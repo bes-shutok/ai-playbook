@@ -23,6 +23,7 @@ if [[ "$LOCK_MODE" == "merge" ]]; then
   INCOMPLETE_SECS="${MERGE_LOCK_INCOMPLETE_SECS:-5}"
   DEAD_HOLDER_GRACE_SECS="${MERGE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
   LOCK_HOLDER_PID="${MERGE_LOCK_HOLDER_PID:-}"
+  LOCK_HOLD_PIN="${MERGE_LOCK_HOLD_PIN:-}"
   LOCK_DIR_ENV="${MERGE_LOCK_DIR:-}"
   LOCK_TOKEN_ENV="${MERGE_LOCK_TOKEN:-}"
   ENV_PREFIX="MERGE_LOCK"
@@ -36,6 +37,7 @@ else
   INCOMPLETE_SECS="${DONE_LOCK_INCOMPLETE_SECS:-5}"
   DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
   LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID:-}"
+  LOCK_HOLD_PIN="${DONE_LOCK_HOLD_PIN:-}"
   LOCK_DIR_ENV="${DONE_LOCK_DIR:-}"
   LOCK_TOKEN_ENV="${DONE_LOCK_TOKEN:-}"
   ENV_PREFIX="DONE_LOCK"
@@ -68,8 +70,18 @@ Commands:
   acquire [--label TEXT]     Try once; print DONE_LOCK_DIR and DONE_LOCK_TOKEN on stdout when acquired.
   wait-acquire [--label TEXT] [--max-wait SECS]
                              Poll until acquired (default max wait: 7200s). Prints exports on success.
-  release                    Remove lock when DONE_LOCK_DIR and DONE_LOCK_TOKEN match (env only).
-  release-repo               Same as release; requires env (refuses shared session load).
+                             While blocked, one stderr line per poll names the holder from
+                             meta.env records (`done lock held: token=... label=... repo=... age=...s`);
+                             with unreadable records, one line says so, then the wait continues silently.
+  release [--from-holder]    Remove lock when DONE_LOCK_DIR and DONE_LOCK_TOKEN match (env only);
+                             with --from-holder no env token is read and the repo-keyed
+                             hold's own records gate the release (see the from-holder
+                             arm below).
+  release-repo [--from-holder]
+                             Same as release; the env path requires env (refuses shared
+                             session load); --from-holder behaves identically on both.
+  release-orphaned           Owner recovery: release when the recorded holder process is
+                             verifiably dead (acquire-output-lost case; never a live holder).
   status                     Show holder for current repo, or "free".
   stale-clean                Remove stale/abandoned/incomplete lock for current repo.
                              Also removes a session-fenced lock when age >= DONE_LOCK_STALE_SECS
@@ -86,11 +98,35 @@ derives from the resolved git common dir); done-mode locks stay keyed
 per-worktree on --show-toplevel.
   merge-acquire [--label TEXT]
   merge-wait-acquire [--label TEXT] [--max-wait SECS]
-  merge-release              Token-fenced release from MERGE_LOCK_* env.
-  merge-release-repo         Same as merge-release; requires env (no session load).
+  merge-release [--from-holder]
+                             Token-fenced release from MERGE_LOCK_* env; with
+                             --from-holder the hold's own records gate the release.
+  merge-release-repo [--from-holder]
+                             Same as merge-release; the env path requires env (no session
+                             load); --from-holder behaves identically on both.
+  merge-release-orphaned     Owner recovery: release when the recorded holder process is
+                             verifiably dead (acquire-output-lost case; never a live holder).
   merge-status               Show merge holder for current repo, or "free".
   merge-stale-clean          Remove stale/abandoned/incomplete merge lock
                              (operator escape at MERGE_LOCK_STALE_SECS age).
+
+From-holder release arm (--from-holder on release, release-repo,
+merge-release, merge-release-repo): the acquire-exports-lost case. No env
+token is read and the shared session file is never sourced (the
+confused-deputy guard keeps its force); the hold is located by its repo key
+and the release gates on the acquire-time meta.env records plus the caller's
+own process tree: the hold was acquired with DONE_LOCK_HOLD_PIN /
+MERGE_LOCK_HOLD_PIN set (holder_pinned=1; WARNING: pinning to a shared
+supervisor voids this guard, because every process in that supervisor's
+subtree passes the ancestry walk), the recorded hostname still matches this
+host (a host rename is the known false positive; release-orphaned /
+merge-release-orphaned and stale-clean remain the fallback ladder),
+holder_state reports alive with the exact recorded identity (dead routes to
+the orphaned arm; a reused pid refuses), the holder is not the degenerate pid
+1 (every process descends from it), and a bounded parent-process walk from
+the calling shell reaches the recorded holder pid. Removal goes through the
+same compare-and-swap as the env path; every refusal is fail-loud and names
+the failed gate.
 
 Environment:
   DONE_LOCK_ROOT             Lock parent directory (default: ~/.ai-playbook/locks/done)
@@ -104,6 +140,10 @@ Environment:
                              when eval'ing from a persistent shell (the default stays the
                              PPID of the eval'ing shell; do not use the acquire script's
                              own PID).
+  DONE_LOCK_HOLD_PIN         Set (any non-empty value) at acquire to record the hold as
+                             pinned (meta holder_pinned=1) and enable the --from-holder
+                             release arm; pin only to a long-lived process you control
+                             (a shared supervisor voids the arm's ancestry guard).
   DONE_LOCK_DIR / DONE_LOCK_TOKEN
                              Required in env for release / release-repo. Session file is
                              fence/status only; release-repo will not source it.
@@ -116,6 +156,7 @@ Environment:
   MERGE_LOCK_INCOMPLETE_SECS Age before a meta-less merge lock_dir is treated as
                              crash leftover (default: 5)
   MERGE_LOCK_HOLDER_PID      Merge-mode equivalent of DONE_LOCK_HOLDER_PID.
+  MERGE_LOCK_HOLD_PIN        Merge-mode equivalent of DONE_LOCK_HOLD_PIN.
   MERGE_LOCK_DIR / MERGE_LOCK_TOKEN
                              Required in env for merge-release / merge-release-repo.
 
@@ -145,6 +186,12 @@ Outcome contract (scripts/OUTCOME_CONTRACT.md):
     release / release-repo
                 success pass; token mismatch and lock-changed-under-us
                 fail; missing-env and missing-metadata refusals tool error.
+    release / release-repo --from-holder (merge equivalents too)
+                success pass; foreign caller, dead holder (routes to the
+                orphaned arm), ambiguous identity, unpinned or degenerate
+                holder, hostname mismatch, and lock-changed-under-us
+                refusals fail with the failed gate named; malformed
+                metadata tool error.
     selftest    pass or fail by harness result.
 EOF
 }
@@ -409,6 +456,14 @@ write_meta() {
   started="$(now_epoch)"
   holder="$(resolve_holder_pid)"
   local holder_identity="$(process_identity "$holder" || true)"
+  # The from-holder release arm gates on this record: the pin env var set at
+  # acquire marks the hold as deliberately pinned to a long-lived holder the
+  # caller controls (pinning to a shared supervisor voids the arm's ancestry
+  # guard).
+  local holder_pinned="0"
+  if [[ -n "$LOCK_HOLD_PIN" ]]; then
+    holder_pinned="1"
+  fi
   meta="${lock_dir}/${META_FILE}"
   # Refuse to overwrite a peer's meta if they claimed the dir first.
   if [[ -f "$meta" ]]; then
@@ -426,6 +481,7 @@ started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 hostname=$(hostname -s 2>/dev/null || hostname)
 holder_pid=${holder}
 holder_identity=${holder_identity}
+holder_pinned=${holder_pinned}
 EOF
   then
     rm -f "$tmp"
@@ -623,6 +679,34 @@ cmd_acquire() {
   exit 1
 }
 
+HOLDER_RECORD_UNREADABLE_REPORTED=0
+emit_holder_wait_diagnostic() {
+  # One stderr line per blocked poll iteration of the acquire wait loop,
+  # naming the holder from the lock directory's own records (meta.env), so
+  # a same-session stale token is visible without hand-inspecting the lock
+  # dir. stdout is never touched here (eval-consumed exports only). When
+  # the records are unreadable, one line per wait run says so, then the
+  # wait continues silently. Diagnostics only: no acquisition, stale,
+  # steal, or exit-code behavior reads or changes from this output.
+  local age age_text recorded_root
+  if [[ -d "$lock_dir" && -f "${lock_dir}/${META_FILE}" ]] \
+      && load_lock_meta && [[ -n "$lock_meta_token" ]]; then
+    age="$(lock_age_secs)"
+    if [[ "$age" =~ ^[0-9]+$ ]]; then
+      age_text="${age}s"
+    else
+      age_text="unknown"
+    fi
+    recorded_root="$(meta_field "${lock_dir}/${META_FILE}" repo_root)"
+    echo "${LOCK_MODE} lock held: token=${lock_meta_token} label=${lock_meta_label:-} repo=${recorded_root:-${repo_root}} age=${age_text}" >&2
+    return 0
+  fi
+  if [[ "$HOLDER_RECORD_UNREADABLE_REPORTED" -eq 0 ]]; then
+    HOLDER_RECORD_UNREADABLE_REPORTED=1
+    echo "${PROG}: lock holder record unreadable (${lock_dir}); continuing to wait" >&2
+  fi
+}
+
 cmd_wait_acquire() {
   local label=""
   local max_wait=7200
@@ -667,19 +751,148 @@ cmd_wait_acquire() {
       emit_outcome fail
       exit 1
     fi
+    emit_holder_wait_diagnostic
     echo "${PROG}: waiting for lock on ${repo_root} (poll ${POLL_SECS}s)..." >&2
     status_report >&2
     sleep "$POLL_SECS"
   done
 }
 
+ancestor_reaches_pid() {
+  # Bounded parent-process walk from this process toward init: does the
+  # calling shell descend from the target pid? Bounded so a corrupted ppid
+  # chain cannot hang a release; pid 1 terminates the walk (the degenerate
+  # holder gate refuses pid 1 before the walk runs).
+  local target="${1:-}"
+  [[ "$target" =~ ^[1-9][0-9]*$ ]] || return 1
+  local pid="$$"
+  local hops=0
+  while [[ -n "$pid" && "$pid" =~ ^[0-9]+$ && "$pid" != "0" && "$hops" -lt 64 ]]; do
+    if [[ "$pid" == "$target" ]]; then
+      return 0
+    fi
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+release_from_holder() {
+  # The metadata-sourced release arm (--from-holder on the four release
+  # subcommands), for the acquire-exports-lost case. No env token is read;
+  # every gate adjudicates the acquire-time records in meta.env plus the
+  # caller's own process ancestry, so the confused-deputy guard keeps its
+  # force (the shared session file is never sourced). The pin record is what
+  # keeps the arm honest: acquire marked the hold as deliberately pinned to a
+  # long-lived holder the caller controls.
+  local orphaned_arm
+  orphaned_arm="$( [[ "$LOCK_MODE" == merge ]] && echo merge-release-orphaned || echo release-orphaned )"
+  require_git_repo
+  local dir="$lock_dir"
+  local meta="${dir}/${META_FILE}"
+  if [[ ! -d "$dir" ]]; then
+    echo "${PROG}: lock already released (${dir})" >&2
+    emit_outcome pass
+    exit 0
+  fi
+  if [[ ! -f "$meta" ]]; then
+    echo "${PROG}: from-holder release: lock directory missing metadata; refusing unsafe release (gate: metadata)" >&2
+    emit_outcome tool_error
+    exit 3
+  fi
+  if ! load_lock_meta \
+      || [[ -z "$lock_meta_token" ]] \
+      || ! [[ "$lock_meta_started_epoch" =~ ^[0-9]+$ ]] \
+      || [[ -z "$lock_meta_holder_pid" ]] \
+      || [[ -z "$lock_meta_holder_identity" ]] \
+      || [[ -z "$lock_meta_hostname" ]]; then
+    echo "${PROG}: from-holder release: lock metadata fails to parse (lock_token, numeric started_epoch, holder_pid, holder_identity, hostname all required); refusing (gate: parse)" >&2
+    emit_outcome tool_error
+    exit 3
+  fi
+  local host
+  host="$(hostname -s 2>/dev/null || hostname)"
+  if [[ "$lock_meta_hostname" != "$host" ]]; then
+    echo "${PROG}: from-holder release: recorded hostname ${lock_meta_hostname} does not match this host (${host}); a host rename is the known false positive and ${orphaned_arm} plus stale-clean remain the fallback ladder; refusing (gate: hostname)" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  if [[ "$(meta_field "$meta" holder_pinned)" != "1" ]]; then
+    echo "${PROG}: from-holder release: the hold is not recorded pinned (holder_pinned unset; set ${ENV_PREFIX}_HOLD_PIN at acquire to pin the hold); refusing (gate: pin)" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  case "$(holder_state)" in
+    alive) : ;;
+    dead)
+      echo "${PROG}: from-holder release: recorded holder pid ${lock_meta_holder_pid} is verifiably dead; the orphaned arm owns dead holders: ${orphaned_arm} (gate: holder-alive)" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+    ambiguous)
+      echo "${PROG}: from-holder release: holder_state=ambiguous (pid-reuse class: recorded identity mismatch while the pid is live); refusing (gate: holder-identity)" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+    *)
+      echo "${PROG}: from-holder release: holder_state=unknown (missing or invalid holder witness); refusing (gate: holder-identity)" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+  esac
+  if [[ "$lock_meta_holder_pid" == "1" ]]; then
+    echo "${PROG}: from-holder release: recorded holder pid 1 is degenerate (every process descends from it, so the ancestry gate cannot discriminate); refusing (gate: holder-degenerate)" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  if ! ancestor_reaches_pid "$lock_meta_holder_pid"; then
+    echo "${PROG}: from-holder release: this shell's process tree does not descend from the recorded holder pid ${lock_meta_holder_pid}; the arm releases only inside the pinned holder's own subtree; refusing (gate: ancestry)" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  local released_for age
+  released_for="$(meta_field "$meta" repo_root)"
+  released_for="${released_for:-$dir}"
+  age="$(lock_age_secs)"
+  # CAS remove: refuse if another waiter replaced the lock after the gates read it.
+  if ! steal_remove_if_unchanged "$lock_meta_token" "$lock_meta_started_epoch" "from-holder-released"; then
+    echo "${PROG}: lock changed under us; not releasing ${dir} (gate: compare-and-swap)" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  clear_lock_session_if_token "$lock_meta_token" || true
+  echo "${PROG}: from-holder released lock for ${released_for} (label ${lock_meta_label}): holder pid ${lock_meta_holder_pid} verified alive with exact identity, pinned, same host, caller descends from it (age ${age}s)"
+  emit_outcome pass
+  # Explicit exit: the arm's callers (release, release-repo, and their merge
+  # twins) must not fall through to the env-token guard with no env.
+  exit 0
+}
+
 cmd_release() {
+  local from_holder=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from-holder)
+        from_holder=1
+        shift
+        ;;
+      *)
+        echo "${PROG}: unknown argument: $1" >&2
+        emit_outcome tool_error
+        exit 3
+        ;;
+    esac
+  done
+  if [[ "$from_holder" -eq 1 ]]; then
+    release_from_holder
+  fi
   local dir="${LOCK_DIR_ENV:-}"
   local token="${LOCK_TOKEN_ENV:-}"
   # Same confused-deputy guard as release-repo: never adopt the shared session file.
   if [[ -z "$dir" || -z "$token" ]]; then
     echo "${PROG}: release requires ${DIR_VAR} and ${TOKEN_VAR} in env" >&2
     echo "${PROG}: re-export them from your acquire Step 0 output; refusing shared session load" >&2
+    echo "${PROG}: owner recovery: re-export from your acquire output, else acquire-and-release self-reclaim, else $([[ "$LOCK_MODE" == merge ]] && echo merge-release-orphaned || echo release-orphaned) when the recorded holder is verifiably dead" >&2
     emit_outcome tool_error
     exit 3
   fi
@@ -718,6 +931,23 @@ cmd_release() {
 }
 
 cmd_release_repo() {
+  local from_holder=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from-holder)
+        from_holder=1
+        shift
+        ;;
+      *)
+        echo "${PROG}: unknown argument: $1" >&2
+        emit_outcome tool_error
+        exit 3
+        ;;
+    esac
+  done
+  if [[ "$from_holder" -eq 1 ]]; then
+    release_from_holder
+  fi
   require_git_repo
   # Confused-deputy guard: do not adopt the shared session file when env is empty.
   # After stale-clean + peer acquire, session names the new holder; sourcing it would
@@ -726,6 +956,7 @@ cmd_release_repo() {
   if [[ -z "$LOCK_DIR_ENV" || -z "$LOCK_TOKEN_ENV" ]]; then
     echo "${PROG}: release-repo requires ${DIR_VAR} and ${TOKEN_VAR} in env" >&2
     echo "${PROG}: re-export them from your acquire Step 0 output; refusing shared session load" >&2
+    echo "${PROG}: owner recovery: re-export from your acquire output, else acquire-and-release self-reclaim, else $([[ "$LOCK_MODE" == merge ]] && echo merge-release-orphaned || echo release-orphaned) when the recorded holder is verifiably dead" >&2
     if [[ -f "$(lock_session_file)" ]]; then
       echo "${PROG}: hint: session file exists for status/fence only; not used for release-repo" >&2
     fi
@@ -733,6 +964,90 @@ cmd_release_repo() {
     exit 3
   fi
   cmd_release
+}
+
+cmd_release_orphaned() {
+  # Owner-only recovery for the acquire-output-lost case: the caller may hold
+  # no env at all (the acquiring shell died with its exports). The hold is
+  # located from the repo key, the release gate is the verified-dead-holder
+  # gate (never the stale threshold), and the shared session file is never
+  # sourced. A provided env token must still match the meta token: a stale
+  # env against a newer hold refuses unchanged.
+  require_git_repo
+  local dir="${LOCK_DIR_ENV:-}"
+  local token="${LOCK_TOKEN_ENV:-}"
+  if [[ -z "$dir" ]]; then
+    dir="$lock_dir"
+  fi
+  # All gates adjudicate the hold the caller names (env) or the repo-key hold
+  # (env-less): aim the global lock_dir the meta readers use before any gate.
+  lock_dir="$dir"
+  local meta="${dir}/${META_FILE}"
+  if [[ ! -d "$dir" ]]; then
+    echo "${PROG}: lock already released (${dir})" >&2
+    clear_lock_session_if_token "$token" || true
+    emit_outcome pass
+    exit 0
+  fi
+  if [[ ! -f "$meta" ]]; then
+    echo "${PROG}: lock directory missing metadata; refusing unsafe orphaned release" >&2
+    emit_outcome tool_error
+    exit 3
+  fi
+  if ! load_lock_meta || [[ -z "$lock_meta_token" ]] || ! [[ "$lock_meta_started_epoch" =~ ^[0-9]+$ ]]; then
+    echo "${PROG}: lock metadata fails to parse; refusing unsafe orphaned release" >&2
+    emit_outcome tool_error
+    exit 3
+  fi
+  local meta_token="$lock_meta_token"
+  local meta_epoch="$lock_meta_started_epoch"
+  if [[ -n "$token" && "$token" != "$meta_token" ]]; then
+    echo "${PROG}: token mismatch; not releasing ${dir}" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  if [[ -z "$lock_meta_holder_pid" ]]; then
+    echo "${PROG}: meta carries no holder_pid; refusing orphaned release" >&2
+    emit_outcome tool_error
+    exit 3
+  fi
+  case "$(holder_state)" in
+    alive)
+      echo "${PROG}: recorded holder is alive (pid ${lock_meta_holder_pid}); orphaned release refuses live holders" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+    ambiguous)
+      echo "${PROG}: holder_state=ambiguous (pid-reuse class: recorded identity mismatch while the pid is live); refusing orphaned release" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+    unknown)
+      echo "${PROG}: holder_state=unknown (missing or invalid holder witness); refusing orphaned release" >&2
+      emit_outcome fail
+      exit 1
+      ;;
+    dead) : ;;
+  esac
+  # The composite verified-dead gate, unchanged: dir present, meta loads, pid
+  # present, state dead, age at or past the dead-holder grace.
+  if ! is_dead_holder_lock; then
+    echo "${PROG}: hold is younger than the dead-holder grace (${DEAD_HOLDER_GRACE_SECS}s); refusing orphaned release" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  local released_for age
+  released_for="$(meta_field "$meta" repo_root)"
+  released_for="${released_for:-$dir}"
+  age="$(lock_age_secs)"
+  if ! steal_remove_if_unchanged "$meta_token" "$meta_epoch" "orphan-released"; then
+    echo "${PROG}: lock changed under us; not releasing ${dir}" >&2
+    emit_outcome fail
+    exit 1
+  fi
+  clear_lock_session_if_token "$meta_token" || true
+  echo "${PROG}: orphan-released lock for ${released_for} (label ${lock_meta_label}): holder pid ${lock_meta_holder_pid} verified dead (holder_state=dead, age ${age}s); caller ${repo_root}"
+  emit_outcome pass
 }
 
 status_report() {
@@ -881,6 +1196,7 @@ cmd_selftest() {
       DONE_LOCK_STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}" \
       DONE_LOCK_DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
       DONE_LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID-}" \
+      DONE_LOCK_HOLD_PIN="${DONE_LOCK_HOLD_PIN-}" \
       DONE_LOCK_DIR="${DONE_LOCK_DIR-}" \
       DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN-}" \
       bash "$script_path" "$@"
@@ -895,6 +1211,7 @@ cmd_selftest() {
       MERGE_LOCK_STALE_SECS="${MERGE_LOCK_STALE_SECS:-600}" \
       MERGE_LOCK_DEAD_HOLDER_GRACE_SECS="${MERGE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
       MERGE_LOCK_HOLDER_PID="${MERGE_LOCK_HOLDER_PID-}" \
+      MERGE_LOCK_HOLD_PIN="${MERGE_LOCK_HOLD_PIN-}" \
       MERGE_LOCK_DIR="${MERGE_LOCK_DIR-}" \
       MERGE_LOCK_TOKEN="${MERGE_LOCK_TOKEN-}" \
       bash "$script_path" "$@"
@@ -1739,6 +2056,538 @@ cmd_selftest() {
     echo "selftest OK: too-new incomplete lock: stale-clean emits OUTCOME: indeterminate on stdout"
   fi
 
+
+  # 18) merge-release-orphaned fixtures (a)-(i): the acquire-output-lost owner arm
+  # (a) a live hold with a live recorded holder pid refuses, naming the live holder.
+  if (
+    cd "$root"
+    eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-live)"
+    lock_dir="$MERGE_LOCK_DIR"
+    meta="${lock_dir}/meta.env"
+    sleep 300 & live_pid=$!
+    live_identity="$(ps -p "$live_pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//' | head -n1)"
+    { grep -v -e '^holder_pid=' -e '^holder_identity=' -e '^started_epoch=' "$meta"
+      printf 'started_epoch=%s\n' "$(( $(date +%s) - 60 ))"
+      printf 'holder_pid=%s\n' "$live_pid"
+      printf 'holder_identity=%s\n' "$live_identity"
+    } > "${meta}.new" && mv "${meta}.new" "$meta"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release released a live holder" >&2; exit 1; }
+    [[ "$out" == *"alive"* ]] || { echo "selftest FAIL: live-holder refusal does not name the live holder: $out" >&2; exit 1; }
+    [[ -d "$lock_dir" ]] || { echo "selftest FAIL: live-holder refusal removed the hold" >&2; exit 1; }
+    kill "$live_pid" 2>/dev/null || true
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses a live recorded holder"
+  else
+    echo "selftest FAIL: orphaned-release live-holder fixture" >&2
+    fail=1
+  fi
+
+  # (b) a hold whose recorded holder pid is verifiably dead and past the grace
+  # releases and leaves the success receipt.
+  if (
+    cd "$root"
+    ( eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-dead)"; printf '%s' "$MERGE_LOCK_DIR" > "${tmp}/orph-dead-dir" )
+    lock_dir="$(cat "${tmp}/orph-dead-dir")"
+    meta="${lock_dir}/meta.env"
+    printf 'started_epoch=%s\n' "$(( $(date +%s) - 60 ))" > "${meta}.epoch"
+    { grep -v -e '^started_epoch=' "$meta"; cat "${meta}.epoch"; } > "${meta}.new" && mv "${meta}.new" "$meta"
+    rm -f "${meta}.epoch"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" || {
+      echo "selftest FAIL: orphaned release refused a verifiably dead holder: $out" >&2; exit 1; }
+    [[ "$out" == *"OUTCOME: pass"* ]] || { echo "selftest FAIL: orphaned release missing success receipt: $out" >&2; exit 1; }
+    [[ "$out" == *"dead"* ]] || { echo "selftest FAIL: orphaned release receipt missing dead-pid evidence: $out" >&2; exit 1; }
+    [[ ! -d "$lock_dir" ]] || { echo "selftest FAIL: orphaned release left the hold in place" >&2; exit 1; }
+  ); then
+    echo "selftest OK: orphaned release frees a verifiably dead holder past the grace"
+  else
+    echo "selftest FAIL: orphaned-release dead-holder fixture" >&2
+    fail=1
+  fi
+
+  # (c) a dead holder still inside the grace refuses with its own message.
+  if (
+    cd "$root"
+    ( eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-grace)"; printf '%s' "$MERGE_LOCK_DIR" > "${tmp}/orph-grace-dir" )
+    lock_dir="$(cat "${tmp}/orph-grace-dir")"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release ignored the dead-holder grace" >&2; exit 1; }
+    [[ "$out" == *"grace"* ]] || { echo "selftest FAIL: grace refusal message missing: $out" >&2; exit 1; }
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses inside the dead-holder grace"
+  else
+    echo "selftest FAIL: orphaned-release grace fixture" >&2
+    fail=1
+  fi
+
+  # (d) an ambiguous holder (deliberately wrong recorded identity, the
+  # pid-reuse class) refuses.
+  if (
+    cd "$root"
+    eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-ambig)"
+    lock_dir="$MERGE_LOCK_DIR"
+    meta="${lock_dir}/meta.env"
+    sleep 300 & ambig_pid=$!
+    { grep -v -e '^holder_pid=' -e '^holder_identity=' -e '^started_epoch=' "$meta"
+      printf 'started_epoch=%s\n' "$(( $(date +%s) - 60 ))"
+      printf 'holder_pid=%s\n' "$ambig_pid"
+      printf 'holder_identity=bogus identity witness\n'
+    } > "${meta}.new" && mv "${meta}.new" "$meta"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release released an ambiguous holder" >&2; exit 1; }
+    [[ "$out" == *"ambiguous"* ]] || { echo "selftest FAIL: ambiguous refusal message missing: $out" >&2; exit 1; }
+    kill "$ambig_pid" 2>/dev/null || true
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses an ambiguous (pid-reuse) holder"
+  else
+    echo "selftest FAIL: orphaned-release ambiguous fixture" >&2
+    fail=1
+  fi
+
+  # (e) a meta with a missing holder_pid refuses.
+  if (
+    cd "$root"
+    eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-nopid)"
+    lock_dir="$MERGE_LOCK_DIR"
+    meta="${lock_dir}/meta.env"
+    { grep -v -e '^holder_pid=' "$meta"; } > "${meta}.new" && mv "${meta}.new" "$meta"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release accepted a meta without holder_pid" >&2; exit 1; }
+    [[ "$out" == *"holder_pid"* ]] || { echo "selftest FAIL: missing-holder_pid refusal message missing: $out" >&2; exit 1; }
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses a meta without holder_pid"
+  else
+    echo "selftest FAIL: orphaned-release missing-holder_pid fixture" >&2
+    fail=1
+  fi
+
+  # (f) missing or unparseable meta refuses.
+  if (
+    cd "$root"
+    eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-nometa)"
+    lock_dir="$MERGE_LOCK_DIR"
+    rm -f "${lock_dir}/meta.env"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release accepted a meta-less lock" >&2; exit 1; }
+    [[ "$out" == *"metadata"* ]] || { echo "selftest FAIL: missing-meta refusal message missing: $out" >&2; exit 1; }
+    printf 'lock_token=truncated\nlabel=partial' > "${lock_dir}/meta.env"
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release accepted an unparseable meta" >&2; exit 1; }
+    [[ "$out" == *"parse"* ]] || { echo "selftest FAIL: unparseable-meta refusal message missing: $out" >&2; exit 1; }
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses missing and unparseable meta"
+  else
+    echo "selftest FAIL: orphaned-release meta fixture" >&2
+    fail=1
+  fi
+
+  # (g) a mismatched-token attempt (stale env against a newer hold) refuses
+  # unchanged.
+  if (
+    cd "$root"
+    ( eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-token)"; printf '%s' "$MERGE_LOCK_DIR" > "${tmp}/orph-token-dir" )
+    lock_dir="$(cat "${tmp}/orph-token-dir")"
+    printf 'started_epoch=%s\n' "$(( $(date +%s) - 60 ))" > "${lock_dir}/meta.env.epoch"
+    { grep -v -e '^started_epoch=' "${lock_dir}/meta.env"; cat "${lock_dir}/meta.env.epoch"; } > "${lock_dir}/meta.env.new" && mv "${lock_dir}/meta.env.new" "${lock_dir}/meta.env"
+    rm -f "${lock_dir}/meta.env.epoch"
+    out="$(MERGE_LOCK_DIR="$lock_dir" MERGE_LOCK_TOKEN=stale-token mrun merge-release-orphaned 2>&1)" && {
+      echo "selftest FAIL: orphaned release accepted a stale env token" >&2; exit 1; }
+    [[ "$out" == *"token mismatch"* ]] || { echo "selftest FAIL: token-mismatch refusal missing: $out" >&2; exit 1; }
+    rm -rf "$lock_dir"
+  ); then
+    echo "selftest OK: orphaned release refuses a stale env token unchanged"
+  else
+    echo "selftest FAIL: orphaned-release token fixture" >&2
+    fail=1
+  fi
+
+  # (h) a stale shared-session fence naming a different, newer token survives
+  # the orphaned release untouched (fence independence).
+  if (
+    cd "$root"
+    ( eval "$(MERGE_LOCK_HOLDER_PID= mrun merge-acquire --label orph-fence)"; printf '%s' "$MERGE_LOCK_DIR" > "${tmp}/orph-fence-dir" )
+    lock_dir="$(cat "${tmp}/orph-fence-dir")"
+    printf 'started_epoch=%s\n' "$(( $(date +%s) - 60 ))" > "${lock_dir}/meta.env.epoch"
+    { grep -v -e '^started_epoch=' "${lock_dir}/meta.env"; cat "${lock_dir}/meta.env.epoch"; } > "${lock_dir}/meta.env.new" && mv "${lock_dir}/meta.env.new" "${lock_dir}/meta.env"
+    rm -f "${lock_dir}/meta.env.epoch"
+    printf 'MERGE_LOCK_DIR=%s\nMERGE_LOCK_TOKEN=different-newer-token\n' "$lock_dir" > .ai-playbook/merge-lock.session
+    out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-release-orphaned 2>&1)" || {
+      echo "selftest FAIL: orphaned release refused beside a foreign fence: $out" >&2; exit 1; }
+    grep -q 'different-newer-token' .ai-playbook/merge-lock.session || {
+      echo "selftest FAIL: orphaned release cleared a foreign session fence" >&2; exit 1; }
+    rm -f .ai-playbook/merge-lock.session
+  ); then
+    echo "selftest OK: orphaned release leaves a foreign session fence untouched"
+  else
+    echo "selftest FAIL: orphaned-release fence-independence fixture" >&2
+    fail=1
+  fi
+
+  # (i) the usage text lists merge-release-orphaned.
+  if bash "$script_path" --help | grep -q 'merge-release-orphaned'; then
+    echo "selftest OK: usage lists merge-release-orphaned"
+  else
+    echo "selftest FAIL: usage does not list merge-release-orphaned" >&2
+    fail=1
+  fi
+
+  # ---- From-holder release arm fixtures (a)-(l) ----
+  # The metadata-sourced release arm for acquire exports lost between one-shot
+  # shells: no env token is read; the release gates on the acquire-time records
+  # (holder_pinned, hostname, holder pid and identity) plus the calling shell's
+  # process ancestry, and removes through the same compare-and-swap.
+
+  # (a) holder-path release: exports lost between one-shot shells of the
+  # acquiring session's own process tree; release-repo --from-holder releases
+  # the still-alive pinned hold from a fresh env-less shell. The holder is a
+  # long-lived session shell (the helper script's bash) that pins itself,
+  # runs the acquire, then stays alive while a later one-shot child releases.
+  if (
+    cd "$root"
+    cat >"${tmp}/fh-holder.sh" <<'FH_HOLDER_EOF'
+set -eu
+root="$1"; lock_root="$2"; script="$3"
+cd "$root"
+# The acquiring session shell pins ITSELF as the holder; the one-shot acquire
+# child's exports are eval'd here and live only in this shell.
+eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ \
+  DONE_LOCK_ROOT="$lock_root" \
+  DONE_LOCK_POLL_SECS=30 DONE_LOCK_STALE_SECS=1800 \
+  DONE_LOCK_DEAD_HOLDER_GRACE_SECS=5 \
+  DONE_LOCK_DIR= DONE_LOCK_TOKEN= \
+  bash "$script" acquire --label from-holder)"
+[[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: holder-session acquire produced no exports" >&2; exit 1; }
+grep -q '^holder_pinned=1$' "${DONE_LOCK_DIR}/meta.env" || { echo "selftest FAIL: pinned acquire recorded no holder_pinned=1" >&2; exit 1; }
+# A later one-shot shell of the same session: fresh env (the exports are
+# lost), still inside the holder's own process subtree; no env token at all.
+cd "$root"
+unset DONE_LOCK_DIR DONE_LOCK_TOKEN
+DONE_LOCK_HOLD_PIN= \
+  DONE_LOCK_ROOT="$lock_root" \
+  DONE_LOCK_POLL_SECS=30 DONE_LOCK_STALE_SECS=1800 \
+  DONE_LOCK_DEAD_HOLDER_GRACE_SECS=5 \
+  DONE_LOCK_DIR= DONE_LOCK_TOKEN= \
+  bash "$script" release-repo --from-holder
+FH_HOLDER_EOF
+    bash "${tmp}/fh-holder.sh" "$root" "$lock_root" "$script_path" >"${tmp}/fh-a.out" 2>&1 || { echo "selftest FAIL: from-holder release refused the holder's own subtree: $(cat "${tmp}/fh-a.out")" >&2; exit 1; }
+    grep -q '^OUTCOME: pass$' "${tmp}/fh-a.out" || { echo "selftest FAIL: from-holder release missing OUTCOME: pass" >&2; exit 1; }
+    [[ ! -d "$test_lock_dir" ]] || { echo "selftest FAIL: from-holder release left the lock dir" >&2; exit 1; }
+    [[ ! -f .ai-playbook/done-lock.session ]] || { echo "selftest FAIL: from-holder release left the session fence" >&2; exit 1; }
+  ); then
+    echo "selftest OK: from-holder release frees the pinned holder's own subtree"
+  else
+    echo "selftest FAIL: from-holder holder-path fixture" >&2
+    fail=1
+  fi
+
+  # (b) merge-release-repo --from-holder mirrors the arm on the merge family.
+  if (
+    cd "$root"
+    cat >"${tmp}/fh-merge-holder.sh" <<'FH_MERGE_HOLDER_EOF'
+set -eu
+root="$1"; mlock_root="$2"; script="$3"
+cd "$root"
+eval "$(MERGE_LOCK_HOLD_PIN=1 MERGE_LOCK_HOLDER_PID=$$ \
+  MERGE_LOCK_ROOT="$mlock_root" \
+  MERGE_LOCK_POLL_SECS=30 MERGE_LOCK_STALE_SECS=600 \
+  MERGE_LOCK_DEAD_HOLDER_GRACE_SECS=5 \
+  MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= \
+  bash "$script" merge-acquire --label merge-from-holder)"
+[[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: merge holder-session acquire produced no exports" >&2; exit 1; }
+cd "$root"
+unset MERGE_LOCK_DIR MERGE_LOCK_TOKEN
+MERGE_LOCK_HOLD_PIN= \
+  MERGE_LOCK_ROOT="$mlock_root" \
+  MERGE_LOCK_POLL_SECS=30 MERGE_LOCK_STALE_SECS=600 \
+  MERGE_LOCK_DEAD_HOLDER_GRACE_SECS=5 \
+  MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= \
+  bash "$script" merge-release-repo --from-holder
+FH_MERGE_HOLDER_EOF
+    bash "${tmp}/fh-merge-holder.sh" "$root" "$mlock_root" "$script_path" >"${tmp}/fh-b.out" 2>&1 || { echo "selftest FAIL: merge from-holder release refused: $(cat "${tmp}/fh-b.out")" >&2; exit 1; }
+    grep -q '^OUTCOME: pass$' "${tmp}/fh-b.out" || { echo "selftest FAIL: merge from-holder release missing OUTCOME: pass" >&2; exit 1; }
+    merge_repo_id="$(printf '%s' "$(git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+    [[ ! -d "${mlock_root}/${merge_repo_id}" ]] || { echo "selftest FAIL: merge from-holder release left the lock dir" >&2; exit 1; }
+  ); then
+    echo "selftest OK: merge from-holder release frees the pinned holder's own subtree"
+  else
+    echo "selftest FAIL: from-holder merge holder-path fixture" >&2
+    fail=1
+  fi
+
+  # (c) a caller outside the recorded holder's subtree refuses with the
+  # ancestry gate named and the lock intact.
+  if (
+    cd "$root"
+    sleep 300 & fh_foreign_holder=$!
+    trap 'kill "$fh_foreign_holder" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID="$fh_foreign_holder" run acquire --label fh-foreign)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-foreign acquire produced no exports" >&2; exit 1; }
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released for a foreign caller: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"ancestry"*) ;;
+      *) echo "selftest FAIL: foreign-caller refusal does not name the ancestry gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: foreign-caller refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses a foreign caller (ancestry gate)"
+  else
+    echo "selftest FAIL: from-holder foreign-caller fixture" >&2
+    fail=1
+  fi
+
+  # (d) a recorded holder that dies after the acquire refuses and names the
+  # orphaned arm (the holder's identity is recorded at acquire while it is
+  # still alive, so the parse gate passes and the dead-holder gate fires).
+  if (
+    cd "$root"
+    sleep 300 & fh_dead_holder=$!
+    trap 'kill "$fh_dead_holder" 2>/dev/null || true; wait "$fh_dead_holder" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID="$fh_dead_holder" run acquire --label fh-dead)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-dead acquire produced no exports" >&2; exit 1; }
+    kill "$fh_dead_holder" 2>/dev/null || true
+    wait "$fh_dead_holder" 2>/dev/null || true
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released a verified-dead holder: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"from-holder"**"orphaned"*) ;;
+      *) echo "selftest FAIL: dead-holder refusal does not name the orphaned arm: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: dead-holder refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder routes a dead holder to the orphaned arm"
+  else
+    echo "selftest FAIL: from-holder dead-holder fixture" >&2
+    fail=1
+  fi
+
+  # (e) a reused-pid ambiguous identity refuses (holder-identity gate).
+  if (
+    cd "$root"
+    sleep 300 & fh_ambig_holder=$!
+    trap 'kill "$fh_ambig_holder" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID="$fh_ambig_holder" run acquire --label fh-ambig)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-ambig acquire produced no exports" >&2; exit 1; }
+    set_meta_field holder_identity definitely-not-the-live-process
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released an ambiguous holder: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"ambiguous"*) ;;
+      *) echo "selftest FAIL: ambiguous refusal does not name the identity gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: ambiguous refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses an ambiguous (pid-reuse) holder"
+  else
+    echo "selftest FAIL: from-holder ambiguous fixture" >&2
+    fail=1
+  fi
+
+  # (f) an unpinned hold refuses (pin gate): the pin env var was unset at
+  # acquire, so the meta records holder_pinned=0.
+  if (
+    cd "$root"
+    sleep 300 & fh_unpinned_holder=$!
+    trap 'kill "$fh_unpinned_holder" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLDER_PID="$fh_unpinned_holder" run acquire --label fh-unpinned)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-unpinned acquire produced no exports" >&2; exit 1; }
+    grep -q '^holder_pinned=0$' "${test_lock_dir}/meta.env" || { echo "selftest FAIL: unpinned acquire did not record holder_pinned=0" >&2; exit 1; }
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released an unpinned hold: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"pin"*) ;;
+      *) echo "selftest FAIL: unpinned refusal does not name the pin gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: unpinned refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses an unpinned hold (pin gate)"
+  else
+    echo "selftest FAIL: from-holder unpinned fixture" >&2
+    fail=1
+  fi
+
+  # (g) the degenerate holder refuses: pid 1 is everybody's ancestor, so the
+  # degenerate gate fires before the ancestry walk.
+  if (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-pid1)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-pid1 acquire produced no exports" >&2; exit 1; }
+    set_meta_field holder_pid 1
+    set_meta_field holder_identity "$(ps -p 1 -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//' | head -n1)"
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released a pid-1 holder: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"degenerate"*) ;;
+      *) echo "selftest FAIL: pid-1 refusal does not name the degenerate gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: pid-1 refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses the degenerate pid-1 holder"
+  else
+    echo "selftest FAIL: from-holder pid-1 fixture" >&2
+    fail=1
+  fi
+
+  # (h) a foreign hostname in the meta refuses (hostname gate; a host rename
+  # is the known false positive the usage text names).
+  if (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-host)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-host acquire produced no exports" >&2; exit 1; }
+    set_meta_field hostname some-other-host
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder released across a hostname mismatch: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"hostname"*) ;;
+      *) echo "selftest FAIL: hostname refusal does not name the hostname gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: hostname refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses a foreign hostname (hostname gate)"
+  else
+    echo "selftest FAIL: from-holder hostname fixture" >&2
+    fail=1
+  fi
+
+  # (i) malformed meta refuses (parse gate): a deleted hostname line and a
+  # non-numeric started epoch each fail closed with the lock intact.
+  if (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-meta-host)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-meta-host acquire produced no exports" >&2; exit 1; }
+    sed -i.bak -e '/^hostname=/d' "${test_lock_dir}/meta.env"
+    rm -f "${test_lock_dir}/meta.env.bak"
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder accepted a meta without hostname: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"parse"*) ;;
+      *) echo "selftest FAIL: missing-hostname refusal does not name the parse gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: parse refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-meta-epoch)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-meta-epoch acquire produced no exports" >&2; exit 1; }
+    set_meta_field started_epoch not-a-number
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder accepted a non-numeric started epoch: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"parse"*) ;;
+      *) echo "selftest FAIL: bad-epoch refusal does not name the parse gate: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: bad-epoch refusal removed the hold" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder refuses malformed meta (parse gate)"
+  else
+    echo "selftest FAIL: from-holder malformed-meta fixture" >&2
+    fail=1
+  fi
+
+  # (j) pin recording is discriminating: the pin env var set at acquire
+  # records holder_pinned=1; unset records holder_pinned=0.
+  if (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-pin-on)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-pin-on acquire produced no exports" >&2; exit 1; }
+    grep -q '^holder_pinned=1$' "${test_lock_dir}/meta.env" || { echo "selftest FAIL: pin-on acquire did not record holder_pinned=1" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+    eval "$(run acquire --label fh-pin-off)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-pin-off acquire produced no exports" >&2; exit 1; }
+    grep -q '^holder_pinned=0$' "${test_lock_dir}/meta.env" || { echo "selftest FAIL: pin-off acquire did not record holder_pinned=0" >&2; exit 1; }
+    run release-repo >/dev/null
+  ); then
+    echo "selftest OK: meta records the pin env state (holder_pinned 1 vs 0)"
+  else
+    echo "selftest FAIL: from-holder pin-recording fixture" >&2
+    fail=1
+  fi
+
+  # (k) generation race: after the gates' meta is replaced by stale-clean plus
+  # a re-acquire, the from-holder attempt cannot remove the newer generation.
+  # Generation 1's holder is the main selftest shell ($$), so its meta is one
+  # the from-holder gates would fully pass (pinned, alive, same host, and the
+  # calling shell descends from it). Gate witness note: the deterministic
+  # refusal fires at the holder-alive gate (gen 2's recorded holder is a
+  # killed sleep), not at the compare-and-swap; the CAS stale-generation
+  # mismatch is only reachable via a genuine concurrent generation swap, the
+  # same limitation the env-token path has, so the asserted outcome (gen-2
+  # token byte-identical after the refused attempt, lock intact) stands in
+  # as the CAS witness beside the env path's covered call shape.
+  if (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID=$$ run acquire --label fh-race-gen1)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-race-gen1 acquire produced no exports" >&2; exit 1; }
+    fh_gen1_token="$(grep -E '^lock_token=' "${test_lock_dir}/meta.env" | head -n1 | cut -d= -f2-)"
+    # Replace the generation: the operator stale escape removes generation 1
+    # (holder alive, fence gone), then a new acquire installs generation 2
+    # pinned to a pid that dies right after the acquire.
+    rm -f .ai-playbook/done-lock.session
+    DONE_LOCK_STALE_SECS=0 run stale-clean >/dev/null 2>&1 || { echo "selftest FAIL: race fixture stale-clean refused generation 1" >&2; exit 1; }
+    sleep 300 & fh_race_holder=$!
+    eval "$(DONE_LOCK_HOLD_PIN=1 DONE_LOCK_HOLDER_PID="$fh_race_holder" run acquire --label fh-race-gen2)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: fh-race-gen2 acquire produced no exports" >&2; exit 1; }
+    kill "$fh_race_holder" 2>/dev/null || true
+    wait "$fh_race_holder" 2>/dev/null || true
+    fh_gen2_token="$(grep -E '^lock_token=' "${test_lock_dir}/meta.env" | head -n1 | cut -d= -f2-)"
+    [[ "$fh_gen1_token" != "$fh_gen2_token" ]] || { echo "selftest FAIL: race fixture reused the generation token" >&2; exit 1; }
+    fh_out="$( cd "$root" && unset DONE_LOCK_DIR DONE_LOCK_TOKEN && run release-repo --from-holder 2>&1 )" && {
+      echo "selftest FAIL: from-holder removed the newer generation: ${fh_out}" >&2; exit 1; }
+    case "$fh_out" in
+      *"from-holder"*) ;;
+      *) echo "selftest FAIL: generation-race refusal carries no from-holder evidence: ${fh_out}" >&2; exit 1 ;;
+    esac
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: newer generation removed by the refused from-holder" >&2; exit 1; }
+    fh_cur_token="$(grep -E '^lock_token=' "${test_lock_dir}/meta.env" | head -n1 | cut -d= -f2-)"
+    [[ "$fh_cur_token" == "$fh_gen2_token" ]] || { echo "selftest FAIL: newer generation mutated by the refused from-holder" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+    rm -f .ai-playbook/done-lock.session
+  ); then
+    echo "selftest OK: from-holder cannot remove a newer lock generation"
+  else
+    echo "selftest FAIL: from-holder generation-race fixture" >&2
+    fail=1
+  fi
+
+  # (l) the usage text documents the from-holder arm and the pin env vars.
+  if bash "$script_path" --help | grep -q -- '--from-holder' && bash "$script_path" --help | grep -q 'DONE_LOCK_HOLD_PIN' && bash "$script_path" --help | grep -q 'MERGE_LOCK_HOLD_PIN'; then
+    echo "selftest OK: usage documents the from-holder arm and the pin env vars"
+  else
+    echo "selftest FAIL: usage does not document --from-holder and the pin env vars" >&2
+    fail=1
+  fi
+
+  # 20) Fixture-count guard: the suite's OK-print count is asserted explicitly
+  # (source grep, not output capture) so a dropped or duplicated fixture fails
+  # the suite even when every remaining fixture passes: 44 pre-existing
+  # fixtures + 12 from-holder fixtures = 56. The pattern is anchored to the
+  # echo statements' line starts so this guard's own grep cannot self-match.
+  local ok_prints
+  ok_prints="$(grep -c '^[[:space:]]*echo "selftest OK:' "$script_path" || true)"
+  if [[ "$ok_prints" -ne 56 ]]; then
+    echo "selftest FAIL: fixture count drifted: ${ok_prints} OK prints, want 56" >&2
+    fail=1
+  fi
+
   rm -rf "$tmp"
   if [[ "$fail" -ne 0 ]]; then
     echo "${PROG}: selftest FAILED" >&2
@@ -1758,14 +2607,16 @@ main() {
   case "$cmd" in
     acquire) cmd_acquire "$@" ;;
     wait-acquire) cmd_wait_acquire "$@" ;;
-    release) cmd_release ;;
-    release-repo) cmd_release_repo ;;
+    release) cmd_release "$@" ;;
+    release-repo) cmd_release_repo "$@" ;;
+    release-orphaned) cmd_release_orphaned ;;
     status) cmd_status ;;
     stale-clean) cmd_stale_clean ;;
     merge-acquire) cmd_acquire "$@" ;;
     merge-wait-acquire) cmd_wait_acquire "$@" ;;
-    merge-release) cmd_release ;;
-    merge-release-repo) cmd_release_repo ;;
+    merge-release) cmd_release "$@" ;;
+    merge-release-repo) cmd_release_repo "$@" ;;
+    merge-release-orphaned) cmd_release_orphaned ;;
     merge-status) cmd_status ;;
     merge-stale-clean) cmd_stale_clean ;;
     selftest) cmd_selftest ;;

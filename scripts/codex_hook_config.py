@@ -71,7 +71,7 @@ def validate_fixture(existing_path: Path, definitions_path: Path, config_path: P
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--existing", type=Path, required=True)
-    parser.add_argument("--definitions", type=Path, default=ROOT / "agents/hooks/codex-execute-plan/hooks.json.example")
+    parser.add_argument("--definitions", type=Path, required=True, help="repository-owned hook definitions fixture")
     parser.add_argument("--config", type=Path, required=True, help="repository fixture; live host config is never read")
     args = parser.parse_args()
     try:

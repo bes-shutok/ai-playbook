@@ -39,7 +39,7 @@ Three subcommands plus a hermetic ``--selftest``:
   error (exit 2), never a silent bare path; a backslash-bearing input
   path is likewise rejected (exit 2; git emits forward slashes only).
   Mirrors (``docs/history/context/confluence/``) and ephemera
-  (``docs/history/reviews/``, ``docs/tmp/``) are exempt. Registered-src
+  (``.ai-playbook/reviews/``, ``.ai-playbook/metrics/``, ``docs/tmp/``) are exempt. Registered-src
   lifecycle exemption, bounded to the transition: a path whose
   normalized form equals the ``src`` of a row with ``state`` completed,
   superseded, or rejected is licensed ONLY for a clean add or rename (porcelain
@@ -183,7 +183,7 @@ FEATURE_NOTES_DIR = "docs/history/feature-notes/"
 # sibling-of-completed convention every consumer spells identically).
 PLANS_REJECTED_DIR = "docs/history/plans/rejected/"
 BACKLOG_REJECTED_DIR = "docs/history/backlog/rejected/"
-EPHEMERA_DIRS = ("docs/history/reviews/", "docs/tmp/")
+EPHEMERA_DIRS = (".ai-playbook/reviews/", ".ai-playbook/metrics/", "docs/tmp/")
 
 REGISTRY_COLUMNS = [
     "identity", "sot", "state", "archived", "reason",
@@ -1575,7 +1575,7 @@ def _run_selftest_checks(st: Selftest) -> None:
 
     # Ephemera exempt.
     root = make_fixture("ephemera", registry_header())
-    for path in ("docs/history/reviews/r.md", "docs/tmp/t.md"):
+    for path in (".ai-playbook/reviews/r.md", "docs/tmp/t.md"):
         code, output = run(["--root", str(root), "check-writes", path])
         st.expect("test_ephemera_exempt_" + path.replace("/", "_"),
                   code, output, 0, forbid_substr=path)

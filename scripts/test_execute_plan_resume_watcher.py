@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Hermetic tests for the standing resume watcher state machine.
 
-Fake clock, fake automation, fake launchd, temporary machine state, plus a
-real ``RuntimeDriver`` file-backed integration fixture: the integration cases
-exercise the real ``runtime_state.json``, the real ``_manifest_lock``, an
-injected clock, and the schedule / replace / progress / cancellation /
-reload / callback paths. No live ``docs/tmp/`` fixtures; the guard-flag
-interleavings run against real temporary files with the real probe writer
-and the real budget-guard hook core.
+Fake clock, fake automation, fake launchd, and temporary authoring state.
+The integration cases exercise the authoring watcher CLI operations, injected
+clock behavior, and schedule / replace / progress / cancellation / reload /
+callback paths. No live ``docs/tmp/`` fixtures; guard-flag interleavings run
+against real temporary files with the real probe writer and budget-guard core.
 """
 
 from __future__ import annotations
@@ -17,12 +15,13 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -33,6 +32,7 @@ sys.path.insert(0, str(HOOK_DIR))
 import budget_guard_core  # noqa: E402
 import execute_plan_resume_watcher as watcher  # noqa: E402
 import execute_plan_runtime as runtime  # noqa: E402
+import plan_shape  # noqa: E402
 import quota_window_probe as probe  # noqa: E402
 
 import plistlib  # noqa: E402
@@ -151,51 +151,6 @@ class FakeStateAdapter(watcher.WatcherStateAdapter):
 
     def projection(self, snapshot: dict) -> str:
         return watcher.render_manifest_projection(snapshot)
-
-
-class RuntimeFixture:
-    """Real RuntimeDriver over a real runtime_state.json in a temp directory."""
-
-    PLAN_TEXT = "# fixture plan\n\n- [ ] task body\n"
-
-    def __init__(self, clock: FakeClock) -> None:
-        self.clock = clock
-        self._tmp = tempfile.TemporaryDirectory()
-        # Canonicalize: the driver's repo-root fence compares against the
-        # resolved root, and the macOS temp parent is a symlink.
-        self.root = Path(self._tmp.name).resolve()
-        self.state_path = self.root / "runtime_state.json"
-        self.plan_path = self.root / "fixture-plan.md"
-        self.plan_path.write_text(self.PLAN_TEXT, encoding="utf-8")
-        runtime.create_manifest(
-            self.state_path,
-            "fixture",
-            [{"id": "task-1", "number": 1, "status": "complete", "checkbox": True}],
-        )
-        self.driver = runtime.RuntimeDriver(
-            self.state_path,
-            plan_slug="fixture",
-            repo_root=self.root,
-            commit_lookup=lambda _commit: True,
-            clock=clock,
-        )
-
-    def cleanup(self) -> None:
-        self._tmp.cleanup()
-
-    def adapter(self) -> watcher.RuntimeResumeWatcherAdapter:
-        return watcher.RuntimeResumeWatcherAdapter(self.driver)
-
-    def plan_digest(self) -> str:
-        return hashlib.sha256(self.plan_path.read_bytes()).hexdigest()
-
-    def peek_state(self) -> dict:
-        return json.loads(self.state_path.read_text(encoding="utf-8"))
-
-    def write_state(self, mutate) -> None:
-        state = self.peek_state()
-        mutate(state)
-        runtime._safe_write_json(self.state_path, state)
 
 
 def known_continue_report(reset_at_epoch: int, binding: str = "primary") -> dict:
@@ -902,1708 +857,6 @@ class WatcherStateMachineTest(unittest.TestCase):
         self.assertIn("automation-create-refused", result["trail"][0]["reason"])
 
 
-class RuntimeWatcherIntegrationTest(unittest.TestCase):
-    """Real RuntimeDriver file-backed cases: runtime_state.json, _manifest_lock,
-    injected clock, schedule / replace / progress / cancellation / reload /
-    callback paths."""
-
-    def setUp(self) -> None:
-        self.clock = FakeClock(3_000_000.0)
-        self.fixture = RuntimeFixture(self.clock)
-        self.addCleanup(self.fixture.cleanup)
-
-    def install_watcher(self, adapter, reset_at_epoch: int, watcher_id: str, **overrides) -> dict:
-        snapshot = adapter.read_state()
-        transition = watcher.build_schedule_transition(
-            snapshot,
-            watcher_id=watcher_id,
-            plan_slug="fixture",
-            repo_root=str(self.fixture.root),
-            plan_path=str(self.fixture.plan_path),
-            plan_digest=self.fixture.plan_digest(),
-            reset_at_epoch=reset_at_epoch,
-            scheduled_at_epoch=int(self.clock()),
-            binding="primary",
-        )
-        transition["receipt"].update(overrides)
-        outcome = adapter.compare_and_swap_schedule(transition)
-        self.assertEqual(outcome["status"], "success", outcome)
-        return outcome
-
-    def test_watcher_stands_down_on_semantic_progress(self) -> None:
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-progress")
-        flag = self.fixture.root / "budget-guard.flag"
-        write_guard_flag(flag, 3_600_000_000)
-        adapter = self.fixture.adapter()
-        # The orchestrator records semantic progress after the boundary.
-        self.clock.advance(60)
-        self.assertEqual(self.fixture.driver.record_progress(["task-1:done"])["status"], "success")
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        decision = watcher.fire_watcher(adapter, receipt, flag_path=flag)
-        self.assertEqual(decision["decision"], "stand_down")
-        self.assertEqual(decision["reason"], "semantic-progress")
-        self.assertFalse(decision["guards_cleared"])
-        # The guard flag is untouched by a stand-down.
-        self.assertTrue(flag.exists())
-        self.assertEqual(flag_epoch(flag), 3_600_000_000)
-
-    def test_peer_resume_stands_down(self) -> None:
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-peer")
-        adapter = self.fixture.adapter()
-        # A peer session constructs its own driver: construction alone moves
-        # no peer-resume marker, so the watcher still resumes.
-        self.clock.advance(120)
-        peer = runtime.RuntimeDriver(
-            self.fixture.state_path,
-            plan_slug="fixture",
-            repo_root=self.fixture.root,
-            commit_lookup=lambda _commit: True,
-            clock=self.clock,
-        )
-        self.assertEqual(peer.resume_watcher_snapshot()["progress_revision"], 0)
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertEqual(watcher.evaluate_fire(adapter, receipt)["decision"], "resume")
-        # The peer re-enters through the resume path: the dedicated
-        # peer-resume marker is written after the scheduling epoch (the
-        # marker write happens at operation entry, whatever the resume
-        # selection returns), and the watcher stands down (r1 F11). The
-        # fire-session adapter is constructed AFTER the peer write, so the
-        # pre-construction peer window stays visible too.
-        peer.resume()
-        firing = self.fixture.adapter()
-        decision = watcher.evaluate_fire(firing, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["decision"], "stand_down")
-        self.assertEqual(decision["reason"], "peer-resumed")
-        # The watcher's own construction and bookkeeping writes never
-        # false-trip the fence: a fresh marker-free install still resumes.
-        self.fixture.write_state(lambda state: state.update({"resume_watcher": None, "peer_resumed_at_epoch": 0.0}))
-        self.install_watcher(self.fixture.adapter(), 3_600_000_120, "rw-peer-2")
-        decision = watcher.evaluate_fire(self.fixture.adapter(), self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["decision"], "resume")
-
-    def test_archived_completed_abort_and_interrupt_stand_downs(self) -> None:
-        # Archived / completed: workflow_state complete in machine state.
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-archived")
-        self.clock.advance(30)
-        archived = self.fixture.root / "docs/history/plans/completed/fixture.md"
-        archived.parent.mkdir(parents=True, exist_ok=True)
-        # The ### Task 1 heading exists because the runtime's terminal gate requires at least one recognizable task section.
-        archived.write_text("# fixture\n\n### Task 1: done\n\n- [x] checklist item\n")
-        # Staged terminal: the final stage requires a conforming pre-archive
-        # gate receipt, so the fixture seeds one with the same shape as the
-        # runtime suite's seed_archive_gate helper (declared destination
-        # equal to the archived path, digest over the archived bytes, source
-        # at the absent active path).
-        self.fixture.write_state(lambda state: state.update({"archive_gate": {
-            "plan_path": "docs/history/plans/fixture.md",
-            "declared_destination": "docs/history/plans/completed/fixture.md",
-            "plan_digest": hashlib.sha256(archived.read_bytes()).hexdigest(),
-            "last_commit_sha": "abcdef1",
-            "phase5_checklist": ["checklist item"],
-            "recorded_at": 1234.0,
-        }}))
-        terminal = self.fixture.driver.mark_terminal("docs/history/plans/completed/fixture.md", "abcdef1", ["checklist item"])
-        self.assertEqual(terminal["status"], "success", terminal)
-        adapter = self.fixture.adapter()
-        decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["reason"], "archived-or-completed")
-        self.assertEqual(decision["decision"], "stand_down")
-
-        # Aborted workflow state.
-        self.fixture.write_state(lambda state: state.update({"workflow_state": "active", "resume_watcher": None}))
-        self.install_watcher(self.fixture.adapter(), 3_600_000_060, "rw-aborted")
-        self.fixture.write_state(lambda state: state.update({"workflow_state": "aborted"}))
-        adapter = self.fixture.adapter()
-        decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["reason"], "aborted-or-interrupted")
-
-        # Interrupted after scheduling: user_interrupt newer than the
-        # scheduling epoch.
-        self.fixture.write_state(lambda state: state.update({"workflow_state": "active", "resume_watcher": None}))
-        self.install_watcher(self.fixture.adapter(), 3_600_000_120, "rw-interrupted")
-        self.clock.advance(300)
-        interrupted = self.fixture.driver.record_interrupt()
-        self.assertEqual(interrupted["status"], "success")
-        self.assertEqual(self.fixture.peek_state()["workflow_state"], "active")
-        adapter = self.fixture.adapter()
-        decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["reason"], "aborted-or-interrupted")
-        # A plain interrupt kept the run resumable (workflow_state unchanged).
-        self.assertEqual(self.fixture.peek_state()["workflow_state"], "active")
-
-    def test_latched_old_interrupt_does_not_trip_later_watcher(self) -> None:
-        # The interrupt is recorded BEFORE the watcher is scheduled.
-        self.clock.advance(10)
-        self.assertEqual(self.fixture.driver.record_interrupt()["status"], "success")
-        old_interrupt = self.fixture.peek_state()["user_interrupt"]
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-latched")
-        adapter = self.fixture.adapter()
-        decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["decision"], "resume")
-        self.assertEqual(self.fixture.peek_state()["user_interrupt"], old_interrupt)
-
-    def test_untouched_state_resumes_with_exact_plan_path_prompt(self) -> None:
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-untouched")
-        adapter = self.fixture.adapter()
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        decision = watcher.evaluate_fire(adapter, receipt)
-        self.assertEqual(decision["decision"], "resume")
-        self.assertEqual(decision["reason"], "untouched-state")
-        # The prompt re-enters execute-plan on the exact canonical plan path.
-        self.assertIn(str(self.fixture.plan_path), decision["prompt"])
-        self.assertIn("Step 0.5", decision["prompt"])
-
-    def test_deleted_plan_digest_fails_closed(self) -> None:
-        # r2 F6: a receipt naming a plan digest must see the same digest
-        # live. A deleted (or unreadable) plan digests to None at fire time;
-        # the old None-skip cleared the fence for exactly the deletion or
-        # archive window the digest fence exists for.
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-deleted")
-        adapter = self.fixture.adapter()
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.fixture.plan_path.unlink()
-        decision = watcher.evaluate_fire(adapter, receipt)
-        self.assertEqual(decision["decision"], "refuse")
-        self.assertEqual(decision["reason"], "fence-mismatch")
-        self.assertIn("plan-digest", decision["mismatches"])
-        self.assertFalse(decision["relaunch"])
-
-    def test_receipt_without_digest_facing_live_digest_refuses(self) -> None:
-        # r3 F21: the receipt-without-digest arm of the plan-digest fence.
-        # A receipt carrying no plan digest that faces a live digest is a
-        # mismatch, so a mutant deleting the elif arm fails here; the
-        # symmetric shape (no digest on either side) still passes.
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-no-digest")
-        adapter = self.fixture.adapter()
-        receipt = dict(self.fixture.peek_state()["resume_watcher"])
-        receipt["plan_digest"] = None
-        decision = watcher.evaluate_fire(adapter, receipt)
-        self.assertEqual(decision["decision"], "refuse")
-        self.assertEqual(decision["reason"], "fence-mismatch")
-        self.assertIn("plan-digest", decision["mismatches"])
-        self.assertFalse(decision["relaunch"])
-
-    def test_watcher_fire_default_flag_path_and_guards_cleared_field(self) -> None:
-        # r3 F4: a CLI fire without a payload flag_path defaults to the
-        # canonical guard path on BOTH boundaries (the plans boundary used
-        # to skip the cleanup silently), and guards_cleared is emitted on
-        # every decision: True through the default-path cleanup here, and
-        # False with a guard sentence that claims no clearing when no
-        # cleanup is configured.
-        def fake_bootstrap(_job):
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        flag = self.fixture.root / "default-arm-budget-guard.flag"
-        fired = self.fixture.root / "default-arm-budget-guard.fired"
-        original_default = watcher.DEFAULT_FLAG_PATH
-        watcher.DEFAULT_FLAG_PATH = flag
-        self.addCleanup(setattr, watcher, "DEFAULT_FLAG_PATH", original_default)
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-default-flag")
-        write_guard_flag(flag, 3_600_000_000)
-        fire_out = io.StringIO()
-        with contextlib.redirect_stdout(fire_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-fire",
-                    "--input", json.dumps({"fired_path": str(fired), "sentinel_path": str(self.fixture.root / "default-arm.sentinel")}),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        decision = json.loads(fire_out.getvalue())
-        self.assertEqual(decision["decision"], "resume", decision)
-        self.assertTrue(decision["guards_cleared"])
-        self.assertFalse(flag.exists(), "the default-path arm must clear the canonical guard path")
-        self.assertIn("already cleared", decision["prompt"])
-        # r4 F4: the resume decision consumed the receipt inside the fire
-        # operation, so this arm installs a fresh watcher before re-firing.
-        self.assertIsNone(self.fixture.peek_state()["resume_watcher"])
-        self.assertGreater(int(self.fixture.peek_state()["boundary_generation"]), 0)
-        self.assertGreater(float(self.fixture.peek_state()["peer_resumed_at_epoch"]), 0.0)
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-default-flag-2")
-        # No configured cleanup: guards_cleared is still emitted, False, and
-        # the prompt must not claim a clearing that never happened.
-        stand_out = io.StringIO()
-        with contextlib.redirect_stdout(stand_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-fire",
-                    "--input", json.dumps({"flag_path": None, "sentinel_path": str(self.fixture.root / "default-arm.sentinel")}),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        no_cleanup = json.loads(stand_out.getvalue())
-        self.assertIn(no_cleanup["decision"], {"resume", "stand_down", "refuse"})
-        self.assertFalse(no_cleanup["guards_cleared"])
-        if no_cleanup["decision"] == "resume":
-            self.assertNotIn("the guards were already cleared", no_cleanup["prompt"])
-            self.assertIn("no guard cleanup is configured", no_cleanup["prompt"])
-
-    def test_watcher_fire_consumes_receipt_two_fires(self) -> None:
-        # r4 F4: a resume decision consumes the receipt inside the fire
-        # operation. Two consecutive fires with NO intervening driver call
-        # must not both resume: the first fire records the peer-resume mark
-        # and supersedes the receipt (compare-and-swap bumping the boundary
-        # generation), so the second fire is refused on machine state - the
-        # pending receipt is gone (stale-attempt) and a fire that somehow
-        # re-evaluated the consumed receipt still refuses on the
-        # boundary-generation fence, never on the peer timestamp.
-        reset = 3_600_000_000
-        self.install_watcher(self.fixture.adapter(), reset, "rw-fire-once")
-        flag = self.fixture.root / "fire-once-budget-guard.flag"
-        write_guard_flag(flag, reset)
-        receipt = dict(self.fixture.peek_state()["resume_watcher"])
-
-        def fire(payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-fire",
-                        "--input", json.dumps(payload),
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        first = fire({"flag_path": str(flag), "sentinel_path": str(self.fixture.root / "fire-once.sentinel")})
-        self.assertEqual(first["decision"], "resume", first)
-        self.assertEqual(first["receipt_superseded"]["status"], "success", first)
-        state = self.fixture.peek_state()
-        self.assertIsNone(state["resume_watcher"])
-        # The receipt's own boundary generation was bumped past: machine
-        # state, not the peer timestamp, fences the consumed receipt.
-        self.assertGreater(int(state["boundary_generation"]), int(receipt["boundary_generation"]))
-        self.assertGreater(float(state["peer_resumed_at_epoch"]), 0.0)
-        # The duplicate fire: refused before any evaluation on machine
-        # state (nothing pending), never a second resume prompt.
-        second = fire({"flag_path": str(flag), "sentinel_path": str(self.fixture.root / "fire-once.sentinel")})
-        self.assertEqual(second["reason_code"], "stale-attempt", second)
-        self.assertNotIn("prompt", second)
-        # Even a fire that somehow re-evaluated the consumed receipt is
-        # refused deterministically on the boundary-generation fence.
-        stale_decision = watcher.evaluate_fire(self.fixture.adapter(), receipt)
-        self.assertEqual(stale_decision["decision"], "refuse")
-        self.assertIn("boundary-generation", stale_decision["mismatches"])
-
-    def test_watcher_fire_consumes_armed_receipt_sentinel(self):
-        # r4 F3: the schedule arm persists the launchd identity it armed
-        # into the watcher receipt, and fire consumes exactly that armed
-        # sentinel. A custom-sentinel arm used to be consumed as
-        # sentinel-absent by the fire's default derivation while the real
-        # sentinel survived, permanently degrading later pauses to
-        # report-only.
-        bootstrap_calls: list[str] = []
-
-        def fake_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        job_dir = self.fixture.root / "armed-launchd"
-        sentinel = self.fixture.root / "armed-custom.sentinel"
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-schedule",
-                    "--input", json.dumps({
-                        "probe_report": known_continue_report(3_600_000_000),
-                        "plan_path": str(self.fixture.plan_path),
-                        "job_dir": str(job_dir),
-                        "sentinel_path": str(sentinel),
-                    }),
-                    "--plan-slug", "fixture",
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        # r5 F11 bootstrap canary: the fake proves the smoke armed launchd
-        # hermetically instead of silently mutating the real gui domain.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the CLI smoke would be mutating the real gui domain")
-        self.assertEqual(json.loads(out.getvalue())["status"], "success")
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        # G2: the arm persists the FULL carrier identity (label, job dir,
-        # plist path, sentinel path, fired marker path), and fire consumes
-        # exactly that armed carrier. A custom-sentinel arm used to be
-        # consumed as sentinel-absent by the fire's default derivation while
-        # the real sentinel survived, permanently degrading later pauses to
-        # report-only.
-        self.assertEqual(receipt["armed_launchd"], {
-            "armed": True,
-            "label": "ai-playbook.budget-resume",
-            "job_dir": str(job_dir),
-            "plist_path": str(job_dir / "ai-playbook.budget-resume.plist"),
-            "sentinel_path": str(sentinel),
-            "fired_marker_path": str(sentinel) + ".fired",
-        })
-        # The launchd job fired (sentinel present). A fire whose payload
-        # names no sentinel must consume the ARMED one, not the derived
-        # default.
-        sentinel.write_text("fired\n", encoding="utf-8")
-        fire_out = io.StringIO()
-        with contextlib.redirect_stdout(fire_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-fire",
-                    "--input", json.dumps({"flag_path": str(self.fixture.root / "armed-guard.flag")}),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        decision = json.loads(fire_out.getvalue())
-        self.assertEqual(decision["decision"], "resume", decision)
-        self.assertTrue(decision["sentinel"]["consumed"])
-        self.assertEqual(decision["sentinel"]["sentinel"], str(sentinel))
-        self.assertFalse(sentinel.exists())
-        # The consumed fired marker is the receipt's own carrier field.
-        self.assertEqual(decision["sentinel"]["fired"], str(sentinel) + ".fired")
-        self.assertTrue(Path(decision["sentinel"]["fired"]).exists())
-
-    def test_schedule_stamps_armed_launchd_only_when_launchd_reachable(self):
-        # r5 F4: the receipt records the launchd identity only when the
-        # chain's launchd link is reachable. An automation echo carrying a
-        # successful create arms no launchd job, so stamping its paths would
-        # record an armed identity that was never armed; a failed echo keeps
-        # the launchd fallback reachable and the stamp stands. r6 F5: the
-        # launchd arm is faked hermetically (the r5 F11 canary seam) because
-        # the receipt now records the arm's ACTUAL outcome - a real
-        # bootstrap failure would rectify the record to armed false.
-        bootstrap_calls: list[str] = []
-
-        def fake_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-
-        def schedule_with(automation):
-            payload = {
-                "probe_report": known_continue_report(3_600_000_000),
-                "plan_path": str(self.fixture.plan_path),
-                "job_dir": str(self.fixture.root / "reach-launchd"),
-                "sentinel_path": str(self.fixture.root / "reach.sentinel"),
-            }
-            if automation is not None:
-                payload["automation"] = automation
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-schedule",
-                        "--input", json.dumps(payload),
-                        "--plan-slug", "fixture",
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue()), self.fixture.peek_state()["resume_watcher"]
-
-        # A successful automation echo: scheduled through automation, and
-        # the receipt records that no launchd carrier was armed, explicitly
-        # (G2) instead of omitting the field or stamping an identity that
-        # was never armed.
-        outcome, receipt = schedule_with({"scheduled": True, "id": "auto-1"})
-        self.assertEqual(outcome["status"], "success", outcome)
-        self.assertEqual(outcome["scheduling"]["mechanism"], "automation")
-        self.assertEqual(receipt["armed_launchd"], {"armed": False, "reason": "automation-echo-scheduled"})
-        # A refused automation echo: the launchd link arms, and the receipt
-        # records exactly the FULL carrier identity the chain was built to
-        # arm (G2). The r6 F5 canary: the fake bootstrap ran, so the armed
-        # record states an arm that actually happened.
-        outcome, receipt = schedule_with({"scheduled": False, "reason": "refused"})
-        self.assertEqual(outcome["status"], "success", outcome)
-        self.assertEqual(outcome["scheduling"]["mechanism"], "launchd")
-        self.assertIsNone(outcome["carrier_rectified"])
-        self.assertEqual(
-            receipt["armed_launchd"],
-            {
-                "armed": True,
-                "label": "ai-playbook.budget-resume",
-                "job_dir": str(self.fixture.root / "reach-launchd"),
-                "plist_path": str(self.fixture.root / "reach-launchd" / "ai-playbook.budget-resume.plist"),
-                "sentinel_path": str(self.fixture.root / "reach.sentinel"),
-                "fired_marker_path": str(self.fixture.root / "reach.sentinel.fired"),
-            },
-        )
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the smoke would be mutating the real gui domain")
-
-    def test_schedule_receipt_rectifies_the_launchd_refusal_outcomes(self):
-        # r6 F5: the carrier record is stamped from the arm's actual launchd
-        # outcome. Pre-fix, the CAS-stamped record claimed armed true before
-        # the chain ran, so the four launchd-failure paths ended report-only
-        # while the receipt claimed an armed carrier - machine-readable
-        # authority describing a carrier that was never armed. The arm now
-        # rectifies the persisted receipt to an explicit armed:false record
-        # naming the launchd refusal, before the schedule result returns.
-        def schedule_receipt(payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-schedule",
-                        "--input", json.dumps(payload),
-                        "--plan-slug", "fixture",
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            outcome = json.loads(out.getvalue())
-            return outcome, self.fixture.peek_state()["resume_watcher"]
-
-        def base_payload(job_dir, sentinel):
-            return {
-                "probe_report": known_continue_report(3_600_000_000),
-                "plan_path": str(self.fixture.plan_path),
-                "job_dir": str(job_dir),
-                "sentinel_path": str(sentinel),
-            }
-
-        # Arm 1: sentinel self-disable - the sentinel is present without a
-        # fired marker, so the launchd link refuses before any side effect.
-        sentinel = self.fixture.root / "rectify.sentinel"
-        job_dir = self.fixture.root / "rectify-launchd"
-        sentinel.write_text("orphan\n", encoding="utf-8")
-        outcome, receipt = schedule_receipt(base_payload(job_dir, sentinel))
-        self.assertEqual(outcome["scheduling"]["mechanism"], "report-only", outcome["scheduling"])
-        expected = {"armed": False, "reason": "sentinel self-disable file present"}
-        self.assertEqual(outcome["carrier_rectified"], expected, outcome["carrier_rectified"])
-        self.assertEqual(receipt["armed_launchd"], expected)
-        sentinel.unlink()
-
-        # Arm 2: label conflict - the job path holds another watcher's job
-        # definition, so the arm refuses instead of destroying it.
-        job_dir.mkdir(parents=True, exist_ok=True)
-        job = job_dir / "ai-playbook.budget-resume.plist"
-        import plistlib
-        job.write_bytes(plistlib.dumps({"Label": "somebody.else.job"}))
-        outcome, receipt = schedule_receipt(base_payload(job_dir, sentinel))
-        self.assertEqual(outcome["scheduling"]["mechanism"], "report-only", outcome["scheduling"])
-        expected = {"armed": False, "reason": "label-conflict: job path holds another watcher's job definition"}
-        self.assertEqual(outcome["carrier_rectified"], expected, outcome["carrier_rectified"])
-        self.assertEqual(receipt["armed_launchd"], expected)
-        self.assertEqual(receipt["armed_launchd"], outcome["carrier_rectified"])
-        # The foreign job definition is untouched by the refused arm.
-        self.assertEqual(plistlib.loads(job.read_bytes())["Label"], "somebody.else.job")
-        job.unlink()  # clear the foreign job so the next arm reaches launchd
-
-        # Arm 3: bootstrap failure - launchd refuses the just-written job;
-        # the fake is the hermetic seam (r5 F11) and the honest outcome is
-        # not-scheduled with the bootstrap detail.
-        bootstrap_calls: list[str] = []
-
-        def failing_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return False, "boom: refused"
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = failing_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        outcome, receipt = schedule_receipt(base_payload(job_dir, sentinel))
-        self.assertEqual(outcome["scheduling"]["mechanism"], "report-only", outcome["scheduling"])
-        expected = {"armed": False, "reason": "launchd-bootstrap-failed: boom: refused"}
-        self.assertEqual(outcome["carrier_rectified"], expected, outcome["carrier_rectified"])
-        self.assertEqual(receipt["armed_launchd"], expected)
-        self.assertTrue(bootstrap_calls, "bootstrap fake was never invoked; the smoke would be mutating the real gui domain")
-        watcher.launchctl_bootstrap = original_bootstrap
-
-        # Arm 4: plist write failure - the job dir path is a file, so the
-        # write fails closed and the reason names it.
-        file_job_dir = self.fixture.root / "rectify-file-job"
-        file_job_dir.write_text("not a directory\n", encoding="utf-8")
-        outcome, receipt = schedule_receipt(base_payload(file_job_dir, sentinel))
-        self.assertEqual(outcome["scheduling"]["mechanism"], "report-only", outcome["scheduling"])
-        self.assertEqual(outcome["carrier_rectified"]["armed"], False)
-        self.assertTrue(outcome["carrier_rectified"]["reason"].startswith("launchd-arm-failed: "), outcome["carrier_rectified"])
-        self.assertEqual(receipt["armed_launchd"], outcome["carrier_rectified"])
-
-    def test_watcher_fire_sentinel_override_is_scoped(self):
-        # r6 F6: the fire payload's explicit sentinel_path is the operator's
-        # manual-recovery override, documented and precedence-ordered over
-        # the receipt's carrier record - and scoped like the scheduler's
-        # spent-pair cleanup (r5 F13): a path outside the sanctioned runtime
-        # directory is refused with nothing consumed and no marker written,
-        # so a wrong explicit path can never consume or mark the wrong pair.
-        reset = 3_600_000_000
-        self.install_watcher(self.fixture.adapter(), reset, "rw-scoped-override")
-        outside = self.fixture.root / "outside-runtime" / "stray.sentinel"
-        outside.parent.mkdir(parents=True, exist_ok=True)
-        outside.write_text("stray\n", encoding="utf-8")
-
-        def fire(sentinel):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-fire",
-                        "--input", json.dumps({"flag_path": str(self.fixture.root / "scoped-guard.flag"), "sentinel_path": str(sentinel)}),
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        refused = fire(outside)
-        self.assertEqual(refused["decision"], "resume", refused)
-        self.assertFalse(refused["sentinel"]["consumed"])
-        self.assertEqual(refused["sentinel"]["reason"], "sentinel override outside the sanctioned runtime directory is refused")
-        self.assertTrue(outside.exists(), "an out-of-scope override must not consume the named sentinel")
-        self.assertFalse(Path(str(outside) + ".fired").exists(), "an out-of-scope override must not write the spent marker")
-
-        # The same override inside the sanctioned directory (patched to the
-        # fixture sentinel home) consumes normally: the documented manual
-        # recovery keeps working for real runtime paths. A fresh watcher is
-        # installed first (a resume decision consumes its receipt, r4 F4),
-        # and the fixture clock moves past the real-time peer-resume mark
-        # the CLI fire wrote, the same way the legacy-receipt smoke does.
-        self.clock.now = time.time() + 120.0
-        self.install_watcher(self.fixture.adapter(), reset, "rw-scoped-override-2")
-        sanctioned = self.fixture.root / "sanctioned-runtime" / "budget-resume.sentinel"
-        sanctioned.parent.mkdir(parents=True, exist_ok=True)
-        sanctioned.write_text("fired\n", encoding="utf-8")
-        original_sentinel_default = watcher.DEFAULT_RESUME_SENTINEL
-        watcher.DEFAULT_RESUME_SENTINEL = sanctioned
-        self.addCleanup(setattr, watcher, "DEFAULT_RESUME_SENTINEL", original_sentinel_default)
-        consumed = fire(sanctioned)
-        self.assertTrue(consumed["sentinel"]["consumed"], consumed["sentinel"])
-        self.assertFalse(sanctioned.exists())
-        self.assertTrue(Path(str(sanctioned) + ".fired").exists())
-
-    def test_supersede_tears_down_armed_carrier_and_later_arm_succeeds(self):
-        # r6 F3, the documented sequence: a continue-boundary launchd arm,
-        # a pause supersede, the ORPHAN job's fire (the job was never booted
-        # out and still touches its sentinel), then a later continue arm.
-        # Pre-fix the supersede tore nothing down, so the orphan's bare
-        # sentinel self-disabled every later arm and automated resume
-        # silently reverted to manual for the rest of the run. The supersede
-        # now tears the recorded carrier down in the same operation,
-        # receipt-only, and the later arm re-arms.
-        bootstrap_calls: list[str] = []
-        bootout_calls: list[str] = []
-
-        def fake_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return True, ""
-
-        def fake_bootout(job):
-            bootout_calls.append(str(job))
-            return {"job": str(job), "exited": 0}
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        original_bootout = watcher.launchctl_bootout
-        watcher.launchctl_bootout = fake_bootout
-        self.addCleanup(setattr, watcher, "launchctl_bootout", original_bootout)
-        job_dir = self.fixture.root / "r6f3-launchd"
-        sentinel = self.fixture.root / "r6f3" / "budget-resume.sentinel"
-        # The scheduler's spent-pair cleanup is scoped to the sanctioned
-        # runtime directory: patch it to the fixture home so the final arm
-        # runs hermetically.
-        original_sentinel_default = watcher.DEFAULT_RESUME_SENTINEL
-        watcher.DEFAULT_RESUME_SENTINEL = sentinel
-        self.addCleanup(setattr, watcher, "DEFAULT_RESUME_SENTINEL", original_sentinel_default)
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", operation,
-                        "--input", json.dumps(payload),
-                        "--plan-slug", "fixture",
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        payload = {
-            "probe_report": known_continue_report(3_600_000_000),
-            "plan_path": str(self.fixture.plan_path),
-            "job_dir": str(job_dir),
-            "sentinel_path": str(sentinel),
-        }
-        scheduled = run("watcher-schedule", payload)
-        self.assertEqual(scheduled["status"], "success", scheduled)
-        self.assertEqual(scheduled["scheduling"]["mechanism"], "launchd")
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertEqual(receipt["armed_launchd"]["armed"], True, receipt["armed_launchd"])
-        plist = Path(receipt["armed_launchd"]["plist_path"])
-        self.assertTrue(plist.exists())
-        # The orphan fire: the still-loaded job touches the sentinel before
-        # running the manual command; nothing consumed it (the receipt is
-        # still pending), so the bare sentinel is exactly the pre-fix trap.
-        sentinel.parent.mkdir(parents=True, exist_ok=True)
-        sentinel.write_text("fired\n", encoding="utf-8")
-
-        superseded = run("watcher-supersede", {"reason": "pause"})
-        self.assertEqual(superseded["status"], "success", superseded)
-        self.assertEqual(superseded["reason_code"], "resume-watcher-cleared")
-        self.assertIsNone(self.fixture.peek_state()["resume_watcher"])
-        # The same-operation teardown: bootout of the recorded plist, the
-        # recorded sentinel consumed, the fired marker written, the inert
-        # plist removed - all receipt-only.
-        teardown = superseded["carrier_teardown"]
-        self.assertTrue(teardown["torn_down"], teardown)
-        self.assertEqual(bootout_calls, [str(plist)], bootout_calls)
-        self.assertEqual(teardown["bootout"]["job"], str(plist))
-        self.assertEqual(teardown["sentinel"]["sentinel"], str(sentinel))
-        self.assertTrue(teardown["sentinel"]["consumed"])
-        self.assertFalse(sentinel.exists())
-        self.assertTrue(Path(str(sentinel) + ".fired").exists())
-        self.assertFalse(plist.exists())
-
-        # The later continue arm: the spent pair is a sanctioned-directory
-        # handshake the scheduler clears, so the arm re-arms launchd instead
-        # of self-disabling on the bare sentinel (pre-fix outcome).
-        rescheduled = run("watcher-schedule", payload)
-        self.assertEqual(rescheduled["status"], "success", rescheduled)
-        self.assertEqual(rescheduled["scheduling"]["mechanism"], "launchd", rescheduled["scheduling"])
-        self.assertEqual(len(bootstrap_calls), 2, bootstrap_calls)
-        self.assertEqual(self.fixture.peek_state()["resume_watcher"]["armed_launchd"]["armed"], True)
-
-    def test_pause_boundary_outcome_carries_carrier_teardown(self):
-        # P13 origin 4a: a pause-boundary supersede of an ARMED watcher
-        # computes the same teardown the direct supersede path does; the
-        # outcome must FORWARD it (carrier_teardown non-null with the
-        # expected shape), not compute-then-drop it at the outcome factory.
-        bootout_calls: list[str] = []
-
-        def fake_bootstrap(job):
-            return True, ""
-
-        def fake_bootout(job):
-            bootout_calls.append(str(job))
-            return {"job": str(job), "exited": 0}
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        original_bootout = watcher.launchctl_bootout
-        watcher.launchctl_bootout = fake_bootout
-        self.addCleanup(setattr, watcher, "launchctl_bootout", original_bootout)
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", operation,
-                        "--input", json.dumps(payload),
-                        "--plan-slug", "fixture",
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        job_dir = self.fixture.root / "p13-pause-launchd"
-        sentinel = self.fixture.root / "p13-pause" / "budget-resume.sentinel"
-        arm_payload = {
-            "probe_report": known_continue_report(3_600_000_000),
-            "plan_path": str(self.fixture.plan_path),
-            "job_dir": str(job_dir),
-            "sentinel_path": str(sentinel),
-        }
-        scheduled = run("watcher-schedule", arm_payload)
-        self.assertEqual(scheduled["status"], "success", scheduled)
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertEqual(receipt["armed_launchd"]["armed"], True, receipt["armed_launchd"])
-        plist = Path(receipt["armed_launchd"]["plist_path"])
-
-        paused = run(
-            "watcher-schedule",
-            {**arm_payload, "probe_report": {**known_continue_report(3_600_000_000), "pause_decision": "pause"}},
-        )
-        self.assertEqual(paused["reason_code"], "resume-watcher-superseded", paused)
-        self.assertIsNone(self.fixture.peek_state()["resume_watcher"])
-        teardown = paused.get("carrier_teardown")
-        self.assertIsNotNone(teardown, "pause outcome dropped the computed carrier_teardown")
-        self.assertTrue(teardown["torn_down"], teardown)
-        # The pause chain bootout can reach the carrier through more than
-        # one idempotent path; the receipt asserts the teardown happened,
-        # not the call count.
-        self.assertIn(str(plist), bootout_calls, bootout_calls)
-        self.assertEqual(teardown["bootout"]["job"], str(plist))
-
-    def test_watcher_fire_default_sentinel_and_flag_parent_marker(self):
-        # r4 F5: the documented production payload omits sentinel_path and
-        # fired_path, so the fire-time default derivation (keyed
-        # default_launchd_identity sentinel; flag-parent fired marker) must
-        # be exercised by a CLI smoke, not only explicit-path smokes. The
-        # defaults are patched to fixture paths, so the smoke stays
-        # hermetic. Arms: a CLI schedule plus fire consuming the keyed
-        # default sentinel from the receipt's armed carrier record (G2);
-        # and a legacy receipt carrying no armed identity, whose fire
-        # consumes NOTHING because the receipt is the only carrier-identity
-        # source and no identity may be derived at fire time (G2).
-        def fake_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return True, ""
-
-        bootstrap_calls: list[str] = []
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        default_job_dir = self.fixture.root / "prod-launchd"
-        default_sentinel = self.fixture.root / "prod-runtime" / "budget-resume.sentinel"
-        original_job_dir = watcher.DEFAULT_LAUNCHD_JOB_DIR
-        original_sentinel = watcher.DEFAULT_RESUME_SENTINEL
-        watcher.DEFAULT_LAUNCHD_JOB_DIR = default_job_dir
-        watcher.DEFAULT_RESUME_SENTINEL = default_sentinel
-        self.addCleanup(setattr, watcher, "DEFAULT_LAUNCHD_JOB_DIR", original_job_dir)
-        self.addCleanup(setattr, watcher, "DEFAULT_RESUME_SENTINEL", original_sentinel)
-        reset = 3_600_000_000
-
-        def fire_with_defaults():
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-fire",
-                        "--input", json.dumps({"flag_path": str(self.fixture.root / "prod-flag" / "budget-guard.flag")}),
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-schedule",
-                    "--input", json.dumps({
-                        "probe_report": known_continue_report(reset),
-                        "plan_path": str(self.fixture.plan_path),
-                    }),
-                    "--plan-slug", "fixture",
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        scheduled = json.loads(out.getvalue())
-        self.assertEqual(scheduled["status"], "success", scheduled)
-        # r5 F11 bootstrap canary: the fake proves the smoke armed launchd
-        # hermetically instead of silently mutating the real gui domain.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the CLI smoke would be mutating the real gui domain")
-        self.assertEqual(scheduled["scheduling"]["mechanism"], "launchd")
-        keyed = watcher.default_launchd_identity("fixture", str(self.fixture.root))
-        self.assertTrue((default_job_dir / watcher.launchd_identity_key("fixture", str(self.fixture.root))).exists())
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertEqual(receipt["armed_launchd"]["sentinel_path"], keyed["sentinel_path"])
-        self.assertEqual(receipt["armed_launchd"]["fired_marker_path"], keyed["sentinel_path"] + ".fired")
-        # The launchd job fired: the sentinel sits at the keyed default,
-        # and the fired marker for this window sits next to the flag (the
-        # payload names no fired_path, so the cleanup derives its home).
-        sentinel_path = Path(keyed["sentinel_path"])
-        sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-        sentinel_path.write_text("fired\n", encoding="utf-8")
-        flag = self.fixture.root / "prod-flag" / "budget-guard.flag"
-        write_guard_flag(flag, reset)
-        marker = flag.parent / watcher.FIRED_MARKER_NAME
-        marker.write_text(str(reset), encoding="utf-8")
-        decision = fire_with_defaults()
-        self.assertEqual(decision["decision"], "resume", decision)
-        self.assertTrue(decision["sentinel"]["consumed"])
-        self.assertEqual(decision["sentinel"]["sentinel"], keyed["sentinel_path"])
-        self.assertFalse(sentinel_path.exists())
-        self.assertEqual(decision["guard_cleanup"]["fired_path"], str(marker))
-        self.assertTrue(decision["guard_cleanup"]["marker_removed"])
-        self.assertFalse(marker.exists())
-        # Legacy receipt arm (G2): a receipt with NO armed carrier record
-        # consumes nothing - the receipt is the only carrier-identity
-        # source, so the fire must not re-derive the keyed default
-        # sentinel. The fixture clock moves past the real-time peer-resume
-        # mark the CLI fire wrote (the CLI entry constructs its driver
-        # without the fixture's fake clock), so the fresh window is newer
-        # than the mark and the fire reaches the consumption decision
-        # instead of standing down.
-        self.clock.now = time.time() + 120.0
-        self.install_watcher(self.fixture.adapter(), reset, "rw-legacy-fire")
-        self.assertNotIn("armed_launchd", self.fixture.peek_state()["resume_watcher"])
-        sentinel_path.write_text("fired\n", encoding="utf-8")
-        write_guard_flag(flag, reset)
-        legacy = fire_with_defaults()
-        self.assertEqual(legacy["decision"], "resume", legacy)
-        # No sentinel consumption happened: the armed carrier is unknown,
-        # and deriving it at fire time is forbidden (the structural test
-        # pins the same invariant on the module source).
-        self.assertNotIn("sentinel", legacy)
-        self.assertTrue(sentinel_path.exists(), "the fire must not consume a sentinel it did not record")
-
-    def test_watcher_fire_watcher_id_echo_guard(self):
-        # r4 F6: a fire naming a stale watcher id is refused before any
-        # guard cleanup: a regression removing the echo guard would let the
-        # stale-id fire resume the replacement early and clear budget
-        # guards inside the still-armed window (evaluate_fire evaluates the
-        # CURRENT receipt). Control arm: the current id fires through.
-        reset = 3_600_000_000
-        self.install_watcher(self.fixture.adapter(), reset, "rw-fire-a")
-        # The replacement window: B replaces A (machine state records the
-        # predecessor), and B's guards are armed.
-        self.install_watcher(self.fixture.adapter(), reset + 60, "rw-fire-b")
-        flag = self.fixture.root / "echo-guard.flag"
-        write_guard_flag(flag, reset + 60)
-
-        def fire(watcher_id):
-            payload = {"flag_path": str(flag), "sentinel_path": str(self.fixture.root / "echo.sentinel")}
-            if watcher_id is not None:
-                payload["watcher_id"] = watcher_id
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(
-                    [
-                        "--manifest", str(self.fixture.state_path),
-                        "--operation", "watcher-fire",
-                        "--input", json.dumps(payload),
-                        "--repo-root", str(self.fixture.root),
-                    ]
-                )
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        stale = fire("rw-fire-a")
-        self.assertEqual(stale["reason_code"], "stale-attempt", stale)
-        self.assertIn("rw-fire-b", stale["evidence"][0])
-        self.assertNotIn("prompt", stale)
-        self.assertTrue(flag.exists(), "a stale-id fire must never clear guards")
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertEqual(receipt["watcher_id"], "rw-fire-b")
-        self.assertEqual(receipt["status"], "pending")
-        # Control: the current id fires through and clears the guards.
-        current = fire("rw-fire-b")
-        self.assertEqual(current["decision"], "resume", current)
-        self.assertTrue(current["guards_cleared"])
-        self.assertFalse(flag.exists())
-
-    def test_plans_watcher_fire_default_flag_path(self):
-        # r4 O19: the plans boundary's fire defaults to the canonical guard
-        # path when the payload names no flag_path - the exact shared-handler
-        # line an r3 F4 revert would change. The default is patched to a
-        # fixture flag so the smoke proves the default was consumed
-        # hermetically.
-        bootstrap_calls: list[str] = []
-
-        def fake_bootstrap(job):
-            bootstrap_calls.append(str(job))
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        default_flag = self.fixture.root / "plans-default-flag" / "budget-guard.flag"
-        original_default = watcher.DEFAULT_FLAG_PATH
-        watcher.DEFAULT_FLAG_PATH = default_flag
-        self.addCleanup(setattr, watcher, "DEFAULT_FLAG_PATH", original_default)
-        root = self.fixture.root
-        state_path = root / "plan-requirements-o19.json"
-        plan_path = root / "o19-plan.md"
-        plan_path.write_text("# fixture plan\n", encoding="utf-8")
-        reset = 3_600_000_000
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        scheduled = run("plans-watcher-schedule", {
-            "state_path": str(state_path),
-            "plan_path": str(plan_path),
-            "plan_slug": "fixture",
-            "probe_report": known_continue_report(reset),
-            "job_dir": str(root / "o19-launchd"),
-            "sentinel_path": str(root / "o19.sentinel"),
-        })
-        self.assertEqual(scheduled["reason_code"], "resume-watcher-scheduled", scheduled)
-        # r5 F11 bootstrap canary: the fake proves the smoke armed launchd
-        # hermetically instead of silently mutating the real gui domain.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the plans CLI smoke would be mutating the real gui domain")
-        write_guard_flag(default_flag, reset)
-        fired = run("plans-watcher-fire", {
-            "state_path": str(state_path),
-            "sentinel_path": str(root / "o19.sentinel"),
-        })
-        self.assertEqual(fired["decision"], "resume", fired)
-        self.assertTrue(fired["guards_cleared"])
-        self.assertFalse(default_flag.exists(), "the omitted flag_path must default to the canonical guard path")
-        self.assertIn("already cleared", fired["prompt"])
-
-    def test_resume_prompt_is_fire_aware(self) -> None:
-        # r2 F12: the fire-rendered prompt must not re-teach the manual
-        # pre-CLI stand-down procedure (the fences and checks already
-        # passed); a literal agent following the old prompt looped and the
-        # composed automation never invoked watcher-fire. The manual
-        # procedure stays the SKILL.md no-CLI fallback only.
-        prompt = watcher.build_resume_prompt({"watcher_id": "rw-x", "plan_path": "/tmp/p.md"})
-        self.assertIn("/tmp/p.md", prompt)
-        self.assertIn("Step 0.5", prompt)
-        self.assertIn("already cleared", prompt)
-        self.assertNotIn("four stand-down checks", prompt)
-
-    def test_resume_prompt_guard_sentence_renders_three_cleanup_outcomes(self) -> None:
-        # r5 F5 / r5 F14: the resume prompt's guard sentence renders from
-        # the actual guard_cleanup receipt across its three outcomes. The
-        # attempted-but-not-achieved outcome must claim no clearing and
-        # carry the retry guidance; the not-configured outcome must claim
-        # no clearing; only a cleared (or absent-guard) cleanup may claim
-        # the clearing.
-        receipt = {"watcher_id": "rw-guard", "plan_path": "/tmp/p.md"}
-        cleared = watcher.build_resume_prompt(receipt, {"removed": True, "reason": "cleared"})
-        self.assertIn("already cleared through the atomic compare-and-delete", cleared)
-        absent = watcher.build_resume_prompt(receipt, {"removed": False, "reason": "flag-absent"})
-        self.assertIn("already cleared through the atomic compare-and-delete", absent)
-        refused = watcher.build_resume_prompt(receipt, {"removed": False, "refused": True, "reason": "newer-window"})
-        self.assertIn("did not complete (reason: newer-window)", refused)
-        self.assertIn("retry that cleanup after the single block", refused)
-        self.assertNotIn("already cleared through the atomic compare-and-delete", refused)
-        self.assertNotIn("no guard cleanup is configured", refused)
-        unconfigured = watcher.build_resume_prompt(receipt, None)
-        self.assertIn("no guard cleanup is configured", unconfigured)
-        self.assertNotIn("already cleared through the atomic compare-and-delete", unconfigured)
-
-        # Integration arm: a resume decision whose configured cleanup is
-        # refused (the flag encodes a newer window) renders the attempted
-        # sentence from the actual receipt, and guards_cleared stays False.
-        reset = 3_600_000_000
-        self.install_watcher(self.fixture.adapter(), reset, "rw-guard-render")
-        newer = self.fixture.root / "guard-render" / "budget-guard.flag"
-        write_guard_flag(newer, reset + 60)
-        decision = watcher.fire_watcher(self.fixture.adapter(), self.fixture.peek_state()["resume_watcher"], flag_path=str(newer))
-        self.assertEqual(decision["decision"], "resume", decision)
-        self.assertFalse(decision["guards_cleared"])
-        self.assertTrue(decision["guard_cleanup"]["refused"])
-        self.assertIn("did not complete (reason: newer-window)", decision["prompt"])
-
-    def test_resume_watcher_receipt_validator_negative_arms(self) -> None:
-        # r5 F10: the receipt validator's negative arms. A valid receipt
-        # passes; each mutation (missing field, empty or non-string
-        # identity field, non-pending status, malformed replaces, non-
-        # numeric or bool epoch, malformed digest) fails closed with
-        # ValueError.
-        def valid_receipt() -> dict:
-            return {
-                "watcher_id": "rw-validate",
-                "plan_slug": "fixture",
-                "repo_root": "/repo",
-                "plan_path": "/repo/plan.md",
-                "plan_digest": "a" * 64,
-                "scheduled_at_epoch": 1_000,
-                "reset_at_epoch": 3_600_000_000,
-                "expected_generation": 0,
-                "expected_progress_revision": 0,
-                "boundary_generation": 1,
-                "binding": "primary",
-                "status": "pending",
-                "replaces": None,
-            }
-
-        watcher.validate_resume_watcher_receipt(valid_receipt())
-        with self.assertRaises(ValueError):
-            watcher.validate_resume_watcher_receipt("not-a-mapping")
-        mutations = [
-            lambda r: r.pop("plan_digest"),
-            lambda r: r.update(watcher_id=""),
-            lambda r: r.update(watcher_id=7),
-            lambda r: r.update(plan_slug="  "),
-            lambda r: r.update(repo_root=None),
-            lambda r: r.update(plan_path=""),
-            lambda r: r.update(binding=""),
-            lambda r: r.update(status="fired"),
-            lambda r: r.update(replaces=5),
-            lambda r: r.update(reset_at_epoch="3600000000"),
-            lambda r: r.update(scheduled_at_epoch=True),
-            lambda r: r.update(expected_progress_revision=False),
-            lambda r: r.update(plan_digest="nothex"),
-            lambda r: r.update(plan_digest="a" * 63),
-        ]
-        for mutate in mutations:
-            receipt = valid_receipt()
-            mutate(receipt)
-            with self.assertRaises(ValueError, msg=repr(sorted(receipt.items()))):
-                watcher.validate_resume_watcher_receipt(receipt)
-
-    def test_canonical_plan_path_and_digest_mismatch_refuse(self) -> None:
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-digest")
-        adapter = self.fixture.adapter()
-        # Plan bytes changed after scheduling: the live digest fence refuses.
-        self.fixture.plan_path.write_text("# fixture plan\n\n- [x] mutated body\n", encoding="utf-8")
-        decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
-        self.assertEqual(decision["decision"], "refuse")
-        self.assertIn("plan-digest", decision["mismatches"])
-        self.assertFalse(decision["relaunch"])
-        # A receipt for a different canonical plan path is fenced too.
-        moved = dict(self.fixture.peek_state()["resume_watcher"])
-        moved["plan_path"] = str(self.fixture.root / "elsewhere.md")
-        decision = watcher.evaluate_fire(adapter, moved)
-        self.assertEqual(decision["decision"], "refuse")
-        self.assertIn("plan-path", decision["mismatches"])
-        # A receipt whose canonical repository root differs is fenced.
-        rooted = dict(self.fixture.peek_state()["resume_watcher"])
-        rooted["repo_root"] = str(self.fixture.root / "other")
-        decision = watcher.evaluate_fire(adapter, rooted)
-        self.assertEqual(decision["decision"], "refuse")
-        self.assertIn("repository-root", decision["mismatches"])
-
-    def test_watcher_runtime_driver_persistence_round_trip(self) -> None:
-        first = self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-round-1")
-        # Reload through a brand new driver: the receipt is durable.
-        reloaded = runtime.RuntimeDriver(
-            self.fixture.state_path,
-            plan_slug="fixture",
-            repo_root=self.fixture.root,
-            commit_lookup=lambda _commit: True,
-            clock=self.clock,
-        )
-        adapter = watcher.RuntimeResumeWatcherAdapter(reloaded)
-        receipt = adapter.read_state()["resume_watcher"]
-        self.assertEqual(receipt["watcher_id"], "rw-round-1")
-        self.assertEqual(set(receipt), set(watcher.RESUME_WATCHER_FIELDS))
-        self.assertEqual(receipt["expected_progress_revision"], 0)
-        self.assertEqual(receipt["boundary_generation"], 1)
-        self.assertEqual(receipt["status"], "pending")
-        # Replacement through the reloaded driver records the predecessor.
-        self.clock.advance(60)
-        second = self.install_watcher(adapter, 3_660_000_000, "rw-round-2")
-        self.assertEqual(second["resume_watcher"]["replaces"], "rw-round-1")
-        self.assertEqual(second["resume_watcher"]["boundary_generation"], 2)
-        # Progress and interrupt persist; supersede clears under the lock.
-        self.assertEqual(reloaded.record_progress(["evidence"])["progress_revision"], 1)
-        self.clock.advance(10)
-        self.assertEqual(reloaded.record_interrupt()["status"], "success")
-        snapshot = adapter.read_state()
-        self.assertEqual(snapshot["progress_revision"], 1)
-        self.assertIsNotNone(snapshot["user_interrupt"])
-        supersedes = adapter.compare_and_swap_supersede(
-            watcher.build_supersede_transition(snapshot, reason="complete")
-        )
-        self.assertEqual(supersedes["status"], "success")
-        self.assertEqual(supersedes["superseded_watcher_id"], "rw-round-2")
-        self.assertIsNone(adapter.read_state()["resume_watcher"])
-        # manifest.md receives a projection only; machine state is authority.
-        self.assertTrue(adapter.projection(adapter.read_state()).startswith("pending_resume_watcher: none"))
-        projected = watcher.render_manifest_projection({"resume_watcher": first["resume_watcher"]})
-        self.assertIn("rw-round-1", projected)
-        self.assertIn("reset_at_epoch=3600000000", projected)
-        history = [event["event"] for event in self.fixture.peek_state()["history"]]
-        self.assertEqual(
-            history,
-            [
-                "resume-watcher-scheduled",
-                "resume-watcher-scheduled",
-                "progress-recorded",
-                "user-interrupt-recorded",
-                "resume-watcher-superseded",
-            ],
-        )
-
-    def test_stale_schedule_transition_never_mutates_machine_state(self) -> None:
-        adapter = self.fixture.adapter()
-        self.install_watcher(adapter, 3_600_000_000, "rw-cas-1")
-        before = self.fixture.peek_state()
-        stale = adapter.compare_and_swap_schedule(
-            watcher.build_schedule_transition(
-                {**adapter.read_state(), "boundary_generation": 0},
-                watcher_id="rw-cas-2",
-                plan_slug="fixture",
-                repo_root=str(self.fixture.root),
-                plan_path=str(self.fixture.plan_path),
-                plan_digest=self.fixture.plan_digest(),
-                reset_at_epoch=3_600_000_060,
-                scheduled_at_epoch=int(self.clock()),
-                binding="primary",
-            )
-        )
-        self.assertEqual(stale["status"], "blocked")
-        self.assertEqual(stale["reason_code"], "stale-attempt")
-        self.assertFalse(stale["cas_applied"])
-        after = self.fixture.peek_state()
-        self.assertEqual(after["resume_watcher"]["watcher_id"], "rw-cas-1")
-        self.assertEqual(after["boundary_generation"], before["boundary_generation"])
-
-    def test_crash_after_pre_relaunch_manifest_refresh_is_recoverable(self) -> None:
-        flag = self.fixture.root / "budget-guard.flag"
-        fired = self.fixture.root / "budget-guard.fired"
-        self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-crash")
-        write_guard_flag(flag, 3_600_000_000)
-        fired.write_text("3600000000\n", encoding="utf-8")
-        adapter = self.fixture.adapter()
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        # The pre-relaunch manifest refresh happens; then the watcher crashes
-        # before clearing guards or relaunching.
-        first = watcher.evaluate_fire(adapter, receipt)
-        self.assertEqual(first["decision"], "resume")
-        # Recovery: a fresh evaluation of the same untouched state reaches the
-        # same single relaunch decision.
-        second = watcher.evaluate_fire(adapter, receipt)
-        self.assertEqual(second["decision"], "resume")
-        self.assertEqual(first["prompt"], second["prompt"])
-        # The guard clear is an idempotent compare-and-delete: the first pass
-        # removes both files, a replayed clear finds nothing to remove.
-        cleared = watcher.fire_watcher(adapter, receipt, flag_path=flag, fired_path=fired)
-        self.assertTrue(cleared["guards_cleared"])
-        self.assertTrue(cleared["guard_cleanup"]["removed"])
-        self.assertTrue(cleared["guard_cleanup"]["marker_removed"])
-        self.assertFalse(flag.exists())
-        self.assertFalse(fired.exists())
-        replayed = watcher.fire_watcher(adapter, receipt, flag_path=flag, fired_path=fired)
-        self.assertTrue(replayed["guards_cleared"])
-        self.assertEqual(replayed["guard_cleanup"]["reason"], "flag-absent")
-
-    def test_cli_watcher_schedule_and_fire_live_path(self) -> None:
-        """r1 F5: the CLI watcher operations are the production invocation
-        path. Scheduling through the CLI persists the receipt in machine
-        state and arms the launchd fallback (never an arm-time sentinel,
-        r1 F1; the arm bootstraps the job into launchd, r2 F4, faked here
-        so the suite stays hermetic); firing through the CLI evaluates the
-        fences and clears the guard flag and fired marker only on a resume
-        decision."""
-
-        def fake_bootstrap(_job):
-            bootstrap_calls.append(str(_job))
-            return True, ""
-
-        bootstrap_calls: list[str] = []
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        flag = self.fixture.root / "budget-guard.flag"
-        fired = self.fixture.root / "budget-guard.fired"
-        job_dir = self.fixture.root / "launchd"
-        sentinel = self.fixture.root / "budget-resume.sentinel"
-        reset = 3_600_000_000
-        write_guard_flag(flag, reset)
-        schedule_payload = json.dumps(
-            {
-                "probe_report": known_continue_report(reset),
-                "plan_path": str(self.fixture.plan_path),
-                "job_dir": str(job_dir),
-                "sentinel_path": str(sentinel),
-            }
-        )
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-schedule",
-                    "--input", schedule_payload,
-                    "--plan-slug", "fixture",
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        # r3 F22 hermeticity canary: the fake bootstrap must actually be the
-        # bound seam. A refactor freezing the launchctl default at import
-        # time would run real launchctl from this smoke and leave the call
-        # record empty.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the CLI smoke would be mutating the real gui domain")
-        scheduled = json.loads(out.getvalue())
-        self.assertEqual(scheduled["status"], "success", scheduled)
-        self.assertEqual(scheduled["scheduling"]["mechanism"], "launchd")
-        receipt = self.fixture.peek_state()["resume_watcher"]
-        self.assertIsNotNone(receipt)
-        self.assertEqual(receipt["reset_at_epoch"], reset)
-        self.assertEqual(receipt["status"], "pending")
-        self.assertTrue((job_dir / "ai-playbook.budget-resume.plist").exists())
-        self.assertFalse(sentinel.exists(), "no arm-time sentinel (r1 F1)")
-
-        # Fire through the CLI: untouched machine state resumes and the
-        # compare-and-delete clears both guards for this window. The payload
-        # names the fixture sentinel, so the one-shot consumption receipt
-        # (r3 F16) is exercised hermetically: the job never ran here, so the
-        # sentinel is absent and the consumption is an honest no-op. r6 F6:
-        # the payload override is scoped to the sanctioned runtime directory,
-        # so the smoke patches the sanctioned directory to the fixture
-        # sentinel and the consume stays an in-scope honest no-op.
-        original_sentinel_default = watcher.DEFAULT_RESUME_SENTINEL
-        watcher.DEFAULT_RESUME_SENTINEL = sentinel
-        self.addCleanup(setattr, watcher, "DEFAULT_RESUME_SENTINEL", original_sentinel_default)
-        fire_out = io.StringIO()
-        with contextlib.redirect_stdout(fire_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-fire",
-                    "--input", json.dumps({"flag_path": str(flag), "fired_path": str(fired), "sentinel_path": str(sentinel)}),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        decision = json.loads(fire_out.getvalue())
-        self.assertEqual(decision["decision"], "resume", decision)
-        self.assertEqual(decision["reason"], "untouched-state")
-        self.assertIn(str(self.fixture.plan_path), decision["prompt"])
-        self.assertTrue(decision["guards_cleared"])
-        self.assertFalse(flag.exists())
-        self.assertFalse(fired.exists())
-        self.assertEqual(decision["sentinel"]["consumed"], False)
-        self.assertEqual(decision["sentinel"]["reason"], "sentinel-absent")
-
-        # A supersede through the CLI clears the pending watcher under CAS.
-        sup_out = io.StringIO()
-        with contextlib.redirect_stdout(sup_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-supersede",
-                    "--input", json.dumps({"reason": "boundary-decision"}),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(sup_out.getvalue())["status"], "success")
-        self.assertIsNone(self.fixture.peek_state()["resume_watcher"])
-        # Firing with nothing pending is a blocked stale-attempt, never a
-        # traceback. The guard paths are pinned explicitly (r2 F20): the
-        # empty-payload arm is hermetic by construction even under a
-        # production regression in the supersede/no-pending guard, because
-        # a fire that reached the cleanup would touch only these fixture
-        # files, never the developer's real guard flag.
-        none_out = io.StringIO()
-        with contextlib.redirect_stdout(none_out):
-            code = runtime.main(
-                [
-                    "--manifest", str(self.fixture.state_path),
-                    "--operation", "watcher-fire",
-                    "--input", json.dumps({
-                        "flag_path": str(self.fixture.root / "budget-guard.flag"),
-                        "fired_path": str(self.fixture.root / "budget-guard.fired"),
-                    }),
-                    "--repo-root", str(self.fixture.root),
-                ]
-            )
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(none_out.getvalue())["reason_code"], "stale-attempt")
-
-    def test_plans_authoring_watcher_cli_operations(self) -> None:
-        # r2 F11: the authoring watcher machinery is invocable end to end
-        # through the manifest-free plans-* operations: schedule over the
-        # authoring state JSON, the resume marker the shared peer fence
-        # reads, a fire that stands down on that marker, and supersede.
-        root = self.fixture.root
-        state_path = root / "plan-requirements-fixture.json"
-        plan_path = root / "authoring-plan.md"
-        plan_path.write_text("# fixture plan\n", encoding="utf-8")
-
-        # Hermetic launchd: the fallback arm writes the plist into the
-        # fixture job dir and the launchctl bootstrap is faked, so the
-        # suite never touches the host's launchd domain (r2 F4).
-        bootstrap_calls: list[str] = []
-
-        def fake_bootstrap(_job):
-            bootstrap_calls.append(str(_job))
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-        job_dir = root / "launchd"
-        sentinel = root / "budget-resume.sentinel"
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        scheduled = run("plans-watcher-schedule", {
-            "state_path": str(state_path),
-            "plan_path": str(plan_path),
-            "plan_slug": "fixture",
-            "probe_report": known_continue_report(3_600_000_000),
-            "job_dir": str(job_dir),
-            "sentinel_path": str(sentinel),
-        })
-        self.assertEqual(scheduled["reason_code"], "resume-watcher-scheduled", scheduled)
-        # r3 F22 hermeticity canary (plans boundary): the fake bootstrap is
-        # the live seam, not an import-time-frozen real launchctl.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the plans CLI smoke would be mutating the real gui domain")
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertIsNotNone(state["resume_watcher"])
-        marker = run("plans-resume-marker", {"state_path": str(state_path), "evidence": ["peer re-entry"]})
-        self.assertEqual(marker["status"], "success")
-        # The fire payload names the fixture guard paths explicitly: the
-        # boundary default is now the canonical flag path (r3 F4), and the
-        # smoke stays hermetic by construction instead of by stand-down
-        # luck. guards_cleared is present on the stand-down too.
-        fired = run("plans-watcher-fire", {
-            "state_path": str(state_path),
-            "flag_path": str(root / "plans-fire-budget-guard.flag"),
-            "sentinel_path": str(sentinel),
-        })
-        self.assertEqual(fired["decision"], "stand_down", fired)
-        self.assertEqual(fired["reason"], "peer-resumed")
-        self.assertIn("guards_cleared", fired)
-        self.assertFalse(fired["guards_cleared"])
-        self.assertEqual(fired["sentinel"]["consumed"], False)
-        superseded = run("plans-watcher-supersede", {"state_path": str(state_path), "reason": "boundary-decision"})
-        self.assertEqual(superseded["status"], "success")
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertIsNone(state["resume_watcher"])
-        # A malformed payload fails closed through the shared handler:
-        # exit 1 with the error on stderr, never a traceback.
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-            code = runtime.main(["--operation", "plans-resume-marker", "--input", json.dumps({}), "--repo-root", str(root)])
-        self.assertEqual(code, 1)
-        self.assertIn("state_path", err.getvalue())
-
-    def test_schedule_fresh_state_documented_payload_schedules(self) -> None:
-        """The documented plans-watcher-schedule payload (state_path,
-        plan_path, probe_report, plan_slug) schedules on an absent fresh
-        authoring state (the origin item's control case, pinned so the
-        documented shape stays schedulable). Hermeticity mechanism (the r3
-        F22 fake-bootstrap canary being the in-file precedent): the payload
-        carries fixture job_dir/sentinel_path overrides as fixture inputs
-        and the launchctl bootstrap is faked, with the canary asserting the
-        fake is the live seam, so the suite never touches the host launchd
-        domain."""
-        root = self.fixture.root
-        state_path = root / "plan-requirements-fixture-schedule.json"
-        bootstrap_calls: list[str] = []
-
-        def fake_bootstrap(_job):
-            bootstrap_calls.append(str(_job))
-            return True, ""
-
-        original_bootstrap = watcher.launchctl_bootstrap
-        watcher.launchctl_bootstrap = fake_bootstrap
-        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        documented = {
-            "state_path": str(state_path),
-            "plan_path": str(self.fixture.plan_path),
-            "probe_report": known_continue_report(3_600_000_000),
-            "plan_slug": "fixture-authoring",
-        }
-        # The four documented payload fields, exactly.
-        self.assertEqual(
-            set(documented),
-            {"state_path", "plan_path", "probe_report", "plan_slug"},
-        )
-        self.assertFalse(state_path.exists(), "the control case needs an absent fresh state file")
-        scheduled = run("plans-watcher-schedule", {
-            **documented,
-            # Hermeticity overrides: the fallback chain arms its launchd
-            # job inside the fixture root only.
-            "job_dir": str(root / "launchd"),
-            "sentinel_path": str(root / "budget-resume.sentinel"),
-        })
-        self.assertEqual(scheduled["status"], "success", scheduled)
-        self.assertEqual(scheduled["reason_code"], "resume-watcher-scheduled", scheduled)
-        self.assertTrue(scheduled["cas_applied"], scheduled)
-        receipt = scheduled["resume_watcher"]
-        self.assertEqual(receipt["status"], "pending", receipt)
-        self.assertEqual(receipt["plan_slug"], "fixture-authoring", receipt)
-        # r3 F22 hermeticity canary (plans boundary): the fake bootstrap is
-        # the live seam, not an import-time-frozen real launchctl.
-        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the documented-payload smoke would be mutating the real gui domain")
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(state["resume_watcher"]["plan_slug"], "fixture-authoring")
-
-    def test_schedule_missing_plan_slug_names_receipt_invalid(self) -> None:
-        """A plans-watcher-schedule payload missing plan_slug fails receipt
-        validation, and the refusal surfaces as watcher-receipt-invalid with
-        the machine trail in evidence, never as watcher-cas-stale (the
-        missing-payload precondition must not masquerade as a
-        compare-and-swap race). Hermetic by construction: the machine blocks
-        before the fallback scheduler chain runs, so no carrier is armed."""
-        root = self.fixture.root
-        state_path = root / "plan-requirements-fixture-schedule-missing.json"
-
-        def run(operation, payload):
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
-            self.assertEqual(code, 0, out.getvalue())
-            return json.loads(out.getvalue())
-
-        blocked = run("plans-watcher-schedule", {
-            "state_path": str(state_path),
-            "plan_path": str(self.fixture.plan_path),
-            "probe_report": known_continue_report(3_600_000_000),
-        })
-        self.assertEqual(blocked["status"], "blocked", blocked)
-        self.assertEqual(blocked["reason_code"], "watcher-receipt-invalid", blocked)
-        self.assertNotEqual(blocked["reason_code"], "watcher-cas-stale", blocked)
-        self.assertFalse(blocked["cas_applied"], blocked)
-        self.assertIn("machine-reason=malformed-result", blocked["evidence"], blocked)
-        self.assertIn(
-            "resume watcher receipt field must be a non-empty string: plan_slug",
-            blocked["evidence"],
-            blocked,
-        )
-        # The machine refused the write, so no pending receipt exists.
-        self.assertFalse(state_path.exists() and bool(json.loads(state_path.read_text(encoding="utf-8")).get("resume_watcher")))
-
-    def test_schedule_cas_refusal_still_watcher_cas_stale(self) -> None:
-        """A genuine compare-and-swap refusal keeps the r3 F7 fence contract:
-        reason_code watcher-cas-stale with cas_applied false and the pending
-        watcher untouched, pinned against overcorrection, and the stale
-        outcome's evidence carries the machine-reason=stale-attempt trail
-        line. Hermetic by construction: the machine blocks before the
-        fallback scheduler chain runs, so no carrier is armed."""
-        root = self.fixture.root
-        state_path = root / "plan-requirements-fixture-schedule-stale.json"
-        clock = self.clock
-        adapter = watcher.PlansAuthoringWatcherAdapter(state_path, repo_root=str(root))
-        # Seed a pending receipt directly through the adapter (the
-        # install_watcher seeding shape); no scheduler chain involved.
-        seeded = adapter.compare_and_swap_schedule(
-            watcher.build_schedule_transition(
-                adapter.read_state(),
-                watcher_id="rw-cas-seed",
-                plan_slug="fixture-authoring",
-                repo_root=str(root),
-                plan_path=str(self.fixture.plan_path),
-                plan_digest=hashlib.sha256(self.fixture.plan_path.read_bytes()).hexdigest(),
-                reset_at_epoch=3_600_000_000,
-                scheduled_at_epoch=int(clock()),
-                binding="primary",
-            )
-        )
-        self.assertEqual(seeded["status"], "success", seeded)
-
-        def schedule_through_arm(schedule_adapter):
-            return watcher.run_cli_watcher_operation(
-                "schedule",
-                {
-                    "state_path": str(state_path),
-                    "plan_path": str(self.fixture.plan_path),
-                    "probe_report": known_continue_report(3_600_000_000),
-                    "plan_slug": "fixture-authoring",
-                    # An automation echo keeps the chain off the launchd
-                    # link even if the machine ever accepted.
-                    "automation": {"scheduled": True, "id": "auto-fixture"},
-                },
-                adapter=schedule_adapter,
-                supersede=adapter.compare_and_swap_supersede,
-                outcome_factory=runtime._outcome,
-                identity_prefix="plans-watcher",
-                plan_slug="fixture-authoring",
-                repo_root=str(root),
-            )
-
-        class ConcurrentWriteAdapter:
-            """Interposes one concurrent machine write (a generation bump,
-            the progress-write shape) between the arm's snapshot read and
-            the compare-and-swap, the deterministic witness of a lost
-            race."""
-
-            def __init__(self, inner: watcher.WatcherStateAdapter) -> None:
-                self._inner = inner
-
-            def read_state(self):
-                return self._inner.read_state()
-
-            def compare_and_swap_schedule(self, transition):
-                with watcher.authoring_state_lock(state_path):
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
-                    state["generation"] = int(state.get("generation", 0)) + 1
-                    state["updated_at"] = float(clock())
-                    runtime._safe_write_json(state_path, state)
-                return self._inner.compare_and_swap_schedule(transition)
-
-            def compare_and_swap_supersede(self, transition):
-                return self._inner.compare_and_swap_supersede(transition)
-
-            def projection(self, snapshot):
-                return self._inner.projection(snapshot)
-
-        stale = schedule_through_arm(ConcurrentWriteAdapter(adapter))
-        self.assertEqual(stale["status"], "blocked", stale)
-        self.assertEqual(stale["reason_code"], "watcher-cas-stale", stale)
-        self.assertFalse(stale["cas_applied"], stale)
-        self.assertIn("machine-reason=stale-attempt", stale["evidence"], stale)
-        self.assertIn("watcher compare-and-swap failed", stale["evidence"], stale)
-        # The pending watcher stays untouched.
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(state["resume_watcher"]["watcher_id"], "rw-cas-seed", state)
-
-    def test_watcher_compare_and_delete_does_not_remove_newer_flag(self) -> None:
-        flag = self.fixture.root / "budget-guard.flag"
-        expired = int(self.clock()) - 60
-        newer = int(self.clock()) + 3_600
-        # The cleanup's decision was made against the expired window...
-        write_guard_flag(flag, expired)
-        # ...but the probe writer has since replaced it with a newer window.
-        self.assertTrue(
-            probe.write_flag_if_paused(
-                flag,
-                "fixture",
-                [{"kind": "primary", "used_percent": 95.0, "reset_at_epoch": newer, "reset_at_iso": "x", "minutes_remaining": 60}],
-                "pause",
-            )
-        )
-        self.assertEqual(flag_epoch(flag), newer)
-        result = watcher.compare_and_delete_flag(flag, expired)
-        self.assertFalse(result["removed"])
-        self.assertTrue(result["refused"])
-        self.assertEqual(result["reason"], "newer-window")
-        self.assertTrue(flag.exists())
-        self.assertEqual(flag_epoch(flag), newer)
-        # The matching epoch is removed; a second replay finds nothing.
-        self.assertTrue(watcher.compare_and_delete_flag(flag, newer)["removed"])
-        self.assertFalse(flag.exists())
-        self.assertEqual(watcher.compare_and_delete_flag(flag, newer)["reason"], "flag-absent")
-        # Lock participation: a compare-and-delete blocked on the held shared
-        # lock cannot decide until the holder releases. The `started` marker
-        # (r1 F29) proves the thread reached its body before the blocked
-        # assertion, so scheduler starvation cannot make the witness vacuous.
-        write_guard_flag(flag, expired)
-        lock_file = watcher.guard_lock_path(flag)
-        self.assertEqual(lock_file.name, "budget-guard.lock")
-        with watcher.budget_guard_lock(flag) as held:
-            self.assertTrue(held)
-            outcome: dict = {}
-            started = threading.Event()
-
-            def compare_delete() -> None:
-                started.set()
-                outcome.update(watcher.compare_and_delete_flag(flag, expired))
-
-            thread = threading.Thread(target=compare_delete)
-            thread.start()
-            self.assertTrue(started.wait(5), "compare-and-delete witness never started")
-            thread.join(0.5)
-            self.assertTrue(thread.is_alive(), "compare-and-delete did not block on the shared guard lock")
-        thread.join(5)
-        self.assertFalse(thread.is_alive())
-        self.assertTrue(outcome["removed"])
-
-    def test_fired_marker_replacement_protected_from_watcher_cleanup(self) -> None:
-        # r1 F20: the standalone compare_and_delete_fired_marker surface is
-        # deleted; the marker branch of compare_and_delete_flag carries the
-        # fired-marker replacement protection.
-        flag = self.fixture.root / "budget-guard.flag"
-        fired = self.fixture.root / "budget-guard.fired"
-        old_window = int(self.clock()) - 60
-        new_window = int(self.clock()) + 3_600
-        # The flag and its marker were re-written for the newer window (the
-        # probe writer and block path did): a cleanup deciding on the old
-        # window is refused by the epoch fence, and the newer marker
-        # survives.
-        write_guard_flag(flag, new_window)
-        fired.write_text(f"{new_window}\n", encoding="utf-8")
-        result = watcher.compare_and_delete_flag(flag, old_window, fired_path=fired)
-        self.assertFalse(result["removed"])
-        self.assertTrue(result["refused"])
-        self.assertEqual(result["reason"], "newer-window")
-        self.assertTrue(fired.exists())
-        self.assertEqual(fired.read_text(encoding="utf-8").strip(), str(new_window))
-        self.assertTrue(flag.exists())
-        # The marker that binds to the watcher's own window is removed with
-        # the flag (marker_removed), and a replay finds nothing.
-        write_guard_flag(flag, old_window)
-        fired.write_text(f"{old_window}\n", encoding="utf-8")
-        removed = watcher.compare_and_delete_flag(flag, old_window, fired_path=fired)
-        self.assertTrue(removed["removed"])
-        self.assertTrue(removed["marker_removed"])
-        self.assertFalse(fired.exists())
-        self.assertFalse(flag.exists())
-        # A replayed clear finds nothing to remove.
-        replay = watcher.compare_and_delete_flag(flag, old_window, fired_path=fired)
-        self.assertEqual(replay["reason"], "flag-absent")
-
-    def test_guard_interleaving_with_probe_writer_and_backstop_hook(self) -> None:
-        flag = self.fixture.root / "budget-guard.flag"
-        fired = self.fixture.root / "budget-guard.fired"
-        expired = int(time.time()) - 120
-        newer = int(time.time()) + 3_600
-        # The probe writer arms an expired window through the shared lock.
-        self.assertTrue(
-            probe.write_flag_if_paused(
-                flag,
-                "fixture",
-                [{"kind": "primary", "used_percent": 95.0, "reset_at_epoch": expired, "reset_at_iso": "x", "minutes_remaining": 0}],
-                "pause",
-            )
-        )
-        out = io.StringIO()
-        hook_outcome: dict = {}
-        cleaner_started = threading.Event()
-
-        def hook_cleanup() -> None:
-            cleaner_started.set()
-            with contextlib.redirect_stdout(out):
-                # Hermeticity: point the decision log into the fixture tmp
-                # dir instead of the host-global hook-outcomes.log.
-                hook_outcome["code"] = budget_guard_core.main(
-                    ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
-                     "--hook-outcomes-log", str(flag.parent / "hook-outcomes.log")]
-                )
-
-        with watcher.budget_guard_lock(flag) as held:
-            self.assertTrue(held)
-            cleaner = threading.Thread(target=hook_cleanup)
-            cleaner.start()
-            self.assertTrue(cleaner_started.wait(5), "hook cleanup witness never started")
-            cleaner.join(0.5)
-            self.assertTrue(cleaner.is_alive(), "hook cleanup did not block on the shared guard lock")
-            # The probe writer's replacement also waits for the same lock.
-            writer_outcome: dict = {}
-            writer_started = threading.Event()
-
-            def writer_replacement() -> None:
-                writer_started.set()
-                writer_outcome["armed"] = probe.write_flag_if_paused(
-                    flag,
-                    "fixture",
-                    [{"kind": "primary", "used_percent": 95.0, "reset_at_epoch": newer, "reset_at_iso": "x", "minutes_remaining": 60}],
-                    "pause",
-                )
-
-            writer = threading.Thread(target=writer_replacement)
-            writer.start()
-            self.assertTrue(writer_started.wait(5), "probe writer witness never started")
-            writer.join(0.5)
-            self.assertTrue(writer.is_alive(), "probe writer did not participate in the shared guard lock")
-        cleaner.join(5)
-        writer.join(5)
-        self.assertFalse(cleaner.is_alive())
-        self.assertFalse(writer.is_alive())
-        self.assertTrue(writer_outcome["armed"])
-        # Whichever way the two unblocked participants ordered, the newer
-        # window's flag survives and the hook's expired cleanup passed.
-        self.assertEqual(hook_outcome["code"], budget_guard_core.EXIT_OK)
-        self.assertEqual(out.getvalue(), "")
-        self.assertTrue(flag.exists())
-        self.assertEqual(flag_epoch(flag), newer)
-
-
 class PlansAuthoringFixture:
     """Hermetic plans authoring workspace: a canonical plan file plus the
     authoring machine-state JSON home and its Markdown notes projection
@@ -2651,7 +904,7 @@ class PlansAuthoringFixture:
             state = json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {}
             mutate(state)
             state["updated_at"] = float(self.clock())
-            runtime._safe_write_json(self.state_path, state)
+            self.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     def note_lines(self) -> list[str]:
         return [line for line in self.notes_path.read_text(encoding="utf-8").splitlines() if line.startswith("pending_resume_watcher:")]
@@ -2694,7 +947,7 @@ class PlansAuthoringWatcherAdapterTest(unittest.TestCase):
         result = self.boundary(known_continue_report(reset))
         self.assertEqual(result["boundary"], "install")
         receipt = self.fixture.peek_state()["resume_watcher"]
-        # The same fenced receipt shape as the runtime adapter.
+        # The same fenced receipt shape is enforced by the shared state machine.
         self.assertEqual(set(receipt), set(watcher.RESUME_WATCHER_FIELDS))
         self.assertEqual(receipt["status"], "pending")
         self.assertEqual(receipt["reset_at_epoch"], reset)
@@ -2938,69 +1191,577 @@ class PlansAuthoringWatcherAdapterTest(unittest.TestCase):
         self.assertEqual(decision["decision"], "stand_down")
         self.assertEqual(decision["reason"], "peer-resumed")
 
-    def test_authoring_and_runtime_adapters_share_one_state_machine(self) -> None:
-        runtime_fixture = RuntimeFixture(self.clock)
-        self.addCleanup(runtime_fixture.cleanup)
-        authoring_writer = self.fixture.adapter()
-        runtime_writer = runtime_fixture.adapter()
-        # Both workflows implement the one adapter protocol.
-        self.assertIsInstance(authoring_writer, watcher.WatcherStateAdapter)
-        self.assertIsInstance(runtime_writer, watcher.WatcherStateAdapter)
+    def test_authoring_cli_operations_remain_reachable(self) -> None:
+        root = self.fixture.root
+        state_path = root / "plan-requirements-fixture.json"
+        plan_path = root / "authoring-plan.md"
+        plan_path.write_text("# fixture plan\n", encoding="utf-8")
+        bootstrap_calls: list[str] = []
 
-        def all_subclasses(cls) -> set:
-            found = set()
-            for sub in cls.__subclasses__():
-                found.add(sub)
-                found |= all_subclasses(sub)
-            return found
+        def fake_bootstrap(job):
+            bootstrap_calls.append(str(job))
+            return True, ""
 
-        # Exactly one state-machine hierarchy exists: the shared protocol
-        # with the runtime and authoring adapters under it (plus this file's
-        # in-memory fake); no second watcher machine.
+        original_bootstrap = watcher.launchctl_bootstrap
+        watcher.launchctl_bootstrap = fake_bootstrap
+        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
+        job_dir = root / "launchd"
+        sentinel = root / "budget-resume.sentinel"
+
+        def run(operation, payload):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
+            self.assertEqual(code, 0, out.getvalue())
+            return json.loads(out.getvalue())
+
+        scheduled = run("plans-watcher-schedule", {
+            "state_path": str(state_path), "plan_path": str(plan_path),
+            "plan_slug": "fixture", "probe_report": known_continue_report(3_600_000_000),
+            "job_dir": str(job_dir), "sentinel_path": str(sentinel),
+        })
+        self.assertEqual(scheduled["reason_code"], "resume-watcher-scheduled", scheduled)
+        self.assertTrue(bootstrap_calls)
+        marker = run("plans-resume-marker", {"state_path": str(state_path), "evidence": ["peer re-entry"]})
+        self.assertEqual(marker["status"], "success")
+        fired = run("plans-watcher-fire", {
+            "state_path": str(state_path), "flag_path": str(root / "guard.flag"),
+            "sentinel_path": str(sentinel),
+        })
+        self.assertEqual(fired["decision"], "stand_down", fired)
+        self.assertEqual(fired["reason"], "peer-resumed")
+        superseded = run("plans-watcher-supersede", {"state_path": str(state_path), "reason": "boundary-decision"})
+        self.assertEqual(superseded["status"], "success")
+        self.assertIsNone(json.loads(state_path.read_text(encoding="utf-8"))["resume_watcher"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = runtime.main(["--operation", "plans-resume-marker", "--input", json.dumps({}), "--repo-root", str(root)])
+        self.assertEqual(code, 1)
+        self.assertIn("state_path", err.getvalue())
+
+    def test_resume_prompt_remains_fire_aware(self) -> None:
+        prompt = watcher.build_resume_prompt({"watcher_id": "rw-x", "plan_path": "/tmp/p.md"})
+        self.assertIn("/tmp/p.md", prompt)
+        self.assertIn("already cleared", prompt)
+        self.assertNotIn("four stand-down checks", prompt)
+
+
+
+class ClockedOrderFixture:
+    """Hermetic clocked-order workspace (the plan's Task 1 fixture).
+
+    A fixture repository root whose name carries a space (so every quoted
+    shell boundary in the fire payload is provably quoted), the real scripts
+    directory reachable through a symlink (the fire payload executes the real
+    CLI through it), an injected clock, and temp ledger paths; the keyed
+    launchd defaults are patched into the fixture root and the launchctl
+    bootstrap/bootout seams are faked so arming never touches the host
+    launchd domain (the r5 F11 canary discipline).
+    """
+
+    def __init__(self, clock: FakeClock) -> None:
+        self.clock = clock
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name).resolve()
+        self.root = base / "fixture repo"
+        self.root.mkdir(parents=True)
+        self.state_dir = self.root / ".ai-playbook" / "maintenance"
+        self.ledger_path = self.state_dir / "clocked-orders.json"
+        self.payload_home = self.state_dir / "clocked-order-payloads"
+        (self.root / "scripts").symlink_to(SCRIPTS, target_is_directory=True)
+
+    def cleanup(self) -> None:
+        self._tmp.cleanup()
+
+    def ledger(self):
+        return watcher.ClockedOrderLedger(
+            self.ledger_path,
+            self.payload_home,
+            repo_root=str(self.root),
+            clock=self.clock,
+        )
+
+    def requested_iso(self, minutes_ahead: int = 90, seconds: int = 0) -> str:
+        moment = datetime.fromtimestamp(self.clock.now).astimezone() + timedelta(minutes=minutes_ahead)
+        return moment.replace(second=seconds, microsecond=0).isoformat()
+
+    def schedule_payload(self, **overrides) -> dict:
+        payload = {
+            "requested_at_iso": self.requested_iso(),
+            "payload_text": "# clocked order payload\n\nResume the authoring loop.\n",
+            "payload_slug": "fixture-order",
+        }
+        payload.update(overrides)
+        return payload
+
+    def schedule(self, payload=None, clock=None) -> dict:
+        return watcher.run_clocked_order_operation(
+            "schedule",
+            self.schedule_payload() if payload is None else payload,
+            repo_root=str(self.root),
+            ledger=self.ledger(),
+            clock=self.clock if clock is None else clock,
+        )
+
+    def discharge(self, order_id: str, **overrides) -> dict:
+        payload = {"order_id": order_id, "payload_slug": "fixture-order"}
+        payload.update(overrides)
+        return watcher.run_clocked_order_operation(
+            "discharge-on-fire",
+            payload,
+            repo_root=str(self.root),
+            ledger=self.ledger(),
+            clock=self.clock,
+        )
+
+
+class ClockedOrderTest(unittest.TestCase):
+    """The clocked-order ledger, its four operations, and the discharge path.
+
+    RED contract (plan 2026-10-05-authoring-clocked-resume-order Task 1): no
+    clocked-order operations, ledger, or discharge path exist today (the
+    watcher is budget-resume-scoped, and its CLI kinds are registered in
+    scripts/execute_plan_runtime.py). Every arm pins one named path: the
+    schedule-arm proof, the automation-cap fall-through, the both-refused
+    park, the single-consumption discharge, the env-complete executable fire
+    payload, the early-fire sentinel consume and re-arm, coexistence with the
+    budget-resume watcher, and the stale-target / late-fire / cancellation
+    fences.
+    """
+
+    def setUp(self) -> None:
+        self.clock = FakeClock(1_000_000.0)
+        self.fixture = ClockedOrderFixture(self.clock)
+        self.addCleanup(self.fixture.cleanup)
+        job_dir = self.fixture.root / "launchd"
+        sentinel = self.fixture.root / ".ai-playbook" / "runtime" / "clocked-order.sentinel"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        original_job_dir = watcher.DEFAULT_LAUNCHD_JOB_DIR
+        original_sentinel = watcher.DEFAULT_RESUME_SENTINEL
+        watcher.DEFAULT_LAUNCHD_JOB_DIR = job_dir
+        watcher.DEFAULT_RESUME_SENTINEL = sentinel
+        self.addCleanup(setattr, watcher, "DEFAULT_LAUNCHD_JOB_DIR", original_job_dir)
+        self.addCleanup(setattr, watcher, "DEFAULT_RESUME_SENTINEL", original_sentinel)
+        self.bootstrap_calls: list[str] = []
+        original_bootstrap = watcher.launchctl_bootstrap
+
+        def fake_bootstrap(job):
+            self.bootstrap_calls.append(str(job))
+            return True, ""
+
+        watcher.launchctl_bootstrap = fake_bootstrap
+        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
+        self.bootout_calls: list[str] = []
+        original_bootout = watcher.launchctl_bootout
+
+        def fake_bootout(job):
+            self.bootout_calls.append(str(job))
+            return {"job": str(job), "exited": 0}
+
+        watcher.launchctl_bootout = fake_bootout
+        self.addCleanup(setattr, watcher, "launchctl_bootout", original_bootout)
+
+    @contextlib.contextmanager
+    def pinned_timezone(self, zone: str):
+        """Ported from the runtime suite: pin the local timezone (POSIX)."""
+        if not hasattr(time, "tzset"):
+            self.skipTest("time.tzset is absent; timezone pinning is POSIX-only")
+        previous = os.environ.get("TZ")
+        os.environ["TZ"] = zone
+        time.tzset()
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = previous
+            time.tzset()
+
+    def armed_order(self, overrides=None, launchd_canary: bool = True) -> dict:
+        payload = self.fixture.schedule_payload(**(overrides or {}))
+        result = self.fixture.schedule(payload)
+        self.assertEqual(result["status"], "success", result)
+        # r5 F11 canary discipline: every launchd-form arm proves it ran the
+        # faked bootstrap instead of silently mutating the real gui domain
+        # (an automation-echo order arms no launchd and skips the canary).
+        if launchd_canary:
+            self.assertTrue(self.bootstrap_calls, "launchd bootstrap fake was never invoked; the smoke would be mutating the real gui domain")
+        return result
+
+    def test_schedule_arms_at_requested_minute_and_proves(self) -> None:
+        requested_epoch = int(datetime.fromisoformat(self.fixture.requested_iso()).timestamp())
+        result = self.armed_order()
+        self.assertEqual(result["fire_epoch"], requested_epoch)
+        self.assertEqual(result["state"], "armed")
+        self.assertEqual(result["requested_epoch"], requested_epoch)
+        order = self.fixture.ledger().order(result["order_id"])
+        self.assertEqual(order["state"], "armed")
+        carrier = order["carrier"]
+        self.assertTrue(carrier["armed"], carrier)
+        # The full carrier record persisted, under the distinct order label.
+        self.assertTrue(carrier["label"].startswith("ai-playbook.clocked-order."), carrier)
+        for field in ("job_dir", "plist_path", "sentinel_path", "fired_marker_path"):
+            self.assertTrue(str(carrier[field]).strip(), carrier)
+        # The A3 proof: the armed carrier's recorded fire time equals the
+        # requested minute.
+        plist = plistlib.loads(Path(carrier["plist_path"]).read_bytes())
+        fire_at = datetime.fromtimestamp(requested_epoch).astimezone()
+        self.assertEqual(plist["StartCalendarInterval"], {"Minute": fire_at.minute, "Hour": fire_at.hour})
+        # The payload copy is retained beside the ledger, digest recorded.
+        copy = Path(order["payload_path"])
+        self.assertTrue(copy.exists())
+        self.assertEqual(order["payload_digest"], hashlib.sha256(copy.read_bytes()).hexdigest())
+        self.assertIn("order-armed", [event["event"] for event in order["history"]])
+
+    def test_schedule_refuses_sub_minute_and_iso_epoch_mismatch(self) -> None:
+        # Sub-minute precision is refused with a named refusal (the carrier's
+        # calendar granularity is minutes); no ledger state is written.
+        blocked = self.fixture.schedule(self.fixture.schedule_payload(requested_at_iso=self.fixture.requested_iso(seconds=30)))
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertIn("sub-minute", blocked["reason_code"], blocked)
+        self.assertFalse(self.fixture.ledger_path.exists(), "a refused schedule must not write ledger state")
+        # An ISO whose re-derived epoch disagrees with the recorded wall clock
+        # (a nonexistent local time across the spring-forward boundary)
+        # refuses with the ledger still untouched.
+        with self.pinned_timezone("America/Los_Angeles"):
+            mismatch = self.fixture.schedule(self.fixture.schedule_payload(requested_at_iso="2026-03-08T02:30:00"))
+        self.assertEqual(mismatch["status"], "blocked", mismatch)
+        self.assertIn("iso-epoch", mismatch["reason_code"], mismatch)
+        self.assertFalse(self.fixture.ledger_path.exists(), "a refused schedule must not write ledger state")
+        # Two pinned zones across a DST boundary: the derived epoch follows
+        # the recorded ISO in each zone, so the same wall-clock request
+        # records two different epochs 15 hours apart.
+        fold_iso = "2026-11-01T01:30:00"
+        la_epoch = int(datetime(2026, 11, 1, 1, 30, tzinfo=timezone(timedelta(hours=-7))).timestamp())
+        sg_epoch = int(datetime(2026, 11, 1, 1, 30, tzinfo=timezone(timedelta(hours=8))).timestamp())
+        self.assertNotEqual(la_epoch, sg_epoch)
+        with self.pinned_timezone("America/Los_Angeles"):
+            la_result = self.armed_order({"requested_at_iso": fold_iso, "automation": {"scheduled": True, "id": "auto-la"}}, launchd_canary=False)
+        with self.pinned_timezone("Asia/Singapore"):
+            sg_result = self.armed_order({"requested_at_iso": fold_iso, "automation": {"scheduled": True, "id": "auto-sg"}}, launchd_canary=False)
+        ledger = self.fixture.ledger()
+        self.assertEqual(int(ledger.order(la_result["order_id"])["requested_epoch"]), la_epoch)
+        self.assertEqual(int(ledger.order(sg_result["order_id"])["requested_epoch"]), sg_epoch)
+
+    def test_automation_cap_refusal_falls_through_to_launchd(self) -> None:
+        # The witnessed receiving-session shape: the automation link refuses
+        # with the capability-unavailable shape and the chain's launchd link
+        # arms with the proven fire epoch.
+        requested_epoch = int(datetime.fromisoformat(self.fixture.requested_iso()).timestamp())
+        result = self.armed_order({"automation": {"scheduled": False, "reason": "automation-capability-unavailable"}})
+        self.assertEqual(result["scheduling"]["mechanism"], "launchd", result["scheduling"])
+        trail = result["scheduling"]["trail"]
+        self.assertEqual(trail[0]["mechanism"], "automation")
+        self.assertFalse(trail[0]["scheduled"])
+        self.assertEqual(result["fire_epoch"], requested_epoch)
+        self.assertEqual(self.fixture.ledger().order(result["order_id"])["state"], "armed")
+
+    def test_both_carriers_refused_parks_with_payload_copy(self) -> None:
+        order_id = "co-park-fixture"
+        job_dir = self.fixture.root / "park-launchd"
+        sentinel = self.fixture.root / ".ai-playbook" / "runtime" / "park.sentinel"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("orphan\n", encoding="utf-8")
+        payload = self.fixture.schedule_payload(
+            order_id=order_id,
+            job_dir=str(job_dir),
+            sentinel_path=str(sentinel),
+            automation={"scheduled": False, "reason": "refused"},
+        )
+        result = self.fixture.schedule(payload)
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "clocked-order-parked-report-only", result)
+        self.assertEqual(result["scheduling"]["mechanism"], "report-only", result["scheduling"])
+        order = self.fixture.ledger().order(order_id)
+        self.assertEqual(order["state"], "pending", order)
+        self.assertFalse(order["carrier"]["armed"], order["carrier"])
+        self.assertTrue(order["carrier"].get("reason"), order["carrier"])
+        # The payload copy is retained at its ledger path and the report-only
+        # result is recorded in the order history.
+        self.assertTrue(Path(order["payload_path"]).exists(), "a parked order retains its payload copy")
+        self.assertIn("order-parked", [event["event"] for event in order["history"]])
+
+    def test_discharge_exactly_once_on_matching_digest_and_target(self) -> None:
+        result = self.armed_order()
+        order_id = result["order_id"]
+        self.clock.advance(result["fire_epoch"] - self.clock.now)
+        first = self.fixture.discharge(order_id)
+        self.assertTrue(first["discharged"], first)
+        self.assertFalse(first["late"], first)
+        self.assertEqual(self.fixture.ledger().order(order_id)["state"], "discharged")
+        second = self.fixture.discharge(order_id)
+        self.assertEqual(second["status"], "blocked", second)
+        self.assertEqual(second["reason_code"], "clocked-order-duplicate-fire", second)
+        self.assertEqual(self.fixture.ledger().order(order_id)["state"], "discharged")
+
+    def test_armed_payload_is_executable_env_complete_form(self) -> None:
+        config_value = "/fixture/provider-config"
+        os.environ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = config_value
+        self.addCleanup(os.environ.pop, "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", None)
+        result = self.armed_order()
+        carrier = self.fixture.ledger().order(result["order_id"])["carrier"]
+        plist_path = Path(carrier["plist_path"])
+        command = plistlib.loads(plist_path.read_bytes())["ProgramArguments"][2]
+        # The payload is the env-complete headless invocation of the
+        # discharge-on-fire operation (the overlay's Launchd carrier bullet):
+        # the provider-config export rides in the payload itself.
+        self.assertIn("clocked-order-discharge-on-fire", command)
+        self.assertIn(f"export ZCODE_BUILTIN_PROVIDER_CONFIG_FILE={shlex.quote(config_value)}", command)
+        # Every shell boundary is a quoted file path: the fixture root name
+        # carries a space, so an unquoted insertion would break the command.
+        script = self.fixture.root / "scripts" / "execute_plan_runtime.py"
+        self.assertIn(shlex.quote(str(script)), command)
+        self.assertIn(shlex.quote(str(self.fixture.root)), command)
+        # The ledger path reaches the discharge operation inside the quoted
+        # --input JSON blob (one quoted shell boundary carrying the recorded
+        # order identity).
+        self.assertIn(str(self.fixture.ledger_path), command)
+        self.assertIn("--input '", command)
+        # Executing the payload through the shell reaches the discharge
+        # operation: the requested minute is long past in real time (the
+        # fixture clock holds 1970), so the payload discharge is a late one,
+        # and the physical one-shot is consumed end to end.
+        subprocess.run(["/bin/sh", "-c", command], check=True, capture_output=True)
+        order = self.fixture.ledger().order(result["order_id"])
+        self.assertEqual(order["state"], "discharged")
+        self.assertFalse(Path(carrier["sentinel_path"]).exists())
+        self.assertTrue(Path(carrier["fired_marker_path"]).exists())
+
+    def test_early_fire_consumes_sentinel_and_re_arms(self) -> None:
+        result = self.armed_order()
+        order_id = result["order_id"]
+        order = self.fixture.ledger().order(order_id)
+        carrier = order["carrier"]
+        sentinel = Path(carrier["sentinel_path"])
+        plist_path = Path(carrier["plist_path"])
+        requested_epoch = result["fire_epoch"]
+        # The carrier fires early: the job touches its sentinel before the
+        # discharge command runs, well before the requested epoch.
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("fired\n", encoding="utf-8")
+        bootstrap_calls_before = len(self.bootstrap_calls)
+        early = self.fixture.discharge(order_id)
+        self.assertTrue(early["early_fire"], early)
+        self.assertFalse(early["discharged"], early)
+        self.assertTrue(early["sentinel"]["consumed"], early)
+        # The check-and-arm-if-none re-arm drove the real launchd shapes (the
+        # faked bootstrap is the live seam), not a record-and-return fake:
+        # the spent pair is cleared and the armed receipt for the requested
+        # minute is rewritten at the recorded plist path.
+        self.assertEqual(len(self.bootstrap_calls), bootstrap_calls_before + 1, self.bootstrap_calls)
+        self.assertFalse(sentinel.exists())
+        self.assertFalse(Path(carrier["fired_marker_path"]).exists(), "the re-arm clears the spent pair")
+        rearmed = self.fixture.ledger().order(order_id)
+        self.assertEqual(rearmed["state"], "armed")
+        self.assertTrue(rearmed["carrier"]["armed"])
+        payload = plistlib.loads(plist_path.read_bytes())
+        fire_at = datetime.fromtimestamp(requested_epoch).astimezone()
+        self.assertEqual(payload["StartCalendarInterval"], {"Minute": fire_at.minute, "Hour": fire_at.hour})
+        self.assertIn("early-fire-rearm", [event["event"] for event in rearmed["history"]])
+
+    def test_stale_target_and_late_fire_and_cancellation(self) -> None:
+        # Target-identity mismatch: refusal without state change, for both
+        # halves of the recorded identity (the payload slug and the canonical
+        # repository root).
+        result = self.armed_order()
+        order_id = result["order_id"]
+        stale_slug = self.fixture.discharge(order_id, payload_slug="some-other-payload")
+        self.assertEqual(stale_slug["status"], "blocked", stale_slug)
+        self.assertEqual(stale_slug["reason_code"], "clocked-order-stale-target", stale_slug)
+        self.assertEqual(self.fixture.ledger().order(order_id)["state"], "armed")
+        stale_root = watcher.run_clocked_order_operation(
+            "discharge-on-fire",
+            {"order_id": order_id, "payload_slug": "fixture-order"},
+            repo_root=str(self.fixture.root / "elsewhere"),
+            ledger=self.fixture.ledger(),
+            clock=self.clock,
+        )
+        self.assertEqual(stale_root["status"], "blocked", stale_root)
+        self.assertEqual(stale_root["reason_code"], "clocked-order-stale-target", stale_root)
+        self.assertEqual(self.fixture.ledger().order(order_id)["state"], "armed")
+
+        # A fire after the requested minute discharges with the lateness
+        # witness recorded in the order history.
+        self.clock.advance(result["fire_epoch"] - self.clock.now + 600)
+        late = self.fixture.discharge(order_id)
+        self.assertTrue(late["discharged"], late)
+        self.assertTrue(late["late"], late)
+        self.assertGreater(late["late_by_seconds"], 0)
+        discharged_order = self.fixture.ledger().order(order_id)
+        self.assertEqual(discharged_order["state"], "discharged")
+        late_events = [event for event in discharged_order["history"] if event["event"] == "order-discharged"]
+        self.assertEqual(len(late_events), 1)
+        self.assertEqual(late_events[0]["late_by_seconds"], late["late_by_seconds"])
+
+        # Explicit cancellation: the armed carrier tears down (bootout plus
+        # sentinel consume) and the terminal state refuses further fires.
+        cancel_seed = self.armed_order()
+        cancel_id = cancel_seed["order_id"]
+        cancel_order = self.fixture.ledger().order(cancel_id)
+        sentinel = Path(cancel_order["carrier"]["sentinel_path"])
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("fired\n", encoding="utf-8")
+        plist_path = Path(cancel_order["carrier"]["plist_path"])
+        self.assertTrue(plist_path.exists())
+        bootout_calls_before = len(self.bootout_calls)
+        cancelled = watcher.run_clocked_order_operation(
+            "cancel", {"order_id": cancel_id},
+            repo_root=str(self.fixture.root), ledger=self.fixture.ledger(), clock=self.clock,
+        )
+        self.assertEqual(cancelled["status"], "success", cancelled)
+        self.assertEqual(cancelled["state"], "cancelled", cancelled)
+        self.assertIn(str(plist_path), self.bootout_calls[bootout_calls_before:])
+        self.assertFalse(plist_path.exists())
+        self.assertFalse(sentinel.exists())
+        self.assertTrue(Path(cancel_order["carrier"]["fired_marker_path"]).exists())
+        self.assertEqual(self.fixture.ledger().order(cancel_id)["state"], "cancelled")
+        refused = self.fixture.discharge(cancel_id)
+        self.assertEqual(refused["status"], "blocked", refused)
+        self.assertEqual(refused["reason_code"], "clocked-order-terminal-state", refused)
+        self.assertIn("cancelled", json.dumps(refused))
+
+        # An automation-form carrier retires through the retirement record.
+        auto = self.armed_order({"automation": {"scheduled": True, "id": "auto-retire"}}, launchd_canary=False)
+        retired = watcher.run_clocked_order_operation(
+            "cancel", {"order_id": auto["order_id"]},
+            repo_root=str(self.fixture.root), ledger=self.fixture.ledger(), clock=self.clock,
+        )
+        self.assertEqual(retired["status"], "success", retired)
+        self.assertEqual(retired["carrier_teardown"]["carrier_form"], "automation", retired)
+        self.assertEqual(retired["carrier_teardown"]["automation_id"], "auto-retire", retired)
+        self.assertEqual(self.fixture.ledger().order(auto["order_id"])["state"], "cancelled")
+
+
+class ClockedOrderDueReaderTest(unittest.TestCase):
+    """The due-time reader's classification (plan Task 2's named arms).
+
+    The plan's RED contract ("no due classification exists today") was authored
+    against the pre-Task-1 watcher; Task 1 landed the ``due`` operation
+    un-tested by design (its log Deviation 5 defers this class to Task 2), so
+    the class witnesses the landed classification's contract instead of a red
+    interpreter error: an order whose requested epoch passed undischarged
+    classifies ``missed`` exactly once (naming the order id and requested
+    time; the terminal state suppresses the second classification), a fired
+    marker from the carrier record (a discharge in flight) never classifies,
+    discharged and cancelled orders never classify missed, and a still-future
+    order is never classified (the A7 pickup boundary, not the reader's).
+    """
+
+    def setUp(self) -> None:
+        self.clock = FakeClock(2_000_000_000.0)
+        self.fixture = ClockedOrderFixture(self.clock)
+        self.addCleanup(self.fixture.cleanup)
+
+    def record_order(self, order_id: str, *, requested_epoch: int, carrier: dict | None = None) -> None:
+        ledger = self.fixture.ledger()
+        ledger.record_order(
+            order_id=order_id,
+            requested_at_iso="2020-01-01T11:00:00",
+            requested_epoch=requested_epoch,
+            payload_text="# clocked order payload\n",
+            payload_slug="fixture-order",
+        )
+        if carrier is not None:
+            armed = ledger.mutate(
+                order_id,
+                event="order-armed",
+                from_states={"pending"},
+                to_state="armed",
+                carrier=carrier,
+            )
+            self.assertEqual(armed["status"], "success", armed)
+
+    def due(self) -> dict:
+        return watcher.run_clocked_order_operation(
+            "due", {},
+            repo_root=str(self.fixture.root),
+            ledger=self.fixture.ledger(),
+            clock=self.clock,
+        )
+
+    def test_overdue_order_classified_missed_once(self) -> None:
+        ledger = self.fixture.ledger()
+        # Pending and overdue: the due classification is `missed`, naming the
+        # order id and its requested time.
+        self.record_order("co-due-pending", requested_epoch=1_578_876_400)
+        first = self.due()
+        self.assertEqual(first["operation"], "clocked-order-due", first)
+        self.assertEqual(first["status"], "success", first)
         self.assertEqual(
-            {cls.__name__ for cls in all_subclasses(watcher.WatcherStateAdapter)},
-            {"RuntimeResumeWatcherAdapter", "PlansAuthoringWatcherAdapter", "FakeStateAdapter"},
+            first["missed"],
+            [{"order_id": "co-due-pending", "requested_at_iso": "2020-01-01T11:00:00", "requested_epoch": 1_578_876_400}],
+            first,
         )
-        # The same fenced receipt shape lands in both workflows' machine state.
-        authoring_result = self.boundary(known_continue_report(7_200_000_090))
-        runtime_transition = watcher.build_schedule_transition(
-            runtime_writer.read_state(),
-            watcher_id="rw-runtime-mirror",
-            plan_slug="fixture",
-            repo_root=str(runtime_fixture.root),
-            plan_path=str(runtime_fixture.plan_path),
-            plan_digest=runtime_fixture.plan_digest(),
-            reset_at_epoch=7_200_000_090,
-            scheduled_at_epoch=int(self.clock()),
-            binding="primary",
-        )
-        runtime_outcome = runtime_writer.compare_and_swap_schedule(runtime_transition)
-        self.assertEqual(runtime_outcome["status"], "success", runtime_outcome)
+        order = ledger.order("co-due-pending")
+        self.assertEqual(order["state"], "missed", order)
+        missed_events = [event for event in order["history"] if event["event"] == "order-missed"]
+        self.assertEqual(len(missed_events), 1, order["history"])
+        self.assertEqual(missed_events[0]["requested_at_iso"], "2020-01-01T11:00:00")
+        self.assertEqual(missed_events[0]["requested_epoch"], 1_578_876_400)
+        # The second classification is suppressed by the terminal state: an
+        # empty list, the ledger state unchanged, exactly one missed event.
+        second = self.due()
+        self.assertEqual(second["missed"], [], second)
+        self.assertEqual(ledger.order("co-due-pending")["state"], "missed")
         self.assertEqual(
-            set(authoring_result["machine"]["resume_watcher"]),
-            set(runtime_outcome["resume_watcher"]),
-            set(watcher.RESUME_WATCHER_FIELDS),
+            len([event for event in ledger.order("co-due-pending")["history"] if event["event"] == "order-missed"]),
+            1,
         )
-        # Firing adapters are constructed after the scheduling writes, exactly
-        # as a later watcher process would be; the same untouched-state fire
-        # evaluation on both adapters resumes.
-        authoring_fire = self.fixture.adapter()
-        runtime_fire = runtime_fixture.adapter()
-        authoring_decision = watcher.evaluate_fire(authoring_fire, self.fixture.peek_state()["resume_watcher"])
-        runtime_decision = watcher.evaluate_fire(runtime_fire, runtime_fixture.peek_state()["resume_watcher"])
-        for decision in (authoring_decision, runtime_decision):
-            self.assertEqual(decision["decision"], "resume")
-            self.assertEqual(decision["reason"], "untouched-state")
-        # And the same semantic-progress stand-down on both.
-        self.clock.advance(60)
-        self.assertEqual(authoring_writer.record_progress(["round folded"])["status"], "success")
-        self.assertEqual(runtime_fixture.driver.record_progress(["task-1:done"])["status"], "success")
-        for adapter, state_path in (
-            (authoring_fire, self.fixture.state_path),
-            (runtime_fire, runtime_fixture.state_path),
-        ):
-            receipt = json.loads(state_path.read_text(encoding="utf-8"))["resume_watcher"]
-            self.assertEqual(watcher.evaluate_fire(adapter, receipt)["reason"], "semantic-progress")
+
+        # Armed and overdue with a fired marker from the carrier record (a
+        # discharge in flight): no missed classification, the order stays
+        # armed.
+        fired_marker = self.fixture.state_dir / "co-due-fired.sentinel.fired"
+        fired_marker.parent.mkdir(parents=True, exist_ok=True)
+        fired_marker.write_text("fired\n", encoding="utf-8")
+        self.record_order(
+            "co-due-firing",
+            requested_epoch=1_578_876_400,
+            carrier={"armed": True, "sentinel_path": str(self.fixture.state_dir / "co-due-fired.sentinel"), "fired_marker_path": str(fired_marker)},
+        )
+        firing = self.due()
+        self.assertEqual(firing["missed"], [], firing)
+        self.assertEqual(ledger.order("co-due-firing")["state"], "armed")
+
+        # Armed and overdue with no fired marker: classified missed (the
+        # classification admits the armed state, not only pending).
+        self.record_order(
+            "co-due-armed",
+            requested_epoch=1_578_876_400,
+            carrier={"armed": True, "sentinel_path": str(self.fixture.state_dir / "co-due-armed.sentinel")},
+        )
+        armed = self.due()
+        self.assertEqual(
+            armed["missed"],
+            [{"order_id": "co-due-armed", "requested_at_iso": "2020-01-01T11:00:00", "requested_epoch": 1_578_876_400}],
+            armed,
+        )
+        self.assertEqual(ledger.order("co-due-armed")["state"], "missed")
+
+        # A discharged order never classifies missed; the state stays
+        # discharged and the missed list stays empty.
+        self.record_order("co-due-discharged", requested_epoch=1_578_876_400)
+        discharged = ledger.mutate("co-due-discharged", event="order-discharged", from_states={"pending"}, to_state="discharged")
+        self.assertEqual(discharged["status"], "success", discharged)
+        still_none = self.due()
+        self.assertEqual(still_none["missed"], [], still_none)
+        self.assertEqual(ledger.order("co-due-discharged")["state"], "discharged")
+
+        # A cancelled order never classifies missed either.
+        self.record_order("co-due-cancelled", requested_epoch=1_578_876_400)
+        cancelled = ledger.mutate("co-due-cancelled", event="order-cancelled", from_states={"pending"}, to_state="cancelled")
+        self.assertEqual(cancelled["status"], "success", cancelled)
+        cancelled_due = self.due()
+        self.assertEqual(cancelled_due["missed"], [], cancelled_due)
+        self.assertEqual(ledger.order("co-due-cancelled")["state"], "cancelled")
+
+        # A still-future order is never classified (the A7 pickup boundary:
+        # the reader marks only a passed deadline).
+        self.record_order("co-due-future", requested_epoch=2_100_000_000)
+        future = self.due()
+        self.assertEqual(future["missed"], [], future)
+        self.assertEqual(ledger.order("co-due-future")["state"], "pending")
 
 
 class LaunchdCarrierIdentityStructuralTest(unittest.TestCase):
@@ -3018,7 +1779,10 @@ class LaunchdCarrierIdentityStructuralTest(unittest.TestCase):
     # chain builder that arms the resolved identity (cli_scheduler_chain,
     # r6 F10: its own callers are constrained so a fire-path re-entry
     # through the chain cannot re-enable derivation) all close the
-    # allowlist transitively over the call graph.
+    # allowlist transitively over the call graph. The clocked-order
+    # identity family (plan 2026-10-05-authoring-clocked-resume-order) is
+    # part of the same closed surface: the per-order key derivation and its
+    # resolver beside the plan-keyed ones.
     DERIVATION_SYMBOLS = {
         "default_launchd_identity",
         "resolve_launchd_identity",
@@ -3026,16 +1790,23 @@ class LaunchdCarrierIdentityStructuralTest(unittest.TestCase):
         "armed_launchd_identity",
         "launchd_plist_path",
         "cli_scheduler_chain",
+        "default_clocked_order_identity",
+        "resolve_clocked_order_identity",
     }
     # Which production function may call each derivation helper, and where
-    # the schedule arm's branch sits inside the shared CLI handler.
+    # the arm handlers' schedule branches sit (the budget-resume shared CLI
+    # handler and the clocked-order operation handler).
+    ARM_HANDLERS = {"run_cli_watcher_operation", "run_clocked_order_operation"}
+    CONSUMING_BRANCH_KIND = {"run_cli_watcher_operation": "fire", "run_clocked_order_operation": "discharge-on-fire"}
     ALLOWED_CALLERS = {
         "default_launchd_identity": {"resolve_launchd_identity"},
         "resolve_launchd_identity": {"resolve_launchd_identity", "cli_scheduler_chain", "run_cli_watcher_operation"},
-        "launchd_identity_key": {"launchd_identity_key", "default_launchd_identity"},
-        "armed_launchd_identity": {"armed_launchd_identity", "run_cli_watcher_operation"},
+        "launchd_identity_key": {"launchd_identity_key", "default_launchd_identity", "default_clocked_order_identity"},
+        "armed_launchd_identity": {"armed_launchd_identity", "run_cli_watcher_operation", "run_clocked_order_operation"},
         "launchd_plist_path": {"launchd_plist_path", "armed_launchd_identity", "schedule"},
-        "cli_scheduler_chain": {"cli_scheduler_chain", "run_cli_watcher_operation"},
+        "cli_scheduler_chain": {"cli_scheduler_chain", "run_cli_watcher_operation", "run_clocked_order_operation"},
+        "default_clocked_order_identity": {"resolve_clocked_order_identity", "run_clocked_order_operation"},
+        "resolve_clocked_order_identity": {"run_clocked_order_operation"},
     }
 
     @staticmethod
@@ -3112,18 +1883,20 @@ class LaunchdCarrierIdentityStructuralTest(unittest.TestCase):
                 self.ALLOWED_CALLERS[symbol],
                 f"{symbol} called outside the arm path: enclosing production function {owner_name}",
             )
-            # The one handler call site must sit in the SCHEDULE branch of
-            # run_cli_watcher_operation (the arm), never the fire branch.
-            if owner_name == "run_cli_watcher_operation":
+            # A handler call site must sit in the SCHEDULE branch of its arm
+            # handler (the budget-resume shared CLI handler and the
+            # clocked-order operation handler), never the consuming branch
+            # (the fire branch, respectively the discharge-on-fire branch).
+            if owner_name in self.ARM_HANDLERS:
                 schedule_span = self._branch_span(owner_node, "schedule")
-                fire_span = self._branch_span(owner_node, "fire")
+                fire_span = self._branch_span(owner_node, self.CONSUMING_BRANCH_KIND[owner_name])
                 self.assertIsNotNone(schedule_span)
                 self.assertIsNotNone(fire_span)
                 self.assertGreaterEqual(node.lineno, schedule_span[0])
                 self.assertLessEqual(node.lineno, schedule_span[1])
                 self.assertFalse(
                     fire_span[0] <= node.lineno <= fire_span[1],
-                    "carrier-identity derivation inside the fire branch",
+                    "carrier-identity derivation inside the consuming branch",
                 )
         self.assertEqual(
             witnessed,
@@ -3180,6 +1953,94 @@ class LaunchdCarrierIdentityStructuralTest(unittest.TestCase):
             self.assertTrue(result["scheduled"], result)
             self.assertEqual(result["job"], record["plist_path"])
             self.assertTrue(Path(record["plist_path"]).exists())
+
+
+class DirectoryPlanPassthroughTest(unittest.TestCase):
+    """The schedule arm's plan operand passthrough under the directory plan shape.
+
+    Plan 2026-10-08-plan-directory-shape Task 3. The watcher resolves a
+    well-formed plan directory through the shared shape resolver: the
+    scheduled receipt carries the manifest digest, and the live digest
+    re-derivation over the same directory returns it unchanged; a malformed
+    directory refuses through the resolver's named arm instead of the
+    legacy unreadable refusal.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _plan_dir(self) -> Path:
+        plan_dir = self.root / "2026-10-08-watcher-dir-plan"
+        (plan_dir / "tasks").mkdir(parents=True)
+        (plan_dir / plan_shape.CHARTER_FILENAME).write_text(
+            "# Plan: watcher fixture\n\n## Why\nCharter why line.\n", encoding="utf-8"
+        )
+        (plan_dir / "tasks" / "01-only.md").write_text(
+            "### Task 1: only\n\n- [ ] work item\n", encoding="utf-8"
+        )
+        return plan_dir
+
+    def _expected_manifest_digest(self, plan_dir: Path) -> str:
+        charter = plan_dir / plan_shape.CHARTER_FILENAME
+        entries = [
+            (plan_shape.CHARTER_FILENAME, charter.read_bytes()),
+            (f"{plan_shape.TASKS_DIRNAME}/01-only.md", (plan_dir / "tasks" / "01-only.md").read_bytes()),
+        ]
+        return hashlib.sha256(plan_shape.manifest_digest_payload(entries)).hexdigest()
+
+    def _schedule(self, plan_path: Path, state_path: Path) -> dict:
+        adapter = watcher.PlansAuthoringWatcherAdapter(state_path, repo_root=str(self.root))
+        return watcher.run_cli_watcher_operation(
+            "schedule",
+            {
+                "state_path": str(state_path),
+                "plan_path": str(plan_path),
+                "probe_report": known_continue_report(3_600_000_000),
+                "plan_slug": "2026-10-08-watcher-dir-plan",
+                # An automation echo keeps the chain off the launchd link.
+                "automation": {"scheduled": True, "id": "auto-fixture"},
+            },
+            adapter=adapter,
+            supersede=adapter.compare_and_swap_supersede,
+            outcome_factory=runtime._outcome,
+            identity_prefix="plans-watcher",
+            plan_slug="2026-10-08-watcher-dir-plan",
+            repo_root=str(self.root),
+        )
+
+    def test_resume_watcher_directory_passthrough(self) -> None:
+        plan_dir = self._plan_dir()
+        state_path = self.root / "plan-requirements-watcher-dir.json"
+        outcome = self._schedule(plan_dir, state_path)
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        receipt = state["resume_watcher"]
+        self.assertEqual(receipt["plan_path"], str(plan_dir.resolve()))
+        self.assertEqual(receipt["plan_digest"], self._expected_manifest_digest(plan_dir))
+        # The live fire fence re-derives the same manifest digest over the
+        # directory operand, so the receipt-versus-live digest fence holds.
+        self.assertEqual(watcher.file_digest(plan_dir), self._expected_manifest_digest(plan_dir))
+        # A malformed directory refuses through the resolver's named arm,
+        # naming the defect and the operand path.
+        charterless = self.root / "2026-10-08-charterless"
+        charterless.mkdir()
+        with self.assertRaisesRegex(ValueError, "plan operand refused.*not a file"):
+            self._schedule(charterless, self.root / "plan-requirements-charterless.json")
+        # A FILE operand the resolver refuses (non-UTF-8 bytes) falls back
+        # to the raw-bytes sha256 digest, the pre-Task-3 behavior: the
+        # schedule succeeds and the receipt binds the file's byte digest.
+        raw_file = self.root / "2026-10-08-latin1-plan.md"
+        raw_bytes = b"# plan\n\nalpha \x97 bravo.\n"
+        raw_file.write_bytes(raw_bytes)
+        raw_state = self.root / "plan-requirements-latin1.json"
+        raw_outcome = self._schedule(raw_file, raw_state)
+        self.assertEqual(raw_outcome["status"], "success", raw_outcome)
+        raw_receipt = json.loads(raw_state.read_text(encoding="utf-8"))["resume_watcher"]
+        self.assertEqual(raw_receipt["plan_digest"], hashlib.sha256(raw_bytes).hexdigest())
 
 
 if __name__ == "__main__":

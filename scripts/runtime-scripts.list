@@ -16,12 +16,10 @@ test_tool_runtime_stats.py
 plan_readiness.py
 quota_window_probe.py
 #
-# The seven regular-file entries with canonical counterparts (conversion
+# The five regular-file entries with canonical counterparts (conversion
 # class: renamed aside to <name>.bak-YYYYMMDD and symlinked on sync):
 rearm_on_touch.py
 lessons.py
-docs_branch_backlog_dedupe.py
-docs_branch_plan_guard.py
 worktree_closeout_migrate.py
 done_sweep_gates_lib.py
 done_sweep_gates.sh
@@ -36,6 +34,12 @@ check_backlog_claimed.py
 reverse_squash_guard.py
 test_reverse_squash_guard.py
 #
+# Execution-claim gateway (born by the 2026-10-07 execution-claim
+# write-enforcement plan; the execute-plan worktree step and the maintenance
+# blueprint resolve the deployed copy as the pinned take/claim/refresh/release
+# procedure of record):
+execution_claim.sh
+#
 # Base-branch reflog audit (born under the outcome contract by the
 # ref-move-integrity-fences plan; the landing tails' post-landing audit duty
 # resolves the deployed copy when the repo-local probe misses):
@@ -47,7 +51,45 @@ test_base_reflog_audit.py
 # the repo-local probe misses):
 read_freshness_probe.py
 test_read_freshness_probe.py
-base_branch_amend_guard.py
-test_base_branch_amend_guard.py
 scripts/land_squash.sh
 scripts/test_land_squash.py
+# Canonical review and metrics archive sync with focused policy-invariance and retention fixtures:
+docs_branch_sync.sh
+test_docs_branch_sync.py
+#
+# Done-flow helpers joined by the 2026-10-07 done-closeout-cost-and-skill-scope
+# plan (one line per name per the header's documented mechanism; the carrier
+# deploy_runtime_helpers.sh reads this manifest at run time):
+dirt_regression_gate.py
+doc_registry_validator.py
+revert_set_classifier.py
+validate_review_staging.py
+facts_paths.py
+corrections_record.py
+plan_delta_classifier.py
+code_delta_classifier.py
+fix_plan_em_dashes.py
+scan-public-hygiene.sh
+check_backlog_inbox_location.py
+check_cleanup_scope_baseline.py
+deploy_runtime_helpers.sh
+test_deploy_runtime_helpers.py
+#
+# The plan-shape resolver joined by the 2026-10-08 plan-directory-shape plan
+# (deployed beside its consumers plan_readiness.py and validate_review_staging.py;
+# the one grammar derivation for plan operands):
+plan_shape.py
+#
+# More names the done skill's resolution conventions resolve from the deployed
+# home copy (probe repo-local first then deployed home, or a Configuration
+# table default under ~/.ai-playbook/scripts):
+done-lock.sh
+confluence-mirror-hygiene.sh
+staged_scope_guard.py
+check_lesson_scope.py
+check_authoring_plans_liveness.py
+gate_liveness_ledger.py
+check-no-em-dash.sh
+check-instruction-size.sh
+check_skill_description_length.py
+skill_text_budget.py

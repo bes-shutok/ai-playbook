@@ -63,6 +63,18 @@ class RetentionCliFixture(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.reviews = self.root / "reviews"
         self.reviews.mkdir()
+        # tmp_dir/reviews_dir resolve facts-first and fail closed: every
+        # fixture carries the standard facts block unless a test writes its
+        # own (mirroring production, where a bootstrapped repo has facts).
+        facts_dir = self.root / ".ai-playbook"
+        facts_dir.mkdir()
+        (facts_dir / "facts.md").write_text(
+            "```toml\n"
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            'tmp_dir = "docs/tmp/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
 
     # -- fixtures ---------------------------------------------------------
 
@@ -212,6 +224,19 @@ class ReviewRetentionTest(RetentionCliFixture):
         self.assertEqual(self.section_count(out, "in_window_retained"), 1)
         self.assertNotIn("mtime", out)
 
+    def test_empty_reviews_dir_facts_value_fails_loud(self) -> None:
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.write_text(
+            "```toml\n"
+            'reviews_dir = ""\n'
+            'tmp_dir = "docs/tmp/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        code, _out, err = self.run_cli("--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot resolve reviews_dir", err)
+
     def test_retention_months_default_and_override(self) -> None:
         # Scenario A: no facts key anywhere -> documented default of three
         # calendar months.
@@ -248,10 +273,12 @@ class ReviewRetentionTest(RetentionCliFixture):
         # Scenario C: the review_retention_months facts key (TOML fence),
         # and the flag's precedence over it.
         facts_dir = self.root / ".ai-playbook"
-        facts_dir.mkdir()
+        facts_dir.mkdir(exist_ok=True)
         (facts_dir / "facts.md").write_text(
             "```toml\n"
             'plans_dir = "docs/history/plans/"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            'tmp_dir = "docs/tmp/"\n'
             'review_retention_months = "1"\n'
             "```\n",
             encoding="utf-8",

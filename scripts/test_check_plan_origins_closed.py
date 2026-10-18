@@ -114,6 +114,12 @@ class PlanOriginsClosedTest(unittest.TestCase):
             self.plans_dir / name, "\n".join(lines) + body
         )
 
+    def _extractors(self):
+        sys.path.insert(0, str(SCRIPT_PATH.parent))
+        import check_plan_origins_closed as gate
+
+        return gate.extract_origin_basenames, gate.extract_coverage_origin_basenames
+
     def _run(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--repo-root", str(self.root)]
@@ -306,6 +312,150 @@ class PlanOriginsClosedTest(unittest.TestCase):
         proc = self._run("--plan", str(plan))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("no origins block; nothing to verify", proc.stdout)
+
+    # ------------------------------------------------------------------
+    # Plural origins token grammar and its coverage/archive consumers
+    # ------------------------------------------------------------------
+
+    def test_witnessed_archived_plan_parses_through_both_extractors(self) -> None:
+        witnessed = (
+            SCRIPT_PATH.parent.parent
+            / "docs/history/plans/completed/2026-10-07-done-readiness-closeout-boundary.md"
+        ).read_text(encoding="utf-8")
+        extract_origin, extract_coverage = self._extractors()
+        expected = [
+            "2026-10-06-done-unrelated-gate-blocks-closeout.md",
+            "2026-10-05-authoring-certification-staging-series-gate.md",
+        ]
+        self.assertEqual(
+            extract_origin(witnessed, self.backlog, self.completed), expected
+        )
+        self.assertEqual(
+            extract_coverage(witnessed, self.backlog, self.completed), expected
+        )
+
+    def test_plural_token_shapes_parse_through_both_extractors(self) -> None:
+        extract_origin, extract_coverage = self._extractors()
+        cases = [
+            (
+                "plain and mixed bullets",
+                f"- docs/history/backlog/{ALPHA}\n"
+                f"* `docs/history/backlog/{BETA}`; annotated\n",
+                [ALPHA, BETA],
+            ),
+            (
+                "duplicate basenames",
+                f"- docs/history/backlog/{ALPHA}\n"
+                f"- docs/history/backlog/completed/{ALPHA}\n",
+                [ALPHA],
+            ),
+            (
+                "compound bullet uses only its leading token",
+                f"- docs/history/backlog/{ALPHA} and docs/history/backlog/{BETA}\n",
+                [ALPHA],
+            ),
+            (
+                "wrapped prose does not add trailing paths",
+                f"- docs/history/backlog/{ALPHA},\n"
+                f"  continuation docs/history/backlog/{BETA}\n"
+                f"  wrapped reference `docs/history/backlog/{GAMMA}`\n",
+                [ALPHA, GAMMA],
+            ),
+            (
+                "non-backlog markdown token is ignored",
+                f"- docs/reviews/{ALPHA}\n",
+                [],
+            ),
+            (
+                "leading-token punctuation is stripped",
+                f"- docs/history/backlog/{ALPHA},\n"
+                f"- docs/history/backlog/{BETA};\n"
+                f"- docs/history/backlog/{GAMMA}:\n",
+                [ALPHA, BETA, GAMMA],
+            ),
+            (
+                "backticked paths accept trailing punctuation",
+                f"- `docs/history/backlog/{ALPHA}`.\n"
+                f"- `docs/history/backlog/{BETA}`,\n"
+                f"- `docs/history/backlog/{GAMMA}`;\n"
+                "- `docs/history/backlog/2026-09-02-origin-delta.md`:\n",
+                [ALPHA, BETA, GAMMA, "2026-09-02-origin-delta.md"],
+            ),
+            (
+                "punctuation inside backticks uses the bare-token arm",
+                f"- `docs/history/backlog/{ALPHA},`\n",
+                [ALPHA],
+            ),
+        ]
+        for label, bullets, expected in cases:
+            with self.subTest(shape=label):
+                text = "Backlog origins (scope of record):\n" + bullets + "\n## Tasks\n"
+                self.assertEqual(
+                    extract_origin(text, self.backlog, self.completed), expected
+                )
+                self.assertEqual(
+                    extract_coverage(text, self.backlog, self.completed), expected
+                )
+
+    def test_coverage_audit_warns_without_changing_mode_results(self) -> None:
+        missing = "2026-09-01-origin-listed-only.md"
+        self._open_top(missing)
+        cases = [
+            (
+                "matched empty block",
+                "Backlog origins (scope of record):\n\n"
+                "## Origins dispositions\n\n"
+                f"- `docs/history/backlog/{missing}`: listed\n",
+                "matched origins block parsed no basenames",
+            ),
+            (
+                "unmatched header",
+                "Backlog origin list:\n\n"
+                "## Origins dispositions\n\n"
+                f"- `docs/history/backlog/{missing}`: listed\n",
+                "origins header line was unmatched",
+            ),
+        ]
+        for index, (label, text, diagnostic) in enumerate(cases):
+            with self.subTest(shape=label):
+                plan = self._write(
+                    self.plans_dir / f"2026-09-22-fixture-audit-{index}.md",
+                    text,
+                )
+                args = [
+                    "--active-plans-dir", "docs/history/plans",
+                    "--plans-dir", "docs/history/plans/completed",
+                    "--backlog-dir", "docs/history/backlog",
+                ]
+                coverage = self._run("--check-coverage", str(plan), *args)
+                self.assertEqual(coverage.returncode, 0, coverage.stdout + coverage.stderr)
+                self.assertIn(missing, coverage.stdout + coverage.stderr)
+                self.assertIn(diagnostic, coverage.stdout + coverage.stderr)
+                self.assertIn("warning", coverage.stdout + coverage.stderr)
+
+                before = (self.backlog / missing).read_bytes()
+                marked = self._run("--mark-covered", str(plan))
+                self.assertEqual(marked.returncode, 0, marked.stdout + marked.stderr)
+                self.assertIn(missing, marked.stdout + marked.stderr)
+                self.assertIn(diagnostic, marked.stdout + marked.stderr)
+                self.assertIn("warning", marked.stdout + marked.stderr)
+                self.assertNotIn("marked 1 origin(s) covered", marked.stdout)
+                self.assertEqual((self.backlog / missing).read_bytes(), before)
+
+    def test_plain_bullet_parse_remains_visible_to_archive_and_corpus_modes(self) -> None:
+        self._open_top(ALPHA)
+        plan = self._write(
+            self.plans_dir / "2026-09-22-fixture-plain-bullet.md",
+            "# Plan: plain bullet\n\n"
+            "Backlog origins (scope of record):\n"
+            f"- docs/history/backlog/{ALPHA}\n\n",
+        )
+        archive = self._run("--plan", str(plan))
+        self.assertEqual(archive.returncode, 1, archive.stdout + archive.stderr)
+        self.assertIn(f"straggler: {ALPHA}", archive.stdout)
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stderr)
+        self.assertIn(f"origin {ALPHA} unresolved", corpus.stdout)
 
 
     # ------------------------------------------------------------------
@@ -539,6 +689,56 @@ class OriginsBlockGrammarTest(unittest.TestCase):
             f"- `{BETA}`\n"
             "\n"
             "## Tasks\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [ALPHA, BETA])
+
+    def test_bare_path_leading_tokens_are_origins(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"- docs/history/backlog/{ALPHA}, context follows\n"
+            f"* `docs/history/backlog/{BETA}`; more context\n"
+            f"+ docs/history/backlog/{ALPHA}.\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [ALPHA, BETA])
+
+    def test_prose_leading_token_contributes_backticks_only(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"- Review this item before `docs/history/backlog/{ALPHA}`\n"
+            f"- This references docs/history/backlog/{BETA} in prose\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [ALPHA])
+
+    def test_bare_path_on_non_bullet_continuation_is_ignored(self):
+        self._archived(ALPHA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"docs/history/backlog/{ALPHA} continuation text\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [])
+
+    def test_mixed_bare_and_backticked_paths_keep_text_order(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"- docs/history/backlog/{ALPHA} then `docs/history/backlog/{BETA}`\n"
         )
         names = self.gate.extract_origin_basenames(
             text, self.backlog, self.completed
@@ -1209,6 +1409,199 @@ class CheckPlanOriginsClosedOutcomeTest(unittest.TestCase):
         )
         self.assertEqual(help_proc.returncode, 0, help_proc.stdout)
         self.assertEqual(self._outcome_lines(help_proc), [])
+
+
+class DirectoryPlanOriginsTest(unittest.TestCase):
+    """Directory-plan operands (plan-directory-shape Task 2): a `--plan`
+    directory reads its origins block from the charter; the corpus walk
+    treats a plans-root directory plan as one unit beside file plans; and
+    the covered witness matches a covering directory plan by its slug."""
+
+    SLUG = "2026-10-08-dir-gate"
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="origins-dir-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.backlog = self.root / "docs" / "history" / "backlog"
+        self.completed = self.backlog / "completed"
+        self.active = self.root / "docs" / "history" / "plans"
+        self.plans_dir = self.active / "completed"
+        for directory in (
+            self.completed,
+            self.plans_dir,
+            self.root / ".ai-playbook",
+        ):
+            directory.mkdir(parents=True)
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        sys.path.insert(0, str(SCRIPT_PATH.parent))
+        import check_plan_origins_closed as gate
+
+        self.gate = gate
+
+    def _write(self, path: Path, text: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _open_top(self, name: str) -> Path:
+        return self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: open\n\nbody\n",
+        )
+
+    def _archived(self, name: str) -> Path:
+        return self._write(
+            self.completed / name,
+            f"# Backlog: {name}\n\nStatus: done\n\nbody\n",
+        )
+
+    def _directory_plan(self, slug: str, charter_text: str) -> Path:
+        plan_dir = self.plans_dir / slug
+        self._write(plan_dir / "tasks" / "01-only.md", "### Task 1: only\n")
+        return self._write(plan_dir / "PLAN.md", charter_text)
+
+    def _covered_top(self, name: str, witness: str) -> Path:
+        return self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: covered ({witness})\n\nbody\n",
+        )
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--repo-root", str(self.root)]
+            + list(args),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_origins_directory_archive_gate(self) -> None:
+        # Arm 1: the witnessed unbackticked plural origins block (the real
+        # corpus shape: prose paths, no backticks). The gate reads the
+        # charter from the directory operand, never misclassifies the
+        # prose paths as live origins, and passes.
+        self._open_top(ALPHA)
+        self._open_top(BETA)
+        plan_dir = self.plans_dir / self.SLUG
+        self._write(plan_dir / "tasks" / "01-only.md", "### Task 1: only\n")
+        self._write(
+            plan_dir / "PLAN.md",
+            "# Plan: dir gate\n\n"
+            "Backlog origins (scope of record): this plan covers "
+            f"docs/history/backlog/{ALPHA} and absorbs one uncovered "
+            f"sibling whose remedy is this plan's own task: "
+            f"docs/history/backlog/{BETA}.\n\n"
+            "## Tasks\n",
+        )
+        proc = self._run("--plan", str(plan_dir))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no origins block", proc.stdout)
+        self.assertNotIn("straggler", proc.stdout)
+        # Arm 2: the undercount audit fires on a dispositions/parsed gap
+        # read from the charter: the block parses one (archived, closed)
+        # origin while the dispositions section lists three.
+        self._archived(ALPHA)
+        self._archived(BETA)
+        self._archived(GAMMA)
+        undercount_slug = "2026-10-08-dir-undercount"
+        undercount_dir = self.plans_dir / undercount_slug
+        self._write(
+            undercount_dir / "tasks" / "01-only.md", "### Task 1: only\n"
+        )
+        self._write(
+            undercount_dir / "PLAN.md",
+            "# Plan: dir undercount\n\n"
+            "Backlog origins (scope of record):\n"
+            f"- `{ALPHA}`\n"
+            "\n"
+            "## Origins dispositions\n\n"
+            f"- `{ALPHA}`: routed done\n"
+            f"- `{BETA}`: routed done\n"
+            f"- `{GAMMA}`: routed done\n",
+        )
+        proc = self._run("--plan", str(undercount_dir))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("warning", combined)
+        self.assertIn(undercount_slug, combined)
+        self.assertIn("3", combined)
+        self.assertIn("1", combined)
+
+    def test_origins_directory_archive_gate_refuses_malformed(self) -> None:
+        # A charterless directory operand is a named tool error, never a
+        # traceback and never a trivial pass.
+        charterless = self.plans_dir / "2026-10-08-charterless"
+        charterless.mkdir(parents=True)
+        proc = self._run("--plan", str(charterless))
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("tool_error", proc.stdout + proc.stderr)
+        self.assertIn("charterless", proc.stderr)
+
+    def test_origins_directory_witness(self) -> None:
+        # A covered origin whose covering witness names a DIRECTORY plan
+        # passes when the directory plan exists under the active plans
+        # root: the witness match re-derives the directory slug (the
+        # charter sits at <slug>/PLAN.md, so a basename-only match would
+        # miss it).
+        gated = self.plans_dir / "2026-10-08-dir-gated.md"
+        self._write(
+            gated,
+            "# Plan: dir gated\n\n"
+            "Backlog origins (scope of record): "
+            f"`docs/history/backlog/{BETA}`.\n",
+        )
+        self._covered_top(BETA, "docs/history/plans/2026-10-08-dir-cover")
+        covering = self._directory_plan(
+            "2026-10-08-dir-cover",
+            "# Plan: dir cover\n\n## Tasks\n\n- [x] done\n",
+        )
+        self.assertTrue(covering.is_file())
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok (1/1 origins closed)", proc.stdout)
+        # The unit-level witness predicate matches the directory slug.
+        self.assertTrue(
+            self.gate._witness_plan_exists(
+                "2026-10-08-dir-cover", self.active, self.plans_dir
+            )
+        )
+        # A witness naming NO existing plan (file or directory slug) keeps
+        # the fold remedy straggler.
+        self._covered_top(
+            GAMMA, "docs/history/plans/2026-10-08-dir-nowhere"
+        )
+        stranded = self.plans_dir / "2026-10-08-dir-stranded.md"
+        self._write(
+            stranded,
+            "# Plan: dir stranded\n\n"
+            "Backlog origins (scope of record): "
+            f"`docs/history/backlog/{GAMMA}`.\n",
+        )
+        proc = self._run("--plan", str(stranded))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f"straggler: {GAMMA}", proc.stdout)
+
+    def test_corpus_scan_discovers_directory_plan(self) -> None:
+        # The corpus walk treats a directory plan as ONE unit beside file
+        # plans: the charter's origins block is scanned, member files never
+        # scan as separate plans, and the warning names the directory slug.
+        self._open_top(ALPHA)
+        self._directory_plan(
+            self.SLUG,
+            "# Plan: dir corpus\n\n"
+            "Backlog origins (scope of record): "
+            f"`docs/history/backlog/{ALPHA}`.\n"
+            "\n## Tasks\n",
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stderr)
+        self.assertIn(self.SLUG, corpus.stdout)
+        self.assertIn(f"origin {ALPHA} unresolved", corpus.stdout)
+        self.assertIn("1 archived plan(s)", corpus.stdout)
+        self.assertNotIn("01-only.md", corpus.stdout)
+        self.assertNotIn("PLAN.md:", corpus.stdout)
 
 
 if __name__ == "__main__":

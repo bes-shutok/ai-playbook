@@ -248,27 +248,42 @@ class LandingParentageGateTest(unittest.TestCase):
             "refuse: default branch no longer descends from pre-landing tip",
             proc.stdout)
 
-    def test_post_landing_origin_ref_passes_and_refuses(self):
+    def test_post_landing_origin_ref_passes_and_notes_divergence(self):
+        # Informational case (the removed origin refusal, rewritten): main
+        # descends from the checked pre-landing tip while the origin-tracking
+        # ref is a non-ancestor of main. The landing commit descends from the
+        # pre-tip, so the landing cannot have changed the origin ref's
+        # ancestry relationship: the leg exits 0 with no refuse line and
+        # exactly one note naming the origin ref and the descent fact.
         git(self.root, "update-ref", "refs/remotes/origin/main", self.pre_tip)
-        # Refuse case: origin at the pre-orphan base, main severed.
-        orphan = commit_tree(self.root, self.tree)
-        git(self.root, "update-ref", "refs/heads/main", orphan)
+        child = commit_tree(self.root, self.tree, self.pre_tip)
+        git(self.root, "update-ref", "refs/heads/main", child)
+        diverged = commit_tree(self.root, self.tree)
+        git(self.root, "update-ref", "refs/remotes/origin/main", diverged)
         proc = run(["post-landing", "--repo", str(self.root),
                     "--pre-tip", self.pre_tip, "--default-ref", "main",
                     "--origin-ref", "origin/main"])
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("refuse: default branch no longer descends from origin/main",
-                      proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertNotIn("refuse:", proc.stdout)
+        notes = [line for line in proc.stdout.splitlines()
+                 if line.startswith("note:")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("origin/main", notes[0])
+        self.assertIn("predates the landing", notes[0])
         # Green path: a fresh pre-tip child on main with origin repointed at
-        # an ancestor of main passes both legs (exercises the origin-leg ok).
-        child = commit_tree(self.root, self.tree, self.pre_tip)
-        git(self.root, "update-ref", "refs/heads/main", child)
+        # an ancestor of main passes both legs (the ok line, no note).
+        child2 = commit_tree(self.root, self.tree, child)
+        git(self.root, "update-ref", "refs/heads/main", child2)
         git(self.root, "update-ref", "refs/remotes/origin/main", self.pre_tip)
         proc = run(["post-landing", "--repo", str(self.root),
                     "--pre-tip", self.pre_tip, "--default-ref", "main",
                     "--origin-ref", "origin/main"])
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("ok: default branch ancestry verified", proc.stdout)
+        notes = [line for line in proc.stdout.splitlines()
+                 if line.startswith("note:")]
+        self.assertEqual(notes, [])
 
     def test_post_landing_absent_origin_ref_skips(self):
         proc = run(["post-landing", "--repo", str(self.root),
@@ -295,7 +310,11 @@ class LandingParentageGateTest(unittest.TestCase):
                     "--pre-tip", self.pre_tip, "--default-ref", "main"])
         self.assertEqual(proc.returncode, 3)
 
-    def test_post_landing_both_legs_drop_prints_both_refuse_lines(self):
+    def test_post_landing_severed_with_diverged_origin_refuses_once(self):
+        # Severed default branch plus a diverged origin-tracking ref: the
+        # pre-tip protection still refuses with exit 1 and exactly one
+        # refuse line (the pre-landing-tip one, reported first); the origin
+        # divergence rides as its informational note.
         git(self.root, "update-ref", "refs/remotes/origin/main", self.pre_tip)
         orphan = commit_tree(self.root, self.tree)
         git(self.root, "update-ref", "refs/heads/main", orphan)
@@ -303,11 +322,23 @@ class LandingParentageGateTest(unittest.TestCase):
                     "--pre-tip", self.pre_tip, "--default-ref", "main",
                     "--origin-ref", "origin/main"])
         self.assertEqual(proc.returncode, 1)
-        pre_line = proc.stdout.index(
-            "refuse: default branch no longer descends from pre-landing tip")
-        origin_line = proc.stdout.index(
-            "refuse: default branch no longer descends from origin/main")
-        self.assertLess(pre_line, origin_line)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+        self.assertEqual(proc.stdout.count("refuse:"), 1)
+        self.assertIn(
+            "refuse: default branch no longer descends from pre-landing tip",
+            proc.stdout)
+        self.assertNotIn(
+            "refuse: default branch no longer descends from origin/main",
+            proc.stdout)
+        notes = [line for line in proc.stdout.splitlines()
+                 if line.startswith("note:")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("origin/main", notes[0])
+        self.assertIn("predates the landing", notes[0])
+        self.assertLess(
+            proc.stdout.index(
+                "refuse: default branch no longer descends from pre-landing tip"),
+            proc.stdout.index(notes[0]))
 
 
 class LandingParentageGatePreSwapLegsTest(unittest.TestCase):

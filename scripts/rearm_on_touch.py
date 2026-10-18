@@ -101,7 +101,7 @@ LIVE_CHILD_HORIZON = timedelta(hours=6)
 # agents/skills/maintenance/zcode.md ("Recurring automation recipe"). This
 # script mirrors, never edits, them; scripts/check_maintenance_pins.sh
 # freezes the originals.
-RECOGNITION_TITLE = "Maintenance scheduler turn (every 2 hours)"
+RECOGNITION_TITLE = "Maintenance scheduler turn"
 RECOGNITION_PROMPT_OPENING = "You are the maintenance scheduler for the repository at"
 
 STATE_REL_PATH = ".ai-playbook/scheduler-state.json"

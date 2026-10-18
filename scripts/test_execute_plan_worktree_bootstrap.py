@@ -37,7 +37,7 @@ round) and ``source_digest`` is the fixture plan's SHA-256. The sidecar
 sits beside the review Markdown under ``stats_sidecar_path`` (the
 ``.stats.json`` suffix replaces ``.md``). The facts file and the reviews
 pair stay gitignored and UNTRACKED in the primary (mirroring the real
-repository, where ``git ls-files docs/reviews`` is empty), so a fresh
+repository, where ``git ls-files .ai-playbook/reviews`` is empty), so a fresh
 linked worktree genuinely lacks them and the negative control holds.
 
 Run: ``python3 scripts/test_execute_plan_worktree_bootstrap.py`` from the
@@ -74,7 +74,7 @@ SLUG = "fixture-plan"
 REVIEW_MD_NAME = f"{PLAN_DATE}-plan-review-{SLUG}-r1.md"
 REVIEW_SIDECAR_NAME = f"{PLAN_DATE}-plan-review-{SLUG}-r1.stats.json"
 
-GITIGNORE_BODY = "/.ai-playbook/\n/docs/reviews\n/docs/tmp/\n"
+GITIGNORE_BODY = "/.ai-playbook/\n/docs/tmp/\n"
 
 # The TOML keys the readiness gate and the bootstrap recipe resolve, with
 # the shapes copied from the real repository's .ai-playbook/facts.md.
@@ -83,7 +83,7 @@ plans_dir = "docs/history/plans/"
 plans_completed_dir = "docs/history/plans/completed/"
 backlog_dir = "docs/history/backlog/"
 backlog_completed_dir = "docs/history/backlog/completed/"
-reviews_dir = "docs/reviews/"
+reviews_dir = ".ai-playbook/reviews/"
 tmp_dir = "docs/tmp/"
 facts_path = ".ai-playbook/facts.md"
 doc_registry_rel = "docs/maintenance/document-registry.md"
@@ -384,7 +384,7 @@ def build_fixture_repo(primary: Path) -> None:
     plan_path.write_text(FIXTURE_PLAN, encoding="utf-8")
     digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
 
-    reviews_dir = primary / "docs" / "reviews"
+    reviews_dir = primary / ".ai-playbook" / "reviews"
     reviews_dir.mkdir(parents=True)
     (reviews_dir / REVIEW_MD_NAME).write_text(
         FIXTURE_REVIEW_TEMPLATE.format(
@@ -473,7 +473,7 @@ class WorktreeBootstrapTest(unittest.TestCase):
             "bootstrap did not copy .ai-playbook/facts.md into the worktree",
         )
         # Outcome 2: the certified reviews sidecar pair copied.
-        reviews = worktree / "docs" / "reviews"
+        reviews = worktree / ".ai-playbook" / "reviews"
         self.assertTrue((reviews / REVIEW_MD_NAME).is_file())
         self.assertTrue((reviews / REVIEW_SIDECAR_NAME).is_file())
         # Outcome 3: the tmp directory created.
@@ -505,6 +505,40 @@ class WorktreeBootstrapTest(unittest.TestCase):
             "facts" in stderr or "reviews" in stderr,
             f"expected an environment failure naming facts or reviews, "
             f"got: {gate.stderr!r}",
+        )
+
+    def test_missing_plan_remedy_carries_stranded_input_pre_pass(self):
+        """The missing-plan remedy routes stranded inputs through the plans
+        Final Step handoff (the stranded-input pre-pass, both conditions and
+        the claim-header selection binding), and the Reference contract no
+        longer scopes the closeout-baseline capture to the execution payload
+        (plan-authoring-done-closeout)."""
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "reports the plan missing",
+            skill_text,
+            "the stranded-input pre-pass's missing-plan condition is missing",
+        )
+        self.assertIn(
+            "any record of the plan's expected review series",
+            skill_text,
+            "the stranded-input pre-pass's review-series condition is missing",
+        )
+        self.assertIn(
+            "the plans skill's Final Step handoff for the authoring worktree",
+            skill_text,
+            "the pre-pass must route by reference to the plans Final Step handoff",
+        )
+        self.assertIn(
+            "that header match is the claim binding",
+            skill_text,
+            "the pre-pass worktree selection lost its claim-header binding",
+        )
+        self.assertNotIn(
+            "execution payload only, the closeout-baseline capture",
+            skill_text,
+            "the Reference contract still scopes the closeout-baseline "
+            "capture to execution payload only",
         )
 
 

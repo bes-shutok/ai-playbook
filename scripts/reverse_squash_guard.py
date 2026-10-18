@@ -3,9 +3,9 @@
 
 Two thin modes over one detection core, plus one commit-inspection mode:
 
-  check-staged [--repo ROOT] [--ack SHA]
+  check-staged [--repo ROOT] [--ack SHA]...
       Judge the index of ROOT (default: process cwd) against ROOT HEAD.
-  check-diff --against REV --repo ROOT [--ack SHA] [FILE]
+  check-diff --against REV --repo ROOT [--ack SHA]... [FILE]
       Judge a git-format unified diff (FILE or stdin) against REV.
   check-commit --rev SHA --repo ROOT
       Inspect one commit: a parentless commit whose tree carries at least
@@ -41,37 +41,55 @@ Two thin modes over one detection core, plus one commit-inspection mode:
       rejected/ subdirectories) into an archive state directory
       (completed/ or deferred/ of either root), deleting it from a
       plans root, or leaving that plans root entirely (the sideways
-      rename: docs/tmp/, the repo root, the other plans root); it must
-      carry execution evidence: zero unchecked `- [ ]` boxes in the
-      egress bytes (parent-side bytes for deletions) AND, for
+      rename: docs/tmp/, the repo root, the other plans root); a
+      directory plan (a plans-root directory carrying the charter)
+      surfaces as N per-file name-status rows because git tracks files,
+      never directories, and those rows aggregate into ONE egress keyed
+      on the directory path before the evidence legs run; it must
+      carry execution evidence: zero unchecked `- [ ]` boxes across the
+      egress bytes (for a directory egress: the charter plus every task
+      file, parent-side bytes for deletions) AND, for
       docs/history/plans/ sources, an exec-review record under
-      docs/reviews/ or docs/history/reviews/ (read at check time; the
+      .ai-playbook/reviews/ (read at check time; the
       homes are per-checkout state) whose filename matches the anchored
       record-name shape ^<...>-plan-review-<slug>-exec-r<N>.md$ (the
       whole name must match, anchored at both name ends, the slug
       occupying the whole hyphen-bounded segment, never a bare
-      substring; the slug is the dated basename minus its leading date)
+      substring; the slug is the dated basename minus its leading date,
+      re-derived from the directory operand for a directory egress)
       and whose content carries the egress bytes' sha256. A backlog-root
       egress needs only the zero-unchecked-boxes leg (a backlog item
       never carries an exec-review record; its sanctioned ticket is the
       sweep's own gate receipt context). A missing or digest-mismatching
       record refuses; a rename into a rejected/ subdirectory of the
       source root is the sanctioned non-execution exit. --ack-egress
-      suppresses exactly one egress path; more than one ack per
+      suppresses exactly one egress path (for a directory egress: the
+      directory path, named once); more than one ack per
       invocation refuses and an ack naming a non-egress path refuses
       as unused; in --rev mode an acked path must be verified by a
       matching Archive-egress-ack: <path> trailer in the commit message
       (an ack whose message lacks the trailer, or whose trailer names a
       different path, refuses), and a --staged ack is warning-level only
       (it cannot be trailer-verified pre-commit).
+  check-claim-fence --base REV --head REV [--repo ROOT]
+      Refuse a plans-root deletion in the base..head range while a live
+      claim under the primary checkout names it; a protected deletion no
+      live claim names and no sanction covers (a same-commit archive
+      twin, a same-commit rejected-state move, or a Plans-Deletion-Ack:
+      trailer) prints a claim-fence-warning: line and still exits 0
+      (four-outcome contract; see the exit-code line below).
 
-Refusal classes: archive-dir egress (a deletion or rename out of
+Refusal and warning classes: archive-dir egress (a deletion or rename out of
 ARCHIVE_DIRS; judged by the staged and diff modes over the index and the
 piped diff), the never-suppressible reviews-home egress (any A, M, R,
 or C record whose post-side path falls under REVIEWS_HOME_PREFIXES -
-docs/reviews/ or docs/history/reviews/; addition-side, no deletion arm),
-and the diffstat mirror of a landed commit (suppressible per commit with
---ack); the landing mode additionally refuses a reviews-home egress in
+.ai-playbook/reviews/; addition-side, no deletion arm),
+and the diffstat mirror of a landed commit - the demotion program's
+incident-heavy leg (both ledger incidents are mirror-only findings on
+legitimate rewording sets, scripts/gate_liveness_ledger.json guard
+reverse-squash-guard) - which reports as a warning line and never fails
+the mode, with a repeatable --ack suppressing a named mirrored commit's
+warning; the landing mode additionally refuses a reviews-home egress in
 the landing diff with its dedicated refuse line before the fresh-base
 verdict, and the landed mode's foreign-deletion sweep walks the commit's
 first-parent diff (REV^ -> REV). The plans-egress archive-ceremony
@@ -82,13 +100,21 @@ divergences of record: this guard binds the record leg to the egress
 bytes' sha256 digest, matches the record name with the anchored
 record-name grammar above (the done lib's live series match is a bare
 substring match, a hole this grammar deliberately does not share: plan
-slug `foo` never matches `bar-foo`'s record here), reads both reviews
-homes (the done lib reads its single resolved home), and covers both
+slug `foo` never matches `bar-foo`'s record here), reads the reviews corpus home
+(the done lib resolves its home from facts), and covers both
 plans roots (the done lib scans its own plans root only, with
 rejected/ among its states where this guard keeps rejected/ the
 sanctioned non-egress exit).
 
 Exit codes: 0 clean, 1 refusal with named evidence, 2 tool failure.
+  Named divergence: check-claim-fence adopts the repo's four-outcome
+  contract (scripts/OUTCOME_CONTRACT.md) instead of this family
+  convention, printing a final `OUTCOME:` line on every modeled run:
+  0 pass, 1 refusal, 2 indeterminate (an unresolvable --base/--head diff
+  source), 3 tool error (a failed repository probe, a git plumbing
+  failure over resolved inputs, a missing --base/--head, or an
+  unresolvable primary checkout); every other subcommand keeps the
+  family convention above.
   Stale-checkout adjudication: a refused or suspect entry whose blob equals the path's blob at an ancestor commit is a stale witness per the stale-checkout discriminator in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md; restore-and-record, never commit.
 """
 
@@ -98,11 +124,16 @@ import re
 import subprocess
 import sys
 
+# The shared plan-shape resolver supplies the directory grammar (the
+# charter filename constant); this guard never re-derives it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plan_shape
+
 ARCHIVE_DIRS = ("docs/history/plans/completed/", "docs/history/backlog/completed/")
 # Addition-side deny set for the reviews-home egress class: any tracked
 # record (A, M, R, or C) whose post-side path lands under these homes is
 # refused, in the staged set, a piped diff, and the landing diff.
-REVIEWS_HOME_PREFIXES = ("docs/reviews/", "docs/history/reviews/")
+REVIEWS_HOME_PREFIXES = (".ai-playbook/reviews/",)
 # Fold-and-delete ack bound for the check-landed sweep: deliberately wider
 # than ARCHIVE_DIRS (which carries the /completed/ component) because
 # fold-and-delete targets sit flat in the two archive trees.
@@ -115,7 +146,7 @@ FOLD_ACK_TREES = ("docs/history/plans/", "docs/history/backlog/")
 PLANS_ROOTS = ("docs/history/plans/", "docs/history/backlog/")
 PLANS_STATE_SUBDIRS = ("completed", "deferred", "rejected")
 ARCHIVE_STATE_SUBDIRS = ("completed", "deferred")
-REVIEWS_HOMES = ("docs/reviews/", "docs/history/reviews/")
+REVIEWS_HOMES = (".ai-playbook/reviews/",)
 PLAN_SLUG_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 # The record stem grammar: <...>-plan-review-<slug>-exec-r<N>; the slug
 # segment is matched hyphen-bounded (whole segment equality, never a bare
@@ -363,7 +394,7 @@ def parse_log_numstat_z(stream):
     return landed
 
 
-def mirror_findings(staged_records, landed, ack_sha):
+def mirror_findings(staged_records, landed, ack_shas):
     """Signature B: diffstat mirror. Fires for commit C when at least two
     staged nonzero paths mirror C; padding and non-mirroring overlap
     tolerated; a single mirroring path alone never fires."""
@@ -386,7 +417,7 @@ def mirror_findings(staged_records, landed, ack_sha):
     findings = []
     acked = []
     for sha in sorted(per_commit):
-        if ack_sha and sha == ack_sha:
+        if ack_shas and sha in ack_shas:
             acked.append(sha)
             continue
         if len(per_commit[sha]) >= MIRROR_FLOOR:
@@ -462,7 +493,7 @@ def last_content_touch(root, path, a, b):
                    "content-touch scan for %s" % path).decode().strip()
 
 
-def report(findings, acked):
+def report(findings, acked, warned=False):
     for line in findings:
         print(line)
     if findings:
@@ -471,6 +502,10 @@ def report(findings, acked):
     if acked:
         for sha in acked:
             print("ok: mirror %s acknowledged" % sha)
+        return 0
+    if warned:
+        print("ok: no refusing reverse-squash signature "
+              "(mirror warning reported above)")
         return 0
     print("ok: no reverse-squash signature")
     return 0
@@ -493,8 +528,14 @@ def cmd_check_staged(args):
     findings = egress_findings(records, diff_text)
     findings.extend(reviews_home_findings(records, diff_text))
     mirrors, acked = mirror_findings(records, landed, args.ack)
-    findings.extend(mirrors)
-    return report(findings, acked)
+    # Demotion split (closeout-gate demotion program change 2, D-7; carrier
+    # row 2026-10-08-done-closeout-ceremony-friction): the diffstat-mirror
+    # signature is the incident-heavy leg (both ledger incidents are
+    # mirror-only firings on legitimate rewording sets), so it reports and
+    # continues; the egress and reviews-home signatures keep their refusal.
+    for mirror in mirrors:
+        print("warning: mirror signature reported, not failing: " + mirror)
+    return report(findings, acked, warned=bool(mirrors))
 
 
 def cmd_check_diff(args):
@@ -531,8 +572,11 @@ def cmd_check_diff(args):
     findings = egress_findings(records, diff_text)
     findings.extend(reviews_home_findings(records, diff_text))
     mirrors, acked = mirror_findings(records, landed, args.ack)
-    findings.extend(mirrors)
-    return report(findings, acked)
+    # The same demotion split as check-staged: mirror findings warn, egress
+    # and reviews-home findings refuse (one contract, two surfaces).
+    for mirror in mirrors:
+        print("warning: mirror signature reported, not failing: " + mirror)
+    return report(findings, acked, warned=bool(mirrors))
 
 
 def cmd_check_commit(args):
@@ -650,6 +694,27 @@ def cmd_check_landing(args):
 
     for line in findings:
         print(line)
+    # Landing-boundary leg (plan
+    # docs/history/plans/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md
+    # Task 2): beside the deleted partition, name every protected
+    # plans-root path the landing would absent whose same target-to-source
+    # scan carries no completed-archive twin and no rejected-state twin
+    # (the arm-boundary matrix's checkable sanctions; the ack trailer
+    # lives in a commit message that does not exist pre-commit). Warning
+    # posture: the stale-base refusal above is the boundary's fence; this
+    # leg only enriches it with the claim-free naming.
+    roots, _tmp_rel = claim_fence_resolved_dirs(root)
+    absent = []
+    for path in deleted:
+        if claim_fence_protected(path, roots) \
+                and claim_fence_archive_twin(ns_records, path) is None \
+                and claim_fence_rejected_twin(ns_records, path) is None:
+            absent.append(
+                "claim-fence-warning: "
+                "absent protected plan at the landing boundary: %s (merge base %s)"
+                % (path, mb_text))
+    for line in absent:
+        print(line)
     print("refuse: landing base stale")
     return 1
 
@@ -744,8 +809,14 @@ def plans_location(path):
     """Where a repo-relative path sits relative to the plans roots
     (PLANS_ROOTS): "root" for a file open at a plans root (outside the
     completed/, deferred/, and rejected/ state subdirectories), the state
-    name for a file inside one of those states, "subdir" for any other
-    nested directory, and None for a path outside both roots."""
+    name for a file inside one of those states, "nested" for a file at
+    any deeper path under a plans root outside the state subdirectories
+    (an egress-capable source exactly like a root-level file), and None
+    for a path outside both roots. This docstring is the Plan-egress
+    definition of record: the egress-capable source shape is a root-level
+    file or a nested file at any depth outside the state subdirectories,
+    and the sideways shape is a rename whose destination leaves the
+    source plans root entirely."""
     for root in PLANS_ROOTS:
         if path.startswith(root):
             rest = path[len(root):]
@@ -753,7 +824,7 @@ def plans_location(path):
             if sep and top in PLANS_STATE_SUBDIRS:
                 return top
             if sep:
-                return "subdir"
+                return "nested"
             return "root"
     return None
 
@@ -767,37 +838,113 @@ def egress_source_root(path):
     return None
 
 
-def archive_egress_pairs(records):
-    """The plan-egress changes in a name-status record set, as
-    (old_path, new_path_or_None) pairs. A deletion from an open plans
-    root is egress; a rename from an open plans root into an archive
-    state directory (completed/ or deferred/ of either root) is egress;
-    so is a sideways rename whose destination leaves the source plans
-    root entirely (docs/tmp/, the repo root, the other plans root); a
-    rename into a rejected/ subdirectory of the source root is the
-    sanctioned non-execution exit and is not egress; root-internal
-    renames are not egress."""
-    pairs = []
+def plan_source_dir(path, roots=PLANS_ROOTS):
+    """The plan-directory prefix ``<plans-root>/<slug>`` of a plans-root
+    path carrying at least one component beyond the root (a directory
+    plan member), or None for a root-level file."""
+    for root in roots:
+        if path.startswith(root):
+            top, sep, _tail = path[len(root):].partition("/")
+            if sep:
+                return root + top
+    return None
+
+
+def common_parent_dir(paths):
+    """The longest common directory of forward-slash paths (the shared
+    destination directory of an aggregated rename group)."""
+    parts = [p.split("/")[:-1] for p in paths]
+    common = []
+    for group in zip(*parts):
+        if len(set(group)) == 1:
+            common.append(group[0])
+        else:
+            break
+    return "/".join(common)
+
+
+def archive_egress_pairs(records, is_plan_directory=None):
+    """The plan-egress changes in a name-status record set, one group per
+    egress: ``{"old": old_path, "new": new_path_or_None, "files":
+    [(old_file, new_file_or_None), ...]}``. A deletion of a plans-root
+    source at any depth outside the state subdirectories (root-level or
+    nested) is egress; a rename from a plans-root source at any depth
+    outside the state subdirectories (root-level or nested) into an
+    archive state directory (completed/ or deferred/ of either root) is
+    egress; so is a sideways rename whose destination leaves the source
+    plans root entirely (docs/tmp/, the repo root, the other plans
+    root); a rename into a rejected/ subdirectory of the source root is
+    the sanctioned non-execution exit and is not egress; root-internal
+    renames are not egress.
+
+    Directory aggregation (the plan-directory shape): git tracks files,
+    never directories, so a directory plan's rename or deletion surfaces
+    as N per-file rows under a common ``<plans-root>/<slug>/`` prefix;
+    when ``is_plan_directory`` says the source directory carries the
+    charter, those rows aggregate into ONE group keyed on the directory
+    path (all-rename groups share the longest common destination
+    directory; all-deletion groups carry new=None) before the egress
+    evidence legs run. Without the predicate, or when the source
+    directory carries no charter, the per-file rows stand alone exactly
+    as before."""
+    candidates = []
     for rec in records:
         if rec["status"] == "D":
-            if plans_location(rec["path"]) == "root":
-                pairs.append((rec["path"], None))
+            if plans_location(rec["path"]) in ("root", "nested"):
+                candidates.append((rec["path"], None))
         elif rec["status"] == "R":
-            if plans_location(rec["old"]) != "root":
+            if plans_location(rec["old"]) not in ("root", "nested"):
                 continue
             if plans_location(rec["path"]) in ARCHIVE_STATE_SUBDIRS:
-                pairs.append((rec["old"], rec["path"]))
+                candidates.append((rec["old"], rec["path"]))
                 continue
             source_root = egress_source_root(rec["old"])
             if source_root is not None \
                     and not rec["path"].startswith(source_root):
-                pairs.append((rec["old"], rec["path"]))
-    return pairs
+                candidates.append((rec["old"], rec["path"]))
+    if is_plan_directory is None:
+        return [{"old": old, "new": new, "files": [(old, new)]}
+                for old, new in candidates]
+    groups = {}
+    for index, (old, _new) in enumerate(candidates):
+        source_dir = plan_source_dir(old)
+        if source_dir is not None:
+            groups.setdefault(source_dir, []).append(index)
+    consumed = set()
+    entries = []
+    for source_dir in sorted(groups):
+        if not is_plan_directory(source_dir):
+            continue
+        member_indexes = groups[source_dir]
+        member_pairs = [candidates[i] for i in member_indexes]
+        news = {new for _old, new in member_pairs}
+        if None in news:
+            if len(news) != 1:
+                continue  # mixed rename/deletion group: never aggregated
+            new_dir = None
+        else:
+            new_dir = common_parent_dir(sorted(news))
+            if not new_dir or new_dir == source_dir:
+                continue
+        consumed.update(member_indexes)
+        entries.append((min(member_indexes), {
+            "old": source_dir,
+            "new": new_dir,
+            "files": sorted(member_pairs),
+        }))
+    for index, (old, new) in enumerate(candidates):
+        if index not in consumed:
+            entries.append((index, {"old": old, "new": new,
+                                    "files": [(old, new)]}))
+    entries.sort(key=lambda item: item[0])
+    return [entry for _index, entry in entries]
 
 
 def plan_slug(path):
     """The done lib's slug rule: the dated basename's stem minus its
-    leading date prefix."""
+    leading date prefix. A directory operand re-derives from the
+    directory name (no .md to strip), so an aggregated directory egress
+    keys its exec-review record leg on the directory slug."""
     base = path.rsplit("/", 1)[-1]
     stem = base[:-3] if base.endswith(".md") else base
     return PLAN_SLUG_DATE_RE.sub("", stem, count=1)
@@ -848,11 +995,19 @@ def record_leg_required(old):
     return old.startswith("docs/history/plans/")
 
 
-def plan_egress_finding(root, old, new, read_egress_bytes):
+def plan_egress_finding(root, old, new, read_egress_bytes, files=None):
     """The named-evidence refusal block for one egress, or an empty list
     when both evidence legs pass. The egress bytes are the new-side bytes
-    for a rename and the parent-side bytes for a deletion."""
-    blob = read_egress_bytes(old, new)
+    for a rename and the parent-side bytes for a deletion. ``files``
+    carries the aggregated member rows of a directory egress: the bytes
+    are then the concatenation over every member in sorted old-path
+    order (charter plus every task file), so the unchecked-boxes leg
+    spans the whole directory manifest and the digest binds it whole."""
+    if files:
+        blob = b"".join(read_egress_bytes(member_old, member_new)
+                        for member_old, member_new in sorted(files))
+    else:
+        blob = read_egress_bytes(old, new)
     digest = hashlib.sha256(blob).hexdigest()
     unchecked = blob.count(b"- [ ]")
     header = "plan-egress: %s%s" % (old, "" if new is None else " -> %s" % new)
@@ -895,12 +1050,14 @@ def cmd_check_archive(args):
                      "or --staged")
     root = args.repo
     commit_message = None
+    source_spec = None
     try:
         run_git(["git", "-C", root, "rev-parse", "--git-dir"], "repository probe")
         if args.rev:
             rev = run_git(["git", "-C", root, "rev-parse", "--verify",
                            "%s^{commit}" % args.rev],
                           "commit resolve").decode().strip()
+            source_spec = rev + "^"
             records = name_status_records(root, rev + "^", rev)
             commit_message = run_git(
                 ["git", "-C", root, "log", "-1", "--format=%B", rev],
@@ -912,6 +1069,7 @@ def cmd_check_archive(args):
                 return run_git(["git", "-C", root, "show", spec],
                                "egress bytes %s" % spec)
         else:
+            source_spec = "HEAD"
             records = name_status_records(root, "HEAD")
 
             def read_egress_bytes(old, new):
@@ -925,15 +1083,31 @@ def cmd_check_archive(args):
         print("refuse: at most one --ack-egress per invocation (got %d)"
               % len(acks))
         return 1
+
+    def is_plan_directory(dir_path):
+        # The directory-egress discriminator: the source-side directory
+        # carries the charter (source side is REV^ in --rev mode, HEAD in
+        # --staged mode). A probe failure is simply "no charter".
+        spec = "%s:%s/%s" % (source_spec, dir_path,
+                             plan_shape.CHARTER_FILENAME)
+        try:
+            run_git(["git", "-C", root, "cat-file", "-e", spec],
+                    "charter probe %s" % spec)
+            return True
+        except ToolError:
+            return False
+
     findings = []
     acked = []
     unused = list(acks)
-    for old, new in archive_egress_pairs(records):
-        if old in unused:
-            unused.remove(old)
-            acked.append(old)
+    for group in archive_egress_pairs(records, is_plan_directory=is_plan_directory):
+        if group["old"] in unused:
+            unused.remove(group["old"])
+            acked.append(group["old"])
             continue
-        findings.extend(plan_egress_finding(root, old, new, read_egress_bytes))
+        findings.extend(plan_egress_finding(
+            root, group["old"], group["new"], read_egress_bytes,
+            files=group["files"]))
     for entry in unused:
         print("warning: --ack-egress matched no detected egress: %s" % entry)
     trailer_missing = []
@@ -970,6 +1144,323 @@ def cmd_check_archive(args):
         return 1
     print("ok: no unevidenced plan egress")
     return 0
+
+
+# --- check-claim-fence: the plans-root deletion claim fence -----------------
+#
+# A deleted plans-root file (under the resolved plans home, outside the
+# completed/, deferred/, and rejected/ state directories) is fenced while
+# a live claim under the primary checkout's execution-claims/ or
+# authoring-claims/ names it: the deleting commit must carry a sanctioned
+# exit itself (the completed-archive twin, a same-commit rejected-state
+# move, or a Plans-Deletion-Ack: trailer naming the path), otherwise the
+# refusal names the path, the claim file, and the three sanctioned exits.
+# A protected deletion no live claim names and no sanction covers is the
+# unclaimed-deletion warning class: it prints a claim-fence-warning:
+# line naming the path and the deleting commit plus a follow-on line
+# enumerating the sanctioned exits, and the guard still exits 0
+# (warning-only posture; the registry-governed promotion to a refusal is
+# a later flip). Per-commit classification:
+# an archive twin landed by a later commit never sanctions the deleting
+# commit. The named divergence from the guard family (0/1/2-tool-failure,
+# no OUTCOME lines) is documented in the module docstring's exit-code
+# line; the naming grammar reuses the guard's own record-stem rule
+# (PLAN_SLUG_DATE_RE over the whole stem, never a bare substring).
+
+CLAIM_FENCE_TMP_DEFAULT = "docs/tmp"
+CLAIM_DIRS = ("execution-claims", "authoring-claims")
+CLAIM_FENCE_ACK_RE = re.compile(r"^Plans-Deletion-Ack:[ \t]*(.+?)[ \t]*$")
+
+
+def claim_fence_resolved_dirs(repo_root):
+    """The claim fence's protected plans roots and tmp dir, resolved
+    through the facts reader (imported over the resolved-parent sys.path
+    pattern, done_sweep_gates_lib.py's import seam) with silent fallback
+    to the guard's existing hard-coded defaults: PLANS_ROOTS for the
+    plans home, docs/tmp for the tmp dir. Returns (roots, tmp_rel); a
+    facts-resolved dir is carried as a repo-relative path anchored at the
+    scanned repository, and a dir resolving outside the repository falls
+    back with the rest.
+
+    Anchoring reads the raw TOML value (facts_paths.resolve_toml_key_raw,
+    the cross-repo caller pattern facts_paths documents) and joins it at
+    the scanned --repo root after expanduser, never the CWD-anchored
+    resolve_toml_key Path: a repo-relative facts value anchored at the
+    process CWD yields a phantom in-repo prefix when the guard is invoked
+    from a subdirectory of the scanned repository and silently defeats
+    the fence (review finding CF1)."""
+    roots = PLANS_ROOTS
+    tmp_rel = CLAIM_FENCE_TMP_DEFAULT
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import facts_paths
+    except ImportError:
+        return roots, tmp_rel
+
+    def anchored_rel(raw):
+        # expanduser first (a tilde value is home-anchored), then join at
+        # the scanned root: join passes an absolute value through
+        # unchanged, and a repo-relative value anchors at the root
+        # regardless of the process CWD. A value that degenerates to the
+        # root itself or escapes it falls back with the rest.
+        joined = os.path.normpath(
+            os.path.join(str(repo_root), os.path.expanduser(raw)))
+        rel = os.path.relpath(joined, str(repo_root))
+        if rel in (".", "") or rel.split(os.sep)[0] == "..":
+            return None
+        return rel.replace(os.sep, "/")
+
+    try:
+        raw_plans = facts_paths.resolve_toml_key_raw(repo_root, "plans_dir")
+        raw_tmp = facts_paths.resolve_toml_key_raw(repo_root, "tmp_dir")
+    except Exception:
+        return roots, tmp_rel
+    if raw_plans is not None:
+        rel = anchored_rel(raw_plans)
+        if rel is not None:
+            roots = (rel + "/",)
+    if raw_tmp is not None:
+        rel = anchored_rel(raw_tmp)
+        if rel is not None:
+            tmp_rel = rel
+    return roots, tmp_rel
+
+
+def claim_fence_primary_checkout(root):
+    """The first `git worktree list --porcelain` worktree entry (the
+    post-landing-staging gate's PRIMARY resolution): execution lanes run
+    closeouts in linked worktrees, so the claim read resolves the primary
+    checkout independent of the scanned --repo path. Raises ToolError on
+    a failed or empty worktree listing."""
+    out = run_git(["git", "-C", root, "worktree", "list", "--porcelain"],
+                  "primary checkout resolve")
+    for line in out.decode("utf-8", "replace").splitlines():
+        if line.startswith("worktree "):
+            return line[len("worktree "):].strip()
+    raise ToolError("primary checkout resolve: no worktree entry")
+
+
+# Contract twin of plans_location: the protected class here is deliberately
+# wider than the archive-egress "root" class (nested plans-root paths are
+# fenced too, never archive egress), per the plan's Terms.
+def claim_fence_protected(path, roots):
+    """A plans-root file under the resolved roots: under a root prefix
+    and outside the three archive state directories (completed, deferred,
+    rejected), the protected class the fence scans."""
+    for prefix in roots:
+        if path.startswith(prefix):
+            top = path[len(prefix):].split("/", 1)[0]
+            return top not in PLANS_STATE_SUBDIRS
+    return False
+
+
+def claim_stem_matches_path(claim_stem, deleted_path, roots=PLANS_ROOTS):
+    """The naming match, per the guard's own record-stem rule (whole-segment
+    equality; never a bare substring or a strict subsequence): the claim's
+    stem equals the deleted basename minus .md, or the basename minus .md
+    minus a leading dated YYYY-MM-DD- prefix (plan_slug), or -- for a
+    deleted path under a plans-root directory ``<slug>/`` -- the directory
+    slug (the directory-plan arm: a claim keyed to the directory slug
+    fences every member path's deletion, the charter and each task file)."""
+    base = deleted_path.rsplit("/", 1)[-1]
+    stem = base[:-3] if base.endswith(".md") else base
+    if claim_stem == stem or claim_stem == plan_slug(deleted_path):
+        return True
+    for root in roots:
+        if deleted_path.startswith(root):
+            top, sep, _tail = deleted_path[len(root):].partition("/")
+            if sep and claim_stem == plan_slug(root + top):
+                return True
+    return False
+
+
+def claim_fence_naming_claim(claims_home, tmp_rel, deleted_path,
+                             roots=PLANS_ROOTS):
+    """The first live claim (execution-claims/ then authoring-claims/)
+    naming deleted_path under the primary checkout's claims home, as the
+    checkout-relative claim path, or None. A missing claim directory
+    contributes nothing (it passes)."""
+    for dirname in CLAIM_DIRS:
+        dirpath = os.path.join(claims_home, tmp_rel, dirname)
+        if not os.path.isdir(dirpath):
+            continue
+        try:
+            names = sorted(os.listdir(dirpath))
+        except OSError as exc:
+            raise ToolError("claim directory read %s: %s" % (dirpath, exc))
+        for name in names:
+            if not name.endswith(".md"):
+                continue
+            if claim_stem_matches_path(name[:-3], deleted_path, roots):
+                return "/".join((tmp_rel, dirname, name))
+    return None
+
+
+def claim_fence_archive_twin(records, deleted_path):
+    """The deleted basename's completed-archive twin added by the same
+    commit: an A, R, or C record whose post-side path sits under a
+    completed archive directory (ARCHIVE_DIRS) with the deleted basename,
+    or None."""
+    base = deleted_path.rsplit("/", 1)[-1]
+    for rec in records:
+        if rec["status"] not in ("A", "R", "C"):
+            continue
+        new = rec["path"]
+        if not any(new.startswith(prefix) for prefix in ARCHIVE_DIRS):
+            continue
+        if new.rsplit("/", 1)[-1] == base:
+            return new
+    return None
+
+
+def claim_fence_rejected_twin(records, deleted_path):
+    """The deleted basename's rejected-state twin added by the same
+    commit, mirroring claim_fence_archive_twin: an A, R, or C record
+    whose post-side path sits under a rejected/ state directory (a plans
+    root's rejected/ subdirectory, the sanctioned non-execution exit the
+    egress family already recognizes) with the deleted basename, or
+    None."""
+    base = deleted_path.rsplit("/", 1)[-1]
+    for rec in records:
+        if rec["status"] not in ("A", "R", "C"):
+            continue
+        new = rec["path"]
+        if plans_location(new) != "rejected":
+            continue
+        if new.rsplit("/", 1)[-1] == base:
+            return new
+    return None
+
+
+def claim_deletion_acked(commit_message, path):
+    """True when the commit message carries a Plans-Deletion-Ack: trailer
+    naming exactly path (the whole trailer value is compared, so a
+    trailer naming a different path never sanctions another path's
+    deletion)."""
+    for line in commit_message.splitlines():
+        m = CLAIM_FENCE_ACK_RE.match(line)
+        if m and m.group(1) == path:
+            return True
+    return False
+
+
+def cmd_check_claim_fence(args):
+    root = args.repo
+    if not args.base or not args.head:
+        print("fail: check-claim-fence requires --base REV and --head REV")
+        print("OUTCOME: tool_error")
+        return 3
+
+    def tool_error(message):
+        print("tool error: %s" % message)
+        print("OUTCOME: tool_error")
+        return 3
+
+    try:
+        run_git(["git", "-C", root, "rev-parse", "--git-dir"],
+                "repository probe")
+    except ToolError as exc:
+        return tool_error(str(exc))
+    try:
+        base = run_git(["git", "-C", root, "rev-parse", "--verify",
+                        "%s^{commit}" % args.base],
+                       "base ref resolve").decode().strip()
+        head = run_git(["git", "-C", root, "rev-parse", "--verify",
+                        "%s^{commit}" % args.head],
+                       "head ref resolve").decode().strip()
+    except ToolError as exc:
+        print("indeterminate: diff source unresolvable: %s" % exc)
+        print("OUTCOME: indeterminate")
+        return 2
+    try:
+        listing = run_git(["git", "-C", root, "rev-list",
+                           "%s..%s" % (base, head)],
+                          "range enumeration")
+        commits = [ln for ln in listing.decode().split() if ln]
+        commits.reverse()  # oldest first: deterministic per-commit order
+        roots, tmp_rel = claim_fence_resolved_dirs(root)
+        claims_state = {"home": None, "resolved": False}
+
+        def claims_home():
+            # Lazy: the claim read resolves the primary checkout only when
+            # a protected deletion needs claim consultation, so a range
+            # with no deletions never depends on the worktree listing.
+            if not claims_state["resolved"]:
+                claims_state["home"] = claim_fence_primary_checkout(root)
+                claims_state["resolved"] = True
+            return claims_state["home"]
+
+        sanctions = []
+        warnings = []
+        blocks = []
+        for sha in commits:
+            records = name_status_records(root, sha + "^", sha)
+            message = run_git(["git", "-C", root, "log", "-1",
+                               "--format=%B", sha],
+                              "commit message").decode("utf-8", "replace")
+            for rec in records:
+                if rec["status"] not in ("D", "R", "C"):
+                    continue
+                old = rec["old"]
+                if not claim_fence_protected(old, roots):
+                    continue
+                twin = claim_fence_archive_twin(records, old)
+                if twin is not None:
+                    sanctions.append(
+                        "ok: plans-root deletion sanctioned "
+                        "(same-commit archive twin at %s): %s" % (twin, old))
+                    continue
+                rejected = claim_fence_rejected_twin(records, old)
+                if rejected is not None:
+                    sanctions.append(
+                        "ok: plans-root deletion sanctioned "
+                        "(same-commit rejected-state move at %s): %s"
+                        % (rejected, old))
+                    continue
+                if claim_deletion_acked(message, old):
+                    sanctions.append(
+                        "ok: plans-root deletion sanctioned "
+                        "(operator ack trailer): %s" % old)
+                    continue
+                claim = claim_fence_naming_claim(claims_home(), tmp_rel,
+                                                 old, roots)
+                if claim is None:
+                    warnings.append(
+                        "claim-fence-warning: unclaimed plans-root "
+                        "deletion: %s (commit %s)" % (old, sha))
+                    warnings.append(
+                        "  sanctioned exits: a same-commit archive twin, "
+                        "a same-commit rejected-state move, a "
+                        "Plans-Deletion-Ack: %s trailer in the deleting "
+                        "commit's message, or standing down and restoring "
+                        "the file" % old)
+                    continue
+                blocks.append((old, claim))
+        for line in sanctions:
+            print(line)
+        for line in warnings:
+            print(line)
+        # Contract twin: these block lines are parsed by the done lib's
+        # _claim_fence_refusal_blocks (scripts/done_sweep_gates_lib.py);
+        # a format edit updates both sites.
+        if blocks:
+            for path, claim in blocks:
+                print("claim-fence: %s deleted while its claim is live"
+                      % path)
+                print("  live claim: %s" % claim)
+                print("  sanctioned exits: archive the file in the same "
+                      "commit, stand down and restore the file, or record "
+                      "a Plans-Deletion-Ack: %s trailer in the deleting "
+                      "commit's message" % path)
+            print("refuse: plans-root deletion under a live claim "
+                  "(%d path(s))" % len(blocks))
+            print("OUTCOME: fail")
+            return 1
+        print("ok: no live-claim plans-root deletion in the range")
+        print("OUTCOME: pass")
+        return 0
+    except ToolError as exc:
+        return tool_error(str(exc))
 
 
 # --- check-single-commit: the landing-residue sweep -------------------------
@@ -1244,12 +1735,16 @@ def main(argv):
 
     staged = sub.add_parser("check-staged")
     staged.add_argument("--repo", default=".")
-    staged.add_argument("--ack", default=None)
+    staged.add_argument("--ack", action="append", default=[],
+                        help="suppress one mirrored commit's warning "
+                             "(repeatable)")
 
     diff = sub.add_parser("check-diff")
     diff.add_argument("--against", required=True)
     diff.add_argument("--repo", required=True)
-    diff.add_argument("--ack", default=None)
+    diff.add_argument("--ack", action="append", default=[],
+                      help="suppress one mirrored commit's warning "
+                           "(repeatable)")
     diff.add_argument("diff_file", nargs="?", default=None)
 
     commit = sub.add_parser("check-commit")
@@ -1303,6 +1798,15 @@ def main(argv):
                          help="suppress exactly one egress path; at most "
                               "one per invocation, an unused ack refuses")
 
+    claim = sub.add_parser("check-claim-fence")
+    claim.add_argument("--base", default=None,
+                       help="range base ref (required; missing is a "
+                            "tool error, the four-outcome divergence)")
+    claim.add_argument("--head", default=None,
+                       help="range head ref (required; missing is a "
+                            "tool error, the four-outcome divergence)")
+    claim.add_argument("--repo", default=".")
+
     args = parser.parse_args(argv)
     try:
         if args.mode == "check-staged":
@@ -1317,6 +1821,8 @@ def main(argv):
             return cmd_check_landed(args)
         if args.mode == "check-archive":
             return cmd_check_archive(args)
+        if args.mode == "check-claim-fence":
+            return cmd_check_claim_fence(args)
         return cmd_check_diff(args)
     except ToolError as exc:
         return fail2(str(exc))

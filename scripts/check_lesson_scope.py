@@ -23,7 +23,7 @@ presumed witness pointers and never match.
 Consumer contract note: WARNING on stderr with exit 0 is the designed
 cold start for direct personal-repo runs (a missing corpus or master,
 or an existing file that parses to zero blocks). Gate consumers that
-pre-resolve both paths (like the done pre-commit audit) must treat any
+pre-resolve both paths (like the done commit run's lesson-scope audit inside the landing posture) must treat any
 WARNING line as a placement-path resolution failure and stop.
 
 Matching runs difflib.SequenceMatcher with autojunk=False so

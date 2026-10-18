@@ -15,7 +15,15 @@ because they do not by themselves show a behavior reversion:
   and pass. So a modification of a HEAD-gained line (the removed line replaced
   by new text not present at the base) passes, pure additions pass, and
   removals of lines already present at the base pass. A removal-only hunk of
-  HEAD-gained lines is a regression (the added-line condition holds vacuously).
+  HEAD-gained lines of a base-present file is a regression (the added-line
+  condition holds vacuously).
+- A file with no version at the merge base (the ``git cat-file -e
+  <base>:<path>`` probe fails) is newly-introduced content: no base-era text
+  exists, so no hunk of its diff can restore any, removal-only hunks
+  included, and every classifiable hunk of such a file passes. Genuine
+  stale-checkout and revert detection stays scoped to files present at the
+  base; unmodeled diff shapes on base-absent files still report
+  indeterminate.
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md): the gate reports exactly one
 of four outcomes as the final ``OUTCOME:`` line on stdout and its exit code.
@@ -177,6 +185,7 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
     """
     repo_root = Path(_git("rev-parse", "--show-toplevel", cwd=cwd).strip())
     resolved = Path(path).resolve()
+    deletion_shape = not resolved.is_file()
     try:
         repo_rel = resolved.relative_to(repo_root)
     except ValueError:
@@ -197,6 +206,9 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
         # diff HEAD classifies it (removal-only hunk of HEAD-gained lines is
         # a regression, the added-line condition holds vacuously)
 
+    base_present = _git_ok(
+        "cat-file", "-e", f"{base}:{repo_rel_posix}", cwd=cwd
+    )
     base_set = set(_blob_lines(base, repo_rel_posix, cwd))
     head_lines = _blob_lines("HEAD", repo_rel_posix, cwd)
     gained = set(head_lines) - base_set
@@ -226,6 +238,17 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
                 f"{len(diff_text.splitlines())} diff lines, could not "
                 "determine restored-content polarity",
             )
+    if not base_present and not deletion_shape:
+        # Newly-introduced content: the path has no merge-base version, so
+        # no base-era text exists for any hunk of its diff to restore
+        # (removal-only hunks included); the revert/stale-checkout net stays
+        # scoped to files present at the base. The hunk-less indeterminate
+        # shape check above still ran first for base-absent paths.
+        # A staged whole-file deletion is exempt from this early return:
+        # every HEAD line of a base-absent path is gained by definition, so
+        # its removal-only hunk classifies below as a regression - the
+        # shape the deletion branch above exists for.
+        return "clean", ""
     removed_counts = Counter(line for removed, _ in hunks for line in removed)
     added_counts = Counter(line for _, added in hunks for line in added)
     moved_counts = removed_counts & added_counts

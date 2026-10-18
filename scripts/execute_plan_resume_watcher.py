@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Workflow-neutral standing resume watcher state machine.
 
-One state machine over two explicit adapter protocols:
+One shared state machine over an explicit authoring-state adapter:
 
-- ``WatcherStateAdapter``: one workflow's authoritative machine-state
-  operations (lock-held read, compare-and-swap replacement/cancellation,
-  semantic-progress, boundary, and projection operations). Task 5 provides
-  the execute-plan runtime-state adapter (``RuntimeResumeWatcherAdapter``);
-  Task 6 adds the plans authoring-state adapter to this same file, so the
-  two workflows never grow separate watcher protocols.
+- ``WatcherStateAdapter`` owns authoritative machine-state operations (lock-held
+  read, compare-and-swap replacement/cancellation, semantic progress, boundary,
+  and projection operations). ``PlansAuthoringWatcherAdapter`` supplies the
+  plans skill's machine-state JSON.
 - ``SchedulerAdapter``: one host automation boundary. The pause-protocol
   fallback chain is automation create, then a launchd one-shot with a
   sentinel self-disable file, then report-only naming the exact resume
@@ -41,19 +39,18 @@ import plistlib
 import re
 import shlex
 import subprocess
+import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 GUARD_LOCK_NAME = "budget-guard.lock"
 DEFAULT_FLAG_PATH = pathlib.Path("~/.ai-playbook/runtime/budget-guard.flag")
 FIRED_MARKER_NAME = "budget-guard.fired"
 
-# Standing resume watcher receipt fields (canonical machine-state fence).
-# This workflow-neutral module owns the schema: the runtime driver and both
-# adapters import it from here, never the reverse, so a layout without the
-# runtime cannot break the authoring watcher with an import error.
+# Standing plans-authoring watcher receipt fields. The plans-authoring state
+# adapter and CLI share this schema and state machine.
 RESUME_WATCHER_FIELDS = (
     "watcher_id",
     "plan_slug",
@@ -341,12 +338,60 @@ def render_manifest_projection(snapshot: Mapping[str, Any]) -> str:
     return "pending_resume_watcher: none"
 
 
+def plan_operand_digest(path: os.PathLike | str) -> tuple[Optional[str], Optional[str]]:
+    """Digest of one plan operand through the shared shape resolver.
+
+    Returns ``(digest, refusal)`` with exactly one non-None: a file operand
+    digests its raw bytes; a well-formed plan directory digests the
+    resolver's canonical manifest serialization, so the scheduled receipt
+    and the live fire fence compare the same both-shapes recipe
+    (plan-directory-shape plan, Task 3); a malformed DIRECTORY operand
+    returns the resolver's named refusal (defect plus operand path, never a
+    bare traceback). A FILE operand the resolver refuses (for example
+    non-UTF-8 bytes) falls back to the raw-bytes sha256 digest, the
+    pre-Task-3 behavior, so only a genuinely malformed directory operand
+    refuses at schedule time. ``(None, None)`` when the sibling resolver
+    module is unavailable, so a layout without it keeps the legacy
+    unreadable refusal instead of an ImportError.
+    """
+
+    try:
+        import plan_shape
+    except ImportError:
+        return None, None
+    candidate = pathlib.Path(os.path.expanduser(str(path)))
+    try:
+        shape = plan_shape.resolve_plan_operand(candidate)
+    except plan_shape.PlanShapeRefusal as exc:
+        if candidate.is_dir():
+            # A malformed directory operand keeps the named refusal: the
+            # schedule-time fence must catch a wrong-shape operand.
+            return None, str(exc)
+        # A refused file operand digests its raw bytes (pre-Task-3
+        # behavior): the digest fence compares bytes, so an unreadable file
+        # still fails closed with the resolver's named refusal.
+        try:
+            return hashlib.sha256(candidate.read_bytes()).hexdigest(), None
+        except OSError:
+            return None, str(exc)
+    return hashlib.sha256(shape.digest_payload).hexdigest(), None
+
+
 def file_digest(path: os.PathLike | str | None) -> Optional[str]:
-    """Current sha-256 of the plan bytes, or None when unreadable or absent."""
+    """Current digest of the plan operand, or None when unreadable or absent.
+
+    A file operand digests its raw bytes (unchanged); a directory operand
+    digests through the shared shape resolver's manifest serialization
+    (plan-directory-shape plan, Task 3). A malformed directory digests to
+    None, so the digest fence fails closed exactly like an unreadable file.
+    """
 
     if path is None:
         return None
     candidate = pathlib.Path(os.path.expanduser(str(path)))
+    if candidate.is_dir():
+        digest, _refusal = plan_operand_digest(candidate)
+        return digest
     try:
         return hashlib.sha256(candidate.read_bytes()).hexdigest()
     except OSError:
@@ -419,33 +464,6 @@ class WatcherStateAdapter(abc.ABC):
         """Human-readable manifest.md projection of the watcher state."""
 
 
-class _SnapshotFencesMixin:
-    """The snapshot-derived stand-down fences shared by every adapter.
-
-    One copy of the semantic-progress, peer-resume, abort/interrupt, and
-    projection logic; persistence layers (schedule/supersede CAS) stay
-    per-workflow. ``peer_resumed`` anchors to ``scheduled_at_epoch`` against
-    the dedicated ``peer_resumed_at_epoch`` machine-state field, which only
-    resume/continue-path operations write (r1 F11): peer writes before a
-    fire session's construction stay visible, and the fire session's own
-    construction and bookkeeping writes never false-trip the fence.
-    """
-
-    def semantic_progress_changed(self, snapshot: Mapping[str, Any], expected_progress_revision: int) -> bool:
-        return int(snapshot.get("progress_revision", 0)) != int(expected_progress_revision)
-
-    def peer_resumed(self, snapshot: Mapping[str, Any], scheduled_at_epoch: int) -> bool:
-        return float(snapshot.get("peer_resumed_at_epoch", 0.0) or 0.0) > float(scheduled_at_epoch)
-
-    def aborted_or_interrupted(self, snapshot: Mapping[str, Any], scheduled_at_epoch: int) -> bool:
-        if snapshot.get("workflow_state") == "aborted":
-            return True
-        return interrupt_after(snapshot.get("user_interrupt"), scheduled_at_epoch)
-
-    def projection(self, snapshot: Mapping[str, Any]) -> str:
-        return render_manifest_projection(snapshot)
-
-
 def watcher_cas_stale(
     transition: Mapping[str, Any],
     current_watcher_id: Any,
@@ -454,9 +472,8 @@ def watcher_cas_stale(
 ) -> bool:
     """The one compare-and-swap stale predicate for every watcher CAS writer.
 
-    Shared by the driver's receipt writer and the authoring adapter: the
-    transition's expected watcher id, generation, and boundary generation
-    must all match current machine state.
+    The transition's expected watcher id, generation, and boundary
+    generation must all match the current authoring state.
     """
 
     return (
@@ -1455,8 +1472,15 @@ def run_cli_watcher_operation(
         # fire from a different working directory compare one absolute
         # path, never an invocation-relative spelling of it.
         plan_path = str(pathlib.Path(raw_plan_path).expanduser().resolve())
-        plan_digest = file_digest(plan_path)
+        # Plan operand passthrough (plan-directory-shape plan, Task 3): the
+        # operand resolves through the shared shape resolver, so a plan
+        # directory schedules with the manifest digest and a malformed one
+        # refuses through the resolver's named arm; a file operand keeps
+        # the legacy raw-bytes digest and unreadable refusal.
+        plan_digest, plan_refusal = plan_operand_digest(plan_path)
         if plan_digest is None:
+            if plan_refusal is not None:
+                raise ValueError(f"{identity_prefix}-schedule plan operand refused: {plan_refusal}")
             raise ValueError(f"{identity_prefix}-schedule plan path is unreadable: {plan_path}")
         payload_job_dir = payload.get("job_dir")
         payload_sentinel = payload.get("sentinel_path")
@@ -1659,62 +1683,6 @@ def run_cli_watcher_operation(
 
 
 # ---------------------------------------------------------------------------
-# execute-plan runtime adapter (Task 5)
-# ---------------------------------------------------------------------------
-
-
-class RuntimeResumeWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
-    """execute-plan runtime_state.json adapter over the durable driver."""
-
-    def __init__(self, driver: Any) -> None:
-        self._driver = driver
-
-    def read_state(self) -> dict[str, Any]:
-        snapshot = dict(self._driver.resume_watcher_snapshot())
-        watcher = snapshot.get("resume_watcher")
-        if isinstance(watcher, Mapping):
-            snapshot["plan_path"] = watcher.get("plan_path")
-            # Recompute the plan-byte digest now: this is the live fence.
-            snapshot["plan_digest"] = file_digest(watcher.get("plan_path"))
-        else:
-            snapshot["plan_path"] = None
-            snapshot["plan_digest"] = None
-        snapshot.setdefault("repo_root", str(self._driver.repo_root))
-        return snapshot
-
-    def compare_and_swap_schedule(self, transition: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._driver.record_resume_watcher(transition)
-
-    def compare_and_swap_supersede(self, transition: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._driver.record_resume_watcher(transition)
-
-    def compare_and_swap_carrier(self, transition: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Rectify the pending receipt's armed_launchd record (r6 F5)."""
-
-        return self._driver.record_resume_watcher(transition)
-
-    def record_resume(self, evidence: Sequence[str] | None = None) -> dict[str, Any]:
-        """Mark a resume-path re-entry for the shared peer fence (r4 F4).
-
-        The fire operation records the mark itself on a resume decision, so
-        a duplicate fire inside the window before the resumed session runs
-        stands down on machine state. The driver's lock-skipping writer is
-        reused: a mark missed under contention is covered by the receipt
-        supersede the fire performs next.
-        """
-
-        del evidence  # the runtime manifest keeps the epoch only
-        self._driver._mark_peer_resumed()
-        return {"status": "success", "reason_code": "peer-resume-marked"}
-
-    def archived_or_completed(self, snapshot: Mapping[str, Any]) -> bool:
-        # The runtime manifest records completion in workflow_state; the
-        # authoring mirror additionally carries plan_status (its own
-        # per-workflow delta below).
-        return snapshot.get("workflow_state") in {"complete", "terminal"}
-
-
-# ---------------------------------------------------------------------------
 # plans authoring adapter (Task 6): the authoring machine-state JSON at
 # {tmp_dir}/plan-requirements-<slug>.json is the authority; the Markdown
 # notes (plan-requirements-<slug>.md) are a projection appended only after
@@ -1747,16 +1715,14 @@ def authoring_state_lock(state_path: os.PathLike | str) -> Iterator[bool]:
         os.close(fd)
 
 
-class PlansAuthoringWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
+class PlansAuthoringWatcherAdapter(WatcherStateAdapter):
     """plans authoring-state adapter over ``plan-requirements-<slug>.json``.
 
     The authoring JSON is the authority; the Markdown notes are the human
     and audit projection and receive a line only after a lock-held state
-    transition. Because every observation delegates to the shared adapter
-    protocol, this workflow shares the same replacement, cancellation,
+    transition. Its observation methods implement the replacement, cancellation,
     boundary generation, canonical plan path and digest, semantic-progress,
-    peer-resume, archive, completion, abort, and interrupt fences as the
-    execute-plan runtime adapter.
+    peer-resume, archive, completion, abort, and interrupt fences required by plans authoring.
     """
 
     def __init__(
@@ -1871,8 +1837,8 @@ class PlansAuthoringWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
             receipt["boundary_generation"] = int(state.get("boundary_generation", 0)) + 1
             state["resume_watcher"] = receipt
             state["boundary_generation"] = receipt["boundary_generation"]
-            # The authoring state owns the plan slug the same way the
-            # runtime manifest does; the fence compares against it.
+            # The authoring state owns the canonical plan slug; the fence
+            # compares against it.
             state["plan_slug"] = receipt["plan_slug"]
             self._save_unlocked(
                 state,
@@ -1916,7 +1882,7 @@ class PlansAuthoringWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
     def compare_and_swap_carrier(self, transition: Mapping[str, Any]) -> dict[str, Any]:
         """Rectify the pending receipt's armed_launchd record (r6 F5).
 
-        The authoring mirror of the runtime driver's ``re-carrier`` action:
+        The plans-authoring carrier replacement operation:
         the pending receipt stays installed with its boundary generation
         unchanged, only the carrier record is replaced.
         """
@@ -1952,9 +1918,22 @@ class PlansAuthoringWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
                 "cas_applied": True,
             }
 
-    # The snapshot-derived fences (semantic progress, peer resume, abort or
-    # interrupt, projection) come from _SnapshotFencesMixin; only the
-    # per-workflow archived trigger and the persistence below live here.
+    # Snapshot-derived stand-down fences live beside the persistence and
+    # archived trigger they govern.
+
+    def semantic_progress_changed(self, snapshot: Mapping[str, Any], expected_progress_revision: int) -> bool:
+        return int(snapshot.get("progress_revision", 0)) != int(expected_progress_revision)
+
+    def peer_resumed(self, snapshot: Mapping[str, Any], scheduled_at_epoch: int) -> bool:
+        return float(snapshot.get("peer_resumed_at_epoch", 0.0) or 0.0) > float(scheduled_at_epoch)
+
+    def aborted_or_interrupted(self, snapshot: Mapping[str, Any], scheduled_at_epoch: int) -> bool:
+        if snapshot.get("workflow_state") == "aborted":
+            return True
+        return interrupt_after(snapshot.get("user_interrupt"), scheduled_at_epoch)
+
+    def projection(self, snapshot: Mapping[str, Any]) -> str:
+        return render_manifest_projection(snapshot)
 
     def archived_or_completed(self, snapshot: Mapping[str, Any]) -> bool:
         # The completed-plan stand-down trigger is a declared delta of this
@@ -2049,3 +2028,955 @@ class PlansAuthoringWatcherAdapter(_SnapshotFencesMixin, WatcherStateAdapter):
                 state["workflow_state"] = kind
             self._save_unlocked(state, {"event": "authoring-terminal-recorded", "kind": kind})
             return {"status": "success", "reason_code": "authoring-terminal-recorded", "kind": kind}
+
+
+# ---------------------------------------------------------------------------
+# Clocked operator orders (plan 2026-10-05-authoring-clocked-resume-order,
+# Task 1): the order ledger, its four CLI operations, and the discharge path.
+# The ledger is a standalone store, NOT a WatcherStateAdapter subclass (A8):
+# pending_rearm is cadence-armed with no per-order wall-clock time, the
+# authoring adapter is plan-slug-keyed and carries resume fences an order
+# does not carry, and the scheduler-state intent family is single-valued by
+# design. The order machinery reuses their patterns - the locked atomic
+# state file, the pairing discipline, the report-only shape, and the
+# scheduler adapter chain with its sentinel lifecycle - without overloading
+# their contracts.
+# ---------------------------------------------------------------------------
+
+
+CLOCKED_ORDER_STATES = ("pending", "armed", "discharged", "cancelled", "missed")
+CLOCKED_ORDER_TERMINAL_STATES = ("discharged", "cancelled", "missed")
+CLOCKED_ORDER_LABEL_PREFIX = "ai-playbook.clocked-order."
+# The provider-config environment the fire payload exports explicitly (the
+# maintenance overlay's Launchd carrier bullet): a launchd-fired job cannot
+# rely on the desktop app's interactive session to supply them, so the
+# builder snapshots the named variable plus every ZCODE provider-config
+# sibling present in the arming environment into the payload itself.
+CLOCKED_ORDER_PROVIDER_CONFIG_VARS = ("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",)
+
+
+def default_clocked_order_ledger_paths(repo_root: os.PathLike | str) -> dict[str, str]:
+    """The A1 default ledger paths under the maintenance state home.
+
+    The resolved ``maintenance_state_dir`` (fallback
+    ``.ai-playbook/maintenance/``) holds ``clocked-orders.json`` and the
+    ``clocked-order-payloads/`` home beside it, both under the gitignored
+    maintenance home. The runtime wrapper resolves the facts key and passes
+    explicit paths; tests inject temp dirs through the same constructor
+    parameters.
+    """
+
+    root = pathlib.Path(os.path.expanduser(str(repo_root))).resolve()
+    state_dir = root / ".ai-playbook" / "maintenance"
+    return {
+        "ledger_path": str(state_dir / "clocked-orders.json"),
+        "payload_home": str(state_dir / "clocked-order-payloads"),
+    }
+
+
+def default_clocked_order_identity(order_id: str | None, repo_root: str | None) -> dict[str, str]:
+    """The keyed default job dir, sentinel, and label for one order carrier.
+
+    The per-order identity key sits beside the existing plan-keyed one (the
+    existing keyed-identity precedent): the key digests the order id and the
+    canonical repository root under the distinct ``ai-playbook.clocked-order.``
+    label prefix, so an order carrier never shares a label, job path, or
+    sentinel with a budget-resume watcher or with another order.
+    """
+
+    key = launchd_identity_key(f"clocked-order:{order_id or ''}", repo_root)
+    return {
+        "key": key,
+        "job_dir": str(DEFAULT_LAUNCHD_JOB_DIR / f"clocked-order-{key}"),
+        "sentinel_path": str(DEFAULT_RESUME_SENTINEL.with_name(f"clocked-order-{key}.sentinel")),
+        "label": f"{CLOCKED_ORDER_LABEL_PREFIX}{key}",
+    }
+
+
+def resolve_clocked_order_identity(
+    job_dir: os.PathLike | str | None,
+    sentinel_path: os.PathLike | str | None,
+    order_id: str | None,
+    repo_root: str | None,
+) -> dict[str, str]:
+    """The one launchd-identity derivation for the clocked-order arms.
+
+    Mirror of :func:`resolve_launchd_identity` keyed on the order identity:
+    keyed whenever either path is left at its default, unkeyed only when the
+    caller brings both paths explicitly.
+    """
+
+    identity = default_clocked_order_identity(order_id, repo_root) if (order_id or repo_root) else None
+    both_explicit = job_dir is not None and sentinel_path is not None
+    if identity is not None and not both_explicit:
+        return {
+            "job_dir": str(job_dir) if job_dir is not None else identity["job_dir"],
+            "sentinel_path": str(sentinel_path) if sentinel_path is not None else identity["sentinel_path"],
+            "label": identity["label"],
+        }
+    return {
+        "job_dir": str(job_dir) if job_dir is not None else str(DEFAULT_LAUNCHD_JOB_DIR),
+        "sentinel_path": str(sentinel_path) if sentinel_path is not None else str(DEFAULT_RESUME_SENTINEL),
+        "label": CLOCKED_ORDER_LABEL_PREFIX.rstrip("."),
+    }
+
+
+def clocked_order_provider_config_exports(environ: Mapping[str, str] | None = None) -> str:
+    """The env-complete export prefix for the order fire payload.
+
+    The maintenance overlay's Launchd carrier bullet prescribes the
+    env-complete headless form: the job exports
+    ``ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`` and its sibling provider-config
+    variables explicitly, because a launchd-fired job cannot rely on the
+    desktop app's interactive session to supply them (the instant-death
+    witness of 2026-09-20). The builder snapshots the named variables plus
+    every ZCODE provider-config sibling present in the arming environment.
+    """
+
+    env = os.environ if environ is None else environ
+    names = list(CLOCKED_ORDER_PROVIDER_CONFIG_VARS)
+    names.extend(
+        sorted(
+            name
+            for name in env
+            if name.startswith("ZCODE_") and "PROVIDER" in name and name not in names
+        )
+    )
+    exports = []
+    for name in names:
+        value = env.get(name)
+        if value:
+            exports.append(f"export {name}={shlex.quote(str(value))}")
+    return " && ".join(exports)
+
+
+def build_clocked_order_fire_command(
+    *,
+    repo_root: os.PathLike | str,
+    ledger_path: os.PathLike | str,
+    order_id: str,
+    payload_slug: str,
+    executable: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """The env-complete headless invocation of the discharge operation.
+
+    Replaces the budget-resume manual-command string for order carriers (the
+    maintenance overlay's Launchd carrier bullet): every file boundary - the
+    repository root, the runtime script, the ledger - is a shell-quoted
+    path, the provider-config exports ride in the payload itself, and the
+    discharge operation is invoked manifest-free over the recorded order
+    identity.
+    """
+
+    repo = pathlib.Path(os.path.expanduser(str(repo_root))).resolve()
+    script = repo / "scripts" / "execute_plan_runtime.py"
+    runner = executable or sys.executable or "/usr/bin/python3"
+    payload = json.dumps(
+        {
+            "order_id": str(order_id),
+            "ledger_path": str(ledger_path),
+            "payload_slug": str(payload_slug),
+            "repo_root": str(repo),
+        },
+        sort_keys=True,
+    )
+    exports = clocked_order_provider_config_exports(environ)
+    parts = []
+    if exports:
+        parts.append(exports)
+    parts.append(f"cd {shlex.quote(str(repo))}")
+    parts.append(
+        f"{shlex.quote(str(runner))} {shlex.quote(str(script))}"
+        " --operation clocked-order-discharge-on-fire"
+        f" --repo-root {shlex.quote(str(repo))}"
+        f" --input {shlex.quote(payload)}"
+    )
+    return " && ".join(parts)
+
+
+def derive_requested_epoch(requested_at_iso: str) -> int:
+    """The authoritative epoch derived from the operator's local ISO (A2).
+
+    A naive ISO string is read in the machine's local zone; the epoch
+    derived from the recorded ISO at schedule time is the authority.
+    """
+
+    moment = datetime.fromisoformat(str(requested_at_iso).strip())
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return int(moment.timestamp())
+
+
+def request_epoch_refusal(requested_at_iso: str) -> str | None:
+    """The named A2 refusal for a requested time, or None when acceptable.
+
+    Sub-minute precision is refused (the carrier's calendar granularity is
+    minutes), and an ISO whose re-derived epoch disagrees with the recorded
+    wall clock (a nonexistent local time across a spring-forward boundary)
+    refuses the schedule.
+    """
+
+    moment = datetime.fromisoformat(str(requested_at_iso).strip())
+    if moment.second or moment.microsecond:
+        return "clocked-order-refused-sub-minute-precision"
+    epoch = derive_requested_epoch(requested_at_iso)
+    rederived = datetime.fromtimestamp(epoch)
+    if moment.tzinfo is not None:
+        rederived = rederived.astimezone(moment.tzinfo)
+    if rederived.replace(tzinfo=None) != moment.replace(tzinfo=None):
+        return "clocked-order-refused-iso-epoch-mismatch"
+    return None
+
+
+def next_local_occurrence_epoch(hour: int, minute: int, now_epoch: float) -> int:
+    """The next local occurrence of one calendar HH:MM at or after now.
+
+    The arming proof's reader: launchd's ``StartCalendarInterval`` fires at
+    the next occurrence of its wall-clock fields, so the armed fire epoch is
+    derived from those fields and compared against the requested epoch (A3).
+    """
+
+    moment = datetime.fromtimestamp(int(now_epoch)).astimezone()
+    candidate = moment.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    if candidate.timestamp() < int(now_epoch):
+        candidate += timedelta(days=1)
+    return int(candidate.timestamp())
+
+
+class ClockedOrderLedger:
+    """The order ledger: a standalone store over ``clocked-orders.json``.
+
+    Not a ``WatcherStateAdapter`` subclass (A8); the closed state set is
+    ``pending`` (recorded, not armed; includes parked orders awaiting
+    pickup), ``armed`` (a carrier receipt exists), ``discharged`` (consumed
+    exactly once), ``cancelled`` (terminal by explicit request), and
+    ``missed`` (terminal; the requested time passed undischarged, so its
+    error records once). Every observation and every transition is lock-held
+    (the shared ``.lock`` file beside the state file), the state is written
+    through temp-file atomic replace, and each transition appends to the
+    order's history under the lock. Payload copies live in the
+    ``clocked-order-payloads/`` home beside the ledger and are retained
+    until the order reaches a terminal state plus one day.
+    """
+
+    RETENTION_SECONDS = 86_400
+
+    def __init__(
+        self,
+        ledger_path: os.PathLike | str,
+        payload_home: os.PathLike | str,
+        *,
+        repo_root: os.PathLike | str,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._ledger_path = pathlib.Path(ledger_path)
+        self._payload_home = pathlib.Path(payload_home)
+        self._repo_root = str(pathlib.Path(os.path.expanduser(str(repo_root))).resolve())
+        self._clock = clock
+
+    @property
+    def ledger_path(self) -> pathlib.Path:
+        return self._ledger_path
+
+    @property
+    def payload_home(self) -> pathlib.Path:
+        return self._payload_home
+
+    @property
+    def repo_root(self) -> str:
+        return self._repo_root
+
+    def payload_copy_path(self, order_id: str) -> pathlib.Path:
+        """The order's payload copy: ``<payload home>/<order id>.md`` (A1)."""
+
+        return self._payload_home / f"{order_id}.md"
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        try:
+            state = json.loads(self._ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        state.setdefault("orders", {})
+        return state
+
+    def _write_unlocked(self, state: dict[str, Any]) -> None:
+        state["updated_at_epoch"] = float(self._clock())
+        self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._ledger_path.with_name(self._ledger_path.name + ".tmp")
+        temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, self._ledger_path)
+
+    def read(self) -> dict[str, Any]:
+        """Lock-held read of the whole ledger."""
+
+        with authoring_state_lock(self._ledger_path):
+            return self._read_unlocked()
+
+    def order(self, order_id: str) -> dict[str, Any] | None:
+        """Lock-held read of one order, or None when unrecorded."""
+
+        order = (self.read().get("orders") or {}).get(str(order_id))
+        return dict(order) if isinstance(order, Mapping) else None
+
+    def orders(self) -> list[dict[str, Any]]:
+        """Lock-held read of every order."""
+
+        return [dict(value) for value in (self.read().get("orders") or {}).values()]
+
+    def record_order(
+        self,
+        *,
+        order_id: str,
+        requested_at_iso: str,
+        requested_epoch: int,
+        payload_text: str,
+        payload_slug: str,
+    ) -> dict[str, Any]:
+        """Record one pending order with its payload copy and digest (A1, A4).
+
+        The payload copy is written to its ledger path first, and the
+        recorded digest is the sha256 of the copy bytes - the discharge's
+        copy-tamper check recomputes it against the same file.
+        """
+
+        now = float(self._clock())
+        with authoring_state_lock(self._ledger_path):
+            state = self._read_unlocked()
+            orders = state["orders"]
+            if str(order_id) in orders:
+                raise ValueError(f"clocked order id already recorded: {order_id}")
+            copy_path = self.payload_copy_path(order_id)
+            copy_path.parent.mkdir(parents=True, exist_ok=True)
+            copy_path.write_text(payload_text, encoding="utf-8")
+            order = {
+                "order_id": str(order_id),
+                "state": "pending",
+                "requested_at_iso": str(requested_at_iso),
+                "requested_epoch": int(requested_epoch),
+                "payload_path": str(copy_path),
+                "payload_digest": hashlib.sha256(copy_path.read_bytes()).hexdigest(),
+                "payload_slug": str(payload_slug),
+                "target_repo_root": self._repo_root,
+                "carrier": {"armed": False, "reason": "not-armed-yet"},
+                "created_at_epoch": now,
+                "updated_at_epoch": now,
+                "history": [
+                    {
+                        "event": "order-recorded",
+                        "at_epoch": now,
+                        "requested_at_iso": str(requested_at_iso),
+                        "requested_epoch": int(requested_epoch),
+                    }
+                ],
+            }
+            orders[order["order_id"]] = order
+            self._write_unlocked(state)
+            return dict(order)
+
+    def mutate(
+        self,
+        order_id: str,
+        *,
+        event: str,
+        from_states: set[str] | None = None,
+        to_state: str | None = None,
+        carrier: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+        history_extra: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The one compare-and-set order transition under the ledger lock.
+
+        Blocked without mutation when the order is unknown or its current
+        state is outside ``from_states`` (``None`` admits every state); a
+        success replaces the carrier record, applies ``extra``, moves the
+        state, stamps the terminal boundary, appends the history event, and
+        sweeps the payload-copy home - all in one locked atomic write.
+        """
+
+        now = float(self._clock())
+        with authoring_state_lock(self._ledger_path):
+            state = self._read_unlocked()
+            orders = state["orders"]
+            order = orders.get(str(order_id))
+            if not isinstance(order, Mapping):
+                return {"status": "blocked", "reason_code": "clocked-order-unknown-order", "cas_applied": False}
+            if from_states is not None and order.get("state") not in set(from_states):
+                return {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-state-conflict",
+                    "current_state": order.get("state"),
+                    "cas_applied": False,
+                    "order": dict(order),
+                }
+            if carrier is not None:
+                order["carrier"] = dict(carrier)
+            if extra:
+                order.update(extra)
+            if to_state is not None:
+                order["state"] = to_state
+            if order.get("state") in CLOCKED_ORDER_TERMINAL_STATES and "terminal_at_epoch" not in order:
+                order["terminal_at_epoch"] = now
+            order["updated_at_epoch"] = now
+            record = {"event": str(event), "at_epoch": now, "state": order.get("state")}
+            if history_extra:
+                record.update(history_extra)
+            order.setdefault("history", []).append(record)
+            self._sweep_payload_copies_unlocked(orders, now)
+            self._write_unlocked(state)
+            return {"status": "success", "reason_code": str(event), "order": dict(order), "cas_applied": True}
+
+    def _sweep_payload_copies_unlocked(self, orders: Mapping[str, Any], now: float) -> None:
+        """The A1 retention rule: copies survive terminal state plus one day."""
+
+        for order in orders.values():
+            if order.get("state") not in CLOCKED_ORDER_TERMINAL_STATES or order.get("payload_swept"):
+                continue
+            terminal_at = float(order.get("terminal_at_epoch") or 0.0)
+            if not terminal_at or now - terminal_at < self.RETENTION_SECONDS:
+                continue
+            try:
+                self.payload_copy_path(str(order["order_id"])).unlink()
+            except OSError:
+                pass
+            order["payload_swept"] = True
+            order.setdefault("history", []).append({"event": "payload-copy-swept", "at_epoch": now})
+
+
+def _consume_order_sentinel(order: Mapping[str, Any]) -> dict[str, Any]:
+    """Consume the order carrier's one-shot sentinel, receipt-only (G2 shape).
+
+    The consumed sentinel and its fired marker come from the order's
+    recorded carrier record and from nothing else; an order without an armed
+    launchd carrier consumes nothing.
+    """
+
+    carrier = order.get("carrier") if isinstance(order.get("carrier"), Mapping) else None
+    if carrier is None or carrier.get("armed") is not True or not carrier.get("sentinel_path"):
+        return {"consumed": False, "reason": "no-armed-launchd-carrier"}
+    fired_marker = carrier.get("fired_marker_path")
+    return consume_resume_sentinel(
+        str(carrier["sentinel_path"]),
+        fired_path=str(fired_marker) if isinstance(fired_marker, str) and fired_marker.strip() else None,
+    )
+
+
+def _rearm_order_carrier(ledger: ClockedOrderLedger, order: Mapping[str, Any]) -> dict[str, Any]:
+    """The check-and-arm-if-none re-arm from the order's recorded carrier.
+
+    The recorded carrier identity is the only input (the receipt-only G2
+    shape): the re-arm never re-derives a launchd identity at fire time - it
+    drives the real launchd one-shot scheduler over the recorded job dir,
+    sentinel, and label, so one armed receipt per order is kept.
+    """
+
+    carrier = order.get("carrier") if isinstance(order.get("carrier"), Mapping) else None
+    if carrier is None or carrier.get("armed") is not True or not carrier.get("plist_path"):
+        return {"scheduled": False, "reason": "no-armed-launchd-carrier-to-rearm"}
+    scheduler = LaunchdOneShotScheduler(
+        str(carrier["job_dir"]),
+        str(carrier["sentinel_path"]),
+        label=str(carrier["label"]),
+    )
+    requested_epoch = int(order["requested_epoch"])
+    scheduling = schedule_with_fallback(
+        [scheduler, ReportOnlyScheduler()],
+        {
+            "fire_at_epoch": requested_epoch,
+            "resume_at_iso": compute_resume_at_iso(requested_epoch),
+            "manual_command": build_clocked_order_fire_command(
+                repo_root=str(order["target_repo_root"]),
+                ledger_path=str(ledger.ledger_path),
+                order_id=str(order["order_id"]),
+                payload_slug=str(order["payload_slug"]),
+            ),
+            "order_id": str(order["order_id"]),
+        },
+    )
+    if scheduling.get("scheduled"):
+        ledger.mutate(
+            str(order["order_id"]),
+            event="early-fire-rearm",
+            from_states={"pending", "armed"},
+            to_state="armed",
+            history_extra={"rearm_mechanism": scheduling.get("mechanism")},
+        )
+    else:
+        refusal = launchd_refusal_reason(scheduling) or "clocked-order-rearm-refused"
+        ledger.mutate(
+            str(order["order_id"]),
+            event="early-fire-parked",
+            from_states={"pending", "armed"},
+            to_state="pending",
+            carrier={"armed": False, "reason": refusal},
+            history_extra={"rearm": scheduling},
+        )
+    return scheduling
+
+
+def run_clocked_order_operation(
+    kind: str,
+    payload: Mapping[str, Any],
+    *,
+    repo_root: str,
+    ledger: ClockedOrderLedger | None = None,
+    clock: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """The ONE CLI handler for the clocked-order operations.
+
+    - ``schedule`` records the pending order (A2 refusals before any ledger
+      write), arms it through the existing scheduler adapter chain with the
+      per-order identity key, proves A3 (the armed carrier's recorded fire
+      time equals the requested epoch), records the full armed receipt, and
+      parks on refusal (the state stays pending, the payload copy is
+      retained, the report-only result is recorded).
+    - ``cancel`` tears the armed carrier down (the supersede-style bootout
+      plus sentinel consume, or the automation retirement record) and is
+      terminal.
+    - ``due`` is the A6 classification: an order whose requested epoch
+      passed, still pending or armed, with no fired marker from its carrier
+      record (no discharge in flight), is marked missed.
+    - ``discharge-on-fire`` is the fire payload's entry: it re-reads the
+      order, applies the state, payload-digest, and target-identity checks,
+      consumes the sentinel, discharges exactly once, and re-arms on an
+      early fire without discharging.
+    """
+
+    def resolved_ledger() -> ClockedOrderLedger:
+        nonlocal ledger
+        if ledger is None:
+            target_root = str(payload.get("repo_root") or repo_root)
+            paths = default_clocked_order_ledger_paths(target_root)
+            ledger = ClockedOrderLedger(
+                payload.get("ledger_path") or paths["ledger_path"],
+                payload.get("payload_home") or paths["payload_home"],
+                repo_root=target_root,
+                clock=clock,
+            )
+        return ledger
+
+    if kind == "schedule":
+        target = resolved_ledger()
+        requested_at_iso = str(payload.get("requested_at_iso") or "").strip()
+        if not requested_at_iso:
+            return {
+                "operation": "clocked-order-schedule",
+                "status": "blocked",
+                "reason_code": "clocked-order-refused-missing-field",
+                "evidence": ["requested_at_iso is required"],
+            }
+        try:
+            refusal = request_epoch_refusal(requested_at_iso)
+        except ValueError:
+            refusal = "clocked-order-refused-unparseable-requested-time"
+        if refusal is not None:
+            return {
+                "operation": "clocked-order-schedule",
+                "status": "blocked",
+                "reason_code": refusal,
+                "requested_at_iso": requested_at_iso,
+                "evidence": [f"{refusal}: requested_at_iso={requested_at_iso}"],
+            }
+        requested_epoch = derive_requested_epoch(requested_at_iso)
+        payload_slug = str(payload.get("payload_slug") or "").strip()
+        payload_text = payload.get("payload_text")
+        if payload_text is None:
+            source = payload.get("payload_path")
+            if not source:
+                return {
+                    "operation": "clocked-order-schedule",
+                    "status": "blocked",
+                    "reason_code": "clocked-order-refused-missing-field",
+                    "evidence": ["payload_text or payload_path is required"],
+                }
+            try:
+                payload_text = pathlib.Path(os.path.expanduser(str(source))).read_text(encoding="utf-8")
+            except OSError as exc:
+                return {
+                    "operation": "clocked-order-schedule",
+                    "status": "blocked",
+                    "reason_code": "clocked-order-refused-unreadable-payload",
+                    "evidence": [f"payload_path={source} is unreadable: {exc}"],
+                }
+        if not payload_slug:
+            return {
+                "operation": "clocked-order-schedule",
+                "status": "blocked",
+                "reason_code": "clocked-order-refused-missing-field",
+                "evidence": ["payload_slug is required"],
+            }
+        order_id = str(payload.get("order_id") or f"co-{uuid.uuid4().hex}")
+        try:
+            order = target.record_order(
+                order_id=order_id,
+                requested_at_iso=requested_at_iso,
+                requested_epoch=requested_epoch,
+                payload_text=str(payload_text),
+                payload_slug=payload_slug,
+            )
+        except ValueError as exc:
+            return {
+                "operation": "clocked-order-schedule",
+                "status": "blocked",
+                "reason_code": "clocked-order-refused-duplicate-order-id",
+                "order_id": order_id,
+                "evidence": [str(exc)],
+            }
+        # The arm path: the identity is resolved once here (inside the
+        # schedule branch, per the launchd allowed-callers pin) and the
+        # chain consumes exactly that resolution, so the order's recorded
+        # carrier and the scheduler's armed carrier cannot disagree.
+        automation_echo = payload.get("automation") if isinstance(payload.get("automation"), Mapping) else None
+        resolved_identity = resolve_clocked_order_identity(
+            payload.get("job_dir"),
+            payload.get("sentinel_path"),
+            order_id,
+            target.repo_root,
+        )
+        launchd_reachable = not (isinstance(automation_echo, Mapping) and automation_echo.get("scheduled") is True)
+        if launchd_reachable:
+            carrier_record: dict[str, Any] = armed_launchd_identity(
+                resolved_identity["job_dir"],
+                resolved_identity["sentinel_path"],
+                resolved_identity["label"],
+            )
+        else:
+            carrier_record = {
+                "armed": True,
+                "carrier_form": "automation",
+                "automation": dict(automation_echo),
+                "fire_epoch": requested_epoch,
+            }
+        fire_command = build_clocked_order_fire_command(
+            repo_root=target.repo_root,
+            ledger_path=str(target.ledger_path),
+            order_id=order_id,
+            payload_slug=payload_slug,
+        )
+        scheduling = schedule_with_fallback(
+            cli_scheduler_chain(
+                automation_result=automation_echo,
+                resolved_identity=resolved_identity,
+                job_dir=payload.get("job_dir"),
+                sentinel_path=payload.get("sentinel_path"),
+                repo_root=target.repo_root,
+            ),
+            {
+                "fire_at_epoch": requested_epoch,
+                "resume_at_iso": compute_resume_at_iso(requested_epoch),
+                "manual_command": fire_command,
+                "order_id": order_id,
+            },
+        )
+        # The A3 arming proof: read the armed carrier's recorded fire time
+        # back and require it to equal the requested epoch (minute
+        # granularity, at or before with zero tolerance). A proposed fire
+        # time that rolls to a later occurrence (the requested minute
+        # already passed) refuses and parks the order for pickup.
+        proven_fire_epoch = None
+        proof_note = None
+        if scheduling.get("scheduled"):
+            if scheduling.get("mechanism") == "launchd":
+                try:
+                    job = plistlib.loads(pathlib.Path(str(carrier_record["plist_path"])).read_bytes())
+                    interval = job["StartCalendarInterval"]
+                    armed_fire_epoch = next_local_occurrence_epoch(int(interval["Hour"]), int(interval["Minute"]), clock())
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    armed_fire_epoch = None
+                    proof_note = f"clocked-order-arming-proof-unreadable: {exc}"
+            else:
+                echo_fire = automation_echo.get("fire_at_epoch")
+                armed_fire_epoch = int(echo_fire) if echo_fire is not None else requested_epoch
+            if armed_fire_epoch == requested_epoch:
+                proven_fire_epoch = armed_fire_epoch
+            elif proof_note is None:
+                proof_note = (
+                    f"clocked-order-arming-proof-refused: armed fire epoch {armed_fire_epoch} "
+                    f"rolls past the requested epoch {requested_epoch}"
+                )
+        if proven_fire_epoch is not None:
+            armed = target.mutate(
+                order_id,
+                event="order-armed",
+                from_states={"pending"},
+                to_state="armed",
+                carrier=carrier_record,
+                history_extra={"fire_epoch": proven_fire_epoch, "mechanism": scheduling.get("mechanism")},
+            )
+            return {
+                "operation": "clocked-order-schedule",
+                "status": "success",
+                "reason_code": "clocked-order-armed",
+                "order_id": order_id,
+                "state": "armed",
+                "fire_epoch": proven_fire_epoch,
+                "requested_at_iso": requested_at_iso,
+                "requested_epoch": requested_epoch,
+                "carrier": dict(armed.get("order", {}).get("carrier") or carrier_record),
+                "scheduling": scheduling,
+                "payload_path": order["payload_path"],
+                "payload_digest": order["payload_digest"],
+            }
+        refusal_reason = proof_note or launchd_refusal_reason(scheduling) or "report-only"
+        if launchd_reachable:
+            # Proof refused: the job was bootstrapped but never proven, so tear
+            # it down before parking; a live unproven carrier must not survive.
+            try:
+                _pp = carrier_record.get("plist_path")
+                if _pp:
+                    _job = pathlib.Path(os.path.expanduser(str(_pp)))
+                    launchctl_bootout(_job)
+                    _job.unlink(missing_ok=True)
+            except OSError:
+                pass
+            carrier_record = {"armed": False, "reason": refusal_reason}
+        parked = target.mutate(
+            order_id,
+            event="order-parked",
+            from_states={"pending"},
+            to_state=None,
+            carrier=carrier_record,
+            history_extra={"reason": refusal_reason, "scheduling": scheduling},
+        )
+        return {
+            "operation": "clocked-order-schedule",
+            "status": "blocked",
+            "reason_code": "clocked-order-parked-report-only",
+            "order_id": order_id,
+            "state": str(parked.get("order", {}).get("state") or "pending"),
+            "requested_at_iso": requested_at_iso,
+            "requested_epoch": requested_epoch,
+            "carrier": dict(parked.get("order", {}).get("carrier") or carrier_record),
+            "scheduling": scheduling,
+            "payload_path": order["payload_path"],
+            "payload_digest": order["payload_digest"],
+        }
+
+    if kind == "cancel":
+        target = resolved_ledger()
+        order_id = str(payload.get("order_id") or "")
+        if not order_id:
+            return {
+                "operation": "clocked-order-cancel",
+                "status": "blocked",
+                "reason_code": "clocked-order-refused-missing-field",
+                "evidence": ["order_id is required"],
+            }
+        order = target.order(order_id)
+        if order is None:
+            return {
+                "operation": "clocked-order-cancel",
+                "status": "blocked",
+                "reason_code": "clocked-order-unknown-order",
+                "order_id": order_id,
+            }
+        if order.get("state") in {"discharged", "cancelled"}:
+            return {
+                "operation": "clocked-order-cancel",
+                "status": "blocked",
+                "reason_code": "clocked-order-terminal-state",
+                "order_id": order_id,
+                "current_state": order.get("state"),
+                "evidence": [f"clocked order {order_id} is terminal: {order.get('state')}"],
+            }
+        carrier = order.get("carrier") if isinstance(order.get("carrier"), Mapping) else {}
+        teardown: dict[str, Any] = {}
+        if carrier.get("armed") and carrier.get("plist_path"):
+            # The launchd carrier tears down exactly like a superseded
+            # watcher receipt: bootout of the recorded plist, the recorded
+            # sentinel consumed - receipt-only, no identity derived.
+            teardown = dict(supersede_carrier_teardown({"armed_launchd": dict(carrier)}))
+            teardown["carrier_form"] = "launchd"
+        elif carrier.get("armed"):
+            # An automation-form carrier retires through the durable
+            # retirement record naming the automation id the operator turn
+            # deletes through the orchestrator-owned primitive.
+            automation = carrier.get("automation") if isinstance(carrier.get("automation"), Mapping) else {}
+            teardown = {
+                "carrier_form": "automation",
+                "automation_id": str(automation.get("id") or ""),
+                "retired": True,
+            }
+        outcome = target.mutate(
+            order_id,
+            event="order-cancelled",
+            from_states={"pending", "armed", "missed"},
+            to_state="cancelled",
+            history_extra={"carrier_teardown": teardown},
+        )
+        succeeded = outcome.get("status") == "success"
+        return {
+            "operation": "clocked-order-cancel",
+            "status": outcome.get("status"),
+            "reason_code": "clocked-order-cancelled" if succeeded else str(outcome.get("reason_code")),
+            "order_id": order_id,
+            "state": "cancelled" if succeeded else str(order.get("state")),
+            "carrier_teardown": teardown,
+            "order": outcome.get("order"),
+        }
+
+    if kind == "due":
+        target = resolved_ledger()
+        now = float(clock())
+        missed = []
+        for order in target.orders():
+            if order.get("state") not in ("pending", "armed"):
+                continue
+            if int(order.get("requested_epoch", 0)) > int(now):
+                continue
+            carrier = order.get("carrier") if isinstance(order.get("carrier"), Mapping) else {}
+            if carrier.get("armed") and carrier.get("fired_marker_path"):
+                # Live discharge evidence (A6): a fired marker from the
+                # order's carrier record means a discharge is in flight.
+                if pathlib.Path(str(carrier["fired_marker_path"])).exists():
+                    continue
+            outcome = target.mutate(
+                str(order["order_id"]),
+                event="order-missed",
+                from_states={"pending", "armed"},
+                to_state="missed",
+                history_extra={
+                    "requested_at_iso": order.get("requested_at_iso"),
+                    "requested_epoch": order.get("requested_epoch"),
+                },
+            )
+            if outcome.get("status") == "success":
+                missed.append(
+                    {
+                        "order_id": str(order["order_id"]),
+                        "requested_at_iso": order.get("requested_at_iso"),
+                        "requested_epoch": order.get("requested_epoch"),
+                    }
+                )
+        return {
+            "operation": "clocked-order-due",
+            "status": "success",
+            "now_epoch": int(now),
+            "missed": missed,
+        }
+
+    if kind == "discharge-on-fire":
+        target = resolved_ledger()
+        order_id = str(payload.get("order_id") or "")
+        if not order_id:
+            return {
+                "operation": "clocked-order-discharge-on-fire",
+                "status": "blocked",
+                "reason_code": "clocked-order-refused-missing-field",
+                "evidence": ["order_id is required"],
+            }
+        order = target.order(order_id)
+        if order is None:
+            return {
+                "operation": "clocked-order-discharge-on-fire",
+                "status": "blocked",
+                "reason_code": "clocked-order-unknown-order",
+                "order_id": order_id,
+            }
+        result: dict[str, Any] = {
+            "operation": "clocked-order-discharge-on-fire",
+            "order_id": order_id,
+            "requested_epoch": order.get("requested_epoch"),
+        }
+        if order.get("state") == "discharged":
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-duplicate-fire",
+                    "discharged": True,
+                    "evidence": [f"clocked order {order_id} was already discharged"],
+                }
+            )
+            return result
+        if order.get("state") not in ("pending", "armed"):
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-terminal-state",
+                    "current_state": order.get("state"),
+                    "evidence": [f"clocked order {order_id} is terminal: {order.get('state')}"],
+                }
+            )
+            return result
+        # The A4 target-identity check: the canonical repository root plus
+        # the payload slug, both recorded and compared; a mismatch refuses
+        # without state change.
+        supplied_slug = payload.get("payload_slug")
+        if supplied_slug is not None and str(supplied_slug) != str(order.get("payload_slug")):
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-stale-target",
+                    "evidence": [
+                        f"payload slug {supplied_slug} does not name the recorded target {order.get('payload_slug')}"
+                    ],
+                }
+            )
+            return result
+        fired_repo_root = str(pathlib.Path(os.path.expanduser(str(repo_root))).resolve())
+        if fired_repo_root != str(order.get("target_repo_root")):
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-stale-target",
+                    "evidence": [
+                        f"firing repository root {fired_repo_root} does not match the recorded target {order.get('target_repo_root')}"
+                    ],
+                }
+            )
+            return result
+        # The A4 copy-tamper check: the digest recorded at schedule time is
+        # recomputed against the payload copy; a mismatch refuses without
+        # state change.
+        live_digest = file_digest(order.get("payload_path"))
+        if live_digest is None or live_digest != order.get("payload_digest"):
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-payload-digest-mismatch",
+                    "evidence": [f"payload copy {order.get('payload_path')} does not match the recorded digest"],
+                }
+            )
+            return result
+        now = float(clock())
+        requested_epoch = int(order.get("requested_epoch", 0))
+        if now < requested_epoch:
+            # Early fire: consume the sentinel, discharge nothing, and
+            # re-arm check-and-arm-if-none for the requested minute.
+            result["sentinel"] = _consume_order_sentinel(order)
+            result["early_fire"] = True
+            result["discharged"] = False
+            result["rearm"] = _rearm_order_carrier(target, order)
+            return result
+        late_by = int(now - requested_epoch)
+        outcome = target.mutate(
+            order_id,
+            event="order-discharged",
+            # armed is admitted beside pending: a scheduled order is armed by
+            # the time its minute arrives, so pending-only would deadlock the
+            # machine (deviation from A4's pending-state wording, recorded).
+            from_states={"pending", "armed"},
+            to_state="discharged",
+            history_extra={"late_by_seconds": late_by, "late": late_by > 0},
+        )
+        if outcome.get("status") != "success":
+            # The single consumption was won by a concurrent fire; the CAS
+            # refusal is the exactly-once fence.
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason_code": "clocked-order-duplicate-fire",
+                    "discharged": False,
+                    "cas": outcome,
+                }
+            )
+            return result
+        result["sentinel"] = _consume_order_sentinel(outcome.get("order") or order)
+        result["discharged"] = True
+        result["late"] = late_by > 0
+        result["late_by_seconds"] = late_by
+        return result
+
+    raise ValueError(f"unknown clocked-order operation kind: {kind}")

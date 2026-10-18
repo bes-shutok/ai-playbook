@@ -1,0 +1,783 @@
+{
+  "schema": 1,
+  "window": {
+    "started": "2026-10-05",
+    "source": "operator investigate commit cb01b7e4 (docs/history/backlog/2026-10-05-done-guard-stack-liveness-economics.md)",
+    "witnessed_stack_cost": "the review-cert-graded-binding execution ran ~16h against the 2-3h per-plan target (docs/history/backlog/2026-10-05-plan-sizing-execution-budget.md)"
+  },
+  "guards": {
+    "reverse-squash-guard": {
+      "notes": "priced by the 2026-09-25 rule29 restaging near-miss (docs/history/plans/completed/2026-09-25-restaging-reverse-squash-guard.md)",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-02",
+          "evidence": "commit d41bf3e5",
+          "time_lost_minutes": null,
+          "note": "check-landing live fire refused a stale-base branch whose landing would have deleted four peer paths from main"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes-20261008T034601Z-3c5b4ea44910.md",
+          "time_lost_minutes": null,
+          "note": "check-staged refused a Task 2 landing with two mirror-only diffstat findings (two 1+/1- single-line home edits on files of prior single-line-edit commits); guard CLI carries one --ack so one finding stayed unackable; content-level inversion check (exact-inverse False, zero line overlap both directions) cleared both; landing e82e988b"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes-20261008T045245Z-4c95b50f7415.md",
+          "time_lost_minutes": null,
+          "note": "second firing of the single --ack limitation: two diffstat-mirror findings (8a1e84cf, e82e988b) on a legitimate rewording set; one ack slot left the verified-benign e82e988b mirror standing at exit 1; proceeded on the prior run's recorded precedent after content-level verification; defect row filed at 1b56d3c3"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "agents/skills/execute-plan/SKILL.md",
+          "time_lost_minutes": null,
+          "note": "demotion program change 2 outcome: the diffstat-mirror signature demoted to a warning arm in check-staged and check-diff with --ack made repeatable (landing c3ec310f3); the entry's stale-base catch keeps its blocking posture and the archive-egress and reviews-home classes stay refusals"
+        }
+      ]
+    },
+    "cas-digest-existence": {
+      "notes": "the CAS old-value existence check; refusal posture is the landing-fence class",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-02",
+          "evidence": "docs/history/plans/completed/2026-10-02-evidence-integrity-fences.md",
+          "time_lost_minutes": null,
+          "note": "refused a hand-expanded fabricated digest during a landing tail"
+        }
+      ]
+    },
+    "dirt-regression-gate": {
+      "notes": "posture flip to fail-loud rides docs/history/plans/2026-10-05-dirt-gate-new-file-refactor-and-required-operands.md",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/backlog/2026-10-05-dirt-regression-new-file-forward-refactor.md",
+          "time_lost_minutes": null,
+          "note": "false positive: vacuous flag on removal-only edits over base-absent new files"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/backlog/2026-10-05-done-dirt-regression-cli-path-usage.md",
+          "time_lost_minutes": null,
+          "note": "displayed command lacks required operands; literal use tool-errors the closeout"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-05",
+          "evidence": "docs/history/backlog/2026-10-05-done-dirt-regression-blocks-reviewed-fix.md",
+          "time_lost_minutes": null,
+          "note": "partial: the reclassification credits the gate with preventing an unnecessary API change"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-11",
+          "evidence": "docs/history/plans/2026-10-11-execute-plan-sequential-only-adapter-removal.md",
+          "time_lost_minutes": null,
+          "note": "Flagged two intentionally consolidated survey checklist lines in operator-directed, cleanly re-reviewed plan revision; user authorized revise and continue."
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-14",
+          "evidence": "valid-active-doc-cleanup",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "post-landing-staging-gate": {
+      "notes": "placement fix authored at docs/history/plans/2026-10-05-post-landing-staging-placement-awareness.md; posture flip rides it",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/backlog/2026-10-05-post-landing-staging-owned-plan-refusal.md",
+          "time_lost_minutes": null,
+          "note": "witnessed twice plus a reproduced third case: the run's own unstaged owned paths read as landing residue, refusal names a harmful remedy"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "agents/skills/done/SKILL.md",
+          "time_lost_minutes": null,
+          "note": "demotion program change 7 outcome: the manifest-owned unstaged leg demoted to the warning arm under every placement reading (landing aa972e228); the entry's 0/1 predicate (2026-10-05 owned-plan refusal, witnessed three times) is the sanction; the staged leg refuses unchanged"
+        }
+      ]
+    },
+    "review-staging-validator": {
+      "notes": "preservation-backup exclusion landed in 95c223c6",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "commit 95c223c6",
+          "time_lost_minutes": null,
+          "note": "byte-identical preservation backups could never pass the name-based back-reference check; closeout blocked until excluded"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-05",
+          "evidence": "docs/history/backlog/2026-10-05-review-round-copies-stale-supersession-link.md",
+          "time_lost_minutes": null,
+          "note": "partial: refused a genuinely corrupted inherited supersession link (corruption itself created by the round-copy machinery)"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-07",
+          "evidence": ".ai-playbook/reviews/2026-10-07-plan-review-done-closeout-cost-and-skill-scope-r1.md",
+          "time_lost_minutes": null,
+          "note": "nine-shape record rejection at r1 forced the record-side repair pass and the contract-bearing launch prompts from r2 on; zero shape defects reached certification"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-07",
+          "evidence": ".ai-playbook/reviews/2026-10-07-plan-review-docs-branch-mixed-review-shadow-omission-reconciliation.md",
+          "time_lost_minutes": null,
+          "note": "metadata-shape rejection at the cycle-23 closeout kept an unshaped reconciliation record off the docs branch; repaired record-side and re-synced"
+        }
+      ]
+    },
+    "run-manifest-writer": {
+      "notes": "checkpoint writer, interrupted-manifest recovery, marker atomicity, and pre-lock classification all landed in 83668da3",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "checkpoint required by the skill had no writer; agent could not comply without inventing state"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "marker failure mid-setup left a stale manifest binding that the pre-commit sweep refused"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "interrupted-run manifest stranded a later authorized closeout with no documented recovery"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "hundreds of unclassified staging candidates aborted write-manifest after lock acquisition"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-16",
+          "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
+          "time_lost_minutes": null,
+          "note": "verify-only demotion record (change 4 of 5, no code change): all four ledger incidents (2026-10-05) are pre-completion costs of the writer machinery being absent or incomplete - checkpoint writer missing, stale marker binding, stranded interrupted manifest, unclassified-staging abort - and each was closed by the same-day completion landing 83668da3 plus the recovery machinery (recover-manifest, list-interrupted, disposition commands); zero catches and zero incidents since, the legs are fail-closed refusals backing the manifest that is the resume source of truth, and the staging-classification leg is the same closeout-boundary family the entry's own preserved-guards arm protects, so a warning-posture flip trades resume integrity for no witnessed cost; posture stands"
+        }
+      ]
+    },
+    "revert-set-classifier": {
+      "notes": "canonical source-resolution arm landed in 83668da3",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "absent deployed copy produced a false missing-dependency block while the canonical copy existed"
+        }
+      ]
+    },
+    "done-receipts": {
+      "notes": "named-conjunct owner-fence refusal landed in 83668da3",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-05",
+          "evidence": "docs/history/plans/completed/2026-10-05-done-lifecycle-recovery-gaps.md",
+          "time_lost_minutes": null,
+          "note": "owner-fence refusal listed the wrong missing fields, hiding the failed fence"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-16",
+          "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
+          "time_lost_minutes": null,
+          "note": "verify-only demotion record (change 5 of 5, no code change): the single ledger incident (2026-10-05) is a diagnostic-message defect - the owner-fence refusal listed the wrong missing fields, hiding the failed fence - fixed in the same completion landing 83668da3; the fence arm itself has no witnessed misfire and zero catches since, it is the closeout's ownership check that every owed receipt is owned before the closeout lands, and its refusal is the bounded-repair surface (name the missing receipt, produce it), so a warning-posture flip would let unowned closeouts land for no witnessed cost; posture stands"
+        }
+      ]
+    },
+    "plan-readiness-digest-gate": {
+      "notes": "graded certification landed in 9d6cdc75",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-09-04",
+          "evidence": "commit 9d6cdc75",
+          "time_lost_minutes": null,
+          "note": "exact-byte binding forced full recertification panels for typography-only deltas (two witnessed rounds, 2026-09-04 and 2026-09-05)"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-16",
+          "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
+          "time_lost_minutes": null,
+          "note": "verify-only demotion record (change 2 of 5, no code change): the incident-bearing arm (exact-byte binding forcing full recertification panels for typography-only deltas) was already demoted by the graded-certification landing 9d6cdc75 (graded stale arms; legacy exact-match rule only on corrections_record deployment gap), and the residual stale-digest readiness refusal is the never-relabel invariant's load-bearing arm - the review-staging recovery routes (914e991b8) pivot on it - so a warning-posture flip would be a machinery decision, not a pure-cost demotion; posture stands"
+        }
+      ]
+    },
+    "per-task-done-subagent": {
+      "notes": "measured cost: nine done sub-agents at 2-6 minutes and ~300k tokens each, ~35 minutes and ~2.5M tokens per multi-task execution (docs/history/backlog/2026-10-05-done-commit-batching.md); batching arm owned by the frozen execution-pipeline-friction entry unit U2",
+      "rows": [
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "agents/skills/execute-plan/SKILL.md",
+          "time_lost_minutes": null,
+          "note": "demotion program change 9 outcome: the per-task done sub-agent spawn removed (landing 5c0fb9a829) - Step 1.4 is a parent-executed done boundary with the sequence, gates, and receipts unchanged; the entry's zero rows plus the ~2.5M-token multi-task cost note are the sanction; Done (per review iteration) stays"
+        }
+      ]
+    },
+    "base-branch-amend-guard": {
+      "notes": "pricing witness: the 2026-10-02 18:09 amend of a peer's landed tip (docs/history/plans/completed/2026-10-02-evidence-integrity-fences.md); zero live catches to date",
+      "rows": [
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "docs/history/backlog/2026-10-08-done-closeout-ceremony-friction.md",
+          "time_lost_minutes": null,
+          "note": "demotion program change 8 outcome: the machinery removed (landing 134cc7b6b) - scripts/base_branch_amend_guard.py and its test deleted after the whole-repo caller search; the entry's zero rows are the sanction and the 2026-10-02 peer-tip amend stays the pricing witness; the base-branch immutability rule stays binding in the done and execute-plan skills"
+        }
+      ]
+    },
+    "plan-readiness": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-06",
+          "evidence": "docs/history/plans/deferred/2026-09-15-plan-readiness-legacy-verdict-grammar-deletion.md",
+          "time_lost_minutes": null,
+          "note": "closeout gate fired on a live peer's in-flight deferred-plan edit; foreign dirt, reported not fixed"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-16",
+          "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
+          "time_lost_minutes": null,
+          "note": "landing-sweep posture demotion (warning, reports never blocks): the gate's one ledger row is an incident on a live peer's in-flight deferred-plan edit (2026-10-06 foreign dirt, reported not fixed) and it has zero catches; the closeout-gate demotion program's continuation entry (routing plan docs/history/plans/deferred/2026-10-10-execute-plan-adapter-route-scope-inversion.md, one gate per change) moves it into LANDING_WARNING_GATES beside instruction-size and description-length"
+        }
+      ]
+    },
+    "post-landing-staging": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/session-notes-20261006T150440Z.md",
+          "time_lost_minutes": null,
+          "note": "manifest-less done run: the strict staged leg refused a staged corpus change with no owning manifest; the record-only allowlist plus pathspec commit is the sanctioned shape"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/session-notes-20261006T120900Z-42d52410ac1a.md",
+          "time_lost_minutes": null,
+          "note": "pre-commit run refused to finalize while the primary holds a live peer corpus-migration boundary (114 novel-byte paths); two runs concurred; retry after the owning session lands"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/session-notes-20261006T160910Z-eee340996255.md",
+          "time_lost_minutes": 25,
+          "note": "blocked the task-1 done boundary pre-commit gate on a completed peer run's uncommitted tally append in the primary; cleared by the operator tally landing 5c52817b"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/session-notes-20261006T170459Z-bbae1bea5ba2.md",
+          "time_lost_minutes": 0,
+          "note": "task-2 done boundary pre-commit run refused over the same fresh primary residue class (uncommitted advisory liveness appends atop tally 5c52817b); blocked report returned with no staging per orchestrator rule"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-07",
+          "evidence": "ed1a637f8b565b76529aad12c13859d99471837b",
+          "time_lost_minutes": null,
+          "note": "First Task 1 done boundary omitted owned claims for same-run pending Task 2/3 tracked work; recovered with a new adopted boundary."
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-07",
+          "evidence": "docs/tmp/done-session/run-manifest-20261007T182822Z-78cea36f5464.json",
+          "time_lost_minutes": 3,
+          "note": "task4 done run: primary-residue finding twice hit a live peer landing window (PLAN-PROMPTS.md fail, then indeterminate under merge lock); resolved by bounded quiesce wait, no peer dirt touched"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes.md",
+          "time_lost_minutes": null,
+          "note": "flagged peer-live unstaged gate_liveness_ledger.json append as residue; both sanctioned remedies excluded by the gate's own terms (escape requires not-peer-live; no landing of this run exists); item 1a disposition: reported, left unstaged"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "docs/history/backlog/2026-10-08-done-closeout-ceremony-friction.md",
+          "time_lost_minutes": null,
+          "note": "demotion program change 1 outcome: the unowned unstaged leg demoted to the warning arm (landing 1a5f0932a); the staged leg keeps its refusal under every ownership class - both entry catches live there"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-14",
+          "evidence": "staged AGENTS.md + docs/maintenance/development_lessons.md absent from the run manifest owned set",
+          "time_lost_minutes": null,
+          "note": " learn-written paths not declared as --owned-path at Step 0; recovery by unstaging, closing the boundary, reopening with complete owned-path claims"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-14",
+          "evidence": "own learn output staged unowned - corpus path written after Step 0; adopted-boundary re-entry with the owned-path claim resolved",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-15",
+          "evidence": "declared record-only corpus path refused by the channel subtraction per the landed done-ownership plan (relanded via a fresh Step 0 claim boundary)",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-16",
+          "evidence": "run 20261016T170118Z refused staging the record-only corpus path unclaimed; re-opened boundary 20261016T171306Z with the Step 0 claim boundary per witness 453d8169",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-17",
+          "evidence": "task 1 boundary commit 2b106936f proceeded past the gate's peer-live primary-checkout staged residue under the operator's recorded 2026-10-16 directive (find a workaround to continue); peer dirt, escape inapplicable, no owned paths touched",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-17",
+          "evidence": "task 2 boundary commit 6e063474f same posture, peer re-staged PLAN-PROMPTS entry in the primary checkout; recorded override-proceed per the standing directive",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-17",
+          "evidence": "task 3 boundary used the path-limited owned-set commit with the runner skipped (identical peer-residue refusal witnessed within the hour at tasks 1-2); standing directive covers the proceed",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-17",
+          "evidence": "docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md",
+          "time_lost_minutes": null,
+          "note": "boundary-class split (plan worktree-done-boundary-gate-roster-split, r4-certified): gate_post_landing_staging no longer runs at per-task done boundaries (--boundary-class per-task); incident witnessed 2026-10-16 (one live execution run stalled a full peer authoring cycle); final-closeout catch frequency unchanged (the gate keeps the full roster at the landing owner); per-task false-positive cost accepted (a per-task boundary forfeits early warning of primary residue); sunset review at first misuse or beside the placement-awareness lineage"
+        }
+      ]
+    },
+    "review-staging": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/session-notes-20261006T150440Z.md",
+          "time_lost_minutes": null,
+          "note": "two foreign peer stub records flagged; preserved uncompleted and the docs-branch sync skipped so stubs do not propagate to the docs branch"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": ".ai-playbook/reviews/2026-10-06-plan-review-plans-egress-coverage-r3.md",
+          "time_lost_minutes": 8,
+          "note": "done pre-docs run: md/sidecar triage disagreement (F3 fixed vs dropped) caught on a manifest-owned record; minimal md bullet repair"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-07",
+          "evidence": ".ai-playbook/reviews/2026-10-06-plan-review-crm-609-nightly-bitmap-rebuild-generation-lifecycle-r10.md",
+          "time_lost_minutes": null,
+          "note": "Known R10 metadata mismatch blocked Task 1 done pre-docs gate; preserved under operator direction."
+        }
+      ]
+    },
+    "doc-registry": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": "docs/tmp/done-session/owned-commits-20261006T160910Z-eee340996255.txt",
+          "time_lost_minutes": null,
+          "note": "flagged a non-sha header line in a fresh owned-commits ledger; header removed before the first append"
+        }
+      ]
+    },
+    "em-dash-added-lines": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-06",
+          "evidence": "docs/history/plans/2026-10-06-land-squash-quoted-porcelain.md",
+          "time_lost_minutes": null,
+          "note": "post-certification em-dashes caught at pre-landing, forcing the r5 re-round"
+        }
+      ]
+    },
+    "land-squash-containment": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-07",
+          "evidence": "9c62b368",
+          "time_lost_minutes": null,
+          "note": "stale-base refusal when a peer landing moved main mid-flight; rebase plus re-land"
+        }
+      ]
+    },
+    "execution-claim-gateway": {
+      "notes": "gateway mechanism: the take refuses run-worktree creation while a fresh foreign execution claim holds (scripts/execution_claim.sh, the pinned single create path wired 2026-10-07); origin evidence in docs/history/plans/2026-10-07-execution-claim-write-enforcement.md (the Why section carries the deleted origin row's evidence)",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-07",
+          "evidence": "landing 80ad2666 and origin row docs/history/backlog/2026-10-07-execution-claim-write-enforcement.md",
+          "time_lost_minutes": 130,
+          "note": "duplicate execution: a carrier took the head plan claim-less, the next carrier's survey read the empty registry as free, and both executions ran concurrently until the peer landed; about 130 lane-minutes and four commits discarded"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-16",
+          "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
+          "time_lost_minutes": null,
+          "note": "verify-only demotion record (change 3 of 5, no code change): the ledger incident (2026-10-07 duplicate execution, about 130 lane-minutes) is the gateway's founding harm class, not a post-wiring misfire - the take refusal was wired the same day by the execution-claim-write-enforcement plan precisely to stop it, the refusal is a near-zero-cost claim-freshness check, and the design is self-healing (freshness decay, stale takeover, occupying-worktree naming, user-directed override route), so a warning-posture flip would re-open the witnessed harm for no recovered cost; posture stands"
+        }
+      ]
+    },
+    "write-manifest-claim-or-foreign": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-07",
+          "evidence": "docs/tmp/done-session/run-manifest-20261008T000158Z-0d92fe5f5e92.json",
+          "time_lost_minutes": null,
+          "note": "claim-or-foreign abort at Step 0 write-manifest named 4508 unclaimed reviews-corpus candidates; classification supplied via emit + --foreign-review-from"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/run-manifest-20261008T030458Z-5ee54fb6d004.json",
+          "time_lost_minutes": null,
+          "note": "Step 0 write refused the unclassified bootstrapped reviews corpus; resolved with --claim-none (all candidates foreign), no ownership assumed"
+        }
+      ]
+    },
+    "backlog-inbox": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/gate-event-20261008T105247Z-34a844b6fc4f.md",
+          "time_lost_minutes": null,
+          "note": "Temporary candidate-list filename tripped the inbox gate; relocation and rerun passed."
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "scripts/done_sweep_gates_lib.py",
+          "time_lost_minutes": null,
+          "note": "demotion program change 4 outcome: the filename-shape refusal demoted to the warning arm (landing 90afa915a); the entry's 0/1 predicate (the 2026-10-08 temporary-filename relocation incident) is the sanction; the validator is unchanged"
+        },
+        {
+          "kind": "change",
+          "date": "2026-10-11",
+          "evidence": "docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md",
+          "time_lost_minutes": null,
+          "note": "roster demotion at landing (done target-state plan docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md): removed from the per-run sweep roster (0 catches, 1 incident, 1 override, already report-not-fail); the filing duty stays with receiving-review's capture step"
+        }
+      ]
+    },
+    "write-manifest-undisposed-interrupted": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/history/backlog/2026-10-08-done-closeout-ceremony-friction.md",
+          "time_lost_minutes": 20,
+          "note": "refusal misclassified a live linked-worktree peer manifest as dead root and printed the disposition-only remedy; manual digest re-derivation yielded instead; peer finalized normally"
+        },
+        {
+          "kind": "override",
+          "date": "2026-10-09",
+          "evidence": "scripts/done_sweep_gates_lib.py",
+          "time_lost_minutes": null,
+          "note": "demotion program change 3 outcome: the undisposed-interrupted refusal demoted to the stderr warning, the write continuing past it (landing b557dc456); reconciliation: the sibling entry undisposed-interrupted-refusal carries a 2026-10-08 catch row for the same refusal surface - the sibling's catch predates the demotion and witnessed the older boundary-adjudication path, so both entries now describe the same warning-arm posture"
+        }
+      ]
+    },
+    "docs-branch-entry-guard": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes.md",
+          "time_lost_minutes": 6,
+          "note": "entry guard refused a fence-marker-contaminated script assembly (SHADOW_CANDIDATES unset) before any worktree or staging artifact existed; content-only reassembly synced clean"
+        }
+      ]
+    },
+    "undisposed-interrupted-refusal": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes-20261008T210446Z-640ba45cc3ff.md",
+          "time_lost_minutes": null,
+          "note": "write-manifest refused new Step 0 while boundary 20261008T192247Z stood undisposed; recovery completed before staging"
+        }
+      ]
+    },
+    "recover-manifest-deliverables-witness": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-08",
+          "evidence": "docs/tmp/done-session/session-notes-20261008T210446Z-640ba45cc3ff.md",
+          "time_lost_minutes": null,
+          "note": "witness refused closure while owned review record resolved on disk but not on the docs branch; deferred sync completed under merge lock, recovery then stamped"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-08",
+          "evidence": "docs/history/backlog/2026-10-08-done-closeout-ceremony-friction.md",
+          "time_lost_minutes": null,
+          "note": "closeout recovery refused 11 owned review records absent from the docs branch after the user directed docs-branch sync be skipped for this session; note-backed recovery did not cover owned reviews, so the closeout stopped before learn, the remaining gates, and the local commit (friction row Evidence; the write-manifest row's session)"
+        }
+      ]
+    },
+    "sensitive-data-scan": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-09",
+          "evidence": "scripts/test_execute_plan_runtime.py",
+          "time_lost_minutes": null,
+          "note": "Pre-commit scan stopped a credential-shaped synthetic fixture assignment (claim_token=12-char value); renamed to a 7-char label, suite re-verified 789 OK"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-16",
+          "evidence": "private-company-email-and-internal-links-blocked-in-private-repo",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-16",
+          "evidence": "private-internal-Atlassian-links-blocked-in-private-repo",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "rearm-on-touch": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-11",
+          "evidence": "a96239acf",
+          "time_lost_minutes": null,
+          "note": "stale mirrored recognition title booked a false parent_absent_since against the armed parent; fixed same run, booking cleared by re-run"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-17",
+          "evidence": "a lossy hand-trimmed automation listing defeated recognition (0 matches) and booked a wrong parent_absent_since into the scheduler state file; the rerun with the faithful listing corrected the bookkeeping (parent-ok)",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "archive-ceremony": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-11",
+          "evidence": "docs/tmp/done-session/session-notes-20261011T200048Z-d8ce01a870c2.md",
+          "time_lost_minutes": null,
+          "note": "valid deferred plans rejected as completed archives"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-17",
+          "evidence": "refused the run's archived fprv plan with 16 unchecked task boxes before any landing (the boxes were genuinely unchecked at HEAD)",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-17",
+          "evidence": "refused the verified staged box-fix twice because the gate reads archive bytes at HEAD, not the staged set; the fix landed only by a peer commit sweeping the shared index (846f9ff61)",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "vim-swap-sweep": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "change",
+          "date": "2026-10-11",
+          "evidence": "docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md",
+          "time_lost_minutes": null,
+          "note": "roster demotion at landing (done target-state plan docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md): new guard entry; removed from the per-run sweep roster (no ledger rows); the periodic maintenance-survey advisory owns the arm (docs/maintenance/demoted-sweep-arms.md)"
+        }
+      ]
+    },
+    "instruction-size": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "change",
+          "date": "2026-10-11",
+          "evidence": "docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md",
+          "time_lost_minutes": null,
+          "note": "roster demotion at landing (done target-state plan docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md): new guard entry; warning posture inside the landing roster (reports, never blocks; no ledger rows)"
+        }
+      ]
+    },
+    "description-length": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "change",
+          "date": "2026-10-11",
+          "evidence": "docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md",
+          "time_lost_minutes": null,
+          "note": "roster demotion at landing (done target-state plan docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md): new guard entry; warning posture inside the landing roster (reports, never blocks; no ledger rows)"
+        }
+      ]
+    },
+    "done-setup-partial-classification": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-12",
+          "evidence": "docs/history/backlog/2026-10-12-done-setup-ignores-dispositioned-manifest-state.md",
+          "time_lost_minutes": 25,
+          "note": "classify_partial selected a dispositioned dead-root manifest as the newest boundary and refused a fresh primary-checkout setup; closeout completed via the recorded continuation-checkout workaround (run 20261012T145100Z-46a6f40d1b21, landed ac3650d5a)"
+        }
+      ]
+    },
+    "landing_parentage_gate": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-12",
+          "evidence": "pre-swap refusal overridden via tail-piped exit in the pre-round-gate-dimension-parity landing (verified sound post hoc; lesson 38)",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "disposition-manifest-deliverables-witness": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-13",
+          "evidence": "run-manifest-20261011T184033Z-c9b724851be8.json",
+          "time_lost_minutes": null,
+          "note": "owned plans-completed path resolves through no witness arm at HEAD"
+        }
+      ]
+    },
+    "dirt-regression": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-14",
+          "evidence": "docs/history/metrics/landing-costs.jsonl",
+          "time_lost_minutes": null,
+          "note": "blocked intentional migration of branch-added tracked archive content to ignored storage"
+        }
+      ]
+    },
+    "claim-or-foreign-classification": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-15",
+          "evidence": "setup refused 5244 unclassified staging candidates until the owned-plan plus three owned-reviews versus 5244-foreign split was declared; second witness of the documented marker-plus-write-manifest recovery",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "write-manifest": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-15",
+          "evidence": "claim-or-foreign refused 2700 unpartitioned staging candidates at first setup, retried with the emission complement via foreign-review-from",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "land-worktree-expected-tip": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-15",
+          "evidence": "hand-expanded digest tail refused by the landing helper during cycle-1 landing (resolve-at-use held; relanded with the sha resolved by git rev-parse at use)",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "prune-audit": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-16",
+          "evidence": "plan-rider over-prune caught as REMOVED-WITHOUT-WITNESS before merge (2026-10-16 authoring closeout; captured as lessons 56-57)",
+          "time_lost_minutes": null
+        }
+      ]
+    },
+    "claim-or-foreign": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-16",
+          "evidence": "run-20261016T120331Z setup",
+          "time_lost_minutes": null,
+          "note": " first manifest write refused the unclaimed staging corpus (2731 candidates) until the emitted candidate list was passed via --foreign-review-from"
+        }
+      ]
+    }
+  }
+}

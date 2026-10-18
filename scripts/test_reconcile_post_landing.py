@@ -916,3 +916,124 @@ class ReconciliationResidualsTest(ReconcilePostLandingTest):
         )
         self.assertEqual(captured["env"].get("GIT_CONFIG_NOSYSTEM"), "1")
         self.assertIn("rev-parse", captured["argv"])
+
+
+class CheckPrimarySweepTest(ReconcilePostLandingTest):
+    """The read-only primary freshness sweep (--check-primary): warning-only
+    stale-witness rows, no writes, exit 0/1/2."""
+
+    def run_sweep(self, repo=None, extra=()):
+        proc = subprocess.run(
+            [sys.executable, RECONCILE_SCRIPT, "--check-primary", "--repo",
+             repo or self.repo.root] + list(extra),
+            capture_output=True,
+            text=True,
+            env=HERMETIC_ENV,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def test_silent_working_tree_variant_reported_stale(self):
+        """Given a tracked path whose worktree bytes equal a pre-landing
+        ancestor blob with nothing staged while HEAD advanced past it,
+        expects exit 1, a stale worktree-arm row naming the path and the
+        ancestor commit, and the file bytes unchanged."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        v1 = r.head()
+        r.write("skill.md", "v2\n")
+        r.commit_all("v2")
+        r.write("skill.md", "v1\n")
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 1)
+        self.assertIn("stale skill.md %s worktree" % v1, out)
+        self.assertEqual(r.read("skill.md"), "v1\n")
+
+    def test_untracked_and_genuine_edits_exit_zero(self):
+        """Given an untracked file and a genuine (non-ancestor) worktree edit,
+        expects exit 0 with no stale row."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        r.write("notes.txt", "untracked\n")
+        r.write("skill.md", "genuinely edited beyond every ancestor\n")
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("stale ", out)
+
+    def test_mid_rebase_primary_notes_and_skips(self):
+        """Given a primary mid-rebase, expects the note row and no stale
+        classification."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        r.write("skill.md", "v1-ancestor-revert\n")
+        os.makedirs(os.path.join(r.git_dir(r.root), "rebase-merge"))
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 0)
+        self.assertIn("note %s midflight" % r.root, out)
+        self.assertNotIn("stale ", out)
+
+    def test_fresh_mtime_witness_reported(self):
+        """Given stale worktree bytes whose mtime postdates the matching
+        commit's committer time, expects the fresh-mtime witness on the row,
+        warning-only."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        v1 = r.head()
+        r.write("skill.md", "v2\n")
+        r.commit_all("v2")
+        r.write("skill.md", "v1\n")
+        r.freshen("skill.md", self.fresh_epoch)
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 1)
+        self.assertIn("stale skill.md %s worktree fresh-mtime" % v1, out)
+
+    def test_staged_ancestor_variant_reports_index_arm(self):
+        """Given index bytes at the parent blob while the worktree carries the
+        post bytes, expects the stale row naming the index arm."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        v1 = r.head()
+        r.write("skill.md", "v2\n")
+        r.commit_all("v2")
+        r.write("skill.md", "v1\n")
+        r.git("add", "skill.md")
+        r.write("skill.md", "v2\n")
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 1)
+        self.assertIn("stale skill.md %s index" % v1, out)
+        self.assertNotIn(" worktree", out.replace("worktree arm", ""))
+
+    def test_both_arms_variant_reports_worktree_row(self):
+        """Given index and worktree bytes each matching ancestor blobs,
+        expects the worktree arm per the pinned precedence."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        v1 = r.head()
+        r.write("skill.md", "v2\n")
+        r.commit_all("v2")
+        r.write("skill.md", "v1\n")
+        r.git("add", "skill.md")
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 1)
+        self.assertIn("stale skill.md %s worktree" % v1, out)
+
+    def test_check_primary_mutually_exclusive_with_landing_args(self):
+        """Given --check-primary combined with a landing argument, expects a
+        usage error exiting 2."""
+        rc, out, err = self.run_sweep(extra=["--base", "main"])
+        self.assertEqual(rc, 2)
+        self.assertNotIn("stale ", out)
+
+    def test_clean_primary_exits_zero(self):
+        """Given a clean primary at HEAD, expects exit 0 and no rows."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        rc, out, _ = self.run_sweep()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")

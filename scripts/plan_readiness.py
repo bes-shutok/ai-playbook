@@ -50,12 +50,42 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import facts_paths
+import plan_shape
+import runtime_capabilities
 import validate_review_staging as vrs
+from review_plan_identity import (
+    identity_token as plan_identity_token,
+    normalize_plan_path,
+    record_identity,
+    repository_root,
+)
+
+# Invocation telemetry (the fail-open wall-time writer, plan
+# 2026-10-14-script-runtime-cost-telemetry): a deployed copy without the
+# sibling keeps the full contract byte-identical, appending no line and
+# printing nothing on either channel.
+try:
+    import invocation_telemetry
+except Exception:  # pragma: no cover - a corrupt sibling must fail open too
+    invocation_telemetry = None  # type: ignore
+
+# The corrections-record sibling (review-cert-graded-binding plan): the
+# marker-prefix constant owner for the caller dispatch, the hermetic
+# scratch-repo builder for the in-file selftest, and the module whose
+# verifier legs the shared gate's graded stale arm runs. A deployment
+# missing the module keeps the legacy exact-match digest rule: the graded
+# stale arm never arms without it (the shared validator degrades the same
+# way), so the fallback is the named degradation, never a crash.
+try:
+    import corrections_record
+except ImportError:  # deployment gap: legacy digest rule, per its own row
+    corrections_record = None
 
 # Sibling compat handshake: the COMPAT_VERSION value of the sibling shared-rule
 # module (vrs) that THIS validator shipped against. Checked at every launch
@@ -209,15 +239,64 @@ def feature_slug(plan_path: Path) -> str:
     return re.sub(r"^\d{4}-\d{2}-\d{2}-", "", stem, count=1)
 
 
+# The canonical artifact-slug shape: the lowercase kebab shape the
+# corrections and seal path enforces (corrections_record's SEAL_SLUG_RE
+# shape). ``artifact_slug`` reports a named refusal for a lowercased
+# feature slug outside it and never sanitizes by any other transform.
+_KEBAB_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ArtifactSlugRefusal(ValueError):
+    """The one pinned derivation refusal for the canonical artifact slug.
+
+    Raised by ``artifact_slug`` when the plan's lowercased feature slug is
+    not already a safe kebab token. Every consumer surface catches it in
+    place and converts it to its own named failure shape (a readiness
+    ``(False, reason)`` path, a validator ``None`` slug, a runtime
+    refusal), so no seam ever surfaces it as a traceback; it subclasses
+    ``ValueError`` so existing narrow ``except ValueError`` postures keep
+    degrading exactly as before.
+    """
+
+
+def artifact_slug(plan_path: Path) -> str:
+    """The one machine identity for plan-review artifacts: the feature
+    slug lowercased.
+
+    The plan filename's story key (its uppercase ticket prefix) stays
+    preserved in prose, titles, and links; only machine surfaces (the
+    discovery glob, per-round name binding, sidecar equality, the
+    evidence payload's seal-context slug, seal paths) resolve through
+    this lowercase canonical form. A lowercased feature slug that does
+    not fullmatch the kebab shape raises ``ArtifactSlugRefusal`` naming
+    the plan filename and the kebab rule; nothing else is transformed.
+    """
+    feature = feature_slug(plan_path)
+    slug = feature.lower()
+    if not _KEBAB_SLUG_RE.fullmatch(slug):
+        raise ArtifactSlugRefusal(
+            f"cannot derive a canonical artifact slug: plan filename "
+            f"{plan_path.name!r} carries feature slug {feature!r}, whose "
+            f"lowercase form {slug!r} is not a safe kebab token (only "
+            "lowercase letters and digits, joined by single hyphens; no "
+            "underscores, dots, or leading/trailing hyphens)"
+        )
+    return slug
+
+
 # ONE encoding of the review-round discovery shape
-# ``*-plan-review-<feature-slug>-r<N>.md`` (N >= 1): a glob skeleton
+# ``*-plan-review-<feature-slug>[-p<8-hex-token>]-r<N>.md`` (N >= 1): a glob skeleton
 # ``latest_review_round`` iterates under the reviews directory and a regex
 # skeleton the ``--check-review-name`` probe fullmatches a round filename
 # against. Both are instantiated by ``review_round_shape`` below, which also
 # owns the slug escaping per pattern language, so the two matchers cannot
 # drift into disagreeing about what a discoverable round is.
-_REVIEW_ROUND_GLOB_SKELETON = "*-plan-review-{slug}-r*.md"
-_REVIEW_ROUND_NAME_SKELETON = r".*-plan-review-{slug}-r([1-9]\d*)\.md"
+_REVIEW_ROUND_GLOB_SKELETON = "*-plan-review-{slug}*-r*.md"
+_REVIEW_ROUND_NAME_SKELETON = r".*-plan-review-{slug}(?:-p[0-9a-f]{{8}})?-r([1-9]\d*)\.md"
+
+
+class AmbiguousReviewSeries(ValueError):
+    """Two canonical pairs claim the same round for one source plan."""
 
 
 def review_round_shape(slug: str) -> tuple[str, re.Pattern[str]]:
@@ -236,7 +315,11 @@ def review_round_shape(slug: str) -> tuple[str, re.Pattern[str]]:
     )
 
 
-def latest_review_round(reviews_dir: Path, slug: str) -> tuple[Path, int] | None:
+def latest_review_round(
+    reviews_dir: Path,
+    slug: str,
+    plan_identity: str | None = None,
+) -> tuple[Path, int] | None:
     """Latest review artifact for ``slug``: highest ``r<N>``, ties by filename.
 
     Never resolves latest by mtime. The candidate glob is instantiated by
@@ -244,13 +327,37 @@ def latest_review_round(reviews_dir: Path, slug: str) -> tuple[Path, int] | None
     consumed here and by the ``--check-review-name`` probe's fullmatch.
     """
     candidates: list[tuple[int, str, Path]] = []
-    glob_pattern, _name_re = review_round_shape(slug)
+    glob_pattern, name_re = review_round_shape(slug)
     for path in reviews_dir.glob(glob_pattern):
-        match = ROUND_RE.search(path.name)
+        match = name_re.fullmatch(path.name)
         if match:
+            if plan_identity is not None:
+                sidecar = vrs.stats_sidecar_path(path)
+                try:
+                    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    # The legacy Markdown path may still assign this pair
+                    # to a different source plan; the selected plan's own
+                    # sidecar is graded by evaluate_readiness afterward.
+                    payload = None
+                candidate_identity = record_identity(path, payload)
+                if candidate_identity is None:
+                    raise AmbiguousReviewSeries(
+                        f"cannot resolve plan identity for {path.name}: "
+                        "missing or unreadable identity metadata"
+                    )
+                if candidate_identity != plan_identity:
+                    continue
             candidates.append((int(match.group(1)), path.name, path))
     if not candidates:
         return None
+    rounds = [candidate[0] for candidate in candidates]
+    duplicates = sorted(number for number in set(rounds) if rounds.count(number) > 1)
+    if plan_identity is not None and duplicates:
+        raise AmbiguousReviewSeries(
+            "matching records for one source plan contain duplicate round(s): "
+            + ", ".join(f"r{number}" for number in duplicates)
+        )
     round_no, _, path = max(candidates)
     return path, round_no
 
@@ -660,80 +767,20 @@ def _review_scope_task_files(stripped: str) -> list[str]:
     """Every ``Files:`` list-item path from ``###``/``####`` Task and
     Step sections.
 
-    Sections open at any ``###`` or ``####`` heading whose title starts
-    with ``Task`` or ``Step``. Extraction reads ONLY the list items in
-    the ``Files:`` block of each task section, aligned to the one
-    documented declaration grammar (runtime-contract.md, "Seeding
-    boundary and resume reconciliation"; the runtime parser
-    ``_plan_declared_files`` is the sole runtime parsing source and this
-    authoring-side record check is the sanctioned second grammar
-    consumer). Only the EXACT ``Files:`` heading opens a block: a
-    case-variant opener (``files:``/``FILES:``) is a named refusal
-    produced by ``_plan_declaration_shape_problem``, never silently
-    collected, and a path-shaped bullet ABOVE the heading is inert prose
-    (collection opens only at the heading). An empty-payload ``Files:``
-    line always (re-)opens collection (r1 F1: EVERY empty-payload
-    ``Files:`` line (re-)opens collection, so a later real ``Files:``
-    block in the same section is inventoried instead of being silently
-    dropped by a first-block latch; the duplicate-heading refusal for
-    that shape is produced by ``_plan_declaration_shape_problem``); a
-    payload-bearing line such as ``Files: none new (...)`` is prose, not
-    a list opener, and closes collection. Collection ends at the first
-    checkbox item (``- [``) or any line that is neither a ``- `` item nor
-    blank, so checkbox bullets elsewhere in the task are never collected
-    as paths (F1: the repo template places ``Files:`` above the task
-    checkboxes, and the old blank-tolerant loop collected every checkbox
-    as a path). An INDENTED list item (raw line starts with whitespace,
-    stripped form starts with ``- ``) is an entry like any other under a
-    valid heading: the documented grammar accepts indented entries, so
-    the former nested-annotation skip is stopped (r2 F3's garbage-path
-    concern is owned by token normalization below, not by skipping
-    entries). Only path-shaped tokens are collected (contains ``/`` or
-    carries a doc/implementation suffix; r4 F2: bare ``- none`` items
-    must not fabricate paths). Each item is normalized to its leading
-    path token (``_review_scope_path_token``).
+    Wrapper over ``_plan_task_sections`` plus ``_plan_files_items``, the
+    one parser implementation, so review-scope clause (c) and the
+    ownership check inventory the same Files lists. The collection
+    rules (exact ``Files:`` opener, empty-payload re-open, checkbox
+    close, indented entries, path-shaped tokens only, leading-token
+    normalization) live in ``_plan_files_items``; this wrapper only
+    flattens the per-section items to the path sequence in document
+    order.
     """
-    paths: list[str] = []
-    for match in re.finditer(
-        r"^#{3,4} (?:Task|Step).*$", stripped, re.MULTILINE
-    ):
-        tail = re.split(r"\n#{2,4} ", stripped[match.end() :], maxsplit=1)[0]
-        collecting = False
-        for line in tail.splitlines():
-            opener = re.match(r"Files:(.*)$", line)
-            if opener:
-                # Only the exact case-sensitive heading decides (the
-                # documented exact-`Files:`-only rule; case variants are
-                # named refusals, never openers). An empty-payload
-                # Files: line always (re-)opens collection (r1 F1: a
-                # later real Files: block in the same section must be
-                # inventoried); a line carrying an inline payload
-                # ("Files: none new (validation only; ...)" is a prose
-                # statement, not a list opener) closes collection.
-                collecting = not opener.group(1).strip()
-                continue
-            if not collecting:
-                continue
-            stripped_line = line.strip()
-            if not stripped_line:
-                continue
-            if stripped_line.startswith("- ["):
-                collecting = False
-                continue
-            if stripped_line.startswith("- "):
-                token = _review_scope_path_token(stripped_line[2:])
-                if token and (
-                    "/" in token
-                    or token.lower().endswith(
-                        REVIEW_SCOPE_DOC_SUFFIXES
-                        + REVIEW_SCOPE_IMPLEMENTATION_SUFFIXES
-                    )
-                ):
-                    # r4 F2: bare `- none` items must not fabricate paths.
-                    paths.append(token)
-            else:
-                collecting = False
-    return paths
+    return [
+        token
+        for _, body in _plan_task_sections(stripped)
+        for token, _ in _plan_files_items(body)
+    ]
 
 
 def review_scope_problem(plan_text: str) -> str | None:
@@ -889,8 +936,8 @@ def _plan_path_shaped(token: str) -> bool:
 
 def _plan_task_sections(stripped: str) -> list[tuple[str, str]]:
     """``(heading title, body)`` for each ``###``/``####`` Task/Step
-    section, same section-boundary rule as ``_review_scope_task_files``
-    (a section ends at the next heading of level ## through ####)."""
+    section, the one owner of the section-boundary rule (a section ends
+    at the next heading of level ## through ####)."""
     sections: list[tuple[str, str]] = []
     for match in re.finditer(
         r"^#{3,4} (?:Task|Step).*$", stripped, re.MULTILINE
@@ -916,8 +963,10 @@ def _plan_task_label(title: str) -> str:
 
 def _plan_files_items(body: str) -> list[tuple[str, bool]]:
     """``(path token, carries the planned-new marker)`` for a task
-    section's ``Files:`` block, mirroring the ``_review_scope_task_files``
-    collection rules aligned to the one documented declaration grammar:
+    section's ``Files:`` block, the one owner of the collection rules
+    (``_review_scope_task_files`` is a wrapper over this parser plus
+    ``_plan_task_sections``) aligned to the one documented declaration
+    grammar:
     only the exact ``Files:`` heading opens collection (case variants are
     named refusals via ``_plan_declaration_shape_problem``), an
     empty-payload ``Files:`` line (re)opens collection, a payload-bearing
@@ -1027,6 +1076,115 @@ def _plan_item_path_tokens(item: str) -> list[str]:
     for raw in outside.split():
         _collect(raw)
     return tokens
+
+
+# Scheme exclusion for the Files:-coverage arm: a URI-scheme token
+# (``https://example.com/a.md``) is a web address, not a repository path,
+# even though its slashes make it path-shaped under ``_plan_path_shaped``.
+# The comparison below never reports scheme-bearing tokens as ``Files:``
+# omissions.
+_PLAN_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
+
+
+def _plan_acceptance_path_token(span: str) -> str | None:
+    """Normalized path token for one backticked acceptance-item span, or
+    ``None`` when the span is out of scope.
+
+    The span is normalized through ``_review_scope_path_token`` (the
+    module's shared token normalization, applied exactly as
+    ``_plan_item_path_tokens`` applies it to a backticked span) and must
+    pass ``_plan_path_shaped`` verbatim plus the scheme exclusion: a
+    scheme-bearing token is not a repository path.
+    """
+    token = _review_scope_path_token(f"`{span}`")
+    if not token or not _plan_path_shaped(token):
+        return None
+    if _PLAN_URL_SCHEME_RE.match(token):
+        return None
+    return token
+
+
+def plan_files_coverage_warnings(plan_text: str) -> list[str]:
+    """Warning-only Files:-coverage arm (machinery registry row
+    ``script:plan-files-coverage-arm``): one line per acceptance-item path
+    token missing from task ``Files:`` lists.
+
+    The shared check surface both gate paths call: the pre-round gate
+    (``run_pre_round``) prints the lines on stderr after all probes pass,
+    mirroring the execution-budget warning precedent, and the full gate's
+    main path prints them on stderr as human-readable evidence before its
+    summary and OUTCOME lines, on its pass path only. The arm never
+    changes an exit code, adds no schema field, and refuses nothing;
+    every failure path prints zero lines (the callers own that contract;
+    here the arm is a pure function of the plan text).
+
+    Token source, pinned so no parallel grammar grows: the acceptance side
+    reads backticked spans from the task's acceptance (checkbox) items
+    only, with the same span anchoring the module's composite
+    checklist-item collector ``_plan_item_path_tokens``; that collector's
+    plain-prose tokens are deliberately out of scope here because they
+    would exceed the priced false-positive cost (one adjudicated warning
+    line per omission). Each span is normalized through
+    ``_review_scope_path_token`` and must be path-shaped
+    (``_plan_path_shaped``) and scheme-free. The comparison set is the
+    ``Files:`` items the module already collects (``_plan_files_items``),
+    with per-task attribution: a token present in its own task's
+    ``Files:`` list is conforming and silent; a token absent from its own
+    task but declared by a sibling task emits the softened sibling
+    variant naming the sibling; the loud variant naming the task, the
+    path, and the quoting item fires only for tokens declared nowhere.
+    A token quoted by several items of one task is reported once, by its
+    first quoting item.
+
+    Known limitation: an acceptance item that mentions another task's
+    path for context produces a warning the author adjudicates; the
+    warning posture keeps that cost at one read.
+    """
+    warnings: list[str] = []
+    stripped = _strip_fences(plan_text)
+    sections = _plan_task_sections(stripped)
+    if not sections:
+        return warnings
+    # Per-task Files: sets plus the token -> first-declaring-task map the
+    # sibling attribution reads.
+    per_task: list[tuple[str, set[str]]] = [
+        (
+            _plan_task_label(title),
+            {token for token, _ in _plan_files_items(body)},
+        )
+        for title, body in sections
+    ]
+    declarer_of: dict[str, str] = {}
+    for label, tokens in per_task:
+        for token in sorted(tokens):
+            declarer_of.setdefault(token, label)
+    for (label, own_files), (_, body) in zip(per_task, sections):
+        reported: set[str] = set()
+        for item in _plan_checklist_items(body):
+            for span in re.findall(r"`([^`]+)`", item):
+                token = _plan_acceptance_path_token(span)
+                if token is None or token in reported:
+                    continue
+                reported.add(token)
+                if token in own_files:
+                    continue
+                declarer = declarer_of.get(token)
+                if declarer is not None:
+                    warnings.append(
+                        f"readiness FILES-COVERAGE WARNING: {label} "
+                        f"acceptance item quotes `{token}`, already "
+                        f"declared by {declarer}'s Files: list "
+                        f"(sibling-declared; adjudicate whether this "
+                        f"task must declare it too)"
+                    )
+                else:
+                    warnings.append(
+                        f"readiness FILES-COVERAGE WARNING: {label} "
+                        f"acceptance item quotes `{token}` but no task's "
+                        f"Files: list declares it (Files:-coverage "
+                        f"contract; quoting item: {item})"
+                    )
+    return warnings
 
 
 def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
@@ -1305,6 +1463,98 @@ def _gated_probe_reason(problem: str, min_date: str, round_no: int, round_date: 
     return f"{problem} (required for plans reviewed on or after {min_date}; latest round r{round_no} is dated {round_date})"
 
 
+# The graded-gate indeterminate prefix (review-cert-graded-binding plan,
+# Task 6): the shared gate's indeterminate evidence (an unresolvable seal
+# anchor or a git plumbing failure over resolved inputs on the
+# corrections-graded arms) is a fail-closed readiness refusal, and this
+# prefix marks the reason so main() classifies it as the indeterminate
+# outcome (exit 2) instead of a findings-class fail.
+_GATE_INDETERMINATE_PREFIX = "readiness indeterminate: "
+
+
+def _plan_corrections_context(
+    plan_path: Path, plan_bytes: bytes
+) -> dict | None:
+    """The correction context for the shared gate's graded stale arm
+    (review-cert-graded-binding plan, Task 6): the plan's repository root
+    resolved from the plan's own directory, the plan path relative to that
+    root (the artifact identity the certification seal names), and the
+    current bytes. ``None`` when the plan does not resolve inside a git
+    working tree: the graded arm never arms and the legacy exact-match
+    digest rule applies unchanged."""
+    try:
+        proc = subprocess.run(
+            [
+                "git", "-C", str(plan_path.parent),
+                "rev-parse", "--show-toplevel",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    root = Path(proc.stdout.strip()).resolve()
+    try:
+        artifact_rel = plan_path.relative_to(root).as_posix()
+    except ValueError:
+        return None
+    return {
+        "family": "plan",
+        "repo": str(root),
+        "artifact_path": artifact_rel,
+        "current_bytes": plan_bytes,
+        # The seal slug: the artifact filename stem carries the plan's date
+        # prefix, so the sidecar's artifact_slug fallback alone would
+        # resolve the seal at the wrong name whenever the two differ. The
+        # canonical artifact slug (the feature slug lowercased) is the one
+        # machine identity; the story key stays preserved in prose.
+        "slug": artifact_slug(plan_path),
+    }
+
+
+def _first_gate_error_reason(
+    first_error: str, payload: dict, round_no: int
+) -> str:
+    """Map the shared gate's FIRST error to the readiness reason.
+
+    Routing home (review-cert-graded-binding plan, Task 6): a
+    ``corrections verification:``-prefixed error is the corrections family
+    and routes DIRECTLY, as the first dispatch test, before the coverage,
+    source_kind, and source_digest substring branches and the final schema
+    wrap. The marker constant is corrections_record's exported
+    ``MARKER_PREFIX``, so a verifier leg can never be misfiled into a
+    substring family its wording happens to touch; production verifier
+    reasons carry no banned routing literal (pinned in
+    corrections_record's MarkerConstantsTest). ``digest_failure_reason``
+    keeps its three families unchanged below."""
+    if corrections_record is not None and first_error.startswith(
+        corrections_record.MARKER_PREFIX
+    ):
+        return first_error
+    if "missing the required 'coverage' object" in first_error:
+        # The coverage-presence error names source_kind in its text;
+        # map it to its own reason instead of the source_kind family.
+        return (
+            f"malformed stats sidecar (schema validation failed) for "
+            f"round r{round_no}: {first_error}"
+        )
+    if "source_kind" in first_error:
+        declared = payload.get("source_kind")
+        return (
+            f"sidecar source_kind is {declared!r}, expected 'plan' "
+            f"(round r{round_no})"
+        )
+    if "source_digest" in first_error:
+        return digest_failure_reason(first_error, round_no)
+    return (
+        f"malformed stats sidecar (schema validation failed) for round "
+        f"r{round_no}: {first_error}"
+    )
+
+
 def evaluate_readiness(
     plan_path: Path, plans_dir: Path, reviews_dir: Path
 ) -> tuple[bool, str | None]:
@@ -1317,10 +1567,21 @@ def evaluate_readiness(
     reviews_dir = reviews_dir.expanduser().resolve()
     resolved = plan_path.expanduser().resolve()
 
-    # 1. Plan path exists, is a file, and resolves under {plans_dir}.
+    # 1. Plan operand exists (single file or resolvable plan directory) and
+    # resolves under {plans_dir}. A directory operand resolves through the
+    # shared shape resolver BEFORE the regular-file gate (plan-directory-
+    # shape plan, Task 1): a well-formed directory is accepted with its
+    # manifest digest, and a malformed one refuses through the resolver's
+    # named arms (whose charterless wording keeps the pinned "not a file"
+    # family). A file or missing operand keeps the legacy checks and reason
+    # strings byte-identically.
+    shape: plan_shape.PlanShape | None = None
     if resolved.is_dir():
-        return False, f"plan path is not a file: {resolved}"
-    if not resolved.is_file():
+        try:
+            shape = plan_shape.resolve_plan_operand(resolved)
+        except plan_shape.PlanShapeRefusal as exc:
+            return False, str(exc)
+    elif not resolved.is_file():
         return False, f"plan file does not exist: {resolved}"
     try:
         rel_to_plans = resolved.relative_to(plans_dir)
@@ -1347,11 +1608,76 @@ def evaluate_readiness(
         return False, (
             f"configured reviews_dir does not exist on disk: {reviews_dir}"
         )
-    slug = feature_slug(resolved)
-    latest = latest_review_round(reviews_dir, slug)
+    story_slug = feature_slug(resolved)
+    try:
+        slug = artifact_slug(resolved)
+    except ArtifactSlugRefusal as exc:
+        return False, str(exc)
+    plan_root = repository_root(resolved.parent)
+    plan_identity = normalize_plan_path(resolved, plan_root) if plan_root else None
+    try:
+        latest = latest_review_round(reviews_dir, slug, plan_identity)
+    except AmbiguousReviewSeries as exc:
+        return False, str(exc)
 
-    # 2. A review artifact for the feature slug exists.
+    # Case-variant secondary probe: scan the reviews home's directory
+    # entries for round filenames matching the canonical shape regex
+    # under case folding but NOT exactly, anchored as a fullmatch (the
+    # module's canonical matcher; a search-based matcher would classify
+    # every `.backup-<timestamp>` copy of a canonical round as
+    # case-variant and permanently collision-refuse any plan with
+    # backups). The probe runs for every plan regardless of its own
+    # slug's case, so a post-rename legacy state is diagnosed by name.
+    _glob_pattern, canonical_name_re = review_round_shape(slug)
+    case_fold_re = re.compile(canonical_name_re.pattern, re.IGNORECASE)
+    entry_names = {entry.name for entry in reviews_dir.iterdir()}
+    case_variants: list[str] = []
+    for name in sorted(entry_names):
+        if (
+            case_fold_re.fullmatch(name) is None
+            or canonical_name_re.fullmatch(name) is not None
+        ):
+            continue
+        variant_path = reviews_dir / name
+        variant_sidecar = vrs.stats_sidecar_path(variant_path)
+        try:
+            variant_payload = json.loads(variant_sidecar.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            variant_payload = None
+        variant_identity = record_identity(variant_path, variant_payload)
+        if variant_identity is None or variant_identity == plan_identity:
+            case_variants.append(name)
+    if case_variants:
+        if latest is not None:
+            return False, (
+                "case-variant round records exist under both the "
+                "story-key and canonical shapes; rename the legacy pair "
+                "to the canonical lowercase shape: "
+                f"{', '.join(case_variants)}"
+            )
+        legacy_names: list[str] = []
+        for name in case_variants:
+            legacy_names.append(name)
+            sidecar_name = name[:-3] + ".stats.json"
+            if sidecar_name in entry_names:
+                legacy_names.append(sidecar_name)
+        return False, (
+            f"no review artifact for canonical artifact slug {slug!r} "
+            f"(plan filename story slug {story_slug!r}) under "
+            f"{reviews_dir}; legacy case-variant round records "
+            f"{', '.join(legacy_names)} exist; rename the pair to the "
+            "canonical lowercase shape"
+        )
+
+    # 2. A review artifact for the canonical artifact slug (the feature
+    # slug lowercased; the story slug stays in the plan filename) exists.
     if latest is None:
+        if story_slug != slug:
+            return False, (
+                f"no review artifact for canonical artifact slug {slug!r} "
+                f"(plan filename story slug {story_slug!r}) "
+                f"under {reviews_dir}"
+            )
         return False, (
             f"no review artifact for feature slug {slug!r} "
             f"under {reviews_dir}"
@@ -1420,21 +1746,40 @@ def evaluate_readiness(
         return False, (
             f"cannot read review artifact r{round_no} (not valid UTF-8): {exc}"
         )
-    try:
-        plan_bytes = resolved.read_bytes()
-    except OSError as exc:
-        return False, f"cannot read plan bytes to compute digest: {exc}"
-    # Structural fence-balance gate (unconditional, before ANY probe or the
-    # digest gate evaluates the plan): an unterminated fence makes the
-    # stripper drop everything it swallowed, so probes would silently score
-    # only the document prefix. Decode defensively here: an undecodable plan
-    # keeps its own later reason family.
-    try:
-        _fence_problem = fence_balance_problem(plan_bytes.decode("utf-8"))
-    except UnicodeDecodeError:
-        _fence_problem = None
-    if _fence_problem is not None:
-        return False, _fence_problem
+    if shape is not None:
+        # Directory form: the digest payload is the manifest serialization
+        # (the SAME compute_source_digest call below hashes it, so the
+        # source_digest contract keeps its shape); the charter and task
+        # texts were read once by the resolver.
+        plan_bytes = shape.digest_payload
+    else:
+        try:
+            plan_bytes = resolved.read_bytes()
+        except OSError as exc:
+            return False, f"cannot read plan bytes to compute digest: {exc}"
+    plan_text: str | None = None
+    if shape is not None:
+        # Per-file fence scanning with file-named errors (plan-directory-
+        # shape plan, Task 1): each file must balance on its own, so a
+        # fence from one file can never pair across a file boundary in the
+        # assembled text the probes read below.
+        for file_label, file_text in shape.fence_units():
+            _fence_problem = fence_balance_problem(file_text)
+            if _fence_problem is not None:
+                return False, f"plan file {file_label}: {_fence_problem}"
+        plan_text = shape.charter_plus_tasks_text()
+    else:
+        # Structural fence-balance gate (unconditional, before ANY probe or
+        # the digest gate evaluates the plan): an unterminated fence makes the
+        # stripper drop everything it swallowed, so probes would silently score
+        # only the document prefix. Decode defensively here: an undecodable plan
+        # keeps its own later reason family.
+        try:
+            _fence_problem = fence_balance_problem(plan_bytes.decode("utf-8"))
+        except UnicodeDecodeError:
+            _fence_problem = None
+        if _fence_problem is not None:
+            return False, _fence_problem
     # Cap-closure declaration presence and the plan-text date guards: the
     # trigger set for the single shared defensive decode below (the only
     # gated consumers of the plan text).
@@ -1453,9 +1798,12 @@ def evaluate_readiness(
     # text, so an undecodable plan whose round is date-exempt and which
     # carries no declaration keeps today's pass and its own later reason
     # family (r2 F2). The existing cannot-read reason family is kept for
-    # the shared failure case; step 6 reuses the decoded text.
-    plan_text: str | None = None
-    if cap_closure_declared or trailer_gated or scope_gated or ownership_gated:
+    # the shared failure case; step 6 reuses the decoded text. The
+    # directory form's assembled text was decoded per file above, so this
+    # decode is the single-file form's duty only.
+    if plan_text is None and (
+        cap_closure_declared or trailer_gated or scope_gated or ownership_gated
+    ):
         try:
             plan_text = plan_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -1473,6 +1821,13 @@ def evaluate_readiness(
     # FIRST error is mapped to a crisp first-failed reason below, preserving
     # the distinct reason families (malformed sidecar, schema, source_kind,
     # stale digest) by classifying the shared validator's error text.
+    # Task 6 pass-through: the correction context (the plan path relative to
+    # its resolved repository root, the current bytes, and that root) arms
+    # the graded stale arm, so it can verify a declared corrections record
+    # and run the round-anchored digest check on EVERY authoritative
+    # freshness check; a plan outside any git repository passes no context
+    # and keeps the legacy exact-match disposition.
+    corrections_context = _plan_corrections_context(resolved, plan_bytes)
     staging_result = vrs.ValidationResult(path=latest_path)
     vrs.validate_stats_sidecar(
         latest_path,
@@ -1480,28 +1835,21 @@ def evaluate_readiness(
         staging_result,
         expected_digest=expected_digest,
         source_kind="plan",
+        corrections_context=corrections_context,
     )
     if staging_result.errors:
         first_error = staging_result.errors[0]
-        if "missing the required 'coverage' object" in first_error:
-            # The coverage-presence error names source_kind in its text;
-            # map it to its own reason instead of the source_kind family.
-            return False, (
-                f"malformed stats sidecar (schema validation failed) for "
-                f"round r{round_no}: {first_error}"
-            )
-        if "source_kind" in first_error:
-            declared = payload.get("source_kind")
-            return False, (
-                f"sidecar source_kind is {declared!r}, expected 'plan' "
-                f"(round r{round_no})"
-            )
-        if "source_digest" in first_error:
-            return False, digest_failure_reason(first_error, round_no)
-        return False, (
-            f"malformed stats sidecar (schema validation failed) for round "
-            f"r{round_no}: {first_error}"
-        )
+        return False, _first_gate_error_reason(first_error, payload, round_no)
+    graded_indeterminate = getattr(
+        staging_result, "indeterminate_reason", None
+    )
+    if graded_indeterminate is not None:
+        # The corrections-graded arm could not re-derive its git evidence
+        # (an unresolvable seal anchor or a plumbing failure over resolved
+        # inputs): the gate refuses without a verdict instead of passing,
+        # and main() classifies the prefixed reason as the indeterminate
+        # outcome (exit 2).
+        return False, _GATE_INDETERMINATE_PREFIX + graded_indeterminate
 
     # 4. Verdict: sidecar ``verdict`` field is DECISIVE when conforming
     # ("yes"/"no" via the single-owner ``sidecar_verdict`` predicate); for
@@ -1613,6 +1961,41 @@ def evaluate_readiness(
                 problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
             )
 
+    # 9. Extraction-rule executability parity (contract single-sourcing):
+    # the create boundary's three extraction-rule components (per-task
+    # checklist action classification, the checklist-action derivation its
+    # checks consume, and the bounded-evidence envelope) run here over the
+    # DERIVED plan shape through the single-homed owned module, so a plan
+    # Phase 0 would refuse on those grounds fails certification with the
+    # same labels - and a certified plan never refuses at Phase 0 on any of
+    # them. POSITION: this step runs AFTER the structural conditions
+    # (readability, sidecar, digest, verdict, trailer, Review Scope, plan
+    # ownership), so a parity fixture mints a conforming review record and
+    # sidecar at the matching digest and makes THIS check the failing
+    # condition. The clone-signature component's inputs (the
+    # discovery-derived verification commands) are a create-boundary
+    # internal not derivable from the plan file alone: per the plan's
+    # Assumption that arm is the EXPLICIT RESIDUAL recorded here, not a
+    # pretended parity; the signature detection still single-homes in the
+    # owned module where the create boundary calls it.
+    if plan_text is None:
+        # The gated consumers above never needed the text (a legacy-exempt
+        # round). An undecodable plan KEEPS TODAY'S PASS here (the pinned
+        # r2 F2 shape: its own reason family, no extraction-rule refusal) -
+        # the create boundary refuses undecodable plans at discovery before
+        # seeding anyway, so no false parity is claimed.
+        try:
+            plan_text = plan_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return True, None
+    # The derived-task loops live in the module-level
+    # extraction_rule_executability_problem helper, which the pre-round
+    # gate's run_pre_round calls too, so both surfaces return byte-identical
+    # verdicts and refusal strings by construction.
+    problem = extraction_rule_executability_problem(plan_text)
+    if problem is not None:
+        return False, problem
+
     return True, None
 
 
@@ -1693,17 +2076,300 @@ def run_sweep(reviews_dir: Path) -> int:
     return 0
 
 
+# Execution budget sizing caps (pre-round warning thresholds). The caps
+# are the plans skill's split questions, never refusals: a breach emits a
+# non-blocking warning naming the breached threshold, so the split
+# decision surfaces at authoring time instead of mid-execution. The
+# comparisons are strictly greater (at-threshold values are silent).
+PRE_ROUND_BUDGET_TOTAL_CAP_HOURS = 3.0
+PRE_ROUND_BUDGET_TASK_CAP_HOURS = 1.5
+PRE_ROUND_BUDGET_TASK_COUNT_CAP = 4
+# The pinned `Execution budget:` line grammar: two author-computed
+# non-negative decimal hours with an optional single fractional part
+# (integers valid); a missing number, a negative, or a non-numeric value
+# is a malformed line. The gate reads the declared numbers and never
+# estimates cost from plan content.
+PRE_ROUND_BUDGET_LINE_RE = re.compile(r"^Execution budget:[ \t]+(.+?)[ \t]*$")
+PRE_ROUND_BUDGET_VALUE_RE = re.compile(
+    r"^(\d+(?:\.\d+)?)h total, largest task (\d+(?:\.\d+)?)h$"
+)
+PRE_ROUND_TASK_HEADING_RE = re.compile(r"^### Task \d+:")
+
+
+def anchors_block_problem(plan_text: str) -> str | None:
+    """The pre-round anchors-block grammar probe (plans rule 29, added by
+    the primary-class-anchors-grammar-drift plan Task 1).
+
+    Enumerates the ``### Task N:`` ordinals over fence-stripped text
+    (mirroring the create path's payload-driven ordinals: a fenced
+    example section is never an enumerated ordinal) and parses each
+    extracted section RAW through the shared parser in
+    ``scripts/plan_shape.py`` -- the same parser, by identity, that the
+    execution seeding's anchors block runs, so a readiness refusal here
+    implies a ``create`` refusal there (the inherited fence-blindness is
+    parity with ``create``, not a new restriction). A malformed entry
+    returns the named problem line quoting the offending entry and
+    interpolating the shared canonical shape; a plan with no task
+    sections, blockless sections, or conforming blocks returns None.
+    """
+
+    stripped = _strip_fences(plan_text)
+    ordinals = sorted(
+        {
+            int(match.group(1))
+            for match in re.finditer(r"^### Task (\d+):", stripped, re.MULTILINE)
+        }
+    )
+    for ordinal in ordinals:
+        section = plan_shape.plan_task_section(plan_text, f"task-{ordinal}")
+        if section is None:
+            continue
+        try:
+            plan_shape.primary_class_anchors(section)
+        except ValueError as exc:
+            return (
+                f"Primary class anchors block refused in Task {ordinal}: "
+                f"{exc}; the canonical entry shape is "
+                f"{plan_shape.PRIMARY_CLASS_ANCHOR_SHAPE}"
+            )
+    return None
+
+
+def pre_round_budget_warnings(plan_text: str) -> list[str]:
+    """Sizing warnings for the optional `Execution budget:` header line.
+
+    The header region is the region between the plan title line (the
+    first line starting ``# ``) and the first ``## `` heading, where the
+    required metadata block lives. Returns zero warnings when the region
+    carries no `Execution budget:` line (silent skip: plans without the
+    line behave byte-identically); one malformed-line warning naming the
+    pinned grammar when the line's value does not parse; otherwise one
+    warning per strictly-greater breach in the declared order (total,
+    largest task, task count from the ``### Task N:`` headings). Every
+    returned line already carries the ``readiness PRE-ROUND WARNING:``
+    prefix. Structural-only: the declared numbers are read as authored
+    and no cost is ever estimated from plan content.
+    """
+    lines = plan_text.splitlines()
+    header_lines: list[str] = []
+    seen_title = False
+    for line in lines:
+        if not seen_title:
+            if line.startswith("# "):
+                seen_title = True
+            continue
+        if line.startswith("## "):
+            break
+        header_lines.append(line)
+    budget_value: str | None = None
+    for line in header_lines:
+        match = PRE_ROUND_BUDGET_LINE_RE.match(line)
+        if match is not None:
+            budget_value = match.group(1)
+            break
+    if budget_value is None:
+        return []
+    value_match = PRE_ROUND_BUDGET_VALUE_RE.match(budget_value)
+    if value_match is None:
+        return [
+            "readiness PRE-ROUND WARNING: the Execution budget line "
+            "does not match the required grammar "
+            "'Execution budget: <total>h total, largest task <max>h' "
+            "(non-negative decimal hours with an optional single "
+            "fractional part, integers valid; a missing number, a "
+            "negative, or a non-numeric value is a malformed line); "
+            "the declared budget is ignored"
+        ]
+    total_hours = float(value_match.group(1))
+    largest_task_hours = float(value_match.group(2))
+    task_count = sum(
+        1 for line in lines if PRE_ROUND_TASK_HEADING_RE.match(line)
+    )
+    warnings: list[str] = []
+    if total_hours > PRE_ROUND_BUDGET_TOTAL_CAP_HOURS:
+        warnings.append(
+            f"readiness PRE-ROUND WARNING: execution budget total "
+            f"{value_match.group(1)}h exceeds the "
+            f"{PRE_ROUND_BUDGET_TOTAL_CAP_HOURS}h plan cap; split the plan"
+        )
+    if largest_task_hours > PRE_ROUND_BUDGET_TASK_CAP_HOURS:
+        warnings.append(
+            f"readiness PRE-ROUND WARNING: execution budget largest task "
+            f"{value_match.group(2)}h exceeds the "
+            f"{PRE_ROUND_BUDGET_TASK_CAP_HOURS}h task cap; split the task "
+            f"into its own plan"
+        )
+    if task_count > PRE_ROUND_BUDGET_TASK_COUNT_CAP:
+        warnings.append(
+            f"readiness PRE-ROUND WARNING: execution budget task count "
+            f"{task_count} exceeds the "
+            f"{PRE_ROUND_BUDGET_TASK_COUNT_CAP}-task cap; split the plan"
+        )
+    return warnings
+
+
+def plan_review_identity_warnings(plan_path: Path, plans_dir: Path) -> list[str]:
+    """Report other dated plans sharing this plan's canonical review slug."""
+    try:
+        slug = artifact_slug(plan_path)
+    except ArtifactSlugRefusal:
+        return []
+    current = plan_path.expanduser().resolve()
+    root = plans_dir.expanduser().resolve()
+    repository = repository_root(root.parent)
+    collisions: set[str] = set()
+    dated_name = re.compile(r"^\d{4}-\d{2}-\d{2}-.+")
+    for candidate in root.rglob("*.md"):
+        if candidate.name == "PLAN.md":
+            source = candidate.parent
+            if not dated_name.fullmatch(source.name):
+                continue
+        elif dated_name.fullmatch(candidate.name):
+            source = candidate
+        else:
+            continue
+        source = source.resolve()
+        if source == current:
+            continue
+        try:
+            candidate_slug = artifact_slug(source)
+        except ArtifactSlugRefusal:
+            continue
+        if candidate_slug != slug:
+            continue
+        display = (
+            source.relative_to(repository).as_posix()
+            if repository is not None and source.is_relative_to(repository)
+            else source.as_posix()
+        )
+        collisions.add(display)
+    return [
+        f"readiness PRE-ROUND WARNING: plan review slug {slug!r} is also used by {path}; source-plan identity keeps review series separate"
+        for path in sorted(collisions)
+    ]
+
+
+def extraction_rule_executability_problem(
+    plan_text: str | None = None,
+    *,
+    derived_task_map: dict[str, dict[str, Any]] | None = None,
+) -> str | None:
+    """The extraction-rule executability parity probes over one plan's
+    derived task sections, single-homed here so the full gate's step 9
+    and the pre-round gate's plan-private subset return byte-identical
+    refusal strings by construction.
+
+    With ``plan_text``, the derived task map is built exactly as step 9
+    builds it (the create boundary's task grammar recognizes
+    ``### Task <N>:`` headings only; a task section with no acceptance
+    criteria stays skipped, the discovery-path residual the create
+    boundary refuses first). With ``derived_task_map``, the caller
+    supplies pre-derived items directly (the unit-level witness over
+    seeding shapes no plan text can express); at least one input must be
+    provided, and a supplied derived task map takes precedence over plan
+    text. Per task, the three single-homed owned
+    checks run in step 9's order (checklist action classification,
+    checklist action derivation, evidence criterion ids) and the first
+    ``ValueError`` becomes the returned named refusal string, wrapped
+    through the SAME ``execute_plan_runtime._named_evidence_limit_error``
+    task-attributed shape for the bounded-evidence envelope grounds (the
+    import kept inside the except arm so the deployment-degradation shape
+    is unchanged); ``None`` when every derived task section is
+    executable. The clone-signature component is NOT here: its
+    discovery-derived verification-command inputs are the documented
+    create-boundary-only residual.
+    """
+    if derived_task_map is None:
+        if plan_text is None:
+            raise ValueError(
+                "extraction_rule_executability_problem needs plan bytes or "
+                "a derived task map"
+            )
+        derived_task_map = {}
+        for section_title, section_body in _plan_task_sections(plan_text):
+            ordinal_match = re.match(r"^Task (\d+):", section_title)
+            if ordinal_match is None:
+                # The create boundary's task grammar recognizes
+                # ``### Task <N>:`` headings only; other headings seed no task
+                # and so carry no extraction-rule ground.
+                continue
+            task_id = f"task-{ordinal_match.group(1)}"
+            criteria, actions = runtime_capabilities.derive_plan_checklist_actions(section_body)
+            if not criteria:
+                # A task section with no acceptance criteria (or only Commit:
+                # lines) is refused by the create boundary's discovery BEFORE
+                # the extraction checks run ("discovery produced no acceptance
+                # criteria ..."): the discovery-path class is the documented
+                # residual, out of certification parity, so the task is skipped
+                # here rather than false-failing with a label discovery never
+                # reaches.
+                continue
+            derived_task_map[task_id] = {
+                "task_body": section_body,
+                "checklist_actions": actions,
+                "required_criteria": criteria,
+            }
+    for task_id, item in sorted(derived_task_map.items()):
+        try:
+            runtime_capabilities.check_checklist_action_classification(task_id, item)
+            runtime_capabilities.derive_checklist_actions(task_id, item)
+            runtime_capabilities.evidence_criterion_ids(list(item["required_criteria"]))
+        except ValueError as error:
+            named = error
+            if any(
+                needle in str(error)
+                for needle in (
+                    "evidence criterion exceeds UTF-8 item byte limit",
+                    "evidence criteria exceed UTF-8 aggregate byte limit",
+                    "evidence criteria exceed receipt item-count limit",
+                )
+            ):
+                # The create boundary wraps the single-homed limit refusals
+                # with the task-attributed named shape; reuse the SAME
+                # wrapper so the full label text is byte-identical.
+                from execute_plan_runtime import _named_evidence_limit_error
+
+                named = _named_evidence_limit_error(derived_task_map, error)
+            return (
+                f"plan fails the executability contract the create boundary "
+                f"enforces at Phase 0: {named}"
+            )
+    return None
+
+
 def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     """Structural-only pre-round authoring gate (plans rule 29).
 
-    Runs the four review-record-independent probes over the plan bytes in
-    gate order (``decision_marker_problem``, ``review_scope_problem``,
-    ``plan_ownership_problem``, ``scope_classification_problem``) with NO
+    Runs the five structural review-record-independent probes over the
+    plan bytes in gate order (``decision_marker_problem``,
+    ``review_scope_problem``, ``plan_ownership_problem``,
+    ``scope_classification_problem``, ``anchors_block_problem``) and then
+    the extraction-rule executability parity probes
+    (``extraction_rule_executability_problem``, the plan-private subset of
+    the full gate's step 9: the bounded-evidence envelope inside the
+    evidence-criterion-ids arm plus the checklist action classification
+    and derivation checks over the derived task sections; the
+    clone-signature component stays create-boundary-only, its
+    discovery-derived verification-command inputs not derivable from plan
+    bytes) with NO
     sidecar-date gating and NO review-record consultation: the tolerated
     no-review-artifact/missing-sidecar class is respected by construction
     (this function never opens ``reviews_dir`` or any sidecar). All clean
     prints the OK line and exits 0; the FIRST failing condition prints
-    ``readiness PRE-ROUND FAILED: <reason>`` to stderr and exits 1.
+    ``readiness PRE-ROUND FAILED: <reason>`` to stderr and exits 1, an
+    executability refusal carrying step 9's byte-identical named label.
+
+    After every probe passes, the optional `Execution budget:` header
+    line is sized non-blockingly: ``readiness PRE-ROUND WARNING:`` lines
+    go to stderr (one per strictly-greater breach in the declared order,
+    total, largest task, task count, plus one malformed-line warning
+    naming the grammar; silence when the line is absent). The warning-only
+    Files:-coverage arm (``plan_files_coverage_warnings``, machinery row
+    ``script:plan-files-coverage-arm``) prints on the same channel under
+    the same contract: its lines go to stderr after all probes pass and
+    the failure paths above emit zero warning lines. Warnings never
+    change the OK line, the exit code, or the failure path (a probe
+    failure emits zero warning lines).
 
     The first-step path semantics (directory, missing, outside plans_dir,
     rejected archive) restate ``evaluate_readiness`` step 1 with its exact
@@ -1711,19 +2377,28 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     for the same input; the shared gate itself is untouched (additive
     branch only). Plan bytes must decode as UTF-8; the decode failure
     carries its own reason here because the full gate's wording is tied to
-    its date-gated probes.
+    its date-gated probes. A directory-shaped plan (plan-directory-shape
+    plan, Task 1) resolves through the shared helper: per-file fence
+    scanning names the file, and the probes read the charter-plus-tasks
+    assembly; the single-file path is byte-identical.
     """
     plans_dir = plans_dir.expanduser().resolve()
     resolved = plan_path.expanduser().resolve()
 
     # Mirror evaluate_readiness step 1 exactly: same checks in the same
-    # order, and byte-identical reason strings.
+    # order, and byte-identical reason strings (a directory operand now
+    # resolves through the shared shape resolver, whose named arms keep
+    # the pinned reason families; a well-formed directory proceeds).
     reason: str | None = None
+    shape: plan_shape.PlanShape | None = None
     if resolved.is_dir():
-        reason = f"plan path is not a file: {resolved}"
+        try:
+            shape = plan_shape.resolve_plan_operand(resolved)
+        except plan_shape.PlanShapeRefusal as exc:
+            reason = str(exc)
     elif not resolved.is_file():
         reason = f"plan file does not exist: {resolved}"
-    else:
+    if reason is None:
         try:
             rel_to_plans = resolved.relative_to(plans_dir)
         except ValueError:
@@ -1743,21 +2418,34 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
         print(f"readiness PRE-ROUND FAILED: {reason}", file=sys.stderr)
         return 1
 
-    try:
-        plan_text = resolved.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        print(
-            f"readiness PRE-ROUND FAILED: cannot read plan bytes (not "
-            f"valid UTF-8): {exc}",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Gate order, first problem wins; each probe stays the single owner
-    # of its check (no logic re-implemented here). The fence-balance probe
-    # runs FIRST: an unterminated fence makes the stripper drop everything
-    # it swallowed, so no later probe may evaluate the truncated text.
-    problem = fence_balance_problem(plan_text)
+    plan_text: str | None = None
+    problem: str | None = None
+    if shape is not None:
+        # Directory form: per-file fence scanning with file-named errors
+        # (same wording as the full gate's directory path), then the
+        # charter-plus-tasks assembly the probes read.
+        for file_label, file_text in shape.fence_units():
+            problem = fence_balance_problem(file_text)
+            if problem is not None:
+                problem = f"plan file {file_label}: {problem}"
+                break
+        if problem is None:
+            plan_text = shape.charter_plus_tasks_text()
+    else:
+        try:
+            plan_text = resolved.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(
+                f"readiness PRE-ROUND FAILED: cannot read plan bytes (not "
+                f"valid UTF-8): {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        # Gate order, first problem wins; each probe stays the single owner
+        # of its check (no logic re-implemented here). The fence-balance probe
+        # runs FIRST: an unterminated fence makes the stripper drop everything
+        # it swallowed, so no later probe may evaluate the truncated text.
+        problem = fence_balance_problem(plan_text)
     if problem is None:
         problem = decision_marker_problem(plan_text)
     if problem is None:
@@ -1768,9 +2456,27 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
         )
     if problem is None:
         problem = scope_classification_problem(plan_text)
+    if problem is None:
+        problem = anchors_block_problem(plan_text)
+    if problem is None:
+        # The plan-private subset of step 9 (extraction-rule executability
+        # parity): the SAME helper step 9 calls, so the refusal strings are
+        # byte-identical; still no review-record consultation.
+        problem = extraction_rule_executability_problem(plan_text)
     if problem is not None:
         print(f"readiness PRE-ROUND FAILED: {problem}", file=sys.stderr)
         return 1
+
+    # Non-blocking sizing warnings (report posture per the guard
+    # doctrine): emitted only after every structural probe passed, so the
+    # failure path above emits zero warning lines. Stderr only; the OK
+    # line and the exit contract below are unchanged.
+    for warning in pre_round_budget_warnings(plan_text):
+        print(warning, file=sys.stderr)
+    for warning in plan_files_coverage_warnings(plan_text):
+        print(warning, file=sys.stderr)
+    for warning in plan_review_identity_warnings(resolved, plans_dir):
+        print(warning, file=sys.stderr)
 
     print(
         "readiness PRE-ROUND OK: structural checks clean "
@@ -1782,18 +2488,23 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
 def check_review_name(
     plan_path: Path, round_md: Path, reviews_dir: Path
 ) -> tuple[bool, str | None]:
-    """Name-shape probe: does one written round pair bind to the plan slug?
+    """Name-shape probe: does one written round pair bind to the plan's
+    canonical artifact slug?
 
     The per-round companion of ``latest_review_round``: re-verifies the
     review artifact pair ``round_md`` against the SAME discovery shape the
     done-boundary gate discovers rounds through, so a misnamed round is
     caught in the round that wrote it instead of surfacing at the done
-    boundary as ``no review artifact for feature slug``. Returns
-    ``(ok, reason)``; ``reason`` names the FIRST failed condition only.
+    boundary as the readiness gate's no-artifact reason (which names the
+    canonical artifact slug beside the story slug for a story-key plan).
+    Returns ``(ok, reason)``; ``reason`` names the FIRST failed condition
+    only. A plan whose stem lowercases to an unsafe kebab form converts
+    here into the named ``(False, reason)`` refusal, never a traceback.
 
     Checks, first problem wins: the round file's parent directory must BE
     the configured ``reviews_dir``; the filename must fullmatch the shared
-    ``review_round_shape`` for the plan's ``feature_slug``; the sidecar
+    ``review_round_shape`` for the plan's canonical ``artifact_slug`` (the
+    feature slug lowercased); the sidecar
     (``vrs.stats_sidecar_path``) must exist and parse as a JSON object;
     ``artifact_slug`` must equal the slug; and when a ``coverage`` object
     is present, every non-empty link value in ``attempts[]``
@@ -1817,7 +2528,12 @@ def check_review_name(
     # sidecar fails its own missing-sidecar check.
     _lex = Path(os.path.abspath(round_md.expanduser()))
     lexical_round = Path(os.path.realpath(_lex.parent)) / _lex.name
-    slug = feature_slug(plan_path.expanduser().resolve())
+    resolved_plan = plan_path.expanduser().resolve()
+    story_slug = feature_slug(resolved_plan)
+    try:
+        slug = artifact_slug(resolved_plan)
+    except ArtifactSlugRefusal as exc:
+        return False, str(exc)
 
     # The round file must live DIRECTLY under the configured reviews
     # directory: the gate's glob only ever looks there, so a pair staged
@@ -1833,8 +2549,9 @@ def check_review_name(
     if match is None:
         return False, (
             f"round filename does not match the discovery shape "
-            f"*-plan-review-{slug}-r<N>.md (N >= 1) for feature slug "
-            f"{slug!r}: {lexical_round.name}"
+            f"*-plan-review-{slug}[-p<8-hex-token>]-r<N>.md (N >= 1) for canonical "
+            f"artifact slug {slug!r} (plan filename story slug "
+            f"{story_slug!r}): {lexical_round.name}"
         )
     round_no = int(match.group(1))
 
@@ -1854,6 +2571,28 @@ def check_review_name(
             f"malformed stats sidecar (top-level JSON value is not an "
             f"object): {type(payload).__name__} (round r{round_no})"
         )
+
+    plan_root = repository_root(resolved_plan.parent)
+    identity = normalize_plan_path(resolved_plan, plan_root) if plan_root else None
+    if identity is not None:
+        recorded_identity = record_identity(lexical_round, payload)
+        token_match = re.search(r"-p([0-9a-f]{8})-r[1-9]\d*\.md$", lexical_round.name)
+        if recorded_identity is not None and recorded_identity != identity:
+            return False, (
+                f"review record source plan identity is {recorded_identity!r}, "
+                f"expected {identity!r}"
+            )
+        if token_match and token_match.group(1) != plan_identity_token(identity):
+            return False, "review filename plan-identity token does not match source-plan path"
+        if token_match and recorded_identity is None:
+            return False, "identity-qualified review record has no source-plan identity"
+        extensions = payload.get("extensions")
+        if (
+            not token_match
+            and isinstance(extensions, dict)
+            and extensions.get("plan_identity")
+        ):
+            return False, "review record with sidecar plan identity must carry its identity token in the filename"
 
     declared_slug = payload.get("artifact_slug")
     if declared_slug != slug:
@@ -1911,7 +2650,34 @@ def _check_sibling_compat() -> str | None:
     return None
 
 
+# In-process selftest suppression (invocation telemetry): the selftest is a
+# metadata exit, not a measured lane, and its fixture families manage the
+# ``.ai-playbook`` layout of the shared temp root with plain mkdir/rmdir, so
+# the in-process ``main()`` calls must leave no telemetry footprint (no
+# metrics home created, no line appended). Subprocess invocations of the
+# script stay measured as designed.
+_selftest_telemetry_suppressed = False
+
+
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: one self-timed wall span across the full run (the
+    invocation-telemetry plan). The body runs under try/finally so the
+    fail-open self-timed append fires on the SystemExit paths too (usage
+    errors, refusals); the writer's own failure never touches the exit
+    status or either contract channel."""
+    started = time.time()
+    try:
+        return _main(argv)
+    finally:
+        if invocation_telemetry is not None and not _selftest_telemetry_suppressed:
+            invocation_telemetry.record_invocation(
+                "plan_readiness.py",
+                "readiness-gate",
+                invocation_telemetry.elapsed_ms(started),
+            )
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = OutcomeArgumentParser(
         description="Fail-closed reviewed-plan readiness gate"
     )
@@ -1930,17 +2696,26 @@ def main(argv: list[str] | None = None) -> int:
         "--pre-round",
         action="store_true",
         help="Run the structural-only pre-round gate (plans rule 29) over "
-        "the plan: the four review-record-independent probes with no "
+        "the plan: the five structural probes plus the extraction-rule executability parity probes with no "
         "sidecar-date gating and no review-record consultation",
     )
     parser.add_argument(
         "--check-review-name",
         metavar="ROUND_MD",
         help="Name-shape probe: verify that the ROUND_MD review artifact "
-        "pair under {reviews_dir} binds to the plan's feature slug (round "
-        "filename matches the gate's discovery shape, stats sidecar present "
-        "with artifact_slug equal to the slug, coverage self-references "
-        "resolve); prints review name check OK/FAILED and exits 0/1",
+        "pair under {reviews_dir} binds to the plan's canonical artifact "
+        "slug (the feature slug lowercased; the story key stays in the "
+        "plan filename; round filename matches the gate's discovery "
+        "shape, stats sidecar present with artifact_slug equal to the "
+        "slug, coverage self-references resolve); prints review name "
+        "check OK/FAILED and exits 0/1",
+    )
+    parser.add_argument(
+        "--print-artifact-slug",
+        action="store_true",
+        help="Print the plan's canonical artifact slug (the feature slug "
+        "lowercased, through the one artifact_slug derivation) and exit; "
+        "read-only: no review record consultation, no facts resolution",
     )
     args = parser.parse_args(argv)
 
@@ -1970,6 +2745,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_review_name and not args.plan_path:
         parser.error("plan_path is required when --check-review-name is set")
 
+    # Parse-time mutual exclusion (--print-artifact-slug print arm): the
+    # slug print composes with neither --selftest, --sweep, --pre-round,
+    # nor --check-review-name, and its plan operand is required; every
+    # violation is a usage error (exit 3, the outcome contract's tool
+    # error) decided before any mode runs.
+    if args.print_artifact_slug and args.selftest:
+        parser.error(
+            "--print-artifact-slug must not be combined with --selftest"
+        )
+    if args.print_artifact_slug and args.sweep:
+        parser.error("--print-artifact-slug must not be combined with --sweep")
+    if args.print_artifact_slug and args.pre_round:
+        parser.error(
+            "--print-artifact-slug must not be combined with --pre-round"
+        )
+    if args.print_artifact_slug and args.check_review_name:
+        parser.error(
+            "--print-artifact-slug must not be combined with "
+            "--check-review-name"
+        )
+    if args.print_artifact_slug and not args.plan_path:
+        parser.error("plan_path is required when --print-artifact-slug is set")
+
     compat_error = _check_sibling_compat()
     if compat_error is not None:
         print(f"compatibility FAILED: {compat_error}", file=sys.stderr)
@@ -1981,6 +2779,34 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.selftest:
         return run_selftest()
+
+    if args.print_artifact_slug:
+        # Read-only slug print (the execution-claim gateway's derivation
+        # seam): the canonical artifact slug through the one ``artifact_slug``
+        # SOT function, no review record consultation, no facts resolution.
+        # The operand anchors at the process cwd like every mode's plan
+        # operand (r4 X5 cwd preference); a missing operand is the
+        # missing-input tool error, and a slug outside the kebab shape is
+        # the derivation's named refusal (fail), never a traceback.
+        _sx = Path(args.plan_path).expanduser()
+        if not _sx.is_absolute():
+            _sx = Path(os.path.abspath(_sx))
+        if not _sx.is_file():
+            print(
+                f"artifact slug FAILED: plan operand not readable: {_sx}",
+                file=sys.stderr,
+            )
+            print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        try:
+            slug = artifact_slug(_sx)
+        except ArtifactSlugRefusal as refusal:
+            print(f"artifact slug FAILED: {refusal}", file=sys.stderr)
+            print("OUTCOME: %s" % OUTCOME_LABELS[1])
+            return 1
+        print(slug)
+        print("OUTCOME: %s" % OUTCOME_LABELS[0])
+        return 0
 
     root = repo_root(Path.cwd())
     plans_dir_raw = facts_paths.resolve_toml_key_raw(root, "plans_dir")
@@ -2065,13 +2891,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"review name check FAILED: {reason}", file=sys.stderr)
             print("OUTCOME: %s" % OUTCOME_LABELS[1])
             return 1
-        slug = feature_slug(plan)
+        story_slug = feature_slug(plan)
+        slug = artifact_slug(plan)
         round_no = (
             review_round_shape(slug)[1].fullmatch(round_path.name).group(1)
         )
         print(
             f"review name check OK: {round_path.name} binds plan slug "
-            f"{slug} (r{round_no})"
+            f"{story_slug} via canonical artifact slug {slug} (r{round_no})"
         )
         print("OUTCOME: %s" % OUTCOME_LABELS[0])
         return 0
@@ -2081,16 +2908,201 @@ def main(argv: list[str] | None = None) -> int:
     # r4 X5), then re-rooting at the resolved repo ROOT (a caller invoking
     # from a subdirectory or outside the repo must not false-reject a valid
     # relative plan path).
-    ok, reason = evaluate_readiness(
-        anchor_at_root(args.plan_path), plans_dir, reviews_dir
-    )
+    plan_operand = anchor_at_root(args.plan_path)
+    ok, reason = evaluate_readiness(plan_operand, plans_dir, reviews_dir)
     if ok:
+        # Warning-only Files:-coverage arm (machinery row
+        # script:plan-files-coverage-arm): human-readable stderr evidence
+        # printed BEFORE the summary and OUTCOME lines, on this pass path
+        # only; any failure path below prints zero coverage lines. A plan
+        # whose bytes are undecodable (or unreadable, e.g. a
+        # directory-shaped plan operand) skips the arm silently; the arm
+        # never changes the exit code and adds no schema field.
+        coverage_plan_text: str | None
+        try:
+            coverage_plan_text = plan_operand.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            coverage_plan_text = None
+        if coverage_plan_text is not None:
+            for warning in plan_files_coverage_warnings(coverage_plan_text):
+                print(warning, file=sys.stderr)
         print("readiness OK: latest review of these plan bytes is ready")
         print("OUTCOME: %s" % OUTCOME_LABELS[0])
         return 0
+    if reason is not None and reason.startswith(_GATE_INDETERMINATE_PREFIX):
+        # The corrections-graded arm's indeterminate class: the gate ran on
+        # repository evidence it could not re-derive, so the run reports
+        # the indeterminate outcome and the caller re-derives from disk
+        # instead of reading a findings-class fail.
+        print(reason, file=sys.stderr)
+        print("OUTCOME: %s" % OUTCOME_LABELS[2])
+        return 2
     print(f"readiness FAILED: {reason}", file=sys.stderr)
     print("OUTCOME: %s" % OUTCOME_LABELS[1])
     return 1
+
+
+# --------------------------------------------------------------------------- #
+# Selftest: corrections-graded gate (review-cert-graded-binding plan,
+# Task 6). Hermetic scratch repos, never the live repo.
+# --------------------------------------------------------------------------- #
+_CORRECTIONS_SELFTEST_SLUG = "graded-gate-plan"
+_CORRECTIONS_SELFTEST_PLAN_NAME = "2026-09-22-graded-gate-plan.md"
+_CORRECTIONS_SELFTEST_PLAN_REL = (
+    "docs/history/plans/" + _CORRECTIONS_SELFTEST_PLAN_NAME
+)
+# The em dash is built from an escape at run time: these fixture bytes never
+# carry the character itself.
+_CORRECTIONS_SELFTEST_D1 = (
+    "# P\n\n"
+    "## Assumptions\n\n"
+    "Decision points requiring a grill: none remain.\n\n"
+    "alpha \u2014 bravo.\n"
+).encode("utf-8")
+_CORRECTIONS_SELFTEST_D2 = (
+    "# P\n\n"
+    "## Assumptions\n\n"
+    "Decision points requiring a grill: none remain.\n\n"
+    "alpha, bravo.\n"
+).encode("utf-8")
+
+
+def _corrections_selftest_payload(digest: str) -> dict:
+    """A current-v1 clear-review sidecar carrying the graded fields (the
+    Task 5 fixture shape): the declared source kind and digest, the round,
+    and the artifact slug the certification seal resolves by."""
+    payload = vrs._post_window_fixture_payload("plan")
+    payload["schema_version"] = 1
+    payload["review_type"] = "Branch Review"
+    payload["artifact_slug"] = _CORRECTIONS_SELFTEST_SLUG
+    payload["round"] = "r1"
+    payload["source_kind"] = "plan"
+    payload["source_digest"] = digest
+    payload["verdict"] = "yes"
+    payload["deduplication_groups"] = []
+    payload["discarded"] = []
+    payload["severity_calibration"] = []
+    payload["triage_outcomes"] = []
+    payload["soften_watchlist"] = []
+    return payload
+
+
+def _corrections_selftest_row(repo, start: str) -> dict | None:
+    """The CLI-produced typography row: the classifier CLI is the only row
+    producer, so the selftest mints through the real ``--emit-row``
+    subprocess inside the scratch repo and returns None on any failure
+    (the caller's check reports the arm, never a traceback)."""
+    script = Path(__file__).resolve().parent / "plan_delta_classifier.py"
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--plan", str(repo.root / _CORRECTIONS_SELFTEST_PLAN_REL),
+                "--since", start,
+                "--emit-row",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=corrections_record.hermetic_git_env(),
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    rows = [
+        line.split(": ", 1)[1]
+        for line in proc.stdout.splitlines()
+        if line.startswith("corrections-row-json: ")
+    ]
+    if len(rows) != 1:
+        return None
+    try:
+        row = json.loads(rows[0])
+    except json.JSONDecodeError:
+        return None
+    return row if isinstance(row, dict) else None
+
+
+def _selftest_corrections_gate(check) -> None:
+    """The declared-record path through the shared digest gate
+    (review-cert-graded-binding plan, Task 6): a hermetic scratch repo
+    carries the committed D1 plan bytes, the round-close commit, the
+    on-disk seal entry for the fixture round, and the committed
+    typography hop to D2; a CLI-produced row re-binds the stale declared
+    digest with no error, and the same repo with the record replaced by a
+    declared digest matching the current bytes refuses naming the anchor
+    leg (bare rewrite)."""
+    cleanup = vrs._GradingCleanup()
+    if corrections_record is None:
+        check(
+            "selftest#corrections_gate/declared_record_passes",
+            False,
+            "corrections_record.py is not importable next to this copy",
+        )
+        check(
+            "selftest#corrections_gate/bare_rewrite_refuses",
+            False,
+            "corrections_record.py is not importable next to this copy",
+        )
+        return
+    repo = corrections_record.build_scratch_repo(cleanup)
+    plans_dir = repo.root / "docs" / "history" / "plans"
+    reviews_dir = repo.root / "docs" / "history" / "reviews"
+    plans_dir.mkdir(parents=True)
+    reviews_dir.mkdir(parents=True)
+    start = repo.commit_file(
+        _CORRECTIONS_SELFTEST_PLAN_REL, _CORRECTIONS_SELFTEST_D1, "seed plan"
+    )
+    close = repo.commit_allow_empty("round 1 close")
+    repo.append_seal_entry(
+        _CORRECTIONS_SELFTEST_SLUG, 1, _CORRECTIONS_SELFTEST_PLAN_REL,
+        start, corrections_record.sha256_hex(_CORRECTIONS_SELFTEST_D1),
+        close,
+    )
+    repo.commit_file(
+        _CORRECTIONS_SELFTEST_PLAN_REL, _CORRECTIONS_SELFTEST_D2,
+        "fix typography",
+    )
+    review = reviews_dir / (
+        "2026-09-22-plan-review-%s-r1.md" % _CORRECTIONS_SELFTEST_SLUG
+    )
+    review.write_text(vrs._post_window_fixture_markdown("plan"),
+                      encoding="utf-8")
+    sidecar = review.with_suffix(".stats.json")
+
+    row = _corrections_selftest_row(repo, start)
+    payload = None
+    if row is not None:
+        payload = _corrections_selftest_payload(
+            corrections_record.sha256_hex(_CORRECTIONS_SELFTEST_D1)
+        )
+        payload["extensions"] = {"corrections": [row]}
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    plan = plans_dir / _CORRECTIONS_SELFTEST_PLAN_NAME
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#corrections_gate/declared_record_passes",
+        row is not None and ok and reason is None,
+        f"row={row is not None} ok={ok} reason={reason}",
+    )
+
+    # Bare rewrite: the declared digest matches the current bytes while the
+    # round-anchored locator resolves the round-start digest.
+    if payload is not None:
+        del payload["extensions"]
+        payload["source_digest"] = corrections_record.sha256_hex(
+            _CORRECTIONS_SELFTEST_D2
+        )
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#corrections_gate/bare_rewrite_refuses",
+        payload is not None and not ok and reason is not None
+        and reason.startswith(corrections_record.MARKER_PREFIX)
+        and "bare rewrite" in reason,
+        f"ok={ok} reason={reason}",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2241,14 +3253,15 @@ def _write_clean_state(
     review = reviews_dir / (
         f"{date}-plan-review-{slug}-{round_suffix}.md"
     )
-    review.write_text(
-        _review_markdown(
-            verdict=verdict,
-            blocking_finding=blocking,
-            verdict_line=verdict_line,
-        ),
-        encoding="utf-8",
-    )
+    plan_root = repository_root(plan.parent)
+    identity = normalize_plan_path(plan, plan_root) if plan_root else None
+    identity_line = f"- URL or Artifact: {identity}\n" if identity else ""
+    review_markdown = _review_markdown(
+        verdict=verdict,
+        blocking_finding=blocking,
+        verdict_line=verdict_line,
+    ).replace("## Metadata\n", "## Metadata\n" + identity_line, 1)
+    review.write_text(review_markdown, encoding="utf-8")
     review.with_suffix(".stats.json").write_text(
         json.dumps(sidecar), encoding="utf-8"
     )
@@ -2887,10 +3900,14 @@ def _selftest_round_selection(
     )
     _clean_reviews_dir(reviews_dir)
 
-    # uppercase_round_suffix_ignored (W10, r3): an uppercase ``-R2.md``
-    # artifact is invisible to BOTH the discovery glob and ROUND_RE (a
-    # consistent lowercase-only pair), so a clean uppercase r2 must NOT
-    # rescue a rejecting lowercase r1.
+    # case_variant_collision/uppercase_round_suffix (retargeted from
+    # uppercase_round_suffix_ignored, W10 r3): the uppercase ``-R2.md``
+    # bytes case-fold-match the canonical discovery shape beside the
+    # canonical rejecting r1, so the case-variant collision refusal
+    # fires by its pinned prefix. The W10 property (an uppercase round
+    # suffix cannot rescue a rejecting round) is now carried by this
+    # refusal: the run still refuses instead of accepting the uppercase
+    # r2's clean verdict.
     plan, _ = _write_clean_state(
         plans_dir, reviews_dir, verdict="no", round_suffix="r1"
     )
@@ -2902,8 +3919,9 @@ def _selftest_round_selection(
     )
     ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
     check(
-        "selftest#uppercase_round_suffix_ignored",
-        not ok and reason is not None and "r1" in reason,
+        "selftest#case_variant_collision/uppercase_round_suffix",
+        not ok and reason is not None
+        and "case-variant round records exist under both" in reason,
         f"ok={ok} reason={reason}",
     )
     _clean_reviews_dir(reviews_dir)
@@ -2961,25 +3979,42 @@ def _selftest_round_selection(
     )
     _clean_reviews_dir(reviews_dir)
 
-    # glob_metachar_slug: a plan slug containing glob metacharacters
-    # (e.g. ``fixture[1]``) must still discover its review artifact —
-    # pins the glob.escape in latest_review_round.
+    # glob_metachar_slug (retargeted for the canonical artifact slug): a
+    # plan slug containing glob metacharacters (e.g. ``fixture[1]``)
+    # lowercases to a non-kebab form, so the gate refuses at the
+    # derivation BEFORE any discovery runs; the named refusal carries the
+    # plan filename, never a traceback. The escaped-glob property the old
+    # arms pinned stays pinned at the discovery helper directly below.
     plan, _ = _write_clean_state(plans_dir, reviews_dir, slug="fixture[1]")
     ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
     check(
-        "selftest#glob_metachar_slug",
-        ok and reason is None,
+        "selftest#glob_metachar_slug/derivation_refusal",
+        not ok and reason is not None
+        and "cannot derive a canonical artifact slug" in reason
+        and plan.name in reason,
         f"ok={ok} reason={reason}",
     )
-    # And the metachar slug with NO review artifact must reject (the
-    # escaped glob must not over-match anything else either).
     _clean_reviews_dir(reviews_dir)
-    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+
+    # Escaped-glob pin at the helper the gate used to drive: a metachar
+    # slug's round is discoverable through the escaped glob, and the
+    # escaped pattern never over-matches another plan's rounds.
+    _write_clean_state(plans_dir, reviews_dir, slug="fixture[1]")
+    found = latest_review_round(reviews_dir, "fixture[1]")
     check(
-        "selftest#glob_metachar_slug/no_review_rejects",
-        not ok and reason is not None and "no review artifact" in reason,
-        f"ok={ok} reason={reason}",
+        "selftest#glob_metachar_slug/escaped_glob_discovers",
+        found is not None and found[1] == 1,
+        f"found={found}",
     )
+    _clean_reviews_dir(reviews_dir)
+    _write_clean_state(plans_dir, reviews_dir, slug="fixture-feature")
+    found = latest_review_round(reviews_dir, "fixture[1]")
+    check(
+        "selftest#glob_metachar_slug/escaped_glob_no_overmatch",
+        found is None,
+        f"found={found}",
+    )
+    _clean_reviews_dir(reviews_dir)
 
 
 def _validate_arm(suffix: str, needle: str | None, expect_ok: bool) -> None:
@@ -4187,10 +5222,15 @@ def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
     )
     _clean_reviews_dir(reviews_dir)
 
-    # uppercase_files_opener_collected (r3 F3): an uppercase `FILES:`
-    # opener listing a path the scope never mentions must be collected
-    # and fail check (c) with the omitted-from-inventory reason; pre-fix
-    # the block is never collected and the gate passes vacuously.
+    # uppercase_files_opener_collected (r3 F3, re-keyed per the
+    # 2026-10-04 backlog row): the documented grammar opens collection on
+    # the exact `Files:` heading only, so an uppercase `FILES:` block is
+    # never collected and the review-scope gate passes it vacuously; the
+    # refusal comes from the plan-structure gate's declaration-shape
+    # check (0) instead. The fixture round is dated on
+    # PLAN_STRUCTURE_MIN_DATE so that gate fires; below it the arm
+    # passed vacuously (ok=True reason=None), the stale-fixture bug this
+    # re-key fixes.
     plan, _ = _write_clean_state(
         plans_dir,
         reviews_dir,
@@ -4202,15 +5242,16 @@ def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
                 "- src/unlisted.py\n"
             ),
         ),
-        date="2026-09-09",
+        date=PLAN_STRUCTURE_MIN_DATE,
     )
     ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
     check(
         "selftest#review_scope/uppercase_files_opener_collected",
         not ok
         and reason is not None
-        and "src/unlisted.py" in reason
-        and "omitted from the Review Scope" in reason,
+        and "FILES:" in reason
+        and "case variant" in reason
+        and PLAN_STRUCTURE_MIN_DATE in reason,
         f"ok={ok} reason={reason}",
     )
     _clean_reviews_dir(reviews_dir)
@@ -5173,7 +6214,7 @@ def _selftest_pre_round(
 ) -> None:
     """Pre-round family: the structural-only ``--pre-round`` invocation.
 
-    The fixture text mirrors the section order the four structural
+    The fixture text mirrors the section order the five structural
     probes read: a ``# Plan:`` title, ``## Assumptions`` closing with
     the plain none-remain trailer line, the ``### Task 1`` section
     (``Files:`` list matching the Review Scope entries, every checklist
@@ -5184,10 +6225,17 @@ def _selftest_pre_round(
     swallows it and the path-kind probe misreads the Production-code
     path as Documentation-listed. The composed text is proven clean by
     direct probe calls before any CLI arm runs; the CLI arms pin the
-    pre-round exit contract: structural probes only (the tolerated
-    no-review-artifact/missing-sidecar class never blocks), a stripped
-    classification tag blocks, and ``--pre-round`` composes with neither
-    ``--selftest`` nor ``--sweep`` (parse-time usage error).
+    pre-round exit contract: the five structural probes plus the
+    extraction-rule executability parity probes over the derived task
+    sections (the tolerated no-review-artifact/missing-sidecar class
+    never blocks), a stripped classification tag blocks, and
+    ``--pre-round`` composes with neither ``--selftest`` nor ``--sweep``
+    (parse-time usage error). The executability fixtures keep the
+    reviews dir empty throughout and expect the byte-identical step 9
+    labels: the three bounded-evidence envelope grounds over plan files,
+    the refusal-path blindness and warning suppression, and the
+    unit-level classification and derivation labels over synthetic item
+    dicts through the extracted helper.
 
     Every CLI invocation goes through a local SystemExit-capturing
     wrapper: argparse raises ``SystemExit`` through
@@ -5237,7 +6285,7 @@ def _selftest_pre_round(
     plan.write_text(plan_text, encoding="utf-8")
 
     # Fixture proof, direct probe calls (no CLI): the composed text must
-    # pass all four structural probes before the CLI arms run.
+    # pass all five structural probes before the CLI arms run.
     probe_reasons = {
         "decision_marker": decision_marker_problem(plan_text),
         "review_scope": review_scope_problem(plan_text),
@@ -5245,6 +6293,7 @@ def _selftest_pre_round(
             plan_text, repo_root(plans_dir.parent)
         ),
         "scope_classification": scope_classification_problem(plan_text),
+        "anchors_block": anchors_block_problem(plan_text),
     }
     check(
         "selftest#pre_round/fixture_probes_clean",
@@ -5330,6 +6379,299 @@ def _selftest_pre_round(
             in sweep_mix[1],
             f"selftest_mix={selftest_mix!r} sweep_mix={sweep_mix!r}",
         )
+
+        # budget_warning_nonblocking: an over-budget header line emits one
+        # stderr warning naming the breached cap without changing the OK
+        # line, the OUTCOME line, or the exit code (the warning class
+        # never blocks).
+        budget_text = _pre_round_clean_plan_text().replace(
+            "# Plan: pre-round fixture\n\n",
+            "# Plan: pre-round fixture\n\n"
+            "Execution budget: 4.0h total, largest task 1.0h\n\n",
+            1,
+        )
+        plan.write_text(budget_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(plan)])
+        check(
+            "selftest#pre_round/budget_warning_nonblocking",
+            rc == 0
+            and "readiness PRE-ROUND OK" in out
+            and "OUTCOME: pass" in out
+            and err.count("readiness PRE-ROUND WARNING:") == 1
+            and "exceeds the 3.0h plan cap" in err,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # --- Extraction-rule executability parity family (pre-round-gate-
+        # dimension-parity plan, Task 1): the full gate's plan-private step
+        # 9 probes run at pre-round over the plan bytes alone. Every
+        # fixture keeps the reviews dir EMPTY (review-record blindness by
+        # construction), and the expected refusal labels are built through
+        # the SAME single-homed wrap scripts/test_plan_readiness.py's
+        # ExtractionRuleParityTest replicates, so a label here is
+        # byte-identical to step 9's by construction.
+        _clean_reviews_dir(reviews_dir)
+
+        def _exec_fixture_plan(criteria_lines: str, budget_line: str = "") -> str:
+            return (
+                "# Plan: pre-round executability fixture\n\n"
+                f"{budget_line}"
+                f"## Assumptions\n\n{trailer}\n\n"
+                "### Task 1: Create the pre-round gate\n\n"
+                "Files:\n\n"
+                "- scripts/pre_round_gate.py *(new)*\n"
+                "- docs/pre-round-gate.md *(new)*\n\n"
+                f"{criteria_lines}"
+                f"{commit_item}\n\n"
+                "## Review Scope\n\n"
+                "**Production code:**\n\n"
+                "- scripts/pre_round_gate.py *(new)*\n\n"
+                "**Documentation:**\n\n"
+                "- docs/pre-round-gate.md *(new)*\n"
+            )
+
+        def _exec_task_criteria(fixture_text: str) -> list[str]:
+            section_body = _plan_task_sections(fixture_text)[0][1]
+            criteria, _actions = runtime_capabilities.derive_plan_checklist_actions(
+                section_body
+            )
+            return criteria
+
+        def _exec_named_label(criteria: list[str]) -> str:
+            # The create boundary's task-attributed wrap over the bare
+            # single-homed refusal (mirrors ExtractionRuleParityTest's
+            # _named_evidence_label replica).
+            try:
+                runtime_capabilities.evidence_criterion_ids(list(criteria))
+            except ValueError as error:
+                from execute_plan_runtime import _named_evidence_limit_error
+
+                return str(
+                    _named_evidence_limit_error(
+                        {"task-1": {"required_criteria": list(criteria)}},
+                        error,
+                    )
+                )
+            raise AssertionError("fixture criteria must exceed an evidence limit")
+
+        # item_bytes_shared_ground: the shared-module probe refuses the
+        # exact criterion the fixture plan derives, and the task-attributed
+        # wrap embeds that bare ground (the gap's both halves at unit
+        # level; holds before and after the pre-round wiring).
+        item_criterion = "x" * 600 + " [class: IMPLEMENTATION_REQUIRED]"
+        item_text = _exec_fixture_plan(f"- [ ] {item_criterion}\n")
+        item_criteria = _exec_task_criteria(item_text)
+        item_label = _exec_named_label(item_criteria)
+        try:
+            runtime_capabilities.evidence_criterion_ids(list(item_criteria))
+            item_bare = None
+        except ValueError as error:
+            item_bare = str(error)
+        check(
+            "selftest#pre_round/executability_item_bytes_shared_ground",
+            item_criteria == [item_criterion]
+            and item_bare is not None
+            and "evidence criterion exceeds UTF-8 item byte limit" in item_bare
+            and item_label.startswith(f"task 'task-1': {item_bare}"),
+            f"criteria_len={len(item_criteria)} bare={item_bare!r} "
+            f"label_head={item_label[:120]!r}",
+        )
+
+        # executability_item_bytes_refused: the over-cap item fixture must
+        # fail --pre-round with the byte-identical named envelope label
+        # (today's tree passes it clean: the witnessed gap this family
+        # pins).
+        exec_plan = plans_dir / "2026-09-01-pre-round-over-cap.md"
+        exec_plan.write_text(item_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_item_bytes_refused",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and item_label in err,
+            f"rc={rc} out={out!r} err_head={err[:300]!r}",
+        )
+
+        # executability_aggregate_bytes_refused: nine sub-cap criteria
+        # (458 y's plus the tag keeps every item under the 512-byte cap)
+        # whose aggregate breaches the 4096-byte cap refuse with their own
+        # named ground, byte-identical to step 9's.
+        aggregate_criteria = [
+            f"c{index}-" + "y" * 458 + " [class: IMPLEMENTATION_REQUIRED]"
+            for index in range(9)
+        ]
+        aggregate_text = _exec_fixture_plan(
+            "".join(f"- [ ] {criterion}\n" for criterion in aggregate_criteria)
+        )
+        aggregate_label = _exec_named_label(_exec_task_criteria(aggregate_text))
+        exec_plan = plans_dir / "2026-09-01-pre-round-over-aggregate.md"
+        exec_plan.write_text(aggregate_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_aggregate_bytes_refused",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and "evidence criteria exceed UTF-8 aggregate byte limit" in err
+            and aggregate_label in err,
+            f"rc={rc} out={out!r} err_head={err[:300]!r}",
+        )
+
+        # executability_criteria_count_refused: 101 short criteria breach
+        # the receipt item-count limit (the count check precedes the
+        # aggregate check inside the single-homed probe, so the count
+        # ground is the named refusal) and refuse with their own named
+        # ground, byte-identical to step 9's.
+        count_criteria = [
+            f"criterion-{index:03d}" + " [class: IMPLEMENTATION_REQUIRED]"
+            for index in range(101)
+        ]
+        count_text = _exec_fixture_plan(
+            "".join(f"- [ ] {criterion}\n" for criterion in count_criteria)
+        )
+        count_label = _exec_named_label(_exec_task_criteria(count_text))
+        exec_plan = plans_dir / "2026-09-01-pre-round-over-count.md"
+        exec_plan.write_text(count_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_criteria_count_refused",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and "evidence criteria exceed receipt item-count limit" in err
+            and count_label in err,
+            f"rc={rc} out={out!r} err_head={err[:300]!r}",
+        )
+
+        # executability_review_blindness: safety witness over the same
+        # over-cap plan with an emptied reviews home; the refusal names
+        # the envelope label without any review record or sidecar in
+        # existence, and the run writes none.
+        _clean_reviews_dir(reviews_dir)
+        exec_plan = plans_dir / "2026-09-01-pre-round-over-cap.md"
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_review_blindness",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and item_label in err
+            and not any(reviews_dir.iterdir()),
+            f"rc={rc} reviews={sorted(p.name for p in reviews_dir.iterdir())} "
+            f"err_head={err[:300]!r}",
+        )
+
+        # executability_conforming_ok: a conforming plan still prints the
+        # OK line with its "(review record not consulted)" suffix.
+        conforming_text = _exec_fixture_plan(
+            "- [ ] Add the `scripts/pre_round_gate.py` gate behind the "
+            "`--pre-round` flag. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        exec_plan = plans_dir / "2026-09-01-pre-round-exec-conforming.md"
+        exec_plan.write_text(conforming_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_conforming_ok",
+            rc == 0
+            and "readiness PRE-ROUND OK: structural checks clean "
+            "(review record not consulted)" in out
+            and "OUTCOME: pass" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # executability_failure_path_no_warnings: on the refusal path the
+        # budget-warning loops never ran; the failing fixture carries an
+        # over-budget header line, so an emitted warning would be visible
+        # and the count stays zero.
+        suppressed_text = _exec_fixture_plan(
+            f"- [ ] {item_criterion}\n",
+            budget_line="Execution budget: 4.0h total, largest task 1.0h\n\n",
+        )
+        exec_plan = plans_dir / "2026-09-01-pre-round-exec-suppressed.md"
+        exec_plan.write_text(suppressed_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(exec_plan)])
+        check(
+            "selftest#pre_round/executability_failure_path_no_warnings",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and item_label in err
+            and err.count("readiness PRE-ROUND WARNING:") == 0,
+            f"rc={rc} err_head={err[:300]!r}",
+        )
+
+        # executability_unit_parity: the extracted helper over synthetic
+        # item dicts (the three classification shapes mirror
+        # test_classification_labels_unit_parity; the two derivation shapes
+        # are seeding-shape grounds no plan text can express) returns
+        # classification and derivation labels byte-identical to step 9's.
+        executability_prefix = (
+            "plan fails the executability contract the create boundary "
+            "enforces at Phase 0: "
+        )
+
+        def _step9_label(refuse):
+            try:
+                refuse()
+            except ValueError as error:
+                return executability_prefix + str(error)
+            raise AssertionError("synthetic item must refuse")
+
+        synthetic_items = []
+        for item in (
+            {"task_body": "- [ ] do a thing\n", "checklist_actions": None},
+            {
+                "task_body": "- [ ] do a thing\n",
+                "checklist_actions": [{"text": "other", "owner": "worker"}],
+            },
+            {
+                "task_body": "",
+                "checklist_actions": [{"text": "", "owner": "worker"}],
+            },
+        ):
+            synthetic_items.append(
+                (
+                    item,
+                    lambda item=item: runtime_capabilities.check_checklist_action_classification(
+                        "task-1", item
+                    ),
+                )
+            )
+        for item in (
+            {
+                "task_body": "",
+                "checklist_actions": [{"text": "Commit:", "owner": "worker"}],
+                "required_criteria": ["do a thing"],
+            },
+            {
+                "task_body": "",
+                "checklist_actions": [{"text": "do a thing", "owner": "parent"}],
+                "required_criteria": ["do a thing"],
+            },
+        ):
+            synthetic_items.append(
+                (
+                    item,
+                    lambda item=item: runtime_capabilities.derive_checklist_actions(
+                        "task-1", item
+                    ),
+                )
+            )
+        # RED tolerance: until the helper lands, the sentinel string keeps
+        # this check failing (never raising) against today's tree.
+        extraction_helper = globals().get(
+            "extraction_rule_executability_problem"
+        )
+        unit_problems = [
+            (
+                extraction_helper(derived_task_map={"task-1": item})
+                if extraction_helper is not None
+                else "extraction_rule_executability_problem is not defined"
+            )
+            for item, _refuse in synthetic_items
+        ]
+        unit_expected = [_step9_label(refuse) for _item, refuse in synthetic_items]
+        check(
+            "selftest#pre_round/executability_unit_parity",
+            unit_problems == unit_expected,
+            f"problems={unit_problems!r} expected={unit_expected!r}",
+        )
     finally:
         os.chdir(prev_cwd)
         # Leave no facts block behind: the CLI family below creates
@@ -5339,6 +6681,439 @@ def _selftest_pre_round(
             facts_md.unlink()
         if facts_dir.is_dir() and not any(facts_dir.iterdir()):
             facts_dir.rmdir()
+
+
+
+_PROBE_GATE_PATH = "scripts/pre_round_gate.py"
+
+
+def _anchors_fixture_plan(task_one_block: str, extra_tasks: str = "") -> str:
+    """A structurally clean single-task plan whose Task 1 carries the
+    given anchors block text ("" for blockless); extra_tasks appends
+    further raw task sections."""
+    trailer = "Decision points requiring a grill: none remain."
+    return (
+        "# Plan: anchors fixture\n\n"
+        f"## Assumptions\n\n{trailer}\n\n"
+        "### Task 1: Create the pre-round gate\n\n"
+        "Files:\n\n"
+        f"- {_PROBE_GATE_PATH} *(new)*\n"
+        "- docs/pre-round-gate.md *(new)*\n\n"
+        f"{task_one_block}"
+        "- [ ] Add the `scripts/pre_round_gate.py` gate behind the "
+        "`--pre-round` flag. [class: IMPLEMENTATION_REQUIRED]\n"
+        "- [ ] Commit: `feat: pre-round structural gate` "
+        "[class: IMPLEMENTATION_REQUIRED]\n\n"
+        f"{extra_tasks}"
+        "## Review Scope\n\n"
+        "**Production code:**\n\n"
+        f"- {_PROBE_GATE_PATH} *(new)*\n\n"
+        "**Documentation:**\n\n"
+        "- docs/pre-round-gate.md *(new)*\n"
+        "- docs/second-task.md *(new)*\n"
+    )
+
+
+_CONFORMING_BLOCK = (
+    "Primary class anchors:\n"
+    "- `PreRoundGate` in `scripts/pre_round_gate.py`, the new gate module\n\n"
+)
+_PROSE_BLOCK = (
+    "Primary class anchors:\n"
+    "- The pre-round gate dispatch-mode paragraph in "
+    "scripts/pre_round_gate.py\n\n"
+)
+
+
+def _selftest_anchors_block(
+    root: Path, plans_dir: Path, reviews_dir: Path, check
+) -> None:
+    """Anchors-block grammar probe family (primary-class-anchors-grammar-
+    drift plan Task 1): the pre-round refusal of a prose-form block, the
+    conforming/blockless/blank-line-boundary passes, the fenced-example
+    and non-task-section ignorals, the second-section enumeration, and
+    the full gate's unchanged posture over a prose-form fixture."""
+    import contextlib
+    import io
+    import os
+
+    def run_main(argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = main(argv)
+            except SystemExit as exc:
+                rc = exc.code
+        return rc, out.getvalue(), err.getvalue()
+
+    facts_dir = root / ".ai-playbook"
+    prev_cwd = os.getcwd()
+    os.chdir(root)
+    try:
+        facts_dir.mkdir(exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            'plans_dir = "plans"\n'
+            'reviews_dir = "reviews"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+
+        def pre_round(text: str, name: str):
+            plan = plans_dir / name
+            plan.write_text(text, encoding="utf-8")
+            return run_main(["--pre-round", str(plan)])
+
+        # prose_form_refused: the pre-round invocation refuses with the
+        # canonical shape named.
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_PROSE_BLOCK), "2026-09-01-anchors-prose.md"
+        )
+        check(
+            "selftest#anchors_block/prose_form_refused",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and "The pre-round gate dispatch-mode paragraph" in err
+            and plan_shape.PRIMARY_CLASS_ANCHOR_SHAPE in err,
+            f"rc={rc} err={err!r}",
+        )
+
+        # conforming_accepted: every entry conforming passes clean.
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_CONFORMING_BLOCK),
+            "2026-09-01-anchors-conforming.md",
+        )
+        check(
+            "selftest#anchors_block/conforming_accepted",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # blockless_unaffected: no anchors block behaves as before.
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(""), "2026-09-01-anchors-blockless.md"
+        )
+        check(
+            "selftest#anchors_block/blockless_unaffected",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # blank_line_boundary: checkboxes after the block's blank line
+        # are criteria, never anchor entries.
+        boundary_block = (
+            "Primary class anchors:\n"
+            "- `PreRoundGate` in `scripts/pre_round_gate.py`\n\n"
+        )
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(boundary_block),
+            "2026-09-01-anchors-boundary.md",
+        )
+        check(
+            "selftest#anchors_block/blank_line_boundary",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # fenced_example_section_ignored: a FULL `### Task 2:` example
+        # section fenced inside Task 1 is never an enumerated ordinal,
+        # exactly as create never requests it.
+        fenced_task2 = (
+            "```text\n"
+            "### Task 2: Example only\n\n"
+            "Primary class anchors:\n"
+            "- The example paragraph in scripts/elsewhere.py\n\n"
+            "- [ ] Not a real task [class: IMPLEMENTATION_REQUIRED]\n"
+            "```\n\n"
+        )
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_CONFORMING_BLOCK, fenced_task2),
+            "2026-09-01-anchors-fenced-task2.md",
+        )
+        check(
+            "selftest#anchors_block/fenced_example_section_ignored",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # fenced_block_inside_task_refused: an anchors block quoted in a
+        # fence INSIDE a real task section is read raw (the inherited
+        # fence-blindness, parity with create) and refuses. The quoted
+        # block is the section's only anchors-shaped content: the shared
+        # block loop ends at the first blank line or non-bullet line, so
+        # a block quoted after a real block's blank line is never read
+        # (on either surface).
+        fenced_block = (
+            "```text\n"
+            "Primary class anchors:\n"
+            "- The quoted paragraph in scripts/elsewhere.py\n"
+            "```\n\n"
+        )
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(fenced_block),
+            "2026-09-01-anchors-fenced-block.md",
+        )
+        check(
+            "selftest#anchors_block/fenced_block_inside_task_refused",
+            rc == 1 and "readiness PRE-ROUND FAILED:" in err,
+            f"rc={rc} err={err!r}",
+        )
+
+        # non_task_section_ignored: an anchors-shaped block under a `## `
+        # section is never parsed (create never reads that section).
+        stray = (
+            "## Notes\n\n"
+            "Primary class anchors:\n"
+            "- The stray paragraph in scripts/elsewhere.py\n\n"
+        )
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_CONFORMING_BLOCK).replace(
+                "## Review Scope", stray + "## Review Scope"
+            ),
+            "2026-09-01-anchors-non-task.md",
+        )
+        check(
+            "selftest#anchors_block/non_task_section_ignored",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # second_section_enumeration: only the second task's block is
+        # malformed; the refusal names that section's entry.
+        task2_bad = (
+            "### Task 2: Second task\n\n"
+            "Files:\n\n"
+            "- docs/second-task.md *(new)*\n\n"
+            "Primary class anchors:\n"
+            "- The second-task paragraph in scripts/pre_round_gate.py\n\n"
+            "- [ ] Do the second thing [class: IMPLEMENTATION_REQUIRED]\n"
+            "- [ ] Commit: `feat: second` [class: IMPLEMENTATION_REQUIRED]\n\n"
+        )
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_CONFORMING_BLOCK, task2_bad),
+            "2026-09-01-anchors-second-section.md",
+        )
+        check(
+            "selftest#anchors_block/second_section_enumeration",
+            rc == 1
+            and "Task 2" in err
+            and "The second-task paragraph" in err,
+            f"rc={rc} err={err!r}",
+        )
+
+        # subsection_read_through: anchors content under a `#### `
+        # subsection heading inside a task section stays inside the
+        # section span, so the shared parser still reads (and refuses) it.
+        rc, out, err = pre_round(
+            _anchors_fixture_plan(_PROSE_BLOCK).replace(
+                "Primary class anchors:",
+                "#### Notes\n\nPrimary class anchors:",
+            ),
+            "2026-09-01-anchors-subsection.md",
+        )
+        check(
+            "selftest#anchors_block/subsection_read_through",
+            rc == 1
+            and "readiness PRE-ROUND FAILED:" in err
+            and "Task 1" in err,
+            f"rc={rc} err={err!r}",
+        )
+
+        # full_gate_posture_unchanged: the full gate over a prose-form
+        # fixture keeps its pre-plan verdict (the no-review-artifact
+        # condition, never the anchors probe -- the anchors check is
+        # wired solely into the pre-round chain).
+        plan = plans_dir / "2026-09-01-anchors-full-gate.md"
+        plan.write_text(
+            _anchors_fixture_plan(_PROSE_BLOCK), encoding="utf-8"
+        )
+        rc, out, err = run_main([str(plan)])
+        check(
+            "selftest#anchors_block/full_gate_posture_unchanged",
+            rc == 1 and "no review artifact" in err,
+            f"rc={rc} err={err!r}",
+        )
+    finally:
+        os.chdir(prev_cwd)
+        facts_md = facts_dir / "facts.md"
+        if facts_md.exists():
+            facts_md.unlink()
+        if facts_dir.is_dir() and not any(facts_dir.iterdir()):
+            facts_dir.rmdir()
+
+
+# The protected grammar names and their single home (the shadowing scan's
+# contract): a definition is an assignment to the exact protected name
+# whose right-hand side is not a `plan_shape.`-qualified reference.
+_ANCHORS_HOME_RELPATH = "scripts/plan_shape.py"
+_ANCHORS_PROTECTED_NAMES = (
+    "PRIMARY_CLASS_ANCHORS_HEADING",
+    "PRIMARY_CLASS_ANCHOR_ENTRY",
+    "PRIMARY_CLASS_ANCHOR_SHAPE",
+)
+
+
+def _anchors_shadow_definitions(
+    files_text: dict[str, str],
+) -> list[str]:
+    """Shadowing scan over an injectable path-to-text mapping.
+
+    Returns one violation line per assignment to a protected name whose
+    right-hand side is not a `plan_shape.`-qualified reference, outside
+    the home file. The mapping keys are repo-relative paths; the home
+    file is exempt.
+    """
+    import re as _re
+
+    pattern = _re.compile(
+        r"^("
+        + "|".join(_ANCHORS_PROTECTED_NAMES)
+        + r")\s*=\s*(.*)$"
+    )
+    violations: list[str] = []
+    for relpath in sorted(files_text):
+        if relpath == _ANCHORS_HOME_RELPATH:
+            continue
+        for lineno, line in enumerate(
+            files_text[relpath].splitlines(), start=1
+        ):
+            match = pattern.match(line)
+            if match is None:
+                continue
+            rhs = match.group(2).strip()
+            if rhs.startswith("plan_shape."):
+                continue
+            violations.append(
+                f"{relpath}:{lineno}: local definition of protected "
+                f"anchors grammar name {match.group(1)} outside the "
+                f"single home {_ANCHORS_HOME_RELPATH}"
+            )
+    return violations
+
+
+def _selftest_anchors_single_home(check) -> None:
+    """Single-home witness family: the tracked repository source carries
+    no definition of the anchors grammar names outside
+    ``scripts/plan_shape.py``; a shadowing redefinition in a consumer is
+    caught by the same scan over an injectable mapping; the runtime's
+    ``plan_shape.``-qualified alias assignments and the skills' prose
+    mentions are the sanctioned-reference arm."""
+    import re as _re
+    import subprocess
+    from pathlib import Path as _Path
+
+    module_root = _Path(__file__).resolve().parent
+    repo_root = module_root.parent
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-z", "*.py"],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=30,
+            check=True,
+        ).stdout.decode("utf-8")
+    except (OSError, subprocess.SubprocessError):
+        listing = ""
+    tracked = [
+        rel
+        for rel in listing.split("\0")
+        if rel.endswith(".py")
+    ]
+    files_text: dict[str, str] = {}
+    for rel in tracked:
+        source = (repo_root / rel).read_text(encoding="utf-8")
+        files_text[rel] = source
+    # The skills' anchors bytes are scanned as real bytes, not only
+    # modeled synthetically: the two skills whose prose carries the
+    # anchors block and fixture entries join the scanned set (the
+    # assignment discriminator accepts prose, so a definition smuggled
+    # into a tracked skill is still caught).
+    for rel in (
+        "agents/skills/plans/SKILL.md",
+        "agents/skills/review-plan/SKILL.md",
+    ):
+        skill = repo_root / rel
+        if skill.exists():
+            files_text[rel] = skill.read_text(encoding="utf-8")
+    # Self-checking enumeration: the scan must have observed the home
+    # and at least one consumer file, so a git failure never reads as a
+    # vacuous pass.
+    check(
+        "selftest#anchors_single_home/enumeration_self_check",
+        _ANCHORS_HOME_RELPATH in files_text
+        and any(
+            rel != _ANCHORS_HOME_RELPATH for rel in files_text
+        )
+        and "agents/skills/plans/SKILL.md" in files_text
+        and "agents/skills/review-plan/SKILL.md" in files_text,
+        f"scanned={sorted(files_text)[:5]}... n={len(files_text)}",
+    )
+    violations = _anchors_shadow_definitions(files_text)
+    check(
+        "selftest#anchors_single_home/tracked_source_clean",
+        violations == [],
+        f"violations={violations[:3]}",
+    )
+
+    # Shadowing arm: one regex-valued and one plain-string literal
+    # redefinition in a synthetic consumer fails the scan.
+    shadowed = dict(files_text)
+    shadowed["scripts/synthetic_consumer.py"] = (
+        "PRIMARY_CLASS_ANCHOR_ENTRY = re.compile(r'x')\n"
+        "PRIMARY_CLASS_ANCHOR_SHAPE = '- `A` in `b`'\n"
+    )
+    violations = _anchors_shadow_definitions(shadowed)
+    check(
+        "selftest#anchors_single_home/shadowing_caught",
+        len(violations) == 2
+        and all(
+            "synthetic_consumer" in violation for violation in violations
+        ),
+        f"violations={violations}",
+    )
+
+    # Sanctioned-reference arm: the runtime's alias assignments (the
+    # `plan_shape.`-qualified shape) and a prose mention accept.
+    sanctioned = dict(files_text)
+    sanctioned["scripts/synthetic_consumer.py"] = (
+        "PRIMARY_CLASS_ANCHORS_HEADING = "
+        "plan_shape.PRIMARY_CLASS_ANCHORS_HEADING\n"
+        "PRIMARY_CLASS_ANCHOR_ENTRY = plan_shape.PRIMARY_CLASS_ANCHOR_ENTRY\n"
+        "# prose: the shape named PRIMARY_CLASS_ANCHOR_SHAPE is owned in "
+        "scripts/plan_shape.py\n"
+    )
+    check(
+        "selftest#anchors_single_home/sanctioned_references_accepted",
+        _anchors_shadow_definitions(sanctioned) == [],
+        "sanctioned references must not violate",
+    )
+
+    # Owner fingerprint (Task 2): the plans skill's corrected shape
+    # sentence names its owner as a backticked symbol; that symbol must
+    # be a compiled-regex binding in scripts/plan_shape.py, resolved via
+    # the module file path (never the process cwd).
+    skill_path = (
+        _Path(__file__).resolve().parent.parent
+        / "agents/skills/plans/SKILL.md"
+    )
+    skill_text = skill_path.read_text(encoding="utf-8")
+    owner_marker = "**Primary class anchors; required:**"
+    sentence = skill_text[
+        skill_text.index(owner_marker):
+    ].split("\n", 1)[0]
+    backticked = _re.findall(r"`([^`]+)`", sentence)
+    regex_bindings = [
+        token
+        for token in backticked
+        if token in _ANCHORS_PROTECTED_NAMES
+        and isinstance(getattr(plan_shape, token, None), _re.Pattern)
+    ]
+    check(
+        "selftest#anchors_single_home/owner_fingerprint",
+        len(regex_bindings) == 1
+        and regex_bindings[0] == "PRIMARY_CLASS_ANCHOR_ENTRY",
+        f"backticked={backticked} regex_bindings={regex_bindings}",
+    )
 
 
 def _selftest_accepted_state(
@@ -5566,6 +7341,252 @@ def _selftest_accepted_state(
             "missing the required 'coverage' object" in e
             for e in missing_cov_result.errors
         ),
+    )
+
+
+def _selftest_slug_case(
+    root: Path, plans_dir: Path, reviews_dir: Path, check
+) -> None:
+    """Canonical artifact-slug family (plan-review story-key case plan):
+    the story-key pass end to end, the case-variant collision and
+    rename-direction refusals, the derivation-refusal conversion, the
+    backup-copy no-op pinning the probe's fullmatch anchor, and the
+    lowercase identity no-op.
+
+    The story key in the fixture names is a generic uppercase placeholder
+    (``AB-12``): the shape under test is the uppercase story filename to
+    lowercase round pair to seal resolution, and this repository's
+    hygiene scan denies real ticket prefixes in script bytes. The fixture
+    date (2026-09-01) sits below the coverage sidecar window, matching
+    the ``_write_clean_state`` convention, so the arms trip only the
+    slug-case behavior under test.
+    """
+    story_date = "2026-09-01"
+    story_slug = "AB-12-nightly-bitmap-rebuild-lifecycle"
+    canonical_slug = story_slug.lower()
+
+    # backup_copy_noop: a `.backup-<timestamp>` copy of the canonical
+    # round beside it leaves the readiness outcome unchanged. The
+    # case-variant probe is anchored as a fullmatch; a search-based
+    # matcher would classify this copy as case-variant and permanently
+    # collision-refuse the plan, flipping this arm red.
+    plan, review = _write_clean_state(plans_dir, reviews_dir)
+    ok_before, reason_before = evaluate_readiness(plan, plans_dir, reviews_dir)
+    backup = review.with_name(review.name + ".backup-1735689600")
+    backup.write_bytes(review.read_bytes())
+    ok_after, reason_after = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#slug_case/backup_copy_noop",
+        ok_before and reason_before is None
+        and ok_after and reason_after is None,
+        f"before={ok_before}/{reason_before} after={ok_after}/{reason_after}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # case_variant_collision_refusal: canonical-shaped AND case-variant
+    # round records both present under the story-key plan; the named
+    # collision refusal fires. The case-variant witness is an
+    # uppercase-shaped legacy r9 record beside the canonical r1 pair:
+    # names that differ by case ONLY cannot coexist on a
+    # case-insensitive filesystem (the second write would collapse into
+    # the first), so the fixture varies the round ordinal too, which
+    # materializes the both-shapes state on every filesystem breed and
+    # is exactly a case-variant record per the plan's terms.
+    plan = plans_dir / f"{story_date}-{story_slug}.md"
+    plan.write_text("# Fixture plan\n\nBody.\n", encoding="utf-8")
+    digest = vrs.compute_source_digest("plan", plan.read_bytes())
+    canonical_round = reviews_dir / (
+        f"{story_date}-plan-review-{canonical_slug}-r1.md"
+    )
+    canonical_round.write_text(_review_markdown(), encoding="utf-8")
+    canonical_sidecar = _clear_sidecar(digest)
+    canonical_sidecar["date"] = story_date
+    canonical_sidecar["artifact_slug"] = canonical_slug
+    canonical_round.with_suffix(".stats.json").write_text(
+        json.dumps(canonical_sidecar), encoding="utf-8"
+    )
+    legacy_round = reviews_dir / (
+        f"{story_date}-plan-review-{story_slug}-r9.md"
+    )
+    legacy_round.write_text(_review_markdown(), encoding="utf-8")
+    legacy_sidecar = _clear_sidecar(digest)
+    legacy_sidecar["date"] = story_date
+    legacy_sidecar["artifact_slug"] = story_slug
+    legacy_round.with_suffix(".stats.json").write_text(
+        json.dumps(legacy_sidecar), encoding="utf-8"
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#slug_case/case_variant_collision_refusal",
+        not ok and reason is not None
+        and (
+            "case-variant round records exist under both the story-key "
+            "and canonical shapes; rename the legacy pair to the "
+            "canonical lowercase shape"
+        ) in reason
+        and legacy_round.name in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # rename_direction_refusal: the plan renamed to lowercase (canonical
+    # identity), legacy uppercase-shaped pairs only; the refusal names
+    # each legacy record, both halves of the pair.
+    renamed = plans_dir / f"{story_date}-{canonical_slug}.md"
+    renamed.write_text("# Fixture plan\n\nBody.\n", encoding="utf-8")
+    legacy_md_name = f"{story_date}-plan-review-{story_slug}-r1.md"
+    legacy = reviews_dir / legacy_md_name
+    legacy.write_text(_review_markdown(), encoding="utf-8")
+    legacy_stats_name = legacy.with_suffix(".stats.json").name
+    legacy_rename_sidecar = _clear_sidecar(
+        vrs.compute_source_digest("plan", renamed.read_bytes())
+    )
+    legacy_rename_sidecar["date"] = story_date
+    legacy_rename_sidecar["artifact_slug"] = story_slug
+    legacy.with_suffix(".stats.json").write_text(
+        json.dumps(legacy_rename_sidecar),
+        encoding="utf-8",
+    )
+    ok, reason = evaluate_readiness(renamed, plans_dir, reviews_dir)
+    check(
+        "selftest#slug_case/rename_direction_refusal",
+        not ok and reason is not None
+        and "rename the pair to the canonical lowercase shape" in reason
+        and legacy_md_name in reason
+        and legacy_stats_name in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # story_key_pass: uppercase plan filename, lowercase round pair and
+    # sidecar; readiness OK, the seal-context slug lowercase in the
+    # evidence payload, and check_review_name OK through the
+    # --check-review-name CLI path with the OK line naming the story slug
+    # beside the canonical slug (a missed CLI switch cannot ship green:
+    # the asserted span names both only when the print derives through
+    # artifact_slug).
+    repo = root / "slug-case-repo"
+    repo_plans = repo / "plans"
+    repo_reviews = repo / "reviews"
+    repo_plans.mkdir(parents=True)
+    repo_reviews.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=False)
+    story_plan = repo_plans / f"{story_date}-{story_slug}.md"
+    story_plan.write_text("# Fixture plan\n\nBody.\n", encoding="utf-8")
+    story_digest = vrs.compute_source_digest("plan", story_plan.read_bytes())
+    story_round = repo_reviews / (
+        f"{story_date}-plan-review-{canonical_slug}-r1.md"
+    )
+    story_round.write_text(_review_markdown(), encoding="utf-8")
+    story_sidecar = _clear_sidecar(story_digest)
+    story_sidecar["date"] = story_date
+    story_sidecar["artifact_slug"] = canonical_slug
+    story_round.with_suffix(".stats.json").write_text(
+        json.dumps(story_sidecar), encoding="utf-8"
+    )
+    ok, reason = evaluate_readiness(story_plan, repo_plans, repo_reviews)
+    check(
+        "selftest#slug_case/story_key_readiness_ok",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    # The context probe mirrors production usage: evaluate_readiness passes
+    # its RESOLVED plan path, so the fixture resolves too (a raw macOS
+    # /var/... path would not be relative to git's /private/var/... toplevel).
+    context = _plan_corrections_context(
+        story_plan.resolve(), story_plan.read_bytes()
+    )
+    check(
+        "selftest#slug_case/story_key_seal_context_slug_lowercase",
+        context is not None and context["slug"] == canonical_slug,
+        f"context={context}",
+    )
+    prev_cwd = os.getcwd()
+    os.chdir(repo)  # main() anchors facts resolution at the process cwd
+    try:
+        (repo / ".ai-playbook").mkdir()
+        (repo / ".ai-playbook" / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            'plans_dir = "plans"\n'
+            'reviews_dir = "reviews"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        rc, out, err = _selftest_run_main(
+            [str(story_plan), "--check-review-name", str(story_round)]
+        )
+        check(
+            "selftest#slug_case/story_key_check_review_name_ok",
+            rc == 0
+            and "review name check OK" in out
+            and (
+                f"binds plan slug {story_slug} via canonical artifact "
+                f"slug {canonical_slug}"
+            ) in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+    finally:
+        os.chdir(prev_cwd)
+
+    # derivation_refusal_converts_to_fail: an unsafe stem lowercasing to
+    # a non-kebab form yields OUTCOME: fail with the plan filename named,
+    # never a traceback.
+    unsafe = plans_dir / "2026-10-06-Foo_bar.md"
+    unsafe.write_text("# Fixture plan\n\nBody.\n", encoding="utf-8")
+    facts_dir = root / ".ai-playbook"
+    prev_cwd = os.getcwd()
+    os.chdir(root)
+    try:
+        facts_dir.mkdir(exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            'plans_dir = "plans"\n'
+            'reviews_dir = "reviews"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        rc, out, err = _selftest_run_main([str(unsafe)])
+        check(
+            "selftest#slug_case/derivation_refusal_converts_to_fail",
+            rc == 1
+            and "OUTCOME: fail" in out
+            and "2026-10-06-Foo_bar.md" in err
+            and "Traceback" not in err
+            and "Traceback" not in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # check_review_name derivation catch: the per-round probe converts
+        # the same refusal into its named (False, reason) failure path.
+        ok, reason = check_review_name(
+            unsafe,
+            reviews_dir / f"{story_date}-plan-review-foo-bar-r1.md",
+            reviews_dir,
+        )
+        check(
+            "selftest#slug_case/derivation_refusal_check_review_name",
+            not ok and reason is not None
+            and "2026-10-06-Foo_bar.md" in reason
+            and "Traceback" not in reason,
+            f"ok={ok} reason={reason}",
+        )
+    finally:
+        os.chdir(prev_cwd)
+        # Leave no facts block behind: the CLI family creates .ai-playbook
+        # fresh (plain mkdir, no exist_ok).
+        facts_md = facts_dir / "facts.md"
+        if facts_md.exists():
+            facts_md.unlink()
+        if facts_dir.is_dir() and not any(facts_dir.iterdir()):
+            facts_dir.rmdir()
+
+    # lowercase_identity_noop: for an all-lowercase plan the canonical
+    # artifact slug equals the feature slug byte for byte.
+    plain = Path(f"{story_date}-fixture-feature.md")
+    check(
+        "selftest#slug_case/lowercase_identity_noop",
+        artifact_slug(plain) == feature_slug(plain) == "fixture-feature",
+        f"artifact={artifact_slug(plain)!r} feature={feature_slug(plain)!r}",
     )
 
 
@@ -5999,6 +8020,18 @@ def _selftest_sweep(
 def run_selftest() -> int:
     """Selftest dispatcher: fixture families run in a TEMP tree, never
     the live repo; every family reports through the shared ``check``."""
+    global _selftest_telemetry_suppressed
+
+    _prior = _selftest_telemetry_suppressed
+    _selftest_telemetry_suppressed = True
+    try:
+        return _run_selftest_families()
+    finally:
+        _selftest_telemetry_suppressed = _prior
+
+
+def _run_selftest_families() -> int:
+    """The run_selftest families, with telemetry already suppressed."""
     import tempfile
 
     failures = 0
@@ -6028,8 +8061,12 @@ def run_selftest() -> int:
         _selftest_plan_ownership(root, plans_dir, reviews_dir, check)
         _selftest_scope_classification(plans_dir, reviews_dir, check)
         _selftest_pre_round(root, plans_dir, reviews_dir, check)
+        _selftest_anchors_block(root, plans_dir, reviews_dir, check)
+        _selftest_anchors_single_home(check)
         _selftest_accepted_state(plans_dir, reviews_dir, check)
+        _selftest_slug_case(root, plans_dir, reviews_dir, check)
         _selftest_cli(root, plans_dir, reviews_dir, check)
+        _selftest_corrections_gate(check)
         _selftest_sweep(root, plans_dir, reviews_dir, check)
 
     print()

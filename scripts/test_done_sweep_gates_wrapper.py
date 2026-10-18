@@ -52,6 +52,21 @@ def wrapper_repo(tmp_path, monkeypatch):
     (root / "README.md").write_text("fixture repo\n", encoding="utf-8")
     git(root, "add", ".gitignore", "README.md")
     git(root, "commit", "-m", "init", "-q")
+    scripts_dir = root / "scripts"
+    scripts_dir.mkdir()
+    # Landing-roster validator stubs: the flip made the landing run carry the
+    # em-dash, instruction-size, and description-length gates; a stub in the
+    # fixture repo's repo-local scripts/ arm keeps those gates deterministic
+    # passes here (the deployment-gap refusals have their own lib-suite arms).
+    (scripts_dir / "check-no-em-dash.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+    )
+    (scripts_dir / "check-instruction-size.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+    )
+    (scripts_dir / "check_skill_description_length.py").write_text(
+        "#!/usr/bin/env python3\nprint('stub ok')\n", encoding="utf-8"
+    )
     facts_dir = root / ".ai-playbook"
     facts_dir.mkdir()
     (facts_dir / "facts.md").write_text(
@@ -59,7 +74,7 @@ def wrapper_repo(tmp_path, monkeypatch):
         'plans_dir = "docs/history/plans/"\n'
         'plans_completed_dir = "docs/history/plans/completed/"\n'
         'backlog_dir = "docs/history/backlog/"\n'
-        'reviews_dir = "docs/reviews/"\n'
+        'reviews_dir = ".ai-playbook/reviews/"\n'
         'tmp_dir = "docs/tmp/"\n'
         "```\n",
         encoding="utf-8",
@@ -179,28 +194,35 @@ def _stub_gates(monkeypatch, gate_overrides: dict) -> None:
 
 
 def test_clean_run_emits_outcome_pass(wrapper_repo):
-    """[class: REPOSITORY_TEST] A clean pre-docs run through the real wrapper
+    """[class: REPOSITORY_TEST] A clean landing run through the real wrapper
     exits 0 and ends stdout with exactly one final `OUTCOME: pass` line, the
     evidence lines (JSON report plus summary) preceding it."""
-    proc = sh([str(WRAPPER), "pre-docs"], wrapper_repo)
+    proc = sh([str(WRAPPER), "landing"], wrapper_repo)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _outcome_rows(proc.stdout) == ["OUTCOME: pass"]
     assert proc.stdout.rstrip().endswith("OUTCOME: pass")
 
 
-def test_modeled_violation_emits_outcome_fail(wrapper_repo):
-    """[class: REPOSITORY_TEST] A gate reporting a modeled violation (the
+def test_modeled_fail_is_advisory_emits_outcome_pass(wrapper_repo):
+    """[class: REPOSITORY_TEST] A gate reporting a modeled ready=no (the
     plan-readiness stub validator reporting `OUTCOME: fail` for a
-    deliverable plan) makes the run exit 1 and end stdout with exactly one
-    final `OUTCOME: fail` line naming the offending plan."""
+    deliverable plan) is advisory: the run exits 0 and ends stdout with
+    exactly one final `OUTCOME: pass` line while the report names the
+    candidate and its first failure, and the candidate's deliverable line
+    is retired from the queue."""
     _write_readiness_validator(wrapper_repo, STUB_VALIDATOR_FAIL)
     plan_rel = "docs/history/plans/2026-10-03-rejected-plan.md"
     _write_deliverable_plan(wrapper_repo, plan_rel)
-    proc = sh([str(WRAPPER), "pre-docs"], wrapper_repo)
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert _outcome_rows(proc.stdout) == ["OUTCOME: fail"]
-    assert proc.stdout.rstrip().endswith("OUTCOME: fail")
+    proc = sh([str(WRAPPER), "landing"], wrapper_repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _outcome_rows(proc.stdout) == ["OUTCOME: pass"]
+    assert proc.stdout.rstrip().endswith("OUTCOME: pass")
     assert "rejected-plan" in proc.stdout
+    assert "readiness FAILED: stub rejection" in proc.stdout
+    deliverables = (
+        wrapper_repo / "docs" / "tmp" / "done-session" / "plan-deliverables.txt"
+    )
+    assert deliverables.read_text(encoding="utf-8").strip() == ""
 
 
 def test_raising_gate_helper_is_indeterminate(wrapper_repo, monkeypatch, capsys):
@@ -215,7 +237,7 @@ def test_raising_gate_helper_is_indeterminate(wrapper_repo, monkeypatch, capsys)
 
     _stub_gates(monkeypatch, {"doc-registry": raising})
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(wrapper_repo))
-    code = lib.main(["pre-docs"])
+    code = lib.main(["landing"])
     out = capsys.readouterr().out
     assert code == 2, out
     assert _outcome_rows(out) == ["OUTCOME: indeterminate"]
@@ -235,7 +257,7 @@ def test_environment_failure_is_tool_error(wrapper_repo, tmp_path):
     (lone / "done_sweep_gates.sh").write_text(
         WRAPPER.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    proc = sh(["bash", str(lone / "done_sweep_gates.sh"), "pre-docs"], wrapper_repo)
+    proc = sh(["bash", str(lone / "done_sweep_gates.sh"), "landing"], wrapper_repo)
     assert proc.returncode == 3, proc.stdout + proc.stderr
     assert _outcome_rows(proc.stdout) == ["OUTCOME: tool_error"]
 
@@ -257,7 +279,7 @@ def test_crashing_child_without_outcome_line_is_tool_error(wrapper_repo):
     _write_readiness_validator(wrapper_repo, STUB_VALIDATOR_CRASH)
     plan_rel = "docs/history/plans/2026-10-03-crashy-plan.md"
     _write_deliverable_plan(wrapper_repo, plan_rel)
-    proc = sh([str(WRAPPER), "pre-docs"], wrapper_repo)
+    proc = sh([str(WRAPPER), "landing"], wrapper_repo)
     assert proc.returncode == 3, proc.stdout + proc.stderr
     assert _outcome_rows(proc.stdout) == ["OUTCOME: tool_error"]
     assert proc.stdout.rstrip().endswith("OUTCOME: tool_error")
@@ -273,7 +295,7 @@ def test_child_reporting_indeterminate_is_indeterminate(wrapper_repo):
     _write_readiness_validator(wrapper_repo, STUB_VALIDATOR_INDETERMINATE)
     plan_rel = "docs/history/plans/2026-10-03-uncertain-plan.md"
     _write_deliverable_plan(wrapper_repo, plan_rel)
-    proc = sh([str(WRAPPER), "pre-docs"], wrapper_repo)
+    proc = sh([str(WRAPPER), "landing"], wrapper_repo)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert _outcome_rows(proc.stdout) == ["OUTCOME: indeterminate"]
     assert proc.stdout.rstrip().endswith("OUTCOME: indeterminate")
@@ -296,7 +318,7 @@ def test_indeterminate_dominates_fail_in_aggregation(
 
     _stub_gates(monkeypatch, {"plan-readiness": failing, "doc-registry": raising})
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(wrapper_repo))
-    code = lib.main(["pre-docs"])
+    code = lib.main(["landing"])
     out = capsys.readouterr().out
     assert code == 2, out
     assert _outcome_rows(out) == ["OUTCOME: indeterminate"]

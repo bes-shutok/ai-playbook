@@ -3,15 +3,23 @@
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 pass (soft mode may
 print warnings inside the pass), exit 1 fail (an invalid record in --hard
-mode), exit 2 indeterminate (not modeled here: the inputs are staging
-markdown bytes that are readable or not, and a schema-violating record is
-the modeled violation this validator exists to report), exit 3 tool error
-(argparse usage violations overridden from argparse's exit 2, an unreadable
-or missing input file, or an empty source-flag value). Every non-metadata
-run ends with exactly one final `OUTCOME:` line on stdout after the
-human-readable evidence; `--help` and `--selftest` are metadata exits with
-no `OUTCOME:` line. Declared placement deviation: a `--json` run carries the
-outcome as the JSON `outcome` field and emits no stdout `OUTCOME:` line.
+mode), exit 2 indeterminate (only on the corrections-graded path: a declared
+corrections record or an authoritative freshness check with repository
+context is verified inside the certified artifact's repository, and an
+unresolvable anchor or a git plumbing failure over resolved inputs names
+where and classifies indeterminate), exit 3 tool error (argparse usage
+violations overridden from argparse's exit 2, an unreadable or missing input
+file, or an empty source-flag value). The final OUTCOME label and the JSON
+`outcome` field always carry the validation verdict: a soft plain run (no
+--hard, no --preflight) over a findings-bearing record ends OUTCOME: fail at
+exit 0, because a soft run reports and never gates; a caller that gates on a
+result must invoke --hard (the report-only reading rule in
+scripts/OUTCOME_CONTRACT.md; preflight keeps its inventory posture where
+findings never move its exit or its label). Every non-metadata run ends with
+exactly one final `OUTCOME:` line on stdout after the human-readable
+evidence; `--help` and `--selftest` are metadata exits with no `OUTCOME:`
+line. Declared placement deviation: a `--json` run carries the outcome as
+the JSON `outcome` field and emits no stdout `OUTCOME:` line.
 Library surfaces sit outside this CLI contract and keep their function-level
 behavior: `validate_staging_file`, the `is_staging_review_path` scope helper
 consumed by the done-sweep lib, and the module imports in
@@ -29,9 +37,17 @@ import json
 import posixpath
 import re
 import sys
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from review_plan_identity import (
+    identity_token as plan_identity_token,
+    normalize_plan_path,
+    record_identity,
+    repository_root,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -39,6 +55,35 @@ try:
     import facts_paths
 except ImportError:  # pragma: no cover
     facts_paths = None  # type: ignore
+
+# Invocation telemetry (the fail-open wall-time writer, plan
+# 2026-10-14-script-runtime-cost-telemetry): a deployed copy without the
+# sibling keeps the full contract byte-identical, appending no line and
+# printing nothing on either channel.
+try:
+    import invocation_telemetry
+except Exception:  # pragma: no cover - a corrupt sibling must fail open too
+    invocation_telemetry = None  # type: ignore
+
+# Metadata-exit suppression (the invocation-telemetry plan): --selftest is a
+# metadata exit, not a measured lane, and its fixture families call the wrapped
+# ``main()`` in-process dozens of times; those calls must leave no telemetry
+# footprint (no line appended). Subprocess invocations of the script stay
+# measured as designed.
+_selftest_telemetry_suppressed = False
+
+# Finding-record calibration vocabulary (machinery script refactor program,
+# Task 4): the closed enums and the per-finding calibration checks live in
+# the sibling module; this from-import keeps the constants resolvable as
+# validator module attributes (scripts/test_review_record_selection.py reads
+# vrs.VALID_* in its vocabulary-equality arms) and the sibling never imports
+# this module, so the direction stays one-way.
+from review_staging_calibration import (
+    VALID_BLAST_RADIUS,
+    VALID_CONFIDENCE,
+    VALID_REACHABILITY,
+    validate_finding_calibration,
+)
 
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
 # argparse override. A usage violation exits 3 with a final `OUTCOME:
@@ -75,6 +120,17 @@ STAGING_NAME_RE = re.compile(
 )
 ROUND_SUFFIX_RE = re.compile(r"-r(\d+)\.md$", re.IGNORECASE)
 BACKUP_NAME_RE = re.compile(r"\.backup-\d{8}T\d{6}(?:-\d+)?\.md$", re.IGNORECASE)
+# The preserved-orphan infix. Single source: ORPHAN_INFIX in
+# scripts/review_record_selection.py (the module that mints these names
+# during recover-orphan); mirrored here because the import direction runs
+# selector -> validator, so the validator cannot import it back. A name
+# carrying the infix is a preserved orphan, a partial record that must
+# stay discovery-invisible: STAGING_NAME_RE's optional ``-r<N>`` tail
+# would otherwise match a preserved name on the plan-review, branch-
+# review, rfc-review, confluence-review, PR-N, and bare-family shapes,
+# and newest_staging_for_branch would hand the partial record to
+# branch-discovery consumers. The staging-path predicate refuses it.
+ORPHAN_INFIX = ".orphan-"
 MEDIUM_PLUS_VERDICT_RE = re.compile(
     r"(\d+)\s+Medium\+?\s+findings(?:\s+accepted\s+for\s+fix)?",
     re.IGNORECASE,
@@ -201,6 +257,36 @@ SOFTEN_WATCHLIST_PARITY_MIN_DATE = "2026-10-03"
 # constant with the same rationale-comment style and re-pin the constant
 # mention in the same commit.
 RECORD_KIND_SIDECAR_MIN_DATE = "2026-09-20"
+# Usage mint presence gate (review round record lifecycle gaps plan,
+# Task 2). A record_kind-canonical record whose ``date`` (the staging
+# filename's leading ``YYYY-MM-DD`` date, falling back to the sidecar
+# ``date`` field) is on or after USAGE_MINT_PAIR_MIN_DATE must carry the
+# well-formed mint pair (the Metadata lines ``review-run-id`` and
+# ``review-started-at-ms``) or the exact ``usage-attribution:
+# bare-capture-fallback`` Metadata marker; worker-evidence,
+# reconciliation, and legacy-import records stay outside the gate, and
+# earlier records are accepted-legacy and exempt, mirroring
+# EXTENDED_SIDECAR_MIN_DATE and RECORD_KIND_SIDECAR_MIN_DATE. The
+# constant is the expected day after the implementing commit lands
+# (implementation lands 2026-10-05), so same-day records stay exempt.
+# Fence-window recovery: if execution pauses across the constant date
+# between the producer and gate commits, bump this constant with the
+# same rationale-comment style and re-pin the constant mention in the
+# same commit.
+USAGE_MINT_PAIR_MIN_DATE = "2026-10-06"
+SELF_HEAL_STATE_MIN_DATE = "2026-10-09"
+# The mint pair's field grammars mirror the capture producer's identity
+# validation (scripts/review_usage_capture.py: a 32-character lowercase
+# hex review_run_id and a positive integer minted_at_ms), so the record
+# gate and the producer can never disagree about shape. ``\Z`` (not
+# ``$``) so a trailing newline cannot slip through, mirroring V1_DATE_RE.
+USAGE_MINT_RUN_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
+USAGE_MINT_STARTED_AT_RE = re.compile(r"[0-9]+\Z")
+# The one exact fallback marker spelling (review round record lifecycle
+# gaps plan, Task 2): the bare-capture fallback is already a named
+# documented mode, and a presence gate needs one exact spelling to be
+# mechanical.
+USAGE_MINT_FALLBACK_MARKER = "usage-attribution: bare-capture-fallback"
 # The closed record-kind enum (review records contract plan, Task 1).
 # ``canonical`` keeps every current gate and is the only kind eligible for a
 # clean verdict; ``reconciliation`` requires the six output-contract labels
@@ -331,59 +417,6 @@ ATTEMPT_RETRYABLE_CLASSES = frozenset(
         "worker-crash",
     }
 )
-# Address fan-out accounting (execute-plan review-fix pipeline efficiency
-# plan, Task 4). ``extensions.address_fanout`` is a version-1-only sidecar
-# extension owned by the review-staging ``Address fan-out accounting``
-# subsection: the parent records per-finding attribution for a fanned
-# address round. The reason codes are the closed address-fan-out enum, with
-# the pinned combination rules (``completed`` required for a successful
-# attempt, ``worker_error`` / ``worker_timeout`` required for the
-# corresponding worker failure, the remaining codes reserved for blocked or
-# cancelled outcomes). A versionless (legacy) record carrying the extension
-# fails closed at the version boundary in
-# ``validate_address_fanout_contract``; current-v1 records get the full
-# shape and conservation gate there.
-ADDRESS_FANOUT_KEY = "address_fanout"
-ADDRESS_FANOUT_KEYS = frozenset({"round", "finding_files", "workers"})
-ADDRESS_FANOUT_REASON_CODES = frozenset(
-    {
-        "completed",
-        "worker_error",
-        "worker_timeout",
-        "cancellation_unverified",
-        "ambiguous_patch",
-        "scope_violation",
-        "stale_attempt",
-        "parent_merge_conflict",
-        "superseded",
-    }
-)
-ADDRESS_FANOUT_SUCCESS_REASON = "completed"
-ADDRESS_FANOUT_WORKER_FAILURE_REASONS = frozenset(
-    {"worker_error", "worker_timeout"}
-)
-ADDRESS_FANOUT_ATTEMPT_STATUSES = frozenset(
-    {"success", "blocked", "cancelled"}
-)
-ADDRESS_FANOUT_WORKER_STATUSES = frozenset({"complete", "blocked"})
-ADDRESS_FANOUT_FINDING_FILES_KEYS = frozenset({"id", "files"})
-ADDRESS_FANOUT_WORKER_KEYS = frozenset(
-    {
-        "id",
-        "findings",
-        "files",
-        "attempts",
-        "status",
-        "fixed",
-        "dropped",
-        "deferred",
-        "pending",
-        "log",
-    }
-)
-ADDRESS_FANOUT_ATTEMPT_KEYS = frozenset(
-    {"id", "status", "reason_code", "log"}
-)
 # Cap-closure terminal shape (certification machinery contract-collisions
 # plan, Task 1). ``extensions.cap_closure`` is a version-1-only sidecar
 # extension declared by the final round of a capped review loop: it records
@@ -403,6 +436,16 @@ CAP_CLOSURE_MIN_ROUND = 3
 CAP_CLOSURE_KEYS = frozenset(
     {"plan_section", "round", "residuals", "pre_fold_digest"}
 )
+# Corrections grading (review-cert-graded-binding plan, Task 5): the
+# declared-when-present extensions keys. ``corrections`` carries the
+# certification-correction rows (shape owned by scripts/corrections_record.py,
+# produced by the classifier CLIs, never hand-authored); ``certified_range``
+# mirrors the code family's certified range and is validated against the
+# certification seal. Both are version-1-only extensions like
+# cap_closure, fail-closed at the version boundary.
+CORRECTIONS_EXTENSION_KEY = "corrections"
+CERTIFIED_RANGE_EXTENSION_KEY = "certified_range"
+_CERTIFIED_RANGE_KEYS = frozenset({"base", "head"})
 # r4 F1: the no-fix marker vocabulary. Producers spell the absent token as
 # ``none`` (the Markdown template spelling), ``null`` (the JSON sidecar
 # spelling copied into the Markdown line), or ``n/a``; all three count as
@@ -514,8 +557,8 @@ CLEAN_VERDICT_RE = re.compile(
 # CAP_CLOSURE_SECTION_HEADING constant and the malformed-declaration
 # rejection lives in the new validate_cap_closure_contract wiring, so the
 # shared-rule semantics are pair-coupled and a partial deployment must
-# fail with the handshake's named message (precedent: the address-fanout
-# change bumped the pair 1 to 2 in 7baa8ce1).
+# fail with the handshake's named message (the cap-closure change bumped
+# the pair from 2 to 3 in 7baa8ce1).
 COMPAT_VERSION = 3
 SUPPORTED_SIDECAR_SCHEMA_VERSIONS = (1,)
 # Single declaration of the conforming verdict vocabulary (version-1 sidecar
@@ -544,9 +587,6 @@ LEGACY_DEFAULT_PANEL_AGENTS = (
 )
 SEVERITY_ORDER = ("Critical", "High", "Medium", "Low")
 VALID_SOURCE_KINDS = frozenset({"plan", "rfc", "document", "code"})
-VALID_BLAST_RADIUS = frozenset({"global", "multi-service", "single-service", "local"})
-VALID_REACHABILITY = frozenset({"expected", "common", "plausible-edge", "theoretical"})
-VALID_CONFIDENCE = frozenset({"verified", "strong-evidence", "hypothesis"})
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 # Finding budget per worker (severity-calibration.md "Finding budget"):
 # all Critical + all blocking expand; up to BUDGET_NONBLOCKING_HIGH_MED
@@ -603,6 +643,12 @@ class ValidationResult:
     warnings: list[str] = field(default_factory=list)
     medium_plus_expected: int = 0
     finding_sections: int = 0
+    # Corrections grading (review-cert-graded-binding plan, Task 5): set
+    # when the graded stale arm hits an unresolvable anchor or a git
+    # plumbing failure over resolved inputs; the CLI maps it to the
+    # indeterminate outcome naming where, and it never rides the errors
+    # list (indeterminate is not a findings-class failure).
+    indeterminate_reason: str | None = None
 
     def add_error(self, message: str) -> None:
         self.errors.append(message)
@@ -627,7 +673,7 @@ def resolve_reviews_dir(start_dir: Path) -> Path:
         resolved = facts_paths.resolve_toml_key(start_dir, "reviews_dir")
         if resolved is not None:
             return resolved
-    return start_dir / "docs" / "history" / "reviews"
+    return start_dir / ".ai-playbook" / "reviews"
 
 
 def compute_source_digest(source_kind: str, content_or_diff_bytes: bytes) -> str:
@@ -650,6 +696,11 @@ def is_staging_review_path(path: Path) -> bool:
     if not name.endswith(".md"):
         return False
     if BACKUP_NAME_RE.search(name):
+        return False
+    # A preserved orphan (the recover-orphan rename) is a partial record,
+    # never an active staging record; refuse it before the staging shapes
+    # can match (ORPHAN_INFIX above).
+    if ORPHAN_INFIX in name:
         return False
     if STAGING_NAME_RE.match(name):
         return True
@@ -1554,6 +1605,18 @@ def _date_fence(
     }
 
 
+def _calendar_valid_record_date(value: object) -> bool:
+    if not isinstance(value, str) or V1_DATE_RE.fullmatch(value) is None:
+        return False
+    from datetime import date as _date
+
+    try:
+        _date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _freshness_fence(
     staging_name: str | None, sidecar_date: object
 ) -> dict[str, str | None]:
@@ -1833,6 +1896,342 @@ def validate_record_kind_metadata(
         )
 
 
+def _usage_mint_fence(
+    staging_name: str | None, sidecar_date: object
+) -> dict[str, str | None]:
+    """Thin wrapper: the USAGE_MINT_PAIR_MIN_DATE fence classification,
+    delegating to the shared ``_date_fence`` owner with the mint minimum
+    date.
+    """
+    return _date_fence(staging_name, sidecar_date, USAGE_MINT_PAIR_MIN_DATE)
+
+
+def validate_self_heal_attempt_state(
+    staging_path: Path,
+    content: str,
+    result: ValidationResult,
+    *,
+    sidecar_payload: object = None,
+) -> None:
+    """Validate run-wide self-heal state using the canonical record-date fence."""
+    predecessor_index = {}
+    for candidate in staging_path.parent.iterdir():
+        name_match = re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}-(.+?)(?:-r([1-9][0-9]*))?\.md",
+            candidate.name,
+        )
+        if name_match:
+            key = (name_match.group(1), int(name_match.group(2) or 1))
+            predecessor_index.setdefault(key, []).append(candidate)
+    pending = [(staging_path, content, sidecar_payload, result)]
+    while pending:
+        staging_path, content, sidecar_payload, record_result = pending.pop()
+        _validate_self_heal_record(
+            staging_path, content, record_result, sidecar_payload, pending, predecessor_index
+        )
+        if record_result is not result:
+            result.errors.extend(record_result.errors)
+
+
+def _validate_self_heal_record(
+    staging_path: Path,
+    content: str,
+    result: ValidationResult,
+    sidecar_payload: object,
+    pending: list | None,
+    predecessor_index: dict,
+) -> None:
+    payload = sidecar_payload if isinstance(sidecar_payload, dict) else {}
+    if payload.get("record_kind") != "canonical":
+        return
+    fence = _date_fence(staging_path.name, payload.get("date"), SELF_HEAL_STATE_MIN_DATE)
+    if fence["name_class"] == "pre-fence" and fence["sidecar_class"] == "pre-fence":
+        return
+    if fence["name_class"] == "undated" or fence["sidecar_class"] == "undated":
+        if "post-fence" in {fence["name_class"], fence["sidecar_class"]}:
+            result.add_error("post-fence self-heal state requires matching dated filename and sidecar date")
+        return
+    if fence["name_class"] != "post-fence" or fence["sidecar_class"] != "post-fence":
+        result.add_error("self-heal state filename and sidecar date must use the same fence class")
+        return
+    if not _calendar_valid_record_date(fence["name_date"]) or not _calendar_valid_record_date(payload.get("date")):
+        result.add_error("post-fence self-heal state requires calendar-valid filename and sidecar dates")
+        return
+
+    meta = _metadata_section(content) or ""
+    run_ids = re.findall(r"^-[ \t]*review-run-id[ \t]*:[ \t]*([0-9a-f]{32})[ \t]*$", meta, re.MULTILINE)
+    if len(run_ids) != 1:
+        result.add_error("post-fence self-heal state requires a minted review-run-id")
+        return
+    current_review_id = run_ids[0]
+    extensions = payload.get("extensions")
+    convergence = extensions.get("convergence") if isinstance(extensions, dict) else None
+    state = convergence.get("self_heal_attempt") if isinstance(convergence, dict) else None
+    if not isinstance(state, dict):
+        result.add_error("post-fence canonical record requires extensions.convergence.self_heal_attempt")
+        return
+
+    status = state.get("status")
+    run_id = state.get("run_id")
+    errors = []
+    if not isinstance(status, str) or status not in {"unused", "consumed", "unknown"}:
+        errors.append("status must be 'unused', 'consumed', or 'unknown'")
+    if not isinstance(run_id, str) or not USAGE_MINT_RUN_ID_RE.fullmatch(run_id):
+        errors.append("run_id must be a 32-character lowercase hexadecimal id")
+    allowed = {"status", "run_id"}
+    if status == "consumed":
+        allowed |= {"round", "source_digest"}
+        consumed_match = re.fullmatch(r"r([1-9][0-9]*)", str(state.get("round", "")))
+        if not consumed_match:
+            errors.append("consumed round must match rN")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(state.get("source_digest", ""))):
+            errors.append("consumed source_digest must be a lowercase SHA-256")
+    if set(state) != allowed:
+        errors.append("state fields do not match the selected status")
+    if errors:
+        result.add_error("extensions.convergence.self_heal_attempt " + "; ".join(errors))
+        return
+
+    match = re.search(r"-r([1-9][0-9]*)\.md$", staging_path.name)
+    declared_round = payload.get("round")
+    if isinstance(declared_round, bool):
+        normalized_round = None
+    elif isinstance(declared_round, int) and declared_round > 0:
+        normalized_round = declared_round
+    elif isinstance(declared_round, str):
+        declared_match = re.fullmatch(r"r([1-9][0-9]*)", declared_round)
+        normalized_round = int(declared_match.group(1)) if declared_match else None
+    else:
+        normalized_round = None
+    if match:
+        number = int(match.group(1))
+        if normalized_round != number:
+            result.add_error("self-heal state sidecar round must match the staging filename round")
+            return
+    else:
+        if normalized_round != 1:
+            result.add_error("an unnumbered self-heal record must declare round 1")
+            return
+        number = 1
+    source_digest = payload.get("source_digest")
+    if number == 1:
+        if status == "unknown" or run_id != current_review_id:
+            result.add_error("r1 must start a new run with unused or consumed state bound to its review-run-id")
+        if status == "consumed" and (state.get("round") != "r1" or state.get("source_digest") != source_digest):
+            result.add_error("r1 consumption must bind to r1 and its sidecar source_digest")
+        return
+    if pending is None:
+        return
+
+    dated_stem = re.sub(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-", "", staging_path.name)
+    chain_stem = re.sub(r"-r[1-9][0-9]*\.md$", "", dated_stem)
+    prior_number = number - 1
+    prior_candidates = sorted(predecessor_index.get((chain_stem, prior_number), []))
+    if len(prior_candidates) > 1:
+        result.add_error("self-heal state has ambiguous predecessor records for the prior round")
+        return
+    prior_path = prior_candidates[0] if prior_candidates else staging_path.with_name(f"{chain_stem}-r{prior_number}.md")
+    prior_sidecar = stats_sidecar_path(prior_path)
+    prior_state = None
+    prior_valid = False
+    prior_post_fence = False
+    if prior_path.is_file() and prior_sidecar.is_file():
+        try:
+            prior_md = prior_path.read_text(encoding="utf-8")
+            prior_payload = json.loads(prior_sidecar.read_text(encoding="utf-8"))
+            prior_fence = _date_fence(
+                prior_path.name,
+                prior_payload.get("date") if isinstance(prior_payload, dict) else None,
+                SELF_HEAL_STATE_MIN_DATE,
+            )
+            prior_post_fence = (
+                isinstance(prior_payload, dict)
+                and prior_payload.get("record_kind") == "canonical"
+                and _calendar_valid_record_date(prior_fence["name_date"])
+                and _calendar_valid_record_date(prior_payload.get("date"))
+                and prior_fence["name_class"] == "post-fence"
+                and prior_fence["sidecar_class"] == "post-fence"
+            )
+            prior_ext = prior_payload.get("extensions", {}) if isinstance(prior_payload, dict) else {}
+            prior_conv = prior_ext.get("convergence", {}) if isinstance(prior_ext, dict) else {}
+            prior_state = prior_conv.get("self_heal_attempt") if isinstance(prior_conv, dict) else None
+            if prior_post_fence:
+                prior_result = ValidationResult(prior_path)
+                if not isinstance(prior_payload.get("source_digest"), str) or not re.fullmatch(r"[0-9a-f]{64}", prior_payload["source_digest"]):
+                    prior_result.add_error("predecessor sidecar source_digest must be a lowercase SHA-256")
+                _validate_self_heal_record(
+                    prior_path, prior_md, prior_result, prior_payload, None, predecessor_index
+                )
+                validate_usage_mint_gate(
+                    prior_path.name, prior_md, prior_result,
+                    sidecar_payload=prior_payload,
+                )
+                prior_valid = prior_result.ok
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            prior_valid = False
+
+    if not prior_valid or not prior_post_fence:
+        if status != "unknown" or run_id != current_review_id:
+            result.add_error("missing, malformed, or legacy prior round requires unknown state bound to this review-run-id")
+        return
+    if prior_state["run_id"] != run_id:
+        result.add_error("run_id cannot change after r1 in the same artifact chain")
+        return
+    if prior_state["status"] in {"consumed", "unknown"}:
+        if state != prior_state:
+            result.add_error("consumed or unknown self-heal state must carry forward unchanged within a run")
+        if pending is not None and prior_number > 1:
+            pending.append((prior_path, prior_md, prior_payload, prior_result))
+        return
+    if status == "unknown":
+        result.add_error("unknown state is allowed only when prior round evidence is unavailable")
+    elif status == "consumed" and (state.get("round") != f"r{number}" or state.get("source_digest") != source_digest):
+        result.add_error("unused-to-consumed transition must bind to this round and its sidecar source_digest")
+    if pending is not None and prior_number > 1:
+        pending.append((prior_path, prior_md, prior_payload, prior_result))
+
+def validate_usage_mint_gate(
+    staging_name: str,
+    content: str,
+    result: ValidationResult,
+    *,
+    sidecar_payload: object = None,
+) -> None:
+    """Mint-pair presence and format gate (review round record lifecycle
+    gaps plan, Task 2).
+
+    A record whose sidecar declares ``record_kind: canonical`` and whose
+    staging filename's leading ``YYYY-MM-DD`` date is on or after
+    ``USAGE_MINT_PAIR_MIN_DATE`` must carry, in the Metadata section,
+    either the well-formed mint pair (``review-run-id`` matching the
+    capture producer's 32-character lowercase hex grammar and
+    ``review-started-at-ms`` a positive integer) or the exact
+    ``usage-attribution: bare-capture-fallback`` marker; a record with the
+    marker and no pair validates as the documented non-attributable
+    fallback. Non-canonical kinds and records dated earlier stay outside
+    the gate. The gate is presence-and-format only: the validator sees
+    only the record, so the verbatim-carry duty stays a staging-skill
+    obligation enforced at the launch step. Each failure names the
+    malformed field or, when neither remedy is present, both remedy
+    spellings.
+    """
+    payload = sidecar_payload if isinstance(sidecar_payload, dict) else {}
+    if payload.get("record_kind") != "canonical":
+        return
+    fence = _usage_mint_fence(staging_name, payload.get("date"))
+    if fence["name_class"] == "pre-fence":
+        return
+    if fence["name_class"] == "undated":
+        if fence["sidecar_class"] == "post-fence":
+            result.add_error(
+                f"staging filename {staging_name!r} has no leading "
+                "YYYY-MM-DD date while the stats sidecar is dated "
+                f"{payload.get('date')!r} (on or after "
+                "USAGE_MINT_PAIR_MIN_DATE "
+                f"{USAGE_MINT_PAIR_MIN_DATE}); post-fence records must use "
+                "the conventional dated staging filename"
+            )
+        return
+    meta = _metadata_section(content)
+    meta_text = meta if meta is not None else ""
+    run_id_values = re.findall(
+        r"^-[ \t]*review-run-id[ \t]*:[ \t]*(.*)$",
+        meta_text,
+        re.MULTILINE,
+    )
+    started_values = re.findall(
+        r"^-[ \t]*review-started-at-ms[ \t]*:[ \t]*(.*)$",
+        meta_text,
+        re.MULTILINE,
+    )
+    marker_present = (
+        re.search(
+            r"^-[ \t]*usage-attribution[ \t]*:[ \t]*bare-capture-fallback[ \t]*$",
+            meta_text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+    if marker_present and (run_id_values or started_values):
+        result.add_error(
+            "usage-attribution fallback marker cannot coexist with either mint-pair field"
+        )
+        return
+    if not run_id_values and not started_values:
+        if marker_present:
+            # The documented bare-capture fallback: the round genuinely
+            # lost its mint and says so; the record stays
+            # non-attributable and validates.
+            return
+        result.add_error(
+            f"staging filename dated {fence['name_date']} (on or after "
+            "USAGE_MINT_PAIR_MIN_DATE "
+            f"{USAGE_MINT_PAIR_MIN_DATE}) carries neither the minted pair "
+            "(Metadata lines 'review-run-id: <32-char lowercase hex>' and "
+            "'review-started-at-ms: <positive integer>' taken verbatim "
+            "from review_usage_capture.py mint, run before workers launch "
+            "per the review-staging skill) nor the fallback marker "
+            "('usage-attribution: bare-capture-fallback', recorded only "
+            "when the mint is genuinely lost); a skipped mint must be "
+            "recorded, never left silent"
+        )
+        return
+    # A pair line is present, so the pair must be well-formed regardless
+    # of the marker: the marker names a round that lost its mint, which
+    # cannot also carry one.
+    if len(run_id_values) > 1:
+        result.add_error(
+            "duplicate 'review-run-id' Metadata label: "
+            f"{len(run_id_values)} matching lines; keep exactly one mint "
+            "pair per record"
+        )
+    elif run_id_values:
+        run_id = run_id_values[0].strip()
+        if USAGE_MINT_RUN_ID_RE.fullmatch(run_id) is None:
+            result.add_error(
+                "mint pair field 'review-run-id' is malformed: "
+                f"{run_id!r} does not match the capture producer's grammar "
+                "(a non-empty 32-character lowercase hex id); re-mint with "
+                "review_usage_capture.py mint, or record only the "
+                "'usage-attribution: bare-capture-fallback' marker when "
+                "the mint is genuinely lost"
+            )
+    else:
+        result.add_error(
+            "mint pair field 'review-run-id' is missing while "
+            "'review-started-at-ms' is present; carry both values "
+            "verbatim from review_usage_capture.py mint, or record only "
+            "the 'usage-attribution: bare-capture-fallback' marker"
+        )
+    if len(started_values) > 1:
+        result.add_error(
+            "duplicate 'review-started-at-ms' Metadata label: "
+            f"{len(started_values)} matching lines; keep exactly one mint "
+            "pair per record"
+        )
+    elif started_values:
+        started = started_values[0].strip()
+        if (
+            USAGE_MINT_STARTED_AT_RE.fullmatch(started) is None
+            or int(started) <= 0
+        ):
+            result.add_error(
+                "mint pair field 'review-started-at-ms' is malformed: "
+                f"{started!r} is not a positive integer (the mint "
+                "output's minted_at_ms); re-mint with "
+                "review_usage_capture.py mint, or record only the "
+                "'usage-attribution: bare-capture-fallback' marker when "
+                "the mint is genuinely lost"
+            )
+    else:
+        result.add_error(
+            "mint pair field 'review-started-at-ms' is missing while "
+            "'review-run-id' is present; carry both values verbatim from "
+            "review_usage_capture.py mint, or record only the "
+            "'usage-attribution: bare-capture-fallback' marker"
+        )
+
+
 def validate_supersession_links(
     path: Path, content: str, result: ValidationResult
 ) -> None:
@@ -1852,10 +2251,37 @@ def validate_supersession_links(
     on the prior record (r1 F7, the mirrored duplicate-label rule).
     Records without a ``Supersedes:`` line, including the prior records
     themselves, are never gated here.
+
+    Self-reference arm (review round record lifecycle gaps plan, Task 1):
+    the record's own ``Superseded by:`` value resolves against the
+    record's own directory, and a value resolving back to the record
+    itself refuses (the witnessed defect is the round copy that inherited
+    its prior's link). The arm runs regardless of a ``Supersedes:`` line
+    so a lone stale copy refuses too, and a correctly marked prior record
+    whose link resolves to a real successor never matches it.
     """
     meta = _metadata_section(content)
     if meta is None:
         return
+    own_back_refs = re.findall(
+        r"^-[ \t]*Superseded by[ \t]*:[ \t]*(\S.*?)[ \t]*$",
+        meta,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    for own_ref in own_back_refs:
+        recorded = own_ref.strip()
+        own_target = Path(recorded)
+        if not own_target.is_absolute():
+            own_target = path.parent / own_target
+        if own_target.resolve() == path.resolve():
+            result.add_error(
+                "Superseded by link resolves to the record itself: "
+                f"'Superseded by: {recorded}' names {path.name}; the line "
+                "is supersession-rounds-only and lives in the prior "
+                "record, so strip the inherited link from the round copy "
+                "before validation (only the selection helper "
+                "mark-superseded writes this line)"
+            )
     refs = re.findall(
         r"^-[ \t]*Supersedes[ \t]*:[ \t]*(\S.*?)[ \t]*$",
         meta,
@@ -1928,6 +2354,85 @@ def validate_supersession_links(
             f"{path.name} declares 'Supersedes: {ref}' but the prior "
             f"record {prior.name} is marked 'Superseded by: {recorded}'; "
             "the two links must name each other"
+        )
+
+
+def _orphan_recovery_link_error(value: str, reason: str) -> str:
+    """One grammar for the orphan-recovery link format refusals (Task 3)."""
+    return (
+        "Orphan recovery link is malformed: the value "
+        f"{value!r} {reason}; the link must be a repo-relative path under "
+        "the reviews directory (the selection helper recover-orphan "
+        "receipt prints the exact line to add)"
+    )
+
+
+def validate_orphan_recovery_link(
+    path: Path, content: str, result: ValidationResult
+) -> None:
+    """Orphan-recovery evidence link format gate (review round record
+    lifecycle gaps plan, Task 3).
+
+    Targeted and optional: Markdown Metadata keys stay ungated (only
+    targeted per-label gates exist; no Markdown allowlist is built, so
+    the historical corpus keeps validating unchanged), and this gate
+    arms only when the record carries an ``Orphan recovery:`` line. The
+    value must be a repo-relative path under the reviews directory: an
+    absolute value refuses, a value resolving outside the reviews
+    directory refuses, and a record outside any git repository refuses
+    because repo-relativeness cannot be verified there. The file's
+    existence is deliberately not checked: the gate is a format gate
+    over the evidence link, and the preserved orphan's presence is the
+    recovery operation's own audited state.
+    """
+    meta = _metadata_section(content)
+    if meta is None:
+        return
+    refs = re.findall(
+        r"^-[ \t]*Orphan recovery[ \t]*:[ \t]*(\S.*?)[ \t]*$",
+        meta,
+        re.MULTILINE,
+    )
+    if not refs:
+        return
+    if len(refs) > 1:
+        result.add_error(
+            "duplicate 'Orphan recovery:' Metadata label: "
+            f"{len(refs)} matching lines; keep exactly one recovery link "
+            "per record"
+        )
+        return
+    value = refs[0].strip()
+    if Path(value).is_absolute():
+        result.add_error(
+            _orphan_recovery_link_error(value, "is an absolute path")
+        )
+        return
+    cr_module = _sibling_module("corrections_record")
+    toplevel = (
+        cr_module.git_text(path.parent, "rev-parse", "--show-toplevel")
+        if cr_module is not None
+        else None
+    )
+    if not toplevel:
+        result.add_error(
+            _orphan_recovery_link_error(
+                value,
+                "cannot be verified because the record is not inside a "
+                "git repository",
+            )
+        )
+        return
+    repo_root = Path(toplevel.strip()).resolve()
+    reviews_dir = resolve_reviews_dir(repo_root)
+    resolved = (repo_root / value).resolve()
+    try:
+        resolved.relative_to(reviews_dir.resolve())
+    except ValueError:
+        result.add_error(
+            _orphan_recovery_link_error(
+                value, "escapes the reviews directory"
+            )
         )
 
 
@@ -3027,402 +3532,8 @@ def _is_normalized_repo_relative_path(value: object) -> bool:
     )
 
 
-def validate_address_fanout_contract(
-    payload: dict,
-    result: ValidationResult,
-    *,
-    schema_class: str,
-) -> None:
-    """The ``extensions.address_fanout`` shape and conservation gate
-    (execute-plan review-fix pipeline efficiency plan, Task 4).
-
-    ``address_fanout`` is legal ONLY on current-v1 records: a versionless
-    (legacy) record carrying the extension fails closed with a
-    version-boundary message and never reaches the shape gate. On a
-    current-v1 record the extension must be an object with ``round``,
-    ``finding_files``, and ``workers`` of the exact pinned types, complete
-    unique id sets, canonical repository-relative file paths, worker
-    file-set equality, one-or-two attempt rows per worker, the closed
-    status and reason-code enums with their valid combinations, a final
-    worker status, required log paths, non-negative integer counts summing
-    to the row's findings length, exact round equality (after string
-    normalization), and no finding id in more than one worker row. Every
-    violation names ``address_fanout``.
-
-    ``schema_class`` is the per-run classification threaded in from
-    ``_validate_stats_sidecar_gates`` (r6 F13:
-    ``classify_sidecar_schema`` runs exactly once per validation run).
-    """
-    if not isinstance(payload, dict):
-        return
-    extensions = payload.get("extensions")
-    if not isinstance(extensions, dict) or ADDRESS_FANOUT_KEY not in extensions:
-        return
-    fanout = extensions[ADDRESS_FANOUT_KEY]
-    if schema_class != "current-v1":
-        result.add_error(
-            "extensions.address_fanout is a version-1-only extension: a "
-            f"{schema_class} record carrying it fails closed at the version "
-            "boundary; versionless legacy sidecars reject address_fanout "
-            "and remain on the single-worker address path"
-        )
-        return
-    if not isinstance(fanout, dict):
-        result.add_error(
-            "extensions.address_fanout must be an object with 'round', "
-            f"'finding_files', and 'workers'; got {type(fanout).__name__}"
-        )
-        return
-    for key in fanout:
-        if key not in ADDRESS_FANOUT_KEYS:
-            result.add_error(
-                f"extensions.address_fanout rejects unknown key {key!r}"
-            )
-
-    def _non_empty_str(where: str, value: object) -> bool:
-        if isinstance(value, str) and value.strip():
-            return True
-        result.add_error(
-            f"extensions.address_fanout {where} must be a non-empty string; "
-            f"got {value!r}"
-        )
-        return False
-
-    # Round: required string, equal to the sidecar round after string
-    # normalization.
-    if "round" not in fanout:
-        result.add_error(
-            "extensions.address_fanout is missing required key 'round'"
-        )
-    elif _non_empty_str("'round'", fanout["round"]):
-        sidecar_round = payload.get("round")
-        fanout_round = fanout["round"]
-        if str(sidecar_round) != fanout_round:
-            result.add_error(
-                "extensions.address_fanout 'round' must equal the sidecar "
-                "round after string normalization (sidecar round "
-                f"{sidecar_round!r} vs extension round {fanout_round!r})"
-            )
-
-    # finding_files rows: {id, files} objects whose ids exist exactly once
-    # in the sidecar findings and whose files are normalized repo-relative
-    # paths.
-    finding_files = fanout.get("finding_files")
-    if finding_files is None:
-        result.add_error(
-            "extensions.address_fanout is missing required key "
-            "'finding_files'"
-        )
-        finding_files = []
-    elif not isinstance(finding_files, list):
-        result.add_error(
-            "extensions.address_fanout 'finding_files' must be a list of "
-            "{id, files} rows"
-        )
-        finding_files = []
-    sidecar_findings = payload.get("findings")
-    sidecar_finding_ids = {
-        row.get("id")
-        for row in sidecar_findings
-        if isinstance(row, dict)
-    } if isinstance(sidecar_findings, list) else set()
-    declared_finding_ids: set = set()
-    files_by_finding: dict = {}
-    for row in finding_files:
-        if not isinstance(row, dict):
-            result.add_error(
-                "extensions.address_fanout 'finding_files' rows must be "
-                "objects"
-            )
-            continue
-        for key in row:
-            if key not in ADDRESS_FANOUT_FINDING_FILES_KEYS:
-                result.add_error(
-                    "extensions.address_fanout 'finding_files' row rejects "
-                    f"unknown key {key!r}"
-                )
-        fid = row.get("id")
-        if isinstance(fid, bool) or not isinstance(fid, int):
-            result.add_error(
-                "extensions.address_fanout 'finding_files' row id must be "
-                f"an integer; got {fid!r}"
-            )
-        elif fid in declared_finding_ids:
-            result.add_error(
-                f"extensions.address_fanout 'finding_files' id {fid!r} "
-                "appears more than once; every finding_files id exists "
-                "exactly once in the sidecar findings"
-            )
-        else:
-            declared_finding_ids.add(fid)
-            if fid not in sidecar_finding_ids:
-                result.add_error(
-                    f"extensions.address_fanout 'finding_files' id {fid!r} "
-                    "does not exist in the sidecar findings"
-                )
-        files = row.get("files")
-        if not isinstance(files, list) or not files:
-            result.add_error(
-                f"extensions.address_fanout 'finding_files' row for id "
-                f"{fid!r} must carry a non-empty 'files' list"
-            )
-            files = []
-        file_set = set()
-        for file_path in files:
-            if _is_normalized_repo_relative_path(file_path):
-                file_set.add(file_path)
-            else:
-                result.add_error(
-                    "extensions.address_fanout file path "
-                    f"{file_path!r} is not a non-empty repository-relative "
-                    "normalized path"
-                )
-        if isinstance(fid, int) and not isinstance(fid, bool):
-            files_by_finding.setdefault(fid, set()).update(file_set)
-
-    # Worker rows: unique ids, per-worker finding assignment, file-set
-    # equality, one-or-two attempts, closed enums with valid combinations,
-    # final status, log paths, and per-row count conservation.
-    workers = fanout.get("workers")
-    if workers is None:
-        result.add_error(
-            "extensions.address_fanout is missing required key 'workers'"
-        )
-        workers = []
-    elif not isinstance(workers, list):
-        result.add_error(
-            "extensions.address_fanout 'workers' must be a list of worker "
-            "rows"
-        )
-        workers = []
-    assigned_finding_owner: dict = {}
-    seen_worker_ids: set = set()
-    for worker in workers:
-        if not isinstance(worker, dict):
-            result.add_error(
-                "extensions.address_fanout 'workers' rows must be objects"
-            )
-            continue
-        for key in worker:
-            if key not in ADDRESS_FANOUT_WORKER_KEYS:
-                result.add_error(
-                    "extensions.address_fanout worker row rejects unknown "
-                    f"key {key!r}"
-                )
-        worker_id = worker.get("id")
-        if _non_empty_str("worker 'id'", worker_id):
-            if worker_id in seen_worker_ids:
-                result.add_error(
-                    f"extensions.address_fanout worker id {worker_id!r} "
-                    "appears more than once; worker ids must be unique"
-                )
-            else:
-                seen_worker_ids.add(worker_id)
-        findings = worker.get("findings")
-        if not isinstance(findings, list) or not findings:
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} must carry "
-                "a non-empty 'findings' id list"
-            )
-            findings = []
-        worker_file_union = set()
-        for fid in findings:
-            if isinstance(fid, bool) or not isinstance(fid, int):
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} "
-                    f"'findings' must be integer ids; got {fid!r}"
-                )
-                continue
-            if fid in assigned_finding_owner:
-                result.add_error(
-                    f"extensions.address_fanout finding id {fid!r} is "
-                    f"assigned to both worker "
-                    f"{assigned_finding_owner[fid]!r} and worker "
-                    f"{worker_id!r}; every finding id occurs in exactly one "
-                    "worker"
-                )
-            else:
-                assigned_finding_owner[fid] = worker_id
-            if fid not in sidecar_finding_ids:
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} "
-                    f"references finding id {fid!r} that does not exist in "
-                    "the sidecar findings"
-                )
-            worker_file_union |= files_by_finding.get(fid, set())
-        worker_files_raw = worker.get("files")
-        if not isinstance(worker_files_raw, list):
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} 'files' "
-                "must be a list of repository-relative normalized paths"
-            )
-            worker_files_raw = []
-        worker_files = set()
-        for file_path in worker_files_raw:
-            if _is_normalized_repo_relative_path(file_path):
-                worker_files.add(file_path)
-            else:
-                result.add_error(
-                    "extensions.address_fanout file path "
-                    f"{file_path!r} is not a non-empty repository-relative "
-                    "normalized path"
-                )
-        if worker_files != worker_file_union:
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} 'files' "
-                "must equal the union of its findings' file sets (worker "
-                f"files {sorted(worker_files)} vs finding union "
-                f"{sorted(worker_file_union)})"
-            )
-        attempts = worker.get("attempts")
-        if not isinstance(attempts, list) or not 1 <= len(attempts) <= 2:
-            shape = (
-                len(attempts)
-                if isinstance(attempts, list)
-                else type(attempts).__name__
-            )
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} must carry "
-                f"one or two 'attempts' rows; got {shape!r}"
-            )
-            attempts = attempts if isinstance(attempts, list) else []
-        seen_attempt_ids: set = set()
-        for attempt in attempts:
-            if not isinstance(attempt, dict):
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} attempt "
-                    "rows must be objects"
-                )
-                continue
-            for key in attempt:
-                if key not in ADDRESS_FANOUT_ATTEMPT_KEYS:
-                    result.add_error(
-                        "extensions.address_fanout attempt row rejects "
-                        f"unknown key {key!r}"
-                    )
-            attempt_id = attempt.get("id")
-            if _non_empty_str("attempt 'id'", attempt_id):
-                if attempt_id in seen_attempt_ids:
-                    result.add_error(
-                        f"extensions.address_fanout worker {worker_id!r} "
-                        f"attempt id {attempt_id!r} appears more than once; "
-                        "attempt ids must be unique"
-                    )
-                else:
-                    seen_attempt_ids.add(attempt_id)
-            status = attempt.get("status")
-            if status not in ADDRESS_FANOUT_ATTEMPT_STATUSES:
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} attempt "
-                    f"{attempt_id!r} 'status' must be one of "
-                    f"{sorted(ADDRESS_FANOUT_ATTEMPT_STATUSES)}; got "
-                    f"{status!r}"
-                )
-            reason_code = attempt.get("reason_code")
-            if reason_code not in ADDRESS_FANOUT_REASON_CODES:
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} attempt "
-                    f"{attempt_id!r} 'reason_code' must be one of the closed "
-                    "address-fan-out enum "
-                    f"{sorted(ADDRESS_FANOUT_REASON_CODES)}; got "
-                    f"{reason_code!r}"
-                )
-            # Combination rules: completed for success; worker_error /
-            # worker_timeout for the corresponding worker failure; the
-            # remaining codes reserved for blocked or cancelled outcomes.
-            if (
-                status in ADDRESS_FANOUT_ATTEMPT_STATUSES
-                and reason_code in ADDRESS_FANOUT_REASON_CODES
-            ):
-                if (
-                    status == "success"
-                    and reason_code != ADDRESS_FANOUT_SUCCESS_REASON
-                ):
-                    result.add_error(
-                        f"extensions.address_fanout worker {worker_id!r} "
-                        f"attempt {attempt_id!r} invalid status/reason "
-                        "combination: a successful attempt requires "
-                        f"reason_code "
-                        f"{ADDRESS_FANOUT_SUCCESS_REASON!r}; got "
-                        f"{reason_code!r}"
-                    )
-                if (
-                    status != "success"
-                    and reason_code == ADDRESS_FANOUT_SUCCESS_REASON
-                ):
-                    result.add_error(
-                        f"extensions.address_fanout worker {worker_id!r} "
-                        f"attempt {attempt_id!r} invalid status/reason "
-                        "combination: reason_code "
-                        f"{ADDRESS_FANOUT_SUCCESS_REASON!r} requires status "
-                        f"'success'; got {status!r}"
-                    )
-            _non_empty_str(
-                f"worker {worker_id!r} attempt {attempt_id!r} 'log'",
-                attempt.get("log"),
-            )
-        status = worker.get("status")
-        if status not in ADDRESS_FANOUT_WORKER_STATUSES:
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} final "
-                "'status' must be one of "
-                f"{sorted(ADDRESS_FANOUT_WORKER_STATUSES)}; got {status!r}"
-            )
-        counts_valid = True
-        counts_total = 0
-        for count_key in ("fixed", "dropped", "deferred", "pending"):
-            count_value = worker.get(count_key)
-            if (
-                isinstance(count_value, bool)
-                or not isinstance(count_value, int)
-                or count_value < 0
-            ):
-                counts_valid = False
-                result.add_error(
-                    f"extensions.address_fanout worker {worker_id!r} count "
-                    f"{count_key!r} must be a non-negative integer; got "
-                    f"{count_value!r}"
-                )
-            else:
-                counts_total += count_value
-        if counts_valid and counts_total != len(findings):
-            result.add_error(
-                f"extensions.address_fanout worker {worker_id!r} counts "
-                "fixed+dropped+deferred+pending "
-                f"({counts_total}) must sum to its findings length "
-                f"({len(findings)})"
-            )
-        _non_empty_str(
-            f"worker {worker_id!r} 'log'", worker.get("log")
-        )
-
-    # Subset conservation: the union of worker-assigned ids must equal the
-    # finding_files id set (all assigned ids equal the exact fanned subset
-    # recorded by the parent).
-    for fid in sorted(declared_finding_ids - set(assigned_finding_owner)):
-        result.add_error(
-            "extensions.address_fanout incomplete assignment: "
-            f"'finding_files' id {fid!r} is assigned to no worker; all "
-            "assigned ids must equal the exact fanned subset recorded by "
-            "the parent"
-        )
-    for fid in sorted(set(assigned_finding_owner) - declared_finding_ids):
-        result.add_error(
-            "extensions.address_fanout incomplete assignment: worker "
-            f"{assigned_finding_owner[fid]!r} references finding id "
-            f"{fid!r} that has no 'finding_files' row"
-        )
-
-
-# The step-3 routed substrings: scripts/plan_readiness.py classifies the
-# shared sidecar gate's first error by matching these literals (coverage
-# presence, then the source-kind family, then the digest family), so any
-# error text carrying one of them is routed into that family.
-# ``validate_cap_closure_contract`` rejections must therefore never carry
-# them, not even echoed from a producer-supplied key or value;
-# ``_route_safe`` strips the literals from an echoed producer value (the
-# ``while`` re-checks after each replacement because removing one occurrence
-# can juxtapose the surviving fragments into a fresh literal).
+# The step-3 routed substrings: readiness classifies the shared sidecar gate's
+# first error by coverage presence, source-kind family, and digest family.
 ROUTED_ERROR_SUBSTRINGS = (
     "source_digest",
     "source_kind",
@@ -3619,6 +3730,383 @@ def validate_cap_closure_contract(
                 "the digest bound to the reviewed bytes: it records the "
                 "pre-fold state, not the folded state"
             )
+
+
+# ---------------------------------------------------------------------------
+# Corrections grading (review-cert-graded-binding plan, Task 5)
+# ---------------------------------------------------------------------------
+
+_SIBLING_MODULES: dict[str, object] = {}
+
+
+def _sibling_module(name: str):
+    """A sibling script module (corrections_record, the two classifiers),
+    imported lazily and memoized: a validator copy deployed without its
+    siblings degrades with a named message instead of crashing at import
+    time, and the graded gates report the deployment gap rather than
+    silently skipping the grading."""
+    if name not in _SIBLING_MODULES:
+        try:
+            _SIBLING_MODULES[name] = __import__(name)
+        except ImportError:
+            _SIBLING_MODULES[name] = None
+    return _SIBLING_MODULES[name]
+
+
+def _corrections_round(payload: dict) -> int | None:
+    """The seal round number from the sidecar's dual-typed ``round`` field
+    (``"r1"`` or an integer); None when it does not resolve."""
+    value = payload.get("round")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        match = re.fullmatch(r"[rR]?(\d+)", value.strip())
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _extensions_member(payload: dict, key: str):
+    extensions = payload.get("extensions")
+    if not isinstance(extensions, dict) or key not in extensions:
+        return None
+    return extensions[key]
+
+
+def _payload_declares_corrections(payload: dict) -> bool:
+    extensions = payload.get("extensions")
+    return (
+        isinstance(extensions, dict)
+        and CORRECTIONS_EXTENSION_KEY in extensions
+    )
+
+
+# Corrections grading's indeterminate classification: these phrases are
+# corrections_record's own refusal wordings for git plumbing failures over
+# resolved inputs and unresolvable anchor/evidence refs (pinned by that
+# module's selftest); a refusal carrying one classifies indeterminate per
+# the staging validator's OUTCOME_CONTRACT row, everything else is the
+# modeled fail class. The receipt leg's "unresolvable witness" refusal is
+# deliberately NOT a marker: an incomplete or unresolvable operator ack is
+# a modeled verification failure, not uncertainty about the evidence.
+_CORRECTIONS_INDETERMINATE_MARKERS = (
+    "git plumbing failed",
+    "is unresolvable",
+    "names an unresolvable ref",
+    "no resolvable entry",
+)
+
+
+def _corrections_refusal_is_indeterminate(message: str) -> bool:
+    return any(
+        marker in message for marker in _CORRECTIONS_INDETERMINATE_MARKERS
+    )
+
+
+def validate_corrections_extension(
+    payload: dict,
+    result: ValidationResult,
+    *,
+    schema_class: str,
+) -> None:
+    """The declared-when-present ``extensions.corrections`` and
+    ``extensions.certified_range`` schema gate.
+
+    Absent means absent; an explicit null is a schema error (never a silent
+    absence); an empty corrections array is the schema error; every row is
+    shaped by corrections_record's schema for both kinds. Both extensions
+    are version-1-only: a versionless record carrying either fails closed
+    at the version boundary, mirroring cap_closure. The
+    gate is schema-only: verification legs live in the graded stale arm, so
+    a row missing a required key or carrying a non-hex digest is a schema
+    error, never a verification error. The gate also carries the seal slug
+    shape (r1 fix fold): the artifact slug is interpolated into the seal
+    relpath, so a slug outside corrections_record's safe kebab shape is a
+    schema error naming the rule, refused before any verification leg runs."""
+    if not isinstance(payload, dict):
+        return
+    extensions = payload.get("extensions")
+    if not isinstance(extensions, dict):
+        return
+    if (
+        CORRECTIONS_EXTENSION_KEY not in extensions
+        and CERTIFIED_RANGE_EXTENSION_KEY not in extensions
+    ):
+        return
+    if schema_class != "current-v1":
+        for key in (CORRECTIONS_EXTENSION_KEY,
+                    CERTIFIED_RANGE_EXTENSION_KEY):
+            if key in extensions:
+                result.add_error(
+                    f"extensions.{key} is a version-1-only extension: a "
+                    f"{schema_class} record carrying it fails closed at the "
+                    "version boundary; versionless legacy sidecars reject it"
+                )
+        return
+    if CORRECTIONS_EXTENSION_KEY in extensions:
+        corrections_value = extensions[CORRECTIONS_EXTENSION_KEY]
+        if corrections_value is None:
+            result.add_error(
+                "extensions.corrections must not be null: absent means "
+                "absent, and null is not the absent form"
+            )
+        else:
+            cr = _sibling_module("corrections_record")
+            if cr is None:
+                result.add_error(
+                    "extensions.corrections could not be schema-checked: "
+                    "corrections_record.py is not importable next to this "
+                    "validator copy"
+                )
+            else:
+                reason = cr.corrections_array_reason(corrections_value)
+                if reason is not None:
+                    result.add_error(reason)
+    if CERTIFIED_RANGE_EXTENSION_KEY in extensions:
+        range_value = extensions[CERTIFIED_RANGE_EXTENSION_KEY]
+        if not isinstance(range_value, dict) or set(range_value) != \
+                _CERTIFIED_RANGE_KEYS:
+            result.add_error(
+                "extensions.certified_range must be an object with exactly "
+                "the keys 'base' and 'head'"
+            )
+        else:
+            for ref_name in ("base", "head"):
+                ref = range_value[ref_name]
+                if not isinstance(ref, str) or not re.fullmatch(
+                        r"[0-9a-f]{40}", ref):
+                    result.add_error(
+                        f"extensions.certified_range {ref_name!r} must be a "
+                        "40-character hex commit sha"
+                    )
+    # The seal slug shape (r1 fix fold): corrections_record carries the
+    # canonical rule and refuses again at the seal-path derivation itself;
+    # this gate re-reports it so a sidecar carrying a corrections extension
+    # fails schema before any verification leg runs, and the refusal never
+    # echoes the slug.
+    cr = _sibling_module("corrections_record")
+    if cr is not None:
+        slug_reason = cr.slug_shape_reason(payload.get("artifact_slug"))
+        if slug_reason is not None:
+            result.add_error(slug_reason)
+
+
+def _canonical_slug(artifact_path):
+    """plan_readiness.artifact_slug (the single owner of the canonical
+    identity: the feature slug lowercased) applied to the plan artifact's
+    repo-relative path; None when there is no path, when plan_readiness is
+    not importable next to this validator copy, or when the derivation
+    refuses an unsafe lowercased feature slug (the dedicated ValueError
+    subclass maps to None here). Used by the graded stale arm so both
+    graded surfaces (readiness and this validator) resolve the same seal
+    path whenever the sidecar's artifact_slug diverges from the artifact
+    filename's canonical slug (r1 fold); the both-surfaces claim now holds
+    for uppercase-story plans too."""
+    if not artifact_path:
+        return None
+    try:
+        pr = _sibling_module("plan_readiness")
+    except ImportError:
+        return None
+    try:
+        return pr.artifact_slug(Path(artifact_path)) or None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _run_graded_stale_arm(
+    payload: dict,
+    result: ValidationResult,
+    declared_digest: str,
+    expected_digest: str | None,
+    declared_kind: str | None,
+    corrections_context: dict,
+) -> bool:
+    """The current-sidecar stale arm graded through verified corrections.
+
+    Arms on every authoritative freshness check (an expected digest to
+    compare) and on every declared corrections record for ``plan`` and
+    ``code`` sidecars with repository context, never only on a mismatch or
+    a declared record. The family verifiers run through
+    corrections_record.py: the round-anchored anchor leg binds the declared
+    digest to the seal entry's round-start digest or to a verifying chain;
+    a verified re-bind adds a warning and never rewrites the declared
+    digest; a sidecar whose round has no seal entry (a certification
+    predating the seal file, or the seal file absent from this worktree)
+    degrades to today's exact-match rule with a named warning. Returns
+    True when the graded arm owned the freshness disposition (the legacy
+    stale comparison is then not applied)."""
+    cr = _sibling_module("corrections_record")
+    if cr is None:
+        result.add_warning(
+            "corrections grading unavailable: corrections_record.py is not "
+            "importable next to this validator copy"
+        )
+        return False
+    family = corrections_context.get("family")
+    if family not in ("plan", "code") or declared_kind != family:
+        return False
+    repo = corrections_context.get("repo")
+    artifact_path = corrections_context.get("artifact_path")
+    if repo is None:
+        return False
+    extensions = payload.get("extensions")
+    rows_value = None
+    if isinstance(extensions, dict) and \
+            CORRECTIONS_EXTENSION_KEY in extensions:
+        rows_value = extensions[CORRECTIONS_EXTENSION_KEY]
+        # A present-but-invalid array, or an explicit null, is the schema
+        # gate's report; the graded arm never re-reports it as a
+        # verification error.
+        if rows_value is None or cr.corrections_array_reason(rows_value) \
+                is not None:
+            return True
+    rows = list(rows_value or [])
+    record_declared = bool(rows)
+    mismatch = (
+        expected_digest is not None and declared_digest != expected_digest
+    )
+    if expected_digest is None and not record_declared:
+        return False
+    round_number = _corrections_round(payload)
+    declared_slug = payload.get("artifact_slug")
+    # The seal slug shape gate (r1 fix fold) keeps first claim on the
+    # sidecar's declared artifact_slug: an unsafe declaration refuses as
+    # a schema-class error even though the derivation below may resolve
+    # the seal from a context or feature slug instead (r1 fold M1).
+    declared_reason = (cr.slug_shape_reason(declared_slug)
+                       if declared_slug else None)
+    if declared_reason is not None:
+        extensions_dict = payload.get("extensions")
+        gate_ran = isinstance(extensions_dict, dict) and (
+            CORRECTIONS_EXTENSION_KEY in extensions_dict
+            or CERTIFIED_RANGE_EXTENSION_KEY in extensions_dict)
+        if not gate_ran:
+            result.add_error(declared_reason)
+        return True
+    # The seal slug derivation (r1 fold M1): the context slug wins
+    # (readiness shapes it from the plan's canonical artifact slug); else
+    # the plan artifact path's canonical artifact slug (the feature slug
+    # lowercased through plan_readiness.artifact_slug, with a derivation
+    # refusal mapping to None, so both graded surfaces resolve the same
+    # seal path); else the shape-checked sidecar artifact_slug. The
+    # canonical-slug derivation is plan-family only: a code artifact path
+    # is a source file, not a plan filename, and its slug stays the
+    # sidecar's artifact_slug.
+    slug = corrections_context.get("slug")
+    if not slug and family == "plan":
+        slug = _canonical_slug(artifact_path)
+    slug = slug or declared_slug
+    if round_number is None:
+        if record_declared:
+            result.indeterminate_reason = cr.leg_reason(
+                "anchor",
+                "the sidecar round does not resolve to a seal round number",
+            )
+            return True
+        result.add_warning(
+            "corrections grading degraded to the exact-match digest rule: "
+            "the sidecar round does not resolve to a seal round number"
+        )
+        return False
+    # The seal slug shape gate (r1 fix fold): an unsafe slug is a
+    # schema-class refusal naming the rule, never a leg reason or
+    # degradation warning quoting an unsanitized seal path. The extensions
+    # schema gate owns the report whenever it ran (either corrections
+    # extension present); a record-free freshness check has no schema-gate
+    # report, so the arm refuses here itself.
+    slug_reason = cr.slug_shape_reason(slug) if slug else None
+    if slug_reason is not None:
+        extensions_dict = payload.get("extensions")
+        gate_ran = isinstance(extensions_dict, dict) and (
+            CORRECTIONS_EXTENSION_KEY in extensions_dict
+            or CERTIFIED_RANGE_EXTENSION_KEY in extensions_dict)
+        if not gate_ran:
+            result.add_error(slug_reason)
+        return True
+    rel = cr.seal_relpath(artifact_path or "", slug)
+    entry = cr.load_seal_entry(repo, rel, round_number)
+    if entry is None:
+        if record_declared:
+            result.indeterminate_reason = cr.leg_reason(
+                "anchor", "the seal file %s has no resolvable entry for "
+                          "round %d" % (rel, round_number))
+            return True
+        result.add_warning(
+            "corrections grading degraded to the exact-match digest rule: "
+            "no certification seal entry resolves for round %d in %s (a "
+            "certification predating the seal file, or the seal file "
+            "absent from this worktree)"
+            % (round_number, rel)
+        )
+        return False
+    if family == "code" and not artifact_path:
+        artifact_path = entry.fields.get("artifact")
+    if family == "plan":
+        pdc = _sibling_module("plan_delta_classifier")
+        if pdc is None:
+            result.add_warning(
+                "corrections grading unavailable: plan_delta_classifier.py "
+                "is not importable next to this validator copy"
+            )
+            return False
+
+        def classify(old_bytes, new_bytes):
+            hunks, ok, message = pdc.classify_delta(old_bytes, new_bytes)
+            return [] if ok else [message]
+
+        verified, message = cr.verify_corrections(
+            repo, artifact_path, "plan", round_number, declared_digest,
+            rows, current_bytes=corrections_context.get("current_bytes"),
+            classify=classify,
+            witness_path=corrections_context.get("witness_path"),
+            slug=slug,
+        )
+    else:
+        cdc = _sibling_module("code_delta_classifier")
+        if cdc is None:
+            result.add_warning(
+                "corrections grading unavailable: "
+                "code_delta_classifier.py is not importable next to this "
+                "validator copy"
+            )
+            return False
+        certified_range = _extensions_member(
+            payload, CERTIFIED_RANGE_EXTENSION_KEY)
+        if record_declared and not isinstance(certified_range, dict):
+            result.add_error(cr.leg_reason(
+                "seal",
+                "the declared corrections chain names no sidecar certified "
+                "range: a review certified over a working-tree diff or "
+                "materialized patch records no range, its corrections are "
+                "unclassifiable, and the default re-review applies"))
+            return True
+        verified, message = cdc.verify_code_corrections(
+            repo, artifact_path, round_number, declared_digest, rows,
+            certified_range if isinstance(certified_range, dict) else None,
+            slug=slug, head=corrections_context.get("head", "HEAD"),
+            witness_path=corrections_context.get("witness_path"),
+        )
+    if not verified:
+        if _corrections_refusal_is_indeterminate(message):
+            result.indeterminate_reason = message
+        else:
+            result.add_error(message)
+        return True
+    if record_declared:
+        if mismatch:
+            result.add_warning(
+                "%s (accepted re-bind: the digest comparison passes on the "
+                "verified corrections chain; the declared digest is not "
+                "rewritten)" % message
+            )
+        return True
+    # The zero-hop arm: the anchor leg already graded the declared digest
+    # against the round-start digest (a bare rewrite refused above); a byte
+    # mismatch still takes today's stale error unchanged.
+    return not mismatch
 
 
 def validate_coverage_markdown_agreement(
@@ -4276,6 +4764,7 @@ def _validate_stats_sidecar_gates(
     expected_digest: str | None = None,
     source_kind: str | None = None,
     sidecar_read: _SidecarRead | None = None,
+    corrections_context: dict | None = None,
 ) -> tuple[dict | None, str | None]:
     """The sidecar gates proper, moved verbatim from the pre-consolidation
     ``validate_stats_sidecar`` body (vrs-freshness-witness-sidecar-read-
@@ -4345,23 +4834,22 @@ def _validate_stats_sidecar_gates(
     # single rule (no second copy kept apart by the skip guard).
     if schema_class != "current-v1":
         _add_record_kind_enum_error(result, payload, version1=False)
-    # Address fan-out accounting (execute-plan review-fix pipeline
-    # efficiency plan, Task 4): extensions.address_fanout is legal only on
-    # current-v1 records; a versionless record carrying the extension fails
-    # closed at the version boundary, and current-v1 records get the full
-    # shape and conservation gate. The per-run classification is threaded
-    # in (r6 F13: classify_sidecar_schema runs exactly once per run).
-    validate_address_fanout_contract(
-        payload, result, schema_class=schema_class
-    )
     # Cap-closure terminal shape (certification machinery contract-collisions
     # plan, Task 1): extensions.cap_closure is legal only on current-v1
     # records; a versionless record carrying the extension fails closed at
     # the version boundary, and current-v1 records get the full shape gate.
     # The per-run classification is threaded in (r6 F13: one
-    # classify_sidecar_schema call per run), mirroring the address-fanout
-    # wiring above.
+    # classify_sidecar_schema call per run).
     validate_cap_closure_contract(
+        payload, result, schema_class=schema_class
+    )
+    # Corrections extension schema (review-cert-graded-binding plan, Task
+    # 5): extensions.corrections and extensions.certified_range are
+    # declared-when-present, version-1-only, and shaped by
+    # corrections_record; the gate is schema-only (a malformed row is a
+    # schema error, never a verification error). The graded verification
+    # itself lives in the stale arm inside validate_current_payload.
+    validate_corrections_extension(
         payload, result, schema_class=schema_class
     )
 
@@ -4419,6 +4907,7 @@ def _validate_stats_sidecar_gates(
             expected_digest=expected_digest,
             source_kind=source_kind,
             schema_label=schema_class,
+            corrections_context=corrections_context,
         )
     # Coverage Markdown agreement (review-runner bounded-timeout plan,
     # Task 2): wired in the shared path so both entry points (staging-time
@@ -4476,6 +4965,7 @@ def validate_stats_sidecar(
     source_kind: str | None = None,
     sidecar_read: _SidecarRead | None = None,
     enforce_witness: bool = False,
+    corrections_context: dict | None = None,
 ) -> dict | None:
     """Validate the stats sidecar and return the parsed payload only
     (vrs-freshness-witness-sidecar-read-consolidation). The tuple return
@@ -4486,7 +4976,10 @@ def validate_stats_sidecar(
     the witness-ledger shape (r1 F9 disposition preserved). With no
     ``sidecar_read`` pre-read the gates read the sidecar themselves;
     r6 F13 keeps ``classify_sidecar_schema`` at exactly one call per
-    validation run."""
+    validation run. ``corrections_context`` (default None) arms the
+    corrections-graded stale arm inside ``validate_current_payload``;
+    the default keeps every external caller on the legacy exact-match
+    disposition."""
     payload, schema_class = _validate_stats_sidecar_gates(
         staging_path,
         content,
@@ -4494,6 +4987,7 @@ def validate_stats_sidecar(
         expected_digest=expected_digest,
         source_kind=source_kind,
         sidecar_read=sidecar_read,
+        corrections_context=corrections_context,
     )
     if not enforce_witness:
         return payload
@@ -4661,6 +5155,7 @@ def validate_current_payload(
     expected_digest: str | None = None,
     source_kind: str | None = None,
     schema_label: str | None = None,
+    corrections_context: dict | None = None,
 ) -> None:
     panel_mode = payload.get("panel_mode")
     # Record-kind resolution (review records contract plan, Task 1): the
@@ -4726,7 +5221,31 @@ def validate_current_payload(
                 "current sidecar source_digest must be a lowercase 64-char hex "
                 "SHA-256; got an invalid or placeholder digest"
             )
-        if expected_digest is not None and str(digest) != expected_digest:
+        # Corrections-graded stale arm (review-cert-graded-binding plan,
+        # Task 5): with repository context the round-anchored digest check
+        # arms on EVERY authoritative freshness check and on every declared
+        # corrections record for plan and code sidecars -- not only on a
+        # mismatch or a declared record. The graded arm owns the freshness
+        # disposition when it returns True; the legacy exact-match stale
+        # error below is then not applied.
+        graded_owned = False
+        if (
+            corrections_context is not None
+            and HEX64_RE.match(str(digest))
+            and (
+                expected_digest is not None
+                or _payload_declares_corrections(payload)
+            )
+        ):
+            graded_owned = _run_graded_stale_arm(
+                payload, result, str(digest), expected_digest, declared_kind,
+                corrections_context,
+            )
+        if (
+            expected_digest is not None
+            and not graded_owned
+            and str(digest) != expected_digest
+        ):
             result.add_error(
                 f"current sidecar source_digest is stale (mismatch vs expected_digest); "
                 f"reviewed artifact may have changed"
@@ -4874,45 +5393,7 @@ def validate_current_payload(
                 f"current finding {display} blocking must be a boolean, "
                 f"got {type(finding['blocking']).__name__}"
             )
-        # r4 F1: membership against a frozenset crashes with an uncaught
-        # TypeError when the operand is unhashable (e.g. a list), aborting
-        # the run before any targeted error is recorded. Mirror the r3 F1
-        # severity pattern: gate each enum check on isinstance(value, str)
-        # so odd-typed values get the existing targeted invalid-* error.
-        if (
-            "blast_radius" in finding
-            and (
-                not isinstance(finding["blast_radius"], str)
-                or finding["blast_radius"] not in VALID_BLAST_RADIUS
-            )
-        ):
-            result.add_error(
-                f"current finding {display} has invalid blast_radius "
-                f"(expected one of {sorted(VALID_BLAST_RADIUS)})"
-            )
-        if (
-            "reachability" in finding
-            and (
-                not isinstance(finding["reachability"], str)
-                or finding["reachability"] not in VALID_REACHABILITY
-            )
-        ):
-            result.add_error(
-                f"current finding {display} has invalid reachability "
-                f"(expected one of {sorted(VALID_REACHABILITY)})"
-            )
-        if (
-            "confidence" in finding
-            and (
-                not isinstance(finding["confidence"], str)
-                or finding["confidence"] not in VALID_CONFIDENCE
-            )
-        ):
-            result.add_error(
-                f"current finding {display} has invalid confidence "
-                f"(expected one of {sorted(VALID_CONFIDENCE)}); "
-                "map to the closed confidence enum (hypothesis, strong-evidence, verified); do not downgrade"
-            )
+        validate_finding_calibration(finding, display, result)
         for field_name in REQUIRED_CURRENT_FINDING_FIELDS:
             if field_name not in finding:
                 result.add_error(
@@ -4957,6 +5438,7 @@ def validate_current_payload(
         validate_finding_conservation(
             content, payload, result, duplicate_flagged_ids
         )
+        validate_counts_parity(content, payload, result)
     validate_record_kind_matrix(payload, content, result)
 
 
@@ -5133,6 +5615,151 @@ def validate_finding_conservation(
                 f"finding conservation: finding {sid} triage disagrees "
                 f"(Markdown {md['triage']!r}, sidecar {sc.get('triage')!r})"
             )
+
+
+def validate_counts_parity(content: str, payload: dict, result: ValidationResult) -> None:
+    """Counts parity (review-staging-outcome-and-counts-contract): every
+    declared counts surface agrees with the record's itemized findings and
+    overflow rows, the itemized rows being the single derived source and the
+    declared surfaces witnesses that must agree with it. The arms: the
+    sidecar ``counts.by_severity`` per-severity staged sums equal the itemized
+    rows at that severity (the same-total/different-split drift shape); a
+    legacy panel table carrying a ``Findings`` column equals the workers
+    fields on that worker's itemized findings; a declared overflow count
+    (sidecar twin or the record Counts overflow line) equals the itemized
+    overflow rows; and the record Markdown Counts lines equal the sidecar
+    ``counts`` on the quantities with sidecar twins (staged, workers). Every
+    refusal names the mismatched surface and both values. An absent declared
+    surface skips its arm: schema coverage governs presence, not parity.
+    """
+    findings = payload.get("findings") or []
+    if not isinstance(findings, list):
+        return
+    overflow = payload.get("overflow") or []
+    if not isinstance(overflow, list):
+        overflow = []
+    counts = payload.get("counts")
+    if not isinstance(counts, dict):
+        counts = {}
+
+    # Arm A: per-severity staged sums vs the itemized rows at that severity.
+    by_severity = counts.get("by_severity")
+    if isinstance(by_severity, dict):
+        for key, declared in by_severity.items():
+            if not isinstance(declared, int) or isinstance(declared, bool):
+                continue
+            itemized = sum(
+                1
+                for finding in findings
+                if isinstance(finding, dict)
+                and str(finding.get("severity", "")).lower() == str(key).lower()
+            )
+            if declared != itemized:
+                result.add_error(
+                    f"counts parity: counts.by_severity.{key}={declared} but "
+                    f"the itemized findings at that severity number {itemized}"
+                )
+
+    # Arm B: a legacy panel table carrying a Findings column (the
+    # ``| Lens | Worker | Findings | ... |`` shape) vs the workers fields on
+    # that worker's itemized findings. Rows whose cells name no declared
+    # panel worker skip (focused and blind-marked rows without a worker
+    # cell never match), so the arm keys on declared worker names only.
+    panel_rows = payload.get("panel")
+    known_workers = {
+        row.get("worker")
+        for row in (panel_rows if isinstance(panel_rows, list) else [])
+        if isinstance(row, dict) and isinstance(row.get("worker"), str)
+    }
+    per_worker: dict[str, int] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        workers_field = finding.get("workers")
+        if not isinstance(workers_field, list):
+            continue
+        for worker in workers_field:
+            if isinstance(worker, str):
+                per_worker[worker] = per_worker.get(worker, 0) + 1
+    panel_match = re.search(r"### Panel\n(.*?)(?=\n### |\Z)", content, re.DOTALL)
+    if panel_match and known_workers:
+        panel_lines = panel_match.group(1).splitlines()
+        header_cells = None
+        findings_idx = None
+        for line in panel_lines:
+            if not line.strip().startswith("|"):
+                continue
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if header_cells is None:
+                lowered = [cell.lower() for cell in cells]
+                if "findings" in lowered:
+                    header_cells = cells
+                    findings_idx = lowered.index("findings")
+                continue
+            if len(cells) != len(header_cells) or findings_idx >= len(cells):
+                continue
+            worker_name = None
+            for cell in cells:
+                candidate = re.sub(r"\([^)]*\)", "", cell).strip()
+                if candidate in known_workers:
+                    worker_name = candidate
+                    break
+            if worker_name is None:
+                continue
+            declared_cell = cells[findings_idx].strip()
+            if not declared_cell.isdigit():
+                continue
+            declared = int(declared_cell)
+            itemized = per_worker.get(worker_name, 0)
+            if declared != itemized:
+                result.add_error(
+                    f"counts parity: the panel Findings column declares "
+                    f"{declared} finding(s) for worker {worker_name!r} but "
+                    f"the itemized findings name that worker on {itemized} row(s)"
+                )
+
+    # Arm C: a declared overflow count vs the itemized overflow rows.
+    if "overflow" in counts and isinstance(counts["overflow"], int):
+        if counts["overflow"] != len(overflow):
+            result.add_error(
+                f"counts parity: counts.overflow={counts['overflow']} but the "
+                f"itemized overflow rows number {len(overflow)}"
+            )
+    counts_match = re.search(r"### Counts\n(.*?)(?=\n### |\Z)", content, re.DOTALL)
+    if counts_match:
+        counts_block = counts_match.group(1)
+        overflow_line = re.search(
+            r"-\s*Overflow[^:\n]*:\s*(\d+)", counts_block, re.IGNORECASE
+        )
+        if overflow_line:
+            declared = int(overflow_line.group(1))
+            if declared != len(overflow):
+                result.add_error(
+                    f"counts parity: the record Counts overflow line declares "
+                    f"{declared} but the itemized overflow rows number "
+                    f"{len(overflow)}"
+                )
+        # Arm D: the record Counts lines vs the sidecar twins (staged,
+        # workers); quantities without a sidecar twin never compare.
+        twins = (
+            ("Workers launched", "workers_launched"),
+            ("Staged findings", "staged_findings"),
+        )
+        for line_label, twin_key in twins:
+            if twin_key not in counts or not isinstance(counts[twin_key], int):
+                continue
+            line_match = re.search(
+                rf"-\s*{line_label}:\s*(\d+)", counts_block, re.IGNORECASE
+            )
+            if not line_match:
+                continue
+            declared = int(line_match.group(1))
+            if declared != counts[twin_key]:
+                result.add_error(
+                    f"counts parity: the record Counts {line_label} line "
+                    f"declares {declared} but sidecar counts.{twin_key} is "
+                    f"{counts[twin_key]}"
+                )
 
 
 def validate_markdown_severity_groups(
@@ -5442,6 +6069,8 @@ def validate_staging_file(
     hard: bool = False,
     expected_digest: str | None = None,
     source_kind: str | None = None,
+    corrections_context: dict | None = None,
+    expected_plan_identity: str | None = None,
 ) -> ValidationResult:
     result = ValidationResult(path=path)
     if not path.is_file():
@@ -5491,6 +6120,26 @@ def validate_staging_file(
     # into the gates below), and the fences consume a missing or malformed
     # sidecar silently (it reports through its own gates).
     sidecar_read = _read_stats_sidecar(stats_sidecar_path(path))
+    if expected_plan_identity is not None and isinstance(sidecar_read.payload, dict):
+        extensions = sidecar_read.payload.get("extensions")
+        declared_identity = (
+            extensions.get("plan_identity") if isinstance(extensions, dict) else None
+        )
+        actual_identity = record_identity(path, sidecar_read.payload)
+        qualified = re.search(r"-p([0-9a-f]{8})-r[1-9]\d*\.md$", path.name)
+        if declared_identity is not None and not isinstance(declared_identity, str):
+            result.add_error("extensions.plan_identity must be a repository-relative path string")
+        elif actual_identity is not None and actual_identity != expected_plan_identity:
+            result.add_error(
+                f"review record plan identity {actual_identity!r} does not match "
+                f"--source-plan {expected_plan_identity!r}"
+            )
+        if qualified and qualified.group(1) != plan_identity_token(expected_plan_identity):
+            result.add_error("review filename plan-identity token does not match --source-plan path")
+        if declared_identity is not None and not qualified:
+            result.add_error("sidecar plan_identity requires an identity-qualified review filename")
+        if qualified and actual_identity is None:
+            result.add_error("identity-qualified review filename requires a plan identity")
     sidecar_date = None
     if isinstance(sidecar_read.payload, dict) and isinstance(
         sidecar_read.payload.get("date"), str
@@ -5561,7 +6210,14 @@ def validate_staging_file(
     validate_record_kind_metadata(
         path.name, content, result, sidecar_payload=sidecar_read.payload
     )
+    validate_usage_mint_gate(
+        path.name, content, result, sidecar_payload=sidecar_read.payload
+    )
+    validate_self_heal_attempt_state(
+        path, content, result, sidecar_payload=sidecar_read.payload
+    )
     validate_supersession_links(path, content, result)
+    validate_orphan_recovery_link(path, content, result)
     validate_release_gate_ledger(content, result)
     validate_declaration_consistency(content, result)
     validate_stats_sidecar(
@@ -5572,6 +6228,7 @@ def validate_staging_file(
         source_kind=source_kind,
         sidecar_read=sidecar_read,
         enforce_witness=True,
+        corrections_context=corrections_context,
     )
 
     if hard and not result.ok:
@@ -5857,6 +6514,14 @@ def _selftest_path_names(_root: Path, check) -> None:
         "timestamped review backup is not an active staging record",
         not is_staging_review_path(
             Path("2026-07-17-plan-review-demo-r2.backup-20260929T102819.md")
+        ),
+    )
+    # The optional ``-r<N>`` tail would otherwise let a preserved orphan
+    # match the staging grammar on the family shapes (exec review F1).
+    check(
+        "preserved orphan is not an active staging record",
+        not is_staging_review_path(
+            Path(f"2026-07-17-plan-review-demo-r1{ORPHAN_INFIX}20261005T120000.md")
         ),
     )
 
@@ -6992,6 +7657,159 @@ def _selftest_finding_conservation(root: Path, check) -> None:
             "triage disagrees" in e
             for e in validate_staging_file(tri_path, hard=True).errors
         ),
+    )
+
+
+def _selftest_counts_parity_and_soft_label(root: Path, check) -> None:
+    """Counts-parity arms (one mismatch witness per surface) plus the soft
+    plain run's truthful fail label at exit 0, the clean-soft pass, and the
+    hard and preflight unchanged pins (review-staging-outcome-and-counts-
+    contract)."""
+    import contextlib
+    import io
+
+    base_finding = _current_finding(id=1, severity="Medium", blocking=False)
+    low_finding = _current_finding(id=2, severity="Low", blocking=False)
+    ok_md = _current_findings_markdown([base_finding, low_finding])
+    ok_payload = _payload_with_findings([base_finding, low_finding])
+
+    # Compatibility pass: the conforming two-finding shape validates clean
+    # under the new arms (hard form).
+    ok_path = _write_staging(
+        root, "2026-07-17-branch-review-parity-ok-r1.md", ok_md, ok_payload
+    )
+    check(
+        "conforming counts surfaces pass the parity arms",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Per-severity witness: same total, different split (the drift shape the
+    # surface exists to catch).
+    split_payload = json.loads(json.dumps(ok_payload))
+    split_payload["counts"]["by_severity"] = {"medium": 2, "low": 0}
+    split_path = _write_staging(
+        root, "2026-07-17-branch-review-parity-sev-r1.md", ok_md, split_payload
+    )
+    check(
+        "by_severity same-total different-split drift fails parity",
+        any(
+            "by_severity" in e
+            for e in validate_staging_file(split_path, hard=True).errors
+        ),
+    )
+
+    # Legacy panel Findings-column witness: the panel table declares 5
+    # findings for correctness-completeness; the itemized rows name it on 1.
+    # The legacy table is appended inside the existing Panel section, after
+    # the standard header's own rows.
+    legacy_md = ok_md.replace(
+        "| risk | security | none | complete | 0 | 0 | 0 | no |",
+        "| risk | security | none | complete | 0 | 0 | 0 | no |\n"
+        "| Lens | Worker | Findings | Blocking |\n"
+        "|------|--------|----------|----------|\n"
+        "| correctness-completeness | focused | 5 | 0 |",
+        1,
+    )
+    legacy_path = _write_staging(
+        root, "2026-07-17-branch-review-parity-panel-r1.md", legacy_md, ok_payload
+    )
+    check(
+        "legacy panel Findings-column drift fails parity",
+        any(
+            "Findings column" in e
+            for e in validate_staging_file(legacy_path, hard=True).errors
+        ),
+    )
+    # The same table with the truthful count passes (arm keys on the declared
+    # worker names only).
+    legacy_ok_md = legacy_md.replace("| focused | 5 | 0 |", "| focused | 2 | 0 |")
+    legacy_ok_path = _write_staging(
+        root,
+        "2026-07-17-branch-review-parity-panel-ok-r1.md",
+        legacy_ok_md,
+        ok_payload,
+    )
+    check(
+        "truthful legacy panel Findings column passes parity",
+        validate_staging_file(legacy_ok_path, hard=True).ok,
+    )
+
+    # Overflow-count witness: the sidecar declares 2 overflow rows; the
+    # itemized overflow list is empty.
+    ov_payload = json.loads(json.dumps(ok_payload))
+    ov_payload["counts"]["overflow"] = 2
+    ov_path = _write_staging(
+        root, "2026-07-17-branch-review-parity-ov-r1.md", ok_md, ov_payload
+    )
+    check(
+        "declared overflow count drift fails parity",
+        any(
+            "counts.overflow" in e
+            for e in validate_staging_file(ov_path, hard=True).errors
+        ),
+    )
+
+    # Combined-line witness: the record Counts Staged-findings line declares
+    # 3; the sidecar twin says 2.
+    combined_md = ok_md.replace("- Staged findings: 2", "- Staged findings: 3")
+    combined_path = _write_staging(
+        root, "2026-07-17-branch-review-parity-comb-r1.md", combined_md, ok_payload
+    )
+    check(
+        "record Counts line vs sidecar twin drift fails parity",
+        any(
+            "Staged findings" in e and "counts parity" in e
+            for e in validate_staging_file(combined_path, hard=True).errors
+        ),
+    )
+
+    # Soft plain run: a findings-bearing record ends OUTCOME: fail at exit 0.
+    broken_md = _current_findings_markdown([])
+    broken_path = _write_staging(
+        root,
+        "2026-07-17-branch-review-parity-soft-fail-r1.md",
+        broken_md,
+        ok_payload,
+    )
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        soft_rc = main(["--json", str(broken_path)])
+    json_payload = json.loads(out.getvalue())
+    check(
+        "soft --json over a broken record reports outcome fail at exit 0",
+        soft_rc == 0 and json_payload.get("outcome") == "fail",
+    )
+    out = io.StringIO()
+    err = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        soft_rc = main([str(broken_path)])
+    check(
+        "soft plain run over a broken record prints OUTCOME: fail at exit 0",
+        soft_rc == 0 and "OUTCOME: fail" in out.getvalue(),
+    )
+
+    # Clean-soft pass: a conforming record keeps OUTCOME: pass at exit 0.
+    with contextlib.redirect_stdout(io.StringIO()) as clean_out:
+        clean_rc = main([str(ok_path)])
+    check(
+        "clean soft run keeps OUTCOME: pass at exit 0",
+        clean_rc == 0 and "OUTCOME: pass" in clean_out.getvalue(),
+    )
+
+    # Hard pin: the gating form keeps exit and label paired (fail at exit 1).
+    with contextlib.redirect_stdout(io.StringIO()) as hard_out:
+        hard_rc = main(["--hard", str(broken_path)])
+    check(
+        "hard run over a broken record keeps OUTCOME: fail at exit 1",
+        hard_rc == 1 and "OUTCOME: fail" in hard_out.getvalue(),
+    )
+
+    # Preflight pin: findings never move the preflight exit or label.
+    with contextlib.redirect_stdout(io.StringIO()) as pf_out:
+        pf_rc = main(["--preflight", str(broken_path)])
+    check(
+        "preflight over a findings-bearing record keeps exit 0 and OUTCOME: pass",
+        pf_rc == 0 and "OUTCOME: pass" in pf_out.getvalue(),
     )
 
 
@@ -9359,160 +10177,6 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
     )
 
 
-def _selftest_address_fanout_contract(root: Path, check) -> None:
-    """Family: the ``extensions.address_fanout`` shape and conservation gate
-    (execute-plan review-fix pipeline efficiency plan, Task 4), placed next
-    to the existing extension-shape cases. The negative cases are
-    table-driven and each check label is the exact plan-pinned selftest
-    label; every failure must carry an error naming ``address_fanout`` plus
-    the case's targeted message fragment. The positive case rides a
-    well-formed ``address_fanout`` extension on a valid current-v1 sidecar
-    through ``--hard``. RED-first family: every case fails until
-    ``validate_address_fanout_contract`` exists and is wired."""
-    import copy as _copy
-
-    base_md = _version1_markdown()
-
-    def stage(idx: int, payload: dict) -> Path:
-        # Pre-fence filename date (matches the existing v1 fixture family):
-        # a post-fence name would trip the freshness and coverage fences,
-        # which are unrelated to the address_fanout gate under test.
-        return _write_staging(
-            root,
-            f"2026-07-17-branch-review-fanout-{idx:02d}-r1.md",
-            base_md,
-            payload,
-        )
-
-    def wellformed_fanout() -> dict:
-        """Well-formed extension for the version-1 base fixture (one finding
-        with id 1, integer sidecar round 1): the worker's files equal the
-        union of its finding file sets, the counts sum to the findings
-        length, the single attempt is success/completed, and both logs are
-        present."""
-        return {
-            "round": "1",
-            "finding_files": [{"id": 1, "files": ["src/sample.py"]}],
-            "workers": [
-                {
-                    "id": "w1",
-                    "findings": [1],
-                    "files": ["src/sample.py"],
-                    "attempts": [
-                        {
-                            "id": "attempt-1",
-                            "status": "success",
-                            "reason_code": "completed",
-                            "log": "docs/tmp/address-w1-attempt-1.md",
-                        }
-                    ],
-                    "status": "complete",
-                    "fixed": 1,
-                    "dropped": 0,
-                    "deferred": 0,
-                    "pending": 0,
-                    "log": "docs/tmp/address-w1.md",
-                }
-            ],
-        }
-
-    def fanned_payload() -> dict:
-        payload = _version1_payload()
-        payload["extensions"] = {
-            "example": True,
-            "address_fanout": wellformed_fanout(),
-        }
-        return payload
-
-    def first_worker(payload: dict) -> dict:
-        return payload["extensions"]["address_fanout"]["workers"][0]
-
-    def first_attempt(payload: dict) -> dict:
-        return first_worker(payload)["attempts"][0]
-
-    def _duplicate_assignment(payload: dict) -> None:
-        second = _copy.deepcopy(first_worker(payload))
-        second["id"] = "w2"
-        payload["extensions"]["address_fanout"]["workers"].append(second)
-
-    # Table-driven negative cases: (exact plan-pinned label, payload
-    # mutation, targeted message fragment).
-    cases = (
-        (
-            "selftest: address_fanout unknown finding id fails hard",
-            lambda p: p["extensions"]["address_fanout"][
-                "finding_files"
-            ].append({"id": 99, "files": ["src/other.py"]}),
-            "does not exist in the sidecar findings",
-        ),
-        (
-            "selftest: address_fanout count mismatch fails hard",
-            lambda p: first_worker(p).update({"fixed": 0}),
-            "must sum to its findings length",
-        ),
-        (
-            "selftest: address_fanout duplicate finding assignment fails hard",
-            _duplicate_assignment,
-            "every finding id occurs in exactly one worker",
-        ),
-        (
-            "selftest: address_fanout missing round fails hard",
-            lambda p: p["extensions"]["address_fanout"].pop("round"),
-            "missing required key 'round'",
-        ),
-        (
-            "selftest: address_fanout missing log fails hard",
-            lambda p: first_worker(p).pop("log"),
-            "'log' must be a non-empty string",
-        ),
-        (
-            "selftest: address_fanout malformed type fails hard",
-            lambda p: p["extensions"].__setitem__(
-                "address_fanout", "not-an-object"
-            ),
-            "must be an object with 'round'",
-        ),
-        (
-            "selftest: address_fanout incomplete assignment fails hard",
-            lambda p: first_worker(p).__setitem__("findings", []),
-            "is assigned to no worker",
-        ),
-        (
-            "selftest: address_fanout unknown reason code fails hard",
-            lambda p: first_attempt(p).update({"reason_code": "mystery-code"}),
-            "must be one of the closed",
-        ),
-        (
-            "selftest: address_fanout invalid status reason combination fails hard",
-            lambda p: first_attempt(p).update({"reason_code": "worker_error"}),
-            "invalid status/reason combination",
-        ),
-        (
-            "selftest: address_fanout versionless legacy fails hard",
-            lambda p: p.pop("schema_version"),
-            "version boundary",
-        ),
-    )
-    for idx, (label, mutate, fragment) in enumerate(cases, start=1):
-        payload = fanned_payload()
-        mutate(payload)
-        result = validate_staging_file(stage(idx, payload), hard=True)
-        targeted = [
-            e
-            for e in result.errors
-            if "address_fanout" in e and fragment in e
-        ]
-        check(label, not result.ok and bool(targeted))
-
-    # Positive: a well-formed address_fanout rides a valid current-v1
-    # sidecar through --hard with zero errors.
-    result = validate_staging_file(stage(0, fanned_payload()), hard=True)
-    check(
-        "selftest: address_fanout well-formed shape passes hard",
-        result.ok,
-    )
-
-
 def _selftest_usage_optional(root: Path, check) -> None:
     """Family: the optional version-1 top-level ``usage`` field (token-usage
     telemetry plan, Task 2). The validator accepts the key only (rationale
@@ -9577,6 +10241,224 @@ def _selftest_usage_optional(root: Path, check) -> None:
         "usage optional: v1 sidecar with a bare-string usage passes hard",
         validate_staging_file(stage("malformed", malformed_usage), hard=True).ok,
     )
+
+
+def _selftest_self_heal_attempt_state(root: Path, check) -> None:
+    import json as _json
+
+    initial_id = "a" * 32
+    current_id = "b" * 32
+    prior_digest = "c" * 64
+    current_digest = "d" * 64
+
+    def run_case(label, number, state, *, prior_state=None, prior_json=True, date="2026-10-09", sidecar_date=None, sidecar_round=None, prior_name_date=None, prior_sidecar_date=None, prior_started_at="1791476234267", prior_run_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", omit_prior_id=False, duplicate_prior_id=False, duplicate_prior_started_at=False, prior_fallback=False, prior_digest_value=None, omit_prior_digest=False, expected=True):
+        case_root = root / label
+        case_root.mkdir()
+        current_path = case_root / f"{date}-branch-review-self-heal-r{number}.md"
+        current_mint = initial_id if number == 1 else current_id
+        current_md = f"## Metadata\n- review-run-id: {current_mint}\n- review-started-at-ms: 1791476234267\n"
+        payload = {"record_kind": "canonical", "date": sidecar_date or date, "round": number if sidecar_round is None else sidecar_round, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": state}}}
+        if number > 1 and prior_state is not None:
+            consumed_match = re.fullmatch(r"r([1-9][0-9]*)", str(prior_state.get("round", ""))) if isinstance(prior_state, dict) and prior_state.get("status") == "consumed" else None
+            consumed_number = int(consumed_match.group(1)) if consumed_match else None
+            for prior_number in range(1, number):
+                prior_path = case_root / f"{prior_name_date or date}-branch-review-self-heal-r{prior_number}.md"
+                prior_mint = initial_id if prior_number == 1 else current_id
+                prior_started_line = f"- review-started-at-ms: {prior_started_at}\n" if prior_started_at is not None else ""
+                if duplicate_prior_started_at:
+                    prior_started_line += f"- review-started-at-ms: {prior_started_at}\n"
+                prior_identity = prior_run_id if prior_run_id is not None else prior_mint
+                prior_ids = "" if omit_prior_id else (f"- review-run-id: {prior_identity}\n- review-run-id: {prior_identity}\n" if duplicate_prior_id else f"- review-run-id: {prior_identity}\n")
+                prior_marker = "- usage-attribution: bare-capture-fallback\n" if prior_fallback else ""
+                prior_path.write_text(f"## Metadata\n" + prior_ids + prior_started_line + prior_marker, encoding="utf-8")
+                if prior_number == number - 1:
+                    chain_state = prior_state
+                elif consumed_number is not None and prior_number >= consumed_number:
+                    chain_state = prior_state
+                else:
+                    chain_state = {"status": "unused", "run_id": initial_id}
+                chain_digest = chain_state.get("source_digest", prior_digest) if isinstance(chain_state, dict) and chain_state.get("status") == "consumed" else (prior_digest if prior_digest_value is None else prior_digest_value)
+                prior_payload = {"record_kind": "canonical", "date": prior_sidecar_date or date, "round": prior_number, "source_digest": chain_digest, "extensions": {"convergence": {"self_heal_attempt": chain_state}}}
+                if omit_prior_digest:
+                    prior_payload.pop("source_digest")
+                sidecar = stats_sidecar_path(prior_path)
+                sidecar.write_text(_json.dumps(prior_payload) if prior_json or prior_number < number - 1 else "{broken", encoding="utf-8")
+        result = ValidationResult(current_path)
+        validate_self_heal_attempt_state(current_path, current_md, result, sidecar_payload=payload)
+        check(f"self-heal state: {label}", (not result.errors) is expected)
+
+    run_case("pre-fence legacy record accepted", 1, None, date="2026-10-08")
+    run_case("mixed date fence rejected", 1, {"status": "unused", "run_id": initial_id}, date="2026-10-08", sidecar_date="2026-10-09", expected=False)
+    for invalid_date_case in (
+        ("invalid current filename date", "2026-10-99", "2026-10-09"),
+        ("invalid current sidecar date", "2026-10-09", "2026-10-99"),
+    ):
+        label, filename_date, sidecar_date = invalid_date_case
+        run_case(f"{label} rejects unused", 1, {"status": "unused", "run_id": initial_id}, date=filename_date, sidecar_date=sidecar_date, expected=False)
+        run_case(f"{label} rejects unknown", 1, {"status": "unknown", "run_id": initial_id}, date=filename_date, sidecar_date=sidecar_date, expected=False)
+    run_case("missing post-fence marker rejected", 1, None, expected=False)
+    fallback = ValidationResult(root / "2026-10-09-branch-review-self-heal-r1.md")
+    validate_self_heal_attempt_state(root / "2026-10-09-branch-review-self-heal-r1.md", "## Metadata\n- usage-attribution: bare-capture-fallback\n", fallback, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09", "round": 1, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}})
+    check("self-heal state: bare usage fallback without mint fails closed", any("requires a minted review-run-id" in error for error in fallback.errors))
+    contradictory = ValidationResult(root / "2026-10-09-branch-review-self-heal-r1.md")
+    validate_usage_mint_gate("2026-10-09-branch-review-self-heal-r1.md", f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n- usage-attribution: bare-capture-fallback\n", contradictory, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09"})
+    check("usage mint gate: fallback marker cannot coexist with mint pair", any("cannot coexist" in error for error in contradictory.errors))
+    for label, fields in (
+        ("run id only", f"- review-run-id: {initial_id}\n"),
+        ("timestamp only", "- review-started-at-ms: 1791476234267\n"),
+    ):
+        partial = ValidationResult(root / "2026-10-09-branch-review-self-heal-r1.md")
+        validate_usage_mint_gate(
+            "2026-10-09-branch-review-self-heal-r1.md",
+            "## Metadata\n" + fields + "- usage-attribution: bare-capture-fallback\n",
+            partial,
+            sidecar_payload={"record_kind": "canonical", "date": "2026-10-09"},
+        )
+        check(f"usage mint gate: fallback marker rejects {label}", any("cannot coexist" in error for error in partial.errors))
+    run_case("r1 starts unused", 1, {"status": "unused", "run_id": initial_id})
+    run_case("r1 may reserve before mutation", 1, {"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": current_digest})
+    run_case("r1 consumed digest mismatch rejected", 1, {"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": prior_digest}, expected=False)
+    run_case("sidecar round mismatch rejected", 2, {"status": "consumed", "run_id": initial_id, "round": "r2", "source_digest": current_digest}, prior_state={"status": "unused", "run_id": initial_id}, sidecar_round=99, expected=False)
+    unnumbered = ValidationResult(root / "2026-10-09-branch-review-main.md")
+    validate_self_heal_attempt_state(root / "2026-10-09-branch-review-main.md", f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", unnumbered, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09", "round": 1, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}})
+    check("self-heal state: unnumbered singleton r1 accepted", not unnumbered.errors)
+    unnumbered_later = ValidationResult(root / "2026-10-09-branch-review-main.md")
+    validate_self_heal_attempt_state(root / "2026-10-09-branch-review-main.md", f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", unnumbered_later, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09", "round": 2, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}})
+    check("self-heal state: unnumbered later round rejected", any("unnumbered" in error for error in unnumbered_later.errors))
+    run_case("r2 unused carries stable run id", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id})
+    run_case("r1 consumption carries to r2", 2, {"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": prior_digest}, prior_state={"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": prior_digest})
+    run_case("unused to consumed binds current round", 2, {"status": "consumed", "run_id": initial_id, "round": "r2", "source_digest": current_digest}, prior_state={"status": "unused", "run_id": initial_id})
+    run_case("unused to consumed wrong round rejected", 2, {"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": current_digest}, prior_state={"status": "unused", "run_id": initial_id}, expected=False)
+    run_case("unused to consumed wrong digest rejected", 2, {"status": "consumed", "run_id": initial_id, "round": "r2", "source_digest": prior_digest}, prior_state={"status": "unused", "run_id": initial_id}, expected=False)
+    consumed_r2 = {"status": "consumed", "run_id": initial_id, "round": "r2", "source_digest": prior_digest}
+    run_case("consumed carries unchanged", 3, consumed_r2, prior_state=consumed_r2)
+    run_case("consumed cannot reset", 3, {"status": "unused", "run_id": initial_id}, prior_state=consumed_r2, expected=False)
+    run_case("malformed prior requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id, "extra": True}, expected=True)
+    run_case("malformed list status prior requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": [], "run_id": initial_id}, expected=True)
+    run_case("missing prior mint timestamp requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_started_at=None, expected=True)
+    run_case("missing prior mint timestamp rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_started_at=None, expected=False)
+    run_case("malformed predecessor digest requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_digest_value="not-a-sha256", expected=True)
+    run_case("malformed predecessor digest rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_digest_value="not-a-sha256", expected=False)
+    run_case("missing predecessor digest requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, omit_prior_digest=True, expected=True)
+    run_case("missing predecessor digest rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, omit_prior_digest=True, expected=False)
+    run_case("malformed prior mint id requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_run_id="A" * 32, expected=True)
+    run_case("malformed prior mint id rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_run_id="A" * 32, expected=False)
+    run_case("missing prior mint id requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, omit_prior_id=True, expected=True)
+    run_case("missing prior mint id rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, omit_prior_id=True, expected=False)
+    run_case("malformed prior mint timestamp requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_started_at="not-a-mint", expected=True)
+    run_case("malformed prior mint timestamp rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_started_at="not-a-mint", expected=False)
+    run_case("duplicate prior mint identity requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, duplicate_prior_id=True, expected=True)
+    run_case("duplicate prior mint identity rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, duplicate_prior_id=True, expected=False)
+    run_case("duplicate prior mint timestamp requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, duplicate_prior_started_at=True, expected=True)
+    run_case("duplicate prior mint timestamp rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, duplicate_prior_started_at=True, expected=False)
+    run_case("prior fallback plus pair requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=True)
+    run_case("prior fallback plus pair rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=False)
+    run_case("prior fallback plus run id only requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=True, prior_started_at=None)
+    run_case("prior fallback plus run id only rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=False, prior_started_at=None)
+    run_case("prior fallback plus timestamp only requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=True, omit_prior_id=True)
+    run_case("prior fallback plus timestamp only rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_fallback=True, expected=False, omit_prior_id=True)
+    run_case("calendar-invalid prior filename requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_name_date="2026-99-99", expected=True)
+    run_case("calendar-invalid prior filename rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_name_date="2026-99-99", expected=False)
+    run_case("calendar-invalid prior sidecar date requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_sidecar_date="2026-99-99", expected=True)
+    run_case("calendar-invalid prior sidecar date rejects unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_sidecar_date="2026-99-99", expected=False)
+    run_case("malformed object status rejected", 1, {"status": {"bad": True}, "run_id": initial_id}, expected=False)
+    run_case("malformed prior cannot authorize unused", 2, {"status": "unused", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id, "extra": True}, expected=False)
+    run_case("missing prior requires unknown", 2, {"status": "unknown", "run_id": current_id})
+    run_case("missing prior rejects unused", 2, {"status": "unused", "run_id": initial_id}, expected=False)
+    run_case("malformed sidecar requires unknown", 2, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unused", "run_id": initial_id}, prior_json=False)
+    run_case("unknown cannot follow an unused earlier chain", 3, {"status": "unknown", "run_id": current_id}, prior_state={"status": "unknown", "run_id": current_id}, expected=False)
+
+    long_chain = root / "long-chain"
+    long_chain.mkdir()
+    chain_size = 1100
+    for number in range(1, chain_size + 1):
+        path = long_chain / f"2026-10-09-branch-review-long-chain-r{number}.md"
+        run_id = initial_id if number == 1 else current_id
+        path.write_text(
+            f"## Metadata\n- review-run-id: {run_id}\n- review-started-at-ms: 1791476234267\n",
+            encoding="utf-8",
+        )
+        state = {"status": "unused", "run_id": initial_id}
+        stats_sidecar_path(path).write_text(
+            _json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": number, "source_digest": prior_digest, "extensions": {"convergence": {"self_heal_attempt": state}}}),
+            encoding="utf-8",
+        )
+    long_result = ValidationResult(path)
+    validate_self_heal_attempt_state(
+        path,
+        path.read_text(encoding="utf-8"),
+        long_result,
+        sidecar_payload=json.loads(stats_sidecar_path(path).read_text(encoding="utf-8")),
+    )
+    check("self-heal state: linked history longer than recursion limit validates iteratively", not long_result.errors)
+    run_case("unknown recovery cannot reset", 3, {"status": "unused", "run_id": current_id}, prior_state={"status": "unknown", "run_id": current_id}, expected=False)
+    run_case("unknown cannot appear with valid prior", 2, {"status": "unknown", "run_id": initial_id}, prior_state={"status": "unused", "run_id": initial_id}, expected=False)
+    legacy_root = root / "legacy-recovery"
+    legacy_root.mkdir()
+    legacy_r1 = legacy_root / "2026-10-08-branch-review-self-heal-r1.md"
+    legacy_r1.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(legacy_r1).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-08", "round": 1, "source_digest": prior_digest}), encoding="utf-8")
+    for label, legacy_state, expected in (
+        ("legacy predecessor requires unknown", {"status": "unknown", "run_id": current_id}, True),
+        ("legacy predecessor rejects unused", {"status": "unused", "run_id": initial_id}, False),
+    ):
+        legacy_r2 = legacy_root / "2026-10-09-branch-review-self-heal-r2.md"
+        legacy_r2.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+        legacy_payload = {"record_kind": "canonical", "date": "2026-10-09", "round": 2, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": legacy_state}}}
+        legacy_result = ValidationResult(legacy_r2)
+        validate_self_heal_attempt_state(legacy_r2, f"## Metadata\n- review-run-id: {current_id}\n- review-started-at-ms: 1791476234267\n", legacy_result, sidecar_payload=legacy_payload)
+        check(f"self-heal state: {label}", (not legacy_result.errors) is expected)
+    recovery_r2 = legacy_root / "2026-10-09-branch-review-self-heal-r2.md"
+    recovery_state = {"status": "unknown", "run_id": current_id}
+    recovery_r2.write_text(f"## Metadata\n- review-run-id: {current_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(recovery_r2).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": 2, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": recovery_state}}}), encoding="utf-8")
+    for label, recovery_r3_state, expected in (
+        ("unknown recovery carries unchanged after legacy", recovery_state, True),
+        ("unknown recovery reset after legacy rejected", {"status": "unused", "run_id": current_id}, False),
+    ):
+        recovery_r3 = legacy_root / "2026-10-09-branch-review-self-heal-r3.md"
+        recovery_r3_result = ValidationResult(recovery_r3)
+        recovery_r3_md = f"## Metadata\n- review-run-id: {current_id}\n- review-started-at-ms: 1791476234267\n"
+        recovery_r3_payload = {"record_kind": "canonical", "date": "2026-10-09", "round": 3, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": recovery_r3_state}}}
+        validate_self_heal_attempt_state(recovery_r3, recovery_r3_md, recovery_r3_result, sidecar_payload=recovery_r3_payload)
+        check(f"self-heal state: {label}", (not recovery_r3_result.errors) is expected)
+    rollover_root = root / "date-rollover"
+    rollover_root.mkdir()
+    rollover_r1 = rollover_root / "2026-10-09-branch-review-self-heal-r1.md"
+    rollover_r1.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    rollover_state = {"status": "unused", "run_id": initial_id}
+    stats_sidecar_path(rollover_r1).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": 1, "source_digest": prior_digest, "extensions": {"convergence": {"self_heal_attempt": rollover_state}}}), encoding="utf-8")
+    rollover_r2 = rollover_root / "2026-10-10-branch-review-self-heal-r2.md"
+    rollover_r2_result = ValidationResult(rollover_r2)
+    rollover_r2_payload = {"record_kind": "canonical", "date": "2026-10-10", "round": 2, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": rollover_state}}}
+    validate_self_heal_attempt_state(rollover_r2, f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", rollover_r2_result, sidecar_payload=rollover_r2_payload)
+    check("self-heal resume: stable state carries across date rollover", not rollover_r2_result.errors)
+    duplicate_r1 = rollover_root / "2026-10-09-branch-review-self-heal.md"
+    duplicate_r1.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(duplicate_r1).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": 1, "source_digest": prior_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}}), encoding="utf-8")
+    ambiguous_result = ValidationResult(rollover_r2)
+    validate_self_heal_attempt_state(rollover_r2, f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", ambiguous_result, sidecar_payload=rollover_r2_payload)
+    check("self-heal resume: duplicate r1 predecessors fail closed", any("ambiguous predecessor" in error for error in ambiguous_result.errors))
+    duplicate_r1.unlink()
+    stats_sidecar_path(duplicate_r1).unlink()
+    cross_date_duplicate = rollover_root / "2026-10-11-branch-review-self-heal-r1.md"
+    cross_date_duplicate.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(cross_date_duplicate).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-11", "round": 1, "source_digest": prior_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}}), encoding="utf-8")
+    cross_date_ambiguous = ValidationResult(rollover_r2)
+    validate_self_heal_attempt_state(rollover_r2, f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", cross_date_ambiguous, sidecar_payload=rollover_r2_payload)
+    check("self-heal resume: cross-date duplicate r1 predecessors fail closed", any("ambiguous predecessor" in error for error in cross_date_ambiguous.errors))
+    chain_root = root / "broken-chain"
+    chain_root.mkdir()
+    r1 = chain_root / "2026-10-09-branch-review-self-heal-r1.md"
+    r1.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(r1).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": 1, "source_digest": prior_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "consumed", "run_id": initial_id, "round": "r1", "source_digest": prior_digest}}}}), encoding="utf-8")
+    r2 = chain_root / "2026-10-09-branch-review-self-heal-r2.md"
+    r2.write_text(f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", encoding="utf-8")
+    stats_sidecar_path(r2).write_text(_json.dumps({"record_kind": "canonical", "date": "2026-10-09", "round": 2, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}}), encoding="utf-8")
+    r3 = chain_root / "2026-10-09-branch-review-self-heal-r3.md"
+    r3_result = ValidationResult(r3)
+    validate_self_heal_attempt_state(r3, f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", r3_result, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09", "round": 3, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}})
+    check("self-heal resume: broken earlier chain rejects unused", any("consumed or unknown self-heal state must carry forward unchanged" in error for error in r3_result.errors))
 
 
 def _selftest_extended_sidecar_freshness(root: Path, check) -> None:
@@ -14831,14 +15713,23 @@ def _selftest_outcome_contract(root: Path, check) -> None:
         and out.rstrip().endswith("OUTCOME: pass"),
     )
 
-    # Arm 3: a soft-mode warning run stays a pass (warning inside the
-    # evidence, OUTCOME line last).
+    # Arm 3: a soft-mode run over an invalid record reports and never
+    # gates (review-staging-outcome-and-counts-contract): exit stays 0 while
+    # the label carries the truthful verdict (the flipped pass-on-fail arm).
     rc, out, err = call([str(invalid_path)])
     check("soft-mode run over an invalid record exits 0", rc == 0)
     check("soft-mode run carries WARN lines in the evidence", "WARN:" in err)
     check(
-        "soft-mode run ends stdout with exactly one OUTCOME: pass",
-        outcome_rows(out) == ["OUTCOME: pass"]
+        "soft-mode run over an invalid record ends OUTCOME: fail at exit 0",
+        outcome_rows(out) == ["OUTCOME: fail"]
+        and out.rstrip().endswith("OUTCOME: fail"),
+    )
+    # The clean-soft pass twin: a valid record keeps OUTCOME: pass at exit 0.
+    rc, out, err = call([str(valid_path)])
+    check(
+        "clean soft run ends stdout with exactly one OUTCOME: pass",
+        rc == 0
+        and outcome_rows(out) == ["OUTCOME: pass"]
         and out.rstrip().endswith("OUTCOME: pass"),
     )
 
@@ -14938,7 +15829,1858 @@ def _selftest_outcome_contract(root: Path, check) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Corrections grading (review-cert-graded-binding plan, Task 5)
+# ---------------------------------------------------------------------------
+
+class _GradingCleanup:
+    """The addCleanup seam corrections_record's scratch-repo builder needs
+    inside the check-based selftest harness; cleanups run at the end of the
+    grading family, last registered first."""
+
+    def __init__(self):
+        self._cleanups: list = []
+
+    def addCleanup(self, fn, *args, **kwargs) -> None:
+        self._cleanups.append((fn, args, kwargs))
+
+    def run(self) -> None:
+        while self._cleanups:
+            fn, args, kwargs = self._cleanups.pop()
+            fn(*args, **kwargs)
+
+
+_CORRECTIONS_PLAN_REL = "docs/history/plans/acme-plan.md"
+_CORRECTIONS_PLAN_SLUG = "acme-plan"
+_CORRECTIONS_SRC_REL = "src/app.py"
+_CORRECTIONS_CODE_SLUG = "acme-src"
+# The story-key placeholder (AB-12) shapes the uppercase-story plan filenames
+# of the canonical-slug arms: the machine-local hygiene deny pattern blocks
+# the literal uppercase ticket digits, and AB-12 exercises the same
+# uppercase-story shape (plan-review slug-case plan, Task 2).
+_STORY_PLAN_REL = "docs/history/plans/2026-09-22-AB-12-acme-plan.md"
+_STORY_CANONICAL_SLUG = "ab-12-acme-plan"
+# An unsafe stem: its lowercase form carries an underscore, so no canonical
+# artifact slug is derivable and the switched fallback must map the refusal
+# to None (the leak arm's seal then resolves at the declared slug).
+_UNSAFE_PLAN_REL = "docs/history/plans/2026-09-22-AB-12-acme_plan.md"
+# The em dash is built from an escape at run time: these source bytes never
+# carry the character itself.
+_CORRECTIONS_D1 = ("# plan\n\nalpha \u2014 bravo.\n").encode("utf-8")
+_CORRECTIONS_D2 = b"# plan\n\nalpha, bravo.\n"
+_CORRECTIONS_D3 = b"# plan\n\nalpha omega.\n"
+_CODE_V0 = b"def f():\n    return 1\n"
+_CODE_V1 = b"def f():\n    return 2\n"
+_CODE_V2 = b"def g():\n    return 3\n"
+_CODE_V3 = b"def g():\n    # reviewed\n    return 3\n"
+_CODE_V_DOCSTRING = b'def g():\n    """Fresh docstring."""\n    return 3\n'
+_GRADING_ACK_RECEIPT = {
+    "directive": "accept the typography re-bind",
+    "authorization_witness": "state/turns/0001.record",
+    "classifier_gap_row": "docs/history/backlog/gap-row.md",
+}
+
+
+def _sibling(name: str):
+    """A sibling script module imported lazily; the grading family needs the
+    corrections-record machinery, the two classifiers, and their CLIs."""
+    return __import__(name)
+
+
+def _run_cli(script_name: str, *args):
+    """Run a classifier CLI hermetically and return the completed process."""
+    import subprocess
+
+    cr = _sibling("corrections_record")
+    script = Path(__file__).resolve().parent / script_name
+    return subprocess.run(
+        [sys.executable, str(script)] + list(args),
+        capture_output=True, text=True, env=cr.hermetic_git_env(),
+    )
+
+
+def _minted_row(proc):
+    """The single corrections row a classifier CLI minted with --emit-row."""
+    rows = [
+        line.split(": ", 1)[1]
+        for line in proc.stdout.splitlines()
+        if line.startswith("corrections-row-json: ")
+    ]
+    assert len(rows) == 1, proc.stdout
+    return json.loads(rows[0])
+
+
+def _grading_plan_fixture(cleanup, *, round_number: int = 1,
+                          hop_date: int | None = None,
+                          orphan_start: bool = False,
+                          with_seal: bool = True,
+                          plan_rel: str = _CORRECTIONS_PLAN_REL,
+                          slug: str = _CORRECTIONS_PLAN_SLUG):
+    """D1 committed at the round start, the round-close commit, the seal
+    entry commit, then the D2 typography fix; dates pinned and increasing.
+    Mirrors the corrections_record plan fixture shape so the readiness
+    fixtures can reuse it. ``plan_rel``/``slug`` parameterize the artifact
+    path and the seal slug (the r1 fold's slug-convergence arms mint a
+    date-prefixed plan whose feature slug diverges from a sidecar's
+    artifact_slug)."""
+    cr = _sibling("corrections_record")
+    repo = cr.build_scratch_repo(cleanup)
+    start = repo.commit_file(plan_rel, _CORRECTIONS_D1, "seed plan")
+    close = repo.commit_allow_empty("round %d close" % round_number)
+    entry = None
+    if with_seal:
+        anchor = start
+        if orphan_start:
+            tree = repo.git("rev-parse", "%s^{tree}" % start).stdout.strip()
+            anchor = repo.git(
+                "commit-tree", tree, "-m", "orphan round start").stdout.strip()
+        entry = repo.append_seal_entry(
+            slug, round_number, plan_rel,
+            anchor, cr.sha256_hex(_CORRECTIONS_D1), close)
+    hop1 = repo.commit_file(
+        plan_rel, _CORRECTIONS_D2, "fix typography",
+        date=hop_date)
+    return repo, {"start": start, "close": close, "entry": entry,
+                  "hop1": hop1, "plan_rel": plan_rel, "slug": slug}
+
+
+def _grading_code_fixture(cleanup, *, fix_bytes=_CODE_V3):
+    """The certified code range (base commit and two content commits) with
+    the round-close commit and the seal entry between the certified head and
+    the fix, then the fix commit; the production range-round-trip shape."""
+    cr = _sibling("corrections_record")
+    repo = cr.build_scratch_repo(cleanup)
+    b0 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V0, "base")
+    c1 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V1, "feature one")
+    c2 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V2, "feature two")
+    certified = cr.diff_bytes(repo.root, b0, c2)
+    close = repo.commit_allow_empty("round 1 close")
+    entry = repo.append_seal_entry(
+        _CORRECTIONS_CODE_SLUG, 1, _CORRECTIONS_SRC_REL, c2,
+        cr.sha256_hex(certified), close,
+        reviewed=(b0, c2, cr.sha256_hex(certified)))
+    c3 = repo.commit_file(_CORRECTIONS_SRC_REL, fix_bytes, "the fix")
+    return repo, {"b0": b0, "c1": c1, "c2": c2, "close": close,
+                  "entry": entry, "c3": c3, "certified": certified}
+
+
+def _grading_v1_payload(source_kind: str, digest: str, *, slug: str,
+                        round_value: str = "r1") -> dict:
+    """A current-v1 clear-review sidecar carrying the graded fields: the
+    declared source kind and digest, the round, and the artifact slug the
+    certification seal resolves by."""
+    payload = _post_window_fixture_payload(source_kind)
+    payload["schema_version"] = 1
+    payload["review_type"] = "Branch Review"
+    payload["artifact_slug"] = slug
+    payload["round"] = round_value
+    payload["source_kind"] = source_kind
+    payload["source_digest"] = digest
+    payload["deduplication_groups"] = []
+    payload["discarded"] = []
+    payload["severity_calibration"] = []
+    payload["triage_outcomes"] = []
+    payload["soften_watchlist"] = []
+    return payload
+
+
+def _grading_stage(root: Path, tag: str, payload: dict, *, kind: str = "plan"):
+    return _write_staging(
+        root,
+        "%s-branch-review-graded-%s-r1.md" % (_POST_WINDOW_FIXTURE_DATE, tag),
+        _post_window_fixture_markdown(kind),
+        payload,
+    )
+
+
+def _plan_context(repo, *, current_bytes=_CORRECTIONS_D2,
+                  witness_path=None, slug=None,
+                  artifact_path=_CORRECTIONS_PLAN_REL) -> dict:
+    return {
+        "family": "plan",
+        "repo": repo.root,
+        "artifact_path": artifact_path,
+        "current_bytes": current_bytes,
+        "witness_path": witness_path,
+        "slug": slug,
+    }
+
+
+def _code_context(repo) -> dict:
+    return {
+        "family": "code",
+        "repo": repo.root,
+        "artifact_path": _CORRECTIONS_SRC_REL,
+        "head": "HEAD",
+    }
+
+
+def _graded_staging_call(*args, **kwargs):
+    """validate_staging_file with the corrections context; the RED run
+    against the pre-change validator surfaces the missing context surface
+    as None so each graded label records a clean per-label failure instead
+    of crashing the suite."""
+    try:
+        return validate_staging_file(*args, **kwargs)
+    except TypeError:
+        return None
+
+
+def _corrections_family_errors(result, *phrases) -> bool:
+    """True when result carries a marker-prefixed corrections reason naming
+    every phrase and no banned literal."""
+    cr = _sibling("corrections_record")
+    matching = [
+        e for e in (result.errors if result is not None else [])
+        if e.startswith(cr.MARKER_PREFIX)
+    ]
+    if not matching:
+        return False
+    for error in matching:
+        for banned in cr.BANNED_LITERALS:
+            if banned in error:
+                return False
+    return all(
+        any(phrase in error for error in matching) for phrase in phrases
+    )
+
+
+def _selftest_corrections_grading(root: Path, check) -> None:
+    """The graded stale arm and the corrections extension schema
+    (review-cert-graded-binding plan, Task 5). The accepted re-bind for
+    both source kinds, the unchanged stale error without a record, the
+    arming of the round-anchored digest check on every authoritative
+    freshness check, the anchor refusal arms, one refusal arm per
+    verification leg, the per-kind refuse witnesses, the certified-seal
+    arms, the cap-closure coexistence arms in both polarities, and the
+    production-shaped CLI arms over a scratch repo."""
+    cr = _sibling("corrections_record")
+    cleanup = _GradingCleanup()
+
+    # ------------------------------------------------------------------
+    # Declared-when-present schema for extensions.corrections
+    # ------------------------------------------------------------------
+    plan_repo, plan_fx = _grading_plan_fixture(cleanup)
+    good_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(plan_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", plan_fx["start"], "--emit-row"))
+    acked_row = dict(good_row, kind=cr.KIND_OPERATOR_ACKED,
+                     receipt=dict(_GRADING_ACK_RECEIPT))
+
+    ok_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    ok_payload["extensions"] = {"corrections": [good_row, acked_row]}
+    ok_result = validate_staging_file(
+        _grading_stage(root, "schema-ok", ok_payload), hard=True)
+    check(
+        "extensions.corrections with valid rows of both kinds passes the schema gate",
+        ok_result is not None
+        and not any("corrections" in e for e in ok_result.errors),
+    )
+
+    null_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    null_payload["extensions"] = {"corrections": None}
+    null_result = validate_staging_file(
+        _grading_stage(root, "schema-null", null_payload), hard=True)
+    check(
+        "extensions.corrections null is a schema error (absent means absent)",
+        null_result is not None
+        and any("corrections" in e and "null" in e for e in null_result.errors),
+    )
+
+    empty_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    empty_payload["extensions"] = {"corrections": []}
+    empty_result = validate_staging_file(
+        _grading_stage(root, "schema-empty", empty_payload), hard=True)
+    check(
+        "extensions.corrections empty array is a schema error",
+        empty_result is not None
+        and _corrections_family_errors(empty_result, "empty"),
+    )
+
+    missing_key_row = {
+        key: value for key, value in good_row.items()
+        if key != "recorded_by"
+    }
+    missing_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    missing_payload["extensions"] = {"corrections": [missing_key_row]}
+    missing_result = validate_staging_file(
+        _grading_stage(root, "schema-missing-key", missing_payload),
+        hard=True,
+    )
+    check(
+        "extensions.corrections row missing a required key is a schema error, not a verification error",
+        missing_result is not None
+        and _corrections_family_errors(missing_result, "schema refusal",
+                                       "recorded_by"),
+    )
+
+    nonhex_row = dict(good_row, after_digest="not-hex")
+    nonhex_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    nonhex_payload["extensions"] = {"corrections": [nonhex_row]}
+    nonhex_result = validate_staging_file(
+        _grading_stage(root, "schema-nonhex", nonhex_payload), hard=True)
+    check(
+        "extensions.corrections non-hex digest row is a schema error",
+        nonhex_result is not None
+        and _corrections_family_errors(nonhex_result, "schema refusal"),
+    )
+
+    vacuous_row = dict(good_row, before_digest=good_row["after_digest"])
+    vacuous_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    vacuous_payload["extensions"] = {"corrections": [vacuous_row]}
+    vacuous_result = validate_staging_file(
+        _grading_stage(root, "schema-vacuous", vacuous_payload), hard=True)
+    check(
+        "vacuous hop refuses: equal before and after digests name the vacuous rule",
+        vacuous_result is not None
+        and _corrections_family_errors(vacuous_result, "vacuous"),
+    )
+
+    versionless_payload = _current_clear_payload()
+    versionless_payload["source_digest"] = cr.sha256_hex(_CORRECTIONS_D1)
+    versionless_payload["source_kind"] = "plan"
+    versionless_payload["extensions"] = {"corrections": [good_row]}
+    versionless_result = validate_staging_file(
+        _grading_stage(root, "schema-versionless", versionless_payload),
+        hard=True,
+    )
+    check(
+        "extensions.corrections on a versionless record fails closed at the version boundary",
+        versionless_result is not None
+        and any("version-1-only" in e and "corrections" in e
+                for e in versionless_result.errors),
+    )
+
+    bad_range_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(b"diff"), slug=_CORRECTIONS_CODE_SLUG)
+    bad_range_payload["extensions"] = {"certified_range": {"base": "zz"}}
+    bad_range_result = validate_staging_file(
+        _grading_stage(root, "range-bad", bad_range_payload, kind="code"),
+        hard=True,
+    )
+    check(
+        "extensions.certified_range malformed shape is a schema error",
+        bad_range_result is not None
+        and any("certified_range" in e for e in bad_range_result.errors),
+    )
+
+    good_range_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(b"diff"), slug=_CORRECTIONS_CODE_SLUG)
+    good_range_payload["extensions"] = {
+        "certified_range": {"base": "a" * 40, "head": "b" * 40},
+    }
+    good_range_result = validate_staging_file(
+        _grading_stage(root, "range-good", good_range_payload, kind="code"),
+        hard=True,
+    )
+    check(
+        "extensions.certified_range valid shape passes the schema gate",
+        good_range_result is not None
+        and not any("certified_range" in e for e in good_range_result.errors),
+    )
+
+    # ------------------------------------------------------------------
+    # Cap-closure coexistence, both polarities
+    # ------------------------------------------------------------------
+    cap_repo, cap_fx = _grading_plan_fixture(cleanup, round_number=3)
+    cap_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(cap_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", cap_fx["start"], "--emit-row"))
+    cap_declaration = {
+        "plan_section": "## Residual findings (cap closure)",
+        "round": "r3",
+        "residuals": 1,
+        "pre_fold_digest": cr.sha256_hex(_CORRECTIONS_D1),
+    }
+    broken_row = {
+        key: value for key, value in cap_row.items() if key != "hunks"
+    }
+    cap_negative_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG,
+        round_value="r3")
+    cap_negative_payload["extensions"] = {
+        "corrections": [broken_row],
+        "cap_closure": cap_declaration,
+    }
+    cap_negative_result = _graded_staging_call(
+        _grading_stage(root, "cap-negative", cap_negative_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(cap_repo),
+    )
+    check(
+        "cap-closure coexistence: a corrections schema error beside a declared cap_closure still reports the schema error",
+        cap_negative_result is not None
+        and _corrections_family_errors(cap_negative_result, "schema refusal")
+        and not any("cap_closure" in e for e in cap_negative_result.errors),
+    )
+    cap_positive_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG,
+        round_value="r3")
+    cap_positive_payload["extensions"] = {
+        "corrections": [cap_row],
+        "cap_closure": cap_declaration,
+    }
+    cap_positive_result = _graded_staging_call(
+        _grading_stage(root, "cap-positive", cap_positive_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(cap_repo),
+    )
+    check(
+        "cap-closure coexistence: a verified corrections chain beside a valid cap_closure declaration reports no cap_closure error",
+        cap_positive_result is not None
+        and not any("cap_closure" in e for e in cap_positive_result.errors),
+    )
+    cap_masked_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG,
+        round_value="r3")
+    cap_masked_payload["extensions"] = {
+        "corrections": [cap_row],
+        "cap_closure": {"plan_section": "## Residual findings (cap closure)",
+                        "round": "r3"},
+    }
+    cap_masked_result = _graded_staging_call(
+        _grading_stage(root, "cap-masked", cap_masked_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(cap_repo),
+    )
+    check(
+        "cap-closure coexistence: a verified corrections chain does not mask an invalid cap_closure declaration",
+        cap_masked_result is not None
+        and any("cap_closure" in e and "residuals" in e
+                for e in cap_masked_result.errors),
+    )
+
+    # ------------------------------------------------------------------
+    # The graded stale arm, plan family (library surface)
+    # ------------------------------------------------------------------
+
+    def plan_arm(tag, *, fixture_kwargs=None, declared, expected,
+                 current=_CORRECTIONS_D2, extensions=None,
+                 slug=_CORRECTIONS_PLAN_SLUG):
+        repo, fx = _grading_plan_fixture(cleanup, **(fixture_kwargs or {}))
+        payload = _grading_v1_payload("plan", declared, slug=slug)
+        payload = json.loads(json.dumps(payload))
+        payload["source_digest"] = declared
+        if extensions is not None:
+            payload["extensions"] = extensions
+        result = _graded_staging_call(
+            _grading_stage(root, tag, payload),
+            hard=True,
+            expected_digest=expected,
+            source_kind="plan",
+            corrections_context=_plan_context(repo, current_bytes=current),
+        )
+        return result
+
+    # The accepted re-bind: a typography-only edit with a verified record.
+    accept_repo, accept_fx = _grading_plan_fixture(cleanup)
+    accept_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(accept_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", accept_fx["start"], "--emit-row"))
+    accept_result = _graded_staging_call(
+        _grading_stage(
+            root,
+            "plan-accept",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D1),
+                                slug=_CORRECTIONS_PLAN_SLUG,
+                                round_value="r1")
+            | {"extensions": {"corrections": [accept_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(accept_repo),
+    )
+    check(
+        "accepted plan re-bind: a typography-only edit with a verified record passes with no stale error",
+        accept_result is not None and accept_result.ok
+        and not accept_result.errors,
+    )
+    check(
+        "accepted plan re-bind adds a warning naming the accepted re-bind",
+        accept_result is not None
+        and any("accepted re-bind" in w for w in accept_result.warnings),
+    )
+
+    # The unchanged stale error without a record (seal present, bytes moved).
+    stale_result = plan_arm(
+        "plan-stale-norecord",
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D2),
+    )
+    check(
+        "unchanged stale error without a record (seal present, bytes moved)",
+        stale_result is not None and not stale_result.ok
+        and any("source_digest is stale" in e for e in stale_result.errors),
+    )
+
+    # r1 fix fold: the seal slug shape. The artifact slug is interpolated
+    # into the seal relpath, so a slug carrying a banned routing literal,
+    # and a path-escaping slug, each refuse as schema-class errors naming
+    # the shape rule; neither the refusal nor the degraded warning quotes
+    # the unsanitized slug. A benign slug keeps verifying end to end (the
+    # accepted re-bind and stale arms above all run through one).
+    banned_slug_result = plan_arm(
+        "plan-slug-banned",
+        slug="source_digest-evil",
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D2),
+    )
+    check(
+        "a seal slug carrying a banned routing literal refuses as a "
+        "schema-class error without echoing the slug",
+        _corrections_family_errors(banned_slug_result, "schema refusal",
+                                   "slug")
+        and banned_slug_result is not None
+        and not any(
+            "source_digest-evil" in line
+            for line in banned_slug_result.errors
+            + banned_slug_result.warnings
+        ),
+    )
+    escape_slug_result = plan_arm(
+        "plan-slug-escape",
+        slug="../evil",
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D2),
+    )
+    check(
+        "a path-escaping seal slug refuses as a schema-class error naming "
+        "the shape rule",
+        _corrections_family_errors(escape_slug_result, "schema refusal",
+                                   "slug"),
+    )
+    gate_slug_repo, gate_slug_fx = _grading_plan_fixture(cleanup)
+    gate_slug_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug="source_digest-evil")
+    gate_slug_payload["extensions"] = {
+        "certified_range": {"base": "a" * 40, "head": "b" * 40}}
+    gate_slug_result = _graded_staging_call(
+        _grading_stage(root, "plan-slug-gate", gate_slug_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D1),
+        source_kind="plan",
+        corrections_context=_plan_context(gate_slug_repo),
+    )
+    check(
+        "the corrections schema gate refuses a seal slug outside the safe "
+        "shape before any verification leg runs",
+        gate_slug_result is not None and not gate_slug_result.ok
+        and _corrections_family_errors(gate_slug_result, "schema refusal",
+                                       "slug"),
+    )
+
+    # Bare rewrite: declared equals the current bytes but neither the
+    # round-start digest nor a verifying chain anchors it.
+    rewrite_result = plan_arm(
+        "plan-bare-rewrite",
+        declared=cr.sha256_hex(_CORRECTIONS_D2),
+        expected=cr.sha256_hex(_CORRECTIONS_D2),
+    )
+    check(
+        "bare rewrite refuses as an unwitnessed sidecar digest mutation (anchor leg)",
+        _corrections_family_errors(rewrite_result, "anchor leg refused",
+                                   "bare rewrite"),
+    )
+
+    # Moved preamble-recorded anchor: the seal entry's round-start commit
+    # is not an ancestor of HEAD.
+    moved_result = plan_arm(
+        "plan-moved-anchor",
+        fixture_kwargs={"orphan_start": True},
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D1),
+        current=_CORRECTIONS_D1,
+    )
+    check(
+        "moved anchor refuses: a seal entry whose round-start commit is not an ancestor of HEAD names the anchor leg",
+        _corrections_family_errors(moved_result, "anchor leg refused",
+                                   "not an ancestor"),
+    )
+
+    # Digest-binding refusal: the plan blob evidence leg. The row's declared
+    # after digest does not re-hash to the blob at its evidence commit.
+    binding_repo, binding_fx = _grading_plan_fixture(cleanup)
+    binding_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(binding_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", binding_fx["start"], "--emit-row"))
+    binding_row["after_digest"] = "e" * 64
+    binding_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-binding",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [binding_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(binding_repo),
+    )
+    check(
+        "digest-binding refusal: a declared after digest mismatching the re-derived plan blob names the binding leg",
+        _corrections_family_errors(binding_result, "binding", "after digest"),
+    )
+
+    # Linkage refusal: a second row chaining from a wrong digest.
+    linkage_repo, linkage_fx = _grading_plan_fixture(cleanup)
+    linkage_first = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(linkage_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", linkage_fx["start"], "--emit-row"))
+    linkage_second = dict(linkage_first,
+                          before_digest=cr.sha256_hex(_CORRECTIONS_D1))
+    linkage_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-linkage",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [linkage_first,
+                                              linkage_second]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(linkage_repo),
+    )
+    check(
+        "linkage refusal: a row declaring a before digest differing from the previous row's after digest names the linkage leg",
+        _corrections_family_errors(linkage_result, "linkage leg refused",
+                                   "before digest"),
+    )
+
+    # Classification refusal: a record claiming exempt over a semantic word
+    # change (the smuggled-edit shape).
+    classify_repo = _sibling("corrections_record").build_scratch_repo(cleanup)
+    classify_start = classify_repo.commit_file(
+        _CORRECTIONS_PLAN_REL, _CORRECTIONS_D1, "seed plan")
+    classify_close = classify_repo.commit_allow_empty("round 1 close")
+    classify_repo.append_seal_entry(
+        _CORRECTIONS_PLAN_SLUG, 1, _CORRECTIONS_PLAN_REL, classify_start,
+        cr.sha256_hex(_CORRECTIONS_D1), classify_close)
+    classify_hop = classify_repo.commit_file(
+        _CORRECTIONS_PLAN_REL, _CORRECTIONS_D3, "smuggled word change")
+    smuggled_row = {
+        "kind": cr.KIND_SCRIPT_VERIFIED,
+        "before_digest": cr.sha256_hex(_CORRECTIONS_D1),
+        "after_digest": cr.sha256_hex(_CORRECTIONS_D3),
+        "evidence_commit": classify_hop,
+        "hunks": [{"header": "@@ -3 +3 @@",
+                   "digest": cr.sha256_hex(b"hunk-bytes")}],
+        "recorded_at": "2026-10-04T00:00:00Z",
+        "recorded_by": "plan_delta_classifier",
+    }
+    classify_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-classify",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D3),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [smuggled_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D3),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            classify_repo, current_bytes=_CORRECTIONS_D3),
+    )
+    check(
+        "classification refusal: a record claiming exempt over a semantic word change names the classification leg",
+        _corrections_family_errors(classify_result, "classification",
+                                   "not exempt"),
+    )
+
+    # Ack-receipt refusal: an operator-acked row with no resolvable witness.
+    ack_repo, ack_fx = _grading_plan_fixture(cleanup)
+    ack_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(ack_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", ack_fx["start"], "--emit-row"))
+    ack_row = dict(ack_row, kind=cr.KIND_OPERATOR_ACKED,
+                   receipt=dict(_GRADING_ACK_RECEIPT))
+    ack_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-ack",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [ack_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(ack_repo),
+    )
+    check(
+        "ack-receipt refusal: an operator-acked row without a resolvable witness names the receipt leg",
+        _corrections_family_errors(ack_result, "receipt"),
+    )
+
+    # Terminal refusal: a chain ending away from the current bytes.
+    terminal_repo, terminal_fx = _grading_plan_fixture(cleanup)
+    terminal_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(terminal_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", terminal_fx["start"], "--emit-row"))
+    terminal_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-terminal",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [terminal_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D3),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            terminal_repo, current_bytes=_CORRECTIONS_D3),
+    )
+    check(
+        "terminal refusal: a chain whose last after digest does not match the current bytes names the terminal leg",
+        _corrections_family_errors(terminal_result, "terminal leg refused",
+                                   "current bytes"),
+    )
+
+    # Seal-integrity refusal: a hop commit dated before the seal commit.
+    dating_repo, dating_fx = _grading_plan_fixture(
+        cleanup, hop_date=1700000000)
+    dating_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(dating_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", dating_fx["start"], "--emit-row"))
+    dating_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-dating",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [dating_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(dating_repo),
+    )
+    check(
+        "certified-seal arm: a hop commit dated before the seal commit refuses naming the seal leg",
+        _corrections_family_errors(dating_result, "seal leg refused",
+                                   "dated before"),
+    )
+
+    # Pre-seal certifications degrade to today's exact-match rule with a
+    # named warning instead of refusing.
+    noseal_fresh_result = plan_arm(
+        "plan-noseal-fresh",
+        fixture_kwargs={"with_seal": False},
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D1),
+        current=_CORRECTIONS_D1,
+    )
+    check(
+        "pre-seal certification degrades: a matching digest with no seal entry passes with a named warning",
+        noseal_fresh_result is not None and noseal_fresh_result.ok
+        and any("degraded" in w for w in noseal_fresh_result.warnings),
+    )
+    noseal_stale_result = plan_arm(
+        "plan-noseal-stale",
+        fixture_kwargs={"with_seal": False},
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D2),
+    )
+    check(
+        "pre-seal certification degrades: a mismatched digest with no seal entry keeps today's stale error beside the warning",
+        noseal_stale_result is not None and not noseal_stale_result.ok
+        and any("source_digest is stale" in e
+                for e in noseal_stale_result.errors)
+        and any("degraded" in w for w in noseal_stale_result.warnings),
+    )
+
+    # The honest clean shape: declared equals both the expected bytes digest
+    # and the seal's round-start digest; the arm passes silently.
+    clean_result = plan_arm(
+        "plan-clean",
+        declared=cr.sha256_hex(_CORRECTIONS_D1),
+        expected=cr.sha256_hex(_CORRECTIONS_D1),
+        current=_CORRECTIONS_D1,
+    )
+    check(
+        "honest clean shape passes silently: declared equals both the expected digest and the round-start digest",
+        clean_result is not None and clean_result.ok
+        and not any("re-bind" in w or "degraded" in w
+                    for w in clean_result.warnings),
+    )
+
+    # A declared record verifies even when the declared digest matches the
+    # current bytes (arming is not keyed on a mismatch).
+    rebound_repo, rebound_fx = _grading_plan_fixture(cleanup)
+    rebound_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(rebound_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", rebound_fx["start"], "--emit-row"))
+    rebound_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-rebound-declared",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [rebound_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(rebound_repo),
+    )
+    check(
+        "arming is not keyed on a mismatch: a declared record beside a matching digest still verifies and passes",
+        rebound_result is not None and rebound_result.ok
+        and not rebound_result.errors,
+    )
+
+    # Indeterminate: an unresolvable evidence commit classifies
+    # indeterminate naming where.
+    indeterminate_repo, indeterminate_fx = _grading_plan_fixture(cleanup)
+    unresolvable_row = {
+        "kind": cr.KIND_SCRIPT_VERIFIED,
+        "before_digest": cr.sha256_hex(_CORRECTIONS_D1),
+        "after_digest": cr.sha256_hex(_CORRECTIONS_D2),
+        "evidence_commit": "f" * 40,
+        "hunks": [{"header": "@@ -3 +3 @@",
+                   "digest": cr.sha256_hex(b"hunk-bytes")}],
+        "recorded_at": "2026-10-04T00:00:00Z",
+        "recorded_by": "plan_delta_classifier",
+    }
+    indeterminate_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-indeterminate",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [unresolvable_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(indeterminate_repo),
+    )
+    check(
+        "indeterminate: an unresolvable evidence commit classifies indeterminate naming where",
+        indeterminate_result is not None
+        and getattr(indeterminate_result, "indeterminate_reason", None)
+        is not None
+        and "unresolvable" in indeterminate_result.indeterminate_reason,
+    )
+
+    # ------------------------------------------------------------------
+    # The graded stale arm, code family (library surface)
+    # ------------------------------------------------------------------
+    code_repo, code_fx = _grading_code_fixture(cleanup)
+    code_row = _minted_row(_run_cli(
+        "code_delta_classifier.py",
+        "--fix-commits", code_fx["c2"], code_fx["c3"],
+        "--base", code_fx["b0"], "--repo", str(code_repo.root),
+        "--emit-row"))
+    code_declared = cr.sha256_hex(code_fx["certified"])
+    code_expected = cr.sha256_hex(cr.diff_bytes(
+        code_repo.root, code_fx["b0"], code_fx["c3"]))
+    code_accept_result = _graded_staging_call(
+        _grading_stage(
+            root, "code-accept",
+            _grading_v1_payload("code", code_declared,
+                                slug=_CORRECTIONS_CODE_SLUG)
+            | {"extensions": {
+                "corrections": [code_row],
+                "certified_range": {"base": code_fx["b0"],
+                                    "head": code_fx["c2"]}}}),
+        hard=True,
+        expected_digest=code_expected,
+        source_kind="code",
+        corrections_context=_code_context(code_repo),
+    )
+    check(
+        "accepted code re-bind: a comment-only fix with a verified record passes with no stale error",
+        code_accept_result is not None and code_accept_result.ok
+        and not code_accept_result.errors,
+    )
+
+    doc_repo, doc_fx = _grading_code_fixture(
+        cleanup, fix_bytes=_CODE_V_DOCSTRING)
+    # The claimed row is hand-crafted on purpose: the classifier refuses to
+    # mint a row over an unclassified delta, and this arm witnesses the
+    # validator refusing the same claim after re-deriving the hop diff.
+    doc_row = {**code_row,
+               "before_digest": cr.sha256_hex(doc_fx["certified"]),
+               "after_digest": cr.sha256_hex(cr.diff_bytes(
+                   doc_repo.root, doc_fx["c2"], doc_fx["c3"])),
+               "before_base": doc_fx["b0"], "before_head": doc_fx["c2"],
+               "after_base": doc_fx["c2"], "after_head": doc_fx["c3"]}
+    doc_result = _graded_staging_call(
+        _grading_stage(
+            root, "code-docstring",
+            _grading_v1_payload("code", cr.sha256_hex(doc_fx["certified"]),
+                                slug=_CORRECTIONS_CODE_SLUG)
+            | {"extensions": {
+                "corrections": [doc_row],
+                "certified_range": {"base": doc_fx["b0"],
+                                    "head": doc_fx["c2"]}}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(cr.diff_bytes(
+            doc_repo.root, doc_fx["b0"], doc_fx["c3"])),
+        source_kind="code",
+        corrections_context=_code_context(doc_repo),
+    )
+    check(
+        "per-kind refuse witness: a regenerated code hop diff containing a docstring edit names the classification leg",
+        _corrections_family_errors(doc_result, "classification",
+                                   "not exempt"),
+    )
+
+    range_repo, range_fx = _grading_code_fixture(cleanup)
+    range_result = _graded_staging_call(
+        _grading_stage(
+            root, "code-range",
+            _grading_v1_payload("code", cr.sha256_hex(range_fx["certified"]),
+                                slug=_CORRECTIONS_CODE_SLUG)
+            | {"extensions": {
+                "certified_range": {"base": range_fx["b0"],
+                                    "head": range_fx["c1"]}}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(cr.diff_bytes(
+            range_repo.root, range_fx["b0"], range_fx["c3"])),
+        source_kind="code",
+        corrections_context=_code_context(range_repo),
+    )
+    check(
+        "certified-seal arm: a sidecar range differing from the certification seal refuses naming the seal leg",
+        _corrections_family_errors(range_result, "seal leg refused",
+                                   "certified range"),
+    )
+
+    code_stale_result = _graded_staging_call(
+        _grading_stage(
+            root, "code-stale",
+            _grading_v1_payload("code", cr.sha256_hex(range_fx["certified"]),
+                                slug=_CORRECTIONS_CODE_SLUG)),
+        hard=True,
+        expected_digest=cr.sha256_hex(cr.diff_bytes(
+            range_repo.root, range_fx["b0"], range_fx["c3"])),
+        source_kind="code",
+        corrections_context=_code_context(range_repo),
+    )
+    check(
+        "code stale without a record keeps today's stale error",
+        code_stale_result is not None and not code_stale_result.ok
+        and any("source_digest is stale" in e
+                for e in code_stale_result.errors),
+    )
+
+    # ------------------------------------------------------------------
+    # Distinct routing-safe reasons per leg
+    # ------------------------------------------------------------------
+    leg_reasons = {}
+    for leg, arm_result in (
+        ("anchor", rewrite_result),
+        ("binding", binding_result),
+        ("linkage", linkage_result),
+        ("classification", classify_result),
+        ("receipt", ack_result),
+        ("terminal", terminal_result),
+    ):
+        if arm_result is not None:
+            leg_reasons[leg] = next(
+                (e for e in arm_result.errors
+                 if e.startswith(cr.MARKER_PREFIX)), None)
+    distinct = (
+        len(leg_reasons) == 6
+        and all(leg_reasons[leg] is not None for leg in leg_reasons)
+        and len(set(leg_reasons.values())) == 6
+    )
+    check(
+        "each verification leg surfaces a distinct routing-safe reason carrying the marker prefix and no banned literal",
+        distinct,
+    )
+
+    # ------------------------------------------------------------------
+    # Production-shaped CLI arms over the scratch repo
+    # ------------------------------------------------------------------
+
+    def cli_call(argv):
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), \
+                contextlib.redirect_stderr(err_buf):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    cli_repo, cli_fx = _grading_code_fixture(cleanup)
+    cli_row = _minted_row(_run_cli(
+        "code_delta_classifier.py",
+        "--fix-commits", cli_fx["c2"], cli_fx["c3"],
+        "--base", cli_fx["b0"], "--repo", str(cli_repo.root),
+        "--emit-row"))
+    cli_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(cli_fx["certified"]),
+        slug=_CORRECTIONS_CODE_SLUG)
+    cli_payload["extensions"] = {
+        "corrections": [cli_row],
+        "certified_range": {"base": cli_fx["b0"], "head": cli_fx["c2"]},
+    }
+    cli_md = _grading_stage(root, "cli-accept", cli_payload, kind="code")
+    cli_sidecar = cli_md.with_suffix(".stats.json")
+    cli_rc, cli_out, cli_err = cli_call(
+        ["--hard", str(cli_md),
+         "--source-code-repo", str(cli_repo.root),
+         "--source-code-plan", str(cli_sidecar)])
+    check(
+        "CLI code context: the production-shaped invocation over a scratch repo exits 0",
+        cli_rc == 0 and cli_out.rstrip().endswith("OUTCOME: pass"),
+    )
+    check(
+        "CLI code context: the accepted re-bind warning names the verified chain",
+        "accepted re-bind" in cli_err and "chain verified" in cli_err,
+    )
+
+    range_cli_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(cli_fx["certified"]),
+        slug=_CORRECTIONS_CODE_SLUG)
+    range_cli_payload["extensions"] = {
+        "corrections": [cli_row],
+        "certified_range": {"base": cli_fx["b0"], "head": cli_fx["c1"]},
+    }
+    range_md = _grading_stage(root, "cli-range", range_cli_payload,
+                              kind="code")
+    range_rc, _range_out, range_err = cli_call(
+        ["--hard", str(range_md),
+         "--source-code-repo", str(cli_repo.root),
+         "--source-code-plan", str(range_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: a sidecar range differing from the seal exits 1 with the corrections-family error",
+        range_rc == 1
+        and "corrections verification:" in range_err
+        and "certified range" in range_err,
+    )
+
+    unresolvable_cli_row = dict(cli_row, after_head="f" * 40)
+    unresolvable_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(cli_fx["certified"]),
+        slug=_CORRECTIONS_CODE_SLUG)
+    unresolvable_payload["extensions"] = {
+        "corrections": [unresolvable_cli_row],
+        "certified_range": {"base": cli_fx["b0"], "head": cli_fx["c2"]},
+    }
+    unresolvable_md = _grading_stage(root, "cli-indeterminate",
+                                     unresolvable_payload, kind="code")
+    unresolvable_rc, unresolvable_out, unresolvable_err = cli_call(
+        ["--hard", str(unresolvable_md),
+         "--source-code-repo", str(cli_repo.root),
+         "--source-code-plan",
+         str(unresolvable_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: an unresolvable correction ref exits 2 with OUTCOME: indeterminate naming where",
+        unresolvable_rc == 2
+        and unresolvable_out.rstrip().endswith("OUTCOME: indeterminate")
+        and "unresolvable" in unresolvable_err,
+    )
+
+    half_flag_md = _grading_stage(root, "cli-half-flag", cli_payload,
+                                  kind="code")
+    half_rc, _half_out, half_err = cli_call(
+        ["--hard", str(half_flag_md),
+         "--source-code-repo", str(cli_repo.root)])
+    exclusive_rc, _exclusive_out, _exclusive_err = cli_call(
+        ["--hard", str(half_flag_md),
+         "--source-plan", str(half_flag_md),
+         "--source-code-repo", str(cli_repo.root),
+         "--source-code-plan", str(half_flag_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: the flags are jointly required and exclusive with the source-file flags (usage tool error)",
+        half_rc == 3 and exclusive_rc == 3
+        and "OUTCOME: tool_error" in half_err,
+    )
+
+    # ------------------------------------------------------------------
+    # r1 fold R2: the operator-ack witness threading (production CLI arms)
+    # ------------------------------------------------------------------
+    ack_cli_repo, ack_cli_fx = _grading_plan_fixture(cleanup)
+    ack_witness_path = root / "ack-witness-r2.record"
+    ack_witness_path.write_text("\n".join([
+        "turn: authorize-rebind",
+        "writer: scheduler-turn-writer",
+        "operator_direction: accept the typography re-bind",
+        "artifact: %s" % _CORRECTIONS_PLAN_REL,
+        "before_digest: %s" % cr.sha256_hex(_CORRECTIONS_D1),
+        "after_digest: %s" % cr.sha256_hex(_CORRECTIONS_D2),
+    ]) + "\n")
+    ack_receipt_path = root / "ack-receipt-r2.json"
+    ack_receipt_path.write_text(json.dumps({
+        "directive": "accept the typography re-bind",
+        "authorization_witness": str(ack_witness_path),
+        "classifier_gap_row": "docs/history/backlog/ack-gap-r2.md",
+    }))
+    ack_cli_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", ack_cli_fx["start"], "--emit-row",
+        "--kind", "operator-acked",
+        "--receipt", str(ack_receipt_path)))
+    ack_cli_repo.write_file(
+        "docs/history/backlog/ack-gap-r2.md",
+        "# classifier gap\n\nproposal: a typography bucket covering hunk "
+        "digest %s\n" % ack_cli_row["hunks"][0]["digest"])
+    ack_md_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG)
+    ack_md_payload["extensions"] = {"corrections": [ack_cli_row]}
+    ack_md = _grading_stage(root, "cli-ack-witness", ack_md_payload)
+    ack_witnessed_rc, ack_witnessed_out, _ack_witnessed_err = cli_call(
+        ["--hard", str(ack_md),
+         "--source-plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL),
+         "--ack-witness", str(ack_witness_path)])
+    check(
+        "CLI ack witness: a complete operator-acked receipt with its witness record and gap row resolves through the graded plan gate (exit 0)",
+        ack_witnessed_rc == 0
+        and ack_witnessed_out.rstrip().endswith("OUTCOME: pass"),
+    )
+    ack_default_rc, _ack_default_out, ack_default_err = cli_call(
+        ["--hard", str(ack_md),
+         "--source-plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL)])
+    check(
+        "CLI ack witness: the same shape without --ack-witness keeps the unattended default (exit 1 naming the receipt leg)",
+        ack_default_rc == 1
+        and "corrections verification:" in ack_default_err
+        and "receipt" in ack_default_err,
+    )
+
+    code_ack_repo, code_ack_fx = _grading_code_fixture(cleanup)
+    code_ack_witness_path = root / "ack-witness-r2-code.record"
+    code_ack_witness_path.write_text("\n".join([
+        "turn: authorize-rebind",
+        "writer: scheduler-turn-writer",
+        "operator_direction: accept the comment-only re-bind",
+        "artifact: %s" % _CORRECTIONS_SRC_REL,
+        "before_digest: %s" % cr.sha256_hex(code_ack_fx["certified"]),
+        "after_digest: %s" % cr.sha256_hex(cr.diff_bytes(
+            code_ack_repo.root, code_ack_fx["c2"], code_ack_fx["c3"])),
+    ]) + "\n")
+    code_ack_receipt_path = root / "ack-receipt-r2-code.json"
+    code_ack_receipt_path.write_text(json.dumps({
+        "directive": "accept the comment-only re-bind",
+        "authorization_witness": str(code_ack_witness_path),
+        "classifier_gap_row": "docs/history/backlog/ack-gap-r2-code.md",
+    }))
+    code_ack_row = _minted_row(_run_cli(
+        "code_delta_classifier.py",
+        "--fix-commits", code_ack_fx["c2"], code_ack_fx["c3"],
+        "--base", code_ack_fx["b0"], "--repo", str(code_ack_repo.root),
+        "--emit-row", "--kind", "operator-acked",
+        "--receipt", str(code_ack_receipt_path),
+        "--ack-witness", str(code_ack_witness_path)))
+    code_ack_repo.write_file(
+        "docs/history/backlog/ack-gap-r2-code.md",
+        "# classifier gap\n\nproposal: a typography bucket covering hunk "
+        "digest %s\n" % code_ack_row["hunks"][0]["digest"])
+    code_ack_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(code_ack_fx["certified"]),
+        slug=_CORRECTIONS_CODE_SLUG)
+    code_ack_payload["extensions"] = {
+        "corrections": [code_ack_row],
+        "certified_range": {"base": code_ack_fx["b0"],
+                            "head": code_ack_fx["c2"]},
+    }
+    code_ack_md = _grading_stage(root, "cli-ack-witness-code",
+                                 code_ack_payload, kind="code")
+    code_ack_rc, code_ack_out, _code_ack_err = cli_call(
+        ["--hard", str(code_ack_md),
+         "--source-code-repo", str(code_ack_repo.root),
+         "--source-code-plan", str(code_ack_md.with_suffix(".stats.json")),
+         "--ack-witness", str(code_ack_witness_path)])
+    check(
+        "CLI ack witness: a complete code-family operator-acked receipt resolves through the graded code gate (exit 0)",
+        code_ack_rc == 0
+        and code_ack_out.rstrip().endswith("OUTCOME: pass"),
+    )
+    code_ack_default_rc, _code_ack_default_out, code_ack_default_err = \
+        cli_call(
+            ["--hard", str(code_ack_md),
+             "--source-code-repo", str(code_ack_repo.root),
+             "--source-code-plan",
+             str(code_ack_md.with_suffix(".stats.json"))])
+    check(
+        "CLI ack witness: the code-family shape without --ack-witness keeps the unattended default (exit 1 naming the receipt leg)",
+        code_ack_default_rc == 1
+        and "corrections verification:" in code_ack_default_err
+        and "receipt" in code_ack_default_err,
+    )
+
+    # ------------------------------------------------------------------
+    # r1 fold M1: one seal slug derivation across both graded surfaces
+    # ------------------------------------------------------------------
+    dated_rel = "docs/history/plans/2026-09-22-acme-plan.md"
+    feature_slug_value = "acme-plan"
+    divergent_slug = "acme-plan-superseded"
+    slug_repo, slug_fx = _grading_plan_fixture(
+        cleanup, plan_rel=dated_rel, slug=feature_slug_value)
+    slug_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(slug_repo.root / dated_rel),
+        "--since", slug_fx["start"], "--emit-row"))
+    slug_lib_result = _graded_staging_call(
+        _grading_stage(
+            root, "slug-lib",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=divergent_slug)
+            | {"extensions": {"corrections": [slug_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            slug_repo, slug=feature_slug_value, artifact_path=dated_rel),
+    )
+    check(
+        "graded slug convergence: the readiness-shaped surface (context slug = the plan's feature slug) verifies the chain beside a divergent sidecar artifact_slug",
+        slug_lib_result is not None and slug_lib_result.ok
+        and not slug_lib_result.errors,
+    )
+    slug_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=divergent_slug)
+    slug_payload["extensions"] = {"corrections": [slug_row]}
+    slug_md = _grading_stage(root, "slug-cli", slug_payload)
+    slug_rc, slug_out, _slug_err = cli_call(
+        ["--hard", str(slug_md),
+         "--source-plan", str(slug_repo.root / dated_rel)])
+    check(
+        "graded slug convergence: the staging CLI surface derives the same feature slug from the artifact path and exits 0 on the identical shape",
+        slug_rc == 0 and slug_out.rstrip().endswith("OUTCOME: pass"),
+    )
+    tamper_md = _grading_stage(
+        root, "slug-tamper",
+        _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D3),
+                            slug=divergent_slug))
+    tamper_lib_result = _graded_staging_call(
+        tamper_md, hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            slug_repo, current_bytes=_CORRECTIONS_D2,
+            slug=feature_slug_value, artifact_path=dated_rel),
+    )
+    check(
+        "graded slug convergence: the tampered declared digest refuses as a bare rewrite on the readiness-shaped surface",
+        _corrections_family_errors(tamper_lib_result, "bare rewrite"),
+    )
+    tamper_rc, _tamper_out, tamper_err = cli_call(
+        ["--hard", str(tamper_md),
+         "--source-plan", str(slug_repo.root / dated_rel)])
+    check(
+        "graded slug convergence: the tampered declared digest refuses as a bare rewrite on the staging CLI surface too",
+        tamper_rc == 1
+        and "corrections verification:" in tamper_err
+        and "bare rewrite" in tamper_err,
+    )
+
+    # ------------------------------------------------------------------
+    # Canonical artifact slug across the graded surfaces (plan-review
+    # slug-case plan, Task 2): an uppercase-story plan filename resolves
+    # its certification seal at the lowercase canonical slug on both
+    # graded surfaces, and an unsafe-stem artifact path with a shape-safe
+    # declared slug degrades to the declared slug without a traceback.
+    # ------------------------------------------------------------------
+    story_repo, story_fx = _grading_plan_fixture(
+        cleanup, plan_rel=_STORY_PLAN_REL, slug=_STORY_CANONICAL_SLUG)
+    story_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(story_repo.root / _STORY_PLAN_REL),
+        "--since", story_fx["start"], "--emit-row"))
+    story_lib_result = _graded_staging_call(
+        _grading_stage(
+            root, "story-lib",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [story_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            story_repo, slug=_STORY_CANONICAL_SLUG,
+            artifact_path=_STORY_PLAN_REL),
+    )
+    check(
+        "story-key canonicalization: a corrections verification whose evidence context slug is the lowercase canonical form of an uppercase-story plan resolves the seal entry at the lowercase relpath",
+        story_lib_result is not None and story_lib_result.ok
+        and not story_lib_result.errors,
+    )
+    # The context-less discriminator carries NO corrections extension: with
+    # one present, the extensions schema gate owns the post-fallback shape
+    # refusal and a non-switched helper would degrade silently, so the
+    # record-free freshness shape is the one that reports the refusal and
+    # proves the fallback switched (the seal sits at the round-start digest,
+    # so the zero-hop anchor grades the declared digest green post-change).
+    story_fresh_repo = cr.build_scratch_repo(cleanup)
+    story_start = story_fresh_repo.commit_file(
+        _STORY_PLAN_REL, _CORRECTIONS_D1, "seed plan")
+    story_close = story_fresh_repo.commit_allow_empty("round 1 close")
+    story_fresh_repo.append_seal_entry(
+        _STORY_CANONICAL_SLUG, 1, _STORY_PLAN_REL, story_start,
+        cr.sha256_hex(_CORRECTIONS_D1), story_close)
+    story_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    story_md = _grading_stage(root, "story-cli", story_payload)
+    story_rc, story_out, _story_err = cli_call(
+        ["--hard", str(story_md),
+         "--source-plan", str(story_fresh_repo.root / _STORY_PLAN_REL)])
+    check(
+        "story-key canonicalization: a context-less plan-family verification whose artifact path carries the uppercase story name resolves the same lowercase seal through the switched fallback (exit 0)",
+        story_rc == 0 and story_out.rstrip().endswith("OUTCOME: pass"),
+    )
+    unsafe_repo, unsafe_fx = _grading_plan_fixture(
+        cleanup, plan_rel=_UNSAFE_PLAN_REL, slug=_CORRECTIONS_PLAN_SLUG)
+    unsafe_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(unsafe_repo.root / _UNSAFE_PLAN_REL),
+        "--since", unsafe_fx["start"], "--emit-row"))
+    unsafe_lib_result = _graded_staging_call(
+        _grading_stage(
+            root, "unsafe-lib",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [unsafe_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(
+            unsafe_repo, artifact_path=_UNSAFE_PLAN_REL),
+    )
+    check(
+        "story-key canonicalization: an unsafe-stem artifact path with a shape-safe declared slug maps the derivation refusal to None so the seal resolves at the declared slug, with no traceback escaping --hard",
+        unsafe_lib_result is not None and unsafe_lib_result.ok
+        and not unsafe_lib_result.errors,
+    )
+
+    cleanup.run()
+
+
+# ---------------------------------------------------------------------------
+# Embedded finding-construction example (finding-template plan, Task 1). The
+# review-staging skill's recipe section fences one minimal-valid example pair
+# (staging doc + stats sidecar) between stable HTML-comment markers; the pair
+# is load-bearing documentation: the selftest extracts it verbatim,
+# materializes it to a temporary directory, and validates it green under the
+# hard schema check, so a schema change that invalidates the documented shape
+# fails the suite in the same edit. The marker grammar below is the stable
+# fence contract this task introduced; the extractor and the repository test
+# suite share it.
+# ---------------------------------------------------------------------------
+
+EMBEDDED_EXAMPLE_MARKER_RE = re.compile(
+    r"^<!-- canonical-example:([a-z-]+) (begin|end) -->\s*$"
+)
+EMBEDDED_EXAMPLE_ROLES = ("staging-doc", "stats-sidecar")
+# Repo-relative home of the fenced example, resolved against this script's
+# parent directory so the in-repo copy and any installed symlink both
+# resolve to the same corpus file.
+EMBEDDED_EXAMPLE_SKILL_RELPATH = "agents/skills/review-staging/SKILL.md"
+# The staging filename the documented pair carries: a plan-review record
+# (the readiness-glob family) dated at writing time, matching the skill
+# example's own Metadata Date line and sidecar date field.
+EMBEDDED_EXAMPLE_STAGING_NAME = (
+    "2026-10-05-plan-review-demo-telemetry-export-r1.md"
+)
+# The skill line that inlines the three validator-enumerated vocabularies
+# (parsed as `field: value | value; ...` segments and asserted against the
+# VALID_* sets so a drifted spelling fails the suite).
+EMBEDDED_EXAMPLE_ENUM_LINE_PREFIX = "- Closed enums:"
+
+
+def embedded_example_skill_path() -> Path:
+    """Absolute path of the skill file carrying the fenced example pair."""
+    return (
+        Path(__file__).resolve().parent.parent / EMBEDDED_EXAMPLE_SKILL_RELPATH
+    )
+
+
+def _strip_example_boundary_fences(lines: list[str]) -> str:
+    """Drop the outer fence pair the skill wraps each extracted file in."""
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    if lines and set(lines[-1].strip()) <= {"`"}:
+        lines = lines[:-1]
+    return "\n".join(lines) + "\n"
+
+
+def extract_embedded_recipe_example(skill_text: str) -> dict[str, str]:
+    """Extract the fenced canonical example pair from the skill text.
+
+    Returns a dict keyed by the marker role (``staging-doc``,
+    ``stats-sidecar``) holding the file contents between that role's
+    begin/end markers with the boundary fence pair stripped. Raises
+    ValueError on missing, nested, unterminated, or unbalanced markers so
+    callers fail loudly instead of validating an empty extraction.
+    """
+    roles: dict[str, str] = {}
+    current_role: str | None = None
+    buffer: list[str] = []
+    for line in skill_text.splitlines():
+        match = EMBEDDED_EXAMPLE_MARKER_RE.match(line)
+        if match:
+            role, bound = match.group(1), match.group(2)
+            if bound == "begin":
+                if current_role is not None:
+                    raise ValueError(
+                        "embedded example: nested begin marker for "
+                        f"{role!r} inside {current_role!r}"
+                    )
+                current_role, buffer = role, []
+                continue
+            if current_role != role:
+                raise ValueError(
+                    f"embedded example: end marker for {role!r} without "
+                    "its begin"
+                )
+            roles[role] = _strip_example_boundary_fences(buffer)
+            current_role = None
+            continue
+        if current_role is not None:
+            buffer.append(line)
+    if current_role is not None:
+        raise ValueError(
+            "embedded example: unterminated begin marker for "
+            f"{current_role!r}"
+        )
+    missing = [r for r in EMBEDDED_EXAMPLE_ROLES if r not in roles]
+    if missing:
+        raise ValueError(
+            f"embedded example: missing fence markers for {missing}"
+        )
+    return roles
+
+
+def _embedded_example_enum_vocabs(skill_text: str) -> dict[str, set[str]]:
+    """Parse the recipe's inlined Closed enums line into field vocabularies.
+
+    Raises ValueError when the line is absent so the selftest check fails
+    loudly rather than comparing against an empty dict.
+    """
+    enum_line = next(
+        (
+            line
+            for line in skill_text.splitlines()
+            if line.lstrip().startswith(EMBEDDED_EXAMPLE_ENUM_LINE_PREFIX)
+        ),
+        None,
+    )
+    if enum_line is None:
+        raise ValueError(
+            "embedded example: no Closed enums line in the skill text"
+        )
+    vocabs: dict[str, set[str]] = {}
+    for segment in enum_line.split(":", 1)[1].split(";"):
+        field, _sep, values = segment.partition(":")
+        vocabs[field.strip()] = {
+            value.strip().strip("`") for value in values.split("|")
+        }
+    return vocabs
+
+
+def _selftest_embedded_recipe_example(root: Path, check) -> None:
+    """Family: the review-staging skill's embedded finding-construction
+    example pair (finding-template plan, Task 1). The skill's recipe section
+    fences one minimal-valid example pair; this family extracts it verbatim
+    through the shared marker grammar, materializes both files in a
+    temporary directory, and validates it green under the hard schema check,
+    then proves the example's fields are load-bearing with per-field
+    malformed variants (each failing with its named error) and asserts the
+    recipe's inlined Closed enums line against this validator's own
+    vocabularies, so a schema change that invalidates the documented shape
+    fails the suite in the same edit."""
+    skill_path = embedded_example_skill_path()
+    if not skill_path.is_file():
+        check("embedded example: the review-staging skill file exists", False)
+        return
+    check("embedded example: the review-staging skill file exists", True)
+    skill_text = skill_path.read_text(encoding="utf-8")
+    try:
+        example = extract_embedded_recipe_example(skill_text)
+    except ValueError as exc:
+        check(f"embedded example: fence markers extract ({exc})", False)
+        return
+    check(
+        "embedded example: both fenced files extract verbatim",
+        set(example) == set(EMBEDDED_EXAMPLE_ROLES)
+        and all(example[role].strip() for role in EMBEDDED_EXAMPLE_ROLES),
+    )
+
+    pair_dir = root / "embedded-example"
+    pair_dir.mkdir()
+    staging = pair_dir / EMBEDDED_EXAMPLE_STAGING_NAME
+    staging.write_text(example["staging-doc"], encoding="utf-8")
+    staging.with_suffix(".stats.json").write_text(
+        example["stats-sidecar"], encoding="utf-8"
+    )
+    green = validate_staging_file(staging, hard=True)
+    check(
+        "embedded example: the extracted pair validates green under the "
+        "hard schema check",
+        green.ok,
+    )
+    if not green.ok:
+        return
+
+    base_md = example["staging-doc"]
+    base_payload = json.loads(example["stats-sidecar"])
+    finding = base_payload["findings"][0]
+
+    def variant(
+        name: str,
+        *,
+        md: str | None = None,
+        payload: dict | None = None,
+    ) -> ValidationResult:
+        vdir = root / f"embedded-variant-{name}"
+        vdir.mkdir()
+        vpath = vdir / EMBEDDED_EXAMPLE_STAGING_NAME
+        vpath.write_text(
+            base_md if md is None else md, encoding="utf-8"
+        )
+        vpath.with_suffix(".stats.json").write_text(
+            json.dumps(base_payload if payload is None else payload),
+            encoding="utf-8",
+        )
+        return validate_staging_file(vpath, hard=True)
+
+    bad_id = json.loads(json.dumps(base_payload))
+    bad_id["findings"][0] = {**finding, "id": "1"}
+    res = variant("non-integer-id", payload=bad_id)
+    check(
+        "embedded example: a non-integer finding id fails with the named "
+        "integer error",
+        not res.ok and any("id must be an integer" in e for e in res.errors),
+    )
+
+    bad_confidence = json.loads(json.dumps(base_payload))
+    bad_confidence["findings"][0] = {**finding, "confidence": "probable"}
+    res = variant("confidence", payload=bad_confidence)
+    check(
+        "embedded example: an out-of-enum confidence fails with the named "
+        "enum error",
+        not res.ok and any("invalid confidence" in e for e in res.errors),
+    )
+
+    missing_reachability = json.loads(json.dumps(base_payload))
+    del missing_reachability["findings"][0]["reachability"]
+    res = variant("reachability", payload=missing_reachability)
+    check(
+        "embedded example: a missing reachability fails with the named "
+        "missing-field error",
+        not res.ok and any("missing reachability" in e for e in res.errors),
+    )
+
+    res = variant("heading", md=base_md.replace("#### F1. ", "#### F1 ", 1))
+    check(
+        "embedded example: a noncanonical F<N> heading fails with the named "
+        "conservation error",
+        not res.ok
+        and any(
+            "no matching Markdown #### F block" in e for e in res.errors
+        ),
+    )
+
+    try:
+        vocabs = _embedded_example_enum_vocabs(skill_text)
+    except ValueError as exc:
+        check(f"embedded example: Closed enums line parses ({exc})", False)
+        return
+    check(
+        "embedded example: the inlined confidence enum equals the "
+        "validator vocabulary",
+        vocabs.get("confidence") == set(VALID_CONFIDENCE),
+    )
+    check(
+        "embedded example: the inlined reachability enum equals the "
+        "validator vocabulary",
+        vocabs.get("reachability") == set(VALID_REACHABILITY),
+    )
+    check(
+        "embedded example: the inlined blast-radius enum equals the "
+        "validator vocabulary",
+        vocabs.get("blast radius") == set(VALID_BLAST_RADIUS),
+    )
+
+
+def _selftest_preflight_inventory(root: Path, check) -> None:
+    """Family: the preflight full-inventory mode (authoring staging
+    preflight and certification-order gates plan, Task 1). One ``--preflight``
+    run is a report-only pass that reports every stage's findings together:
+    a stage whose input is absent reports that stage's required-input
+    inventory (derived from this file's own schema constants, never a second
+    hand-written list) while the remaining stages still execute against the
+    inputs that exist. Four contract arms: (1) a clean recipe-shaped staging
+    Markdown with no sidecar file names BOTH the missing sidecar file and
+    the version-1 sidecar's required top-level fields in one output (RED
+    before the mode exists: the same input reported only the one
+    missing-sidecar error); (2) defects in several stages at once surface in
+    one run (superset assertion, never an exact count; doubles as the
+    continuation regression pin); (3) the ``--hard`` posture's error sets
+    and exit codes equal the pre-change behavior exactly (characterization
+    pin, green before the mode exists); (4) findings never move the exit
+    code (report-only), while an unreadable input path keeps the outcome
+    contract's tool_error class beside usage violations, matching the
+    existing non-hard run for the same input."""
+    @contextlib.contextmanager
+    def _captured():
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            yield out_buf, err_buf
+
+    def call(argv: list[str]):
+        """Run main(argv) under both-stream capture; SystemExit is the
+        argparse errors' channel, so its code is the return value."""
+        with _captured() as (out_buf, err_buf):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def error_lines(err: str) -> list[str]:
+        return sorted(
+            line[len("ERROR: "):]
+            for line in err.splitlines()
+            if line.startswith("ERROR: ")
+        )
+
+    skill_path = embedded_example_skill_path()
+    if not skill_path.is_file():
+        check("preflight: the review-staging skill file exists", False)
+        return
+    check("preflight: the review-staging skill file exists", True)
+    skill_text = skill_path.read_text(encoding="utf-8")
+    try:
+        example = extract_embedded_recipe_example(skill_text)
+    except ValueError as exc:
+        check(f"preflight: recipe markers extract ({exc})", False)
+        return
+    check("preflight: the recipe pair extracts verbatim", True)
+    base_md = example["staging-doc"]
+    base_payload = json.loads(example["stats-sidecar"])
+
+    # Fixture A: clean recipe-shaped staging Markdown, no sidecar file (the
+    # witnessed cascade state: today's non-hard run reports exactly one
+    # error and teaches nothing about the sidecar inventory).
+    a_dir = root / "preflight-missing-sidecar"
+    a_dir.mkdir()
+    staging_a = a_dir / EMBEDDED_EXAMPLE_STAGING_NAME
+    staging_a.write_text(base_md, encoding="utf-8")
+    sidecar_name = stats_sidecar_path(staging_a).name
+
+    # Fixture B: staging Markdown missing two required sections plus a
+    # sidecar carrying three schema defects (a bad verdict enum value, a
+    # 40-hex digest, a missing extended field).
+    b_dir = root / "preflight-multi-stage"
+    b_dir.mkdir()
+    staging_b = b_dir / EMBEDDED_EXAMPLE_STAGING_NAME
+    md_b = base_md.replace("## Metadata\n", "", 1).replace(
+        "### Panel\n", "", 1
+    )
+    payload_b = json.loads(json.dumps(base_payload))
+    payload_b["verdict"] = "maybe"
+    payload_b["source_digest"] = "a" * 40
+    del payload_b["last_fix_commit"]
+    staging_b.write_text(md_b, encoding="utf-8")
+    staging_b.with_suffix(".stats.json").write_text(
+        json.dumps(payload_b), encoding="utf-8"
+    )
+
+    # Arm 1: the missing-sidecar run names the file AND the version-1
+    # sidecar's required top-level fields, derived from the schema
+    # constants, in the same output.
+    rc, out, err = call(["--preflight", str(staging_a)])
+    check("preflight missing-sidecar run exits 0", rc == 0)
+    check(
+        "preflight missing-sidecar run reports the missing sidecar file",
+        sidecar_name in err,
+    )
+    check(
+        "preflight missing-sidecar run names every version-1 required "
+        "top-level field in the same output",
+        [name for name in V1_REQUIRED_TOP_LEVEL_FIELDS
+         if f"'{name}'" in err] == list(V1_REQUIRED_TOP_LEVEL_FIELDS),
+    )
+    rc, out, err = call(["--json", "--preflight", str(staging_a)])
+    payload: dict = {}
+    if rc == 0 and out.strip():
+        payload = json.loads(out)
+    preflight_payload = payload.get("preflight", {})
+    inventories = preflight_payload.get("stage_inventories", [])
+    check("preflight json missing-sidecar run exits 0", rc == 0)
+    check(
+        "preflight json carries the report-only marker",
+        preflight_payload.get("report_only") is True,
+    )
+    check(
+        "preflight json carries the missing sidecar input by name",
+        any(
+            row.get("missing_input") == sidecar_name
+            for row in inventories
+            if isinstance(row, dict)
+        ),
+    )
+    check(
+        "preflight json carries the version-1 required top-level fields",
+        any(
+            row.get("required_top_level_fields")
+            == list(V1_REQUIRED_TOP_LEVEL_FIELDS)
+            for row in inventories
+            if isinstance(row, dict)
+        ),
+    )
+    check(
+        "preflight json outcome field stays pass on a findings-bearing run",
+        payload.get("outcome") == "pass",
+    )
+
+    # Arm 2: defects in several stages at once surface in one preflight run
+    # (superset assertion: a faithful fixture run reports additional
+    # cascaded Markdown findings alongside the named ones).
+    rc, out, err = call(["--preflight", str(staging_b)])
+    check("preflight multi-stage run exits 0", rc == 0)
+    check(
+        "preflight multi-stage run reports the missing Metadata section",
+        "missing ## Metadata" in err,
+    )
+    check(
+        "preflight multi-stage run reports the missing Panel section",
+        "missing ### Panel under Review Statistics" in err,
+    )
+    check(
+        "preflight multi-stage run reports the bad verdict enum value",
+        "version-1 sidecar field 'verdict' must be 'yes' or 'no'" in err,
+    )
+    check(
+        "preflight multi-stage run reports the 40-hex digest defect",
+        "source_digest must be a lowercase 64-char hex SHA-256" in err,
+    )
+    check(
+        "preflight multi-stage run reports the missing extended field",
+        "is missing extended field 'last_fix_commit'" in err,
+    )
+
+    # Arm 3: the --hard posture is unchanged (characterization over the
+    # pre-change engine, green before the mode exists; the frozen error
+    # sets below are the witnessed pre-change behavior of these exact
+    # fixtures, including the witnessed one-error cascade state).
+    rc, out, err = call(["--hard", str(staging_a)])
+    check("hard missing-sidecar run exits 1", rc == 1)
+    check(
+        "hard missing-sidecar run ends with OUTCOME: fail",
+        out.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "hard missing-sidecar run keeps the pre-change error set exactly",
+        error_lines(err) == [
+            f"missing required stats sidecar: {sidecar_name}",
+        ],
+    )
+    rc, out, err = call(["--hard", str(staging_b)])
+    check("hard multi-stage run exits 1", rc == 1)
+    check(
+        "hard multi-stage run ends with OUTCOME: fail",
+        out.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "hard multi-stage run keeps the pre-change error set exactly",
+        error_lines(err) == [
+            "current sidecar source_digest must be a lowercase 64-char hex "
+            "SHA-256; got an invalid or placeholder digest",
+            "missing ## Metadata",
+            "missing ### Panel under Review Statistics",
+            "staging filename dated 2026-10-05 (on or after "
+            "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
+            "Metadata line 'Changed-risk signals'",
+            "staging filename dated 2026-10-05 (on or after "
+            "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
+            "Metadata line 'Last fix commit'",
+            "staging filename dated 2026-10-05 (on or after "
+            "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
+            "Metadata line 'Prior findings supplied as filter'",
+            "staging filename dated 2026-10-05 (on or after "
+            "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
+            "Metadata line 'Review mode'",
+            "staging filename dated 2026-10-05 (on or after "
+            "RECORD_KIND_SIDECAR_MIN_DATE 2026-09-20) is missing the "
+            "Metadata 'Record kind:' line while the sidecar declares "
+            "record_kind 'canonical' (the owning producer is review-plan)",
+            "version-1 sidecar dated '2026-10-05' (on or after "
+            "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing extended "
+            "field 'last_fix_commit'",
+            "version-1 sidecar field 'verdict' must be 'yes' or 'no'",
+        ],
+    )
+
+    # Arm 4: the report-only exit contract. Findings never move the exit
+    # code; an unreadable input path keeps the tool_error class beside
+    # usage violations, matching the existing non-hard run.
+    rc, out, err = call(["--preflight", str(staging_b)])
+    check("preflight run with findings exits 0 (report-only)", rc == 0)
+    check(
+        "preflight run with findings ends with OUTCOME: pass",
+        out.rstrip().endswith("OUTCOME: pass"),
+    )
+    missing_path = root / "preflight-no-such-record.md"
+    rc_pf, out_pf, err_pf = call(["--preflight", str(missing_path)])
+    check(
+        "preflight unreadable input exits non-zero with the tool_error "
+        "class",
+        rc_pf != 0
+        and rc_pf == 3
+        and out_pf.rstrip().endswith("OUTCOME: tool_error"),
+    )
+    check(
+        "preflight unreadable input names the path",
+        str(missing_path) in err_pf,
+    )
+    rc_soft, out_soft, err_soft = call([str(missing_path)])
+    check(
+        "preflight unreadable input matches the non-hard run's tool_error "
+        "exit and stdout",
+        rc_pf == rc_soft and out_pf == out_soft,
+    )
+    check(
+        "preflight unreadable input matches the non-hard run's error line",
+        error_lines(err_pf) == error_lines(err_soft)
+        and len(error_lines(err_pf)) == 1,
+    )
+    rc, out, err = call(["--json", "--preflight", str(missing_path)])
+    payload = {}
+    if out.strip():
+        payload = json.loads(out)
+    check(
+        "preflight json unreadable run outcome field is tool_error",
+        rc == 3 and payload.get("outcome") == "tool_error",
+    )
+    rc, out, err = call(["--preflight"])
+    check(
+        "preflight usage violation exits 3 as tool_error",
+        rc == 3 and "OUTCOME: tool_error" in err,
+    )
+
+
 def run_selftest() -> int:
+    global _selftest_telemetry_suppressed
+    _prior_suppressed = _selftest_telemetry_suppressed
+    _selftest_telemetry_suppressed = True
+    try:
+        return _run_selftest_body()
+    finally:
+        _selftest_telemetry_suppressed = _prior_suppressed
+
+
+def _run_selftest_body() -> int:
     import tempfile
 
     _CHECK_FAILURES[0] = 0
@@ -14953,17 +17695,18 @@ def run_selftest() -> int:
             ("typed_current_schema", _selftest_typed_current_schema),
             ("finding_budget", _selftest_finding_budget),
             ("finding_conservation", _selftest_finding_conservation),
+            (
+                "counts_parity_and_soft_label",
+                _selftest_counts_parity_and_soft_label,
+            ),
             ("full_panel_completion", _selftest_full_panel_completion),
             ("readiness_independence", _selftest_readiness_independence),
             ("producer_artifacts", _selftest_producer_artifacts),
             ("source_cli", _selftest_source_cli),
             ("discarded_header_skip", _selftest_discarded_header_skip),
             ("versioned_schema_and_patterns", _selftest_versioned_schema_and_patterns),
-            (
-                "address_fanout_contract",
-                _selftest_address_fanout_contract,
-            ),
             ("usage_optional", _selftest_usage_optional),
+            ("self_heal_attempt_state", _selftest_self_heal_attempt_state),
             (
                 "extended_sidecar_freshness",
                 _selftest_extended_sidecar_freshness,
@@ -15005,8 +17748,20 @@ def run_selftest() -> int:
                 _selftest_date_fence_shared_owner,
             ),
             (
+                "corrections_grading",
+                _selftest_corrections_grading,
+            ),
+            (
                 "outcome_contract",
                 _selftest_outcome_contract,
+            ),
+            (
+                "embedded_recipe_example",
+                _selftest_embedded_recipe_example,
+            ),
+            (
+                "preflight_inventory",
+                _selftest_preflight_inventory,
             ),
         ):
             fn(root, check)
@@ -15021,7 +17776,143 @@ def run_selftest() -> int:
     return 0
 
 
+def _preflight_stage_inventories(target: Path) -> list[dict]:
+    """One inventory row per validation stage whose input file is absent.
+
+    Preflight's defensive continuation: a stage whose input is absent does
+    not stop the run, it reports the absent input plus the inventory the
+    stage's contract requires, derived from this file's own schema constants
+    (never a second hand-written list), and the remaining stages still run
+    against the inputs that exist (``validate_staging_file`` already owns
+    that ordering). The stats-sidecar stage is the witnessed absent-input
+    stage: its engine gate stops at the missing-file error, so preflight
+    adds the version-1 sidecar's required top-level fields beside it.
+    """
+    sidecar_path = stats_sidecar_path(target)
+    if sidecar_path.is_file():
+        return []
+    return [
+        {
+            "stage": "stats sidecar",
+            "missing_input": sidecar_path.name,
+            "required_top_level_fields": list(V1_REQUIRED_TOP_LEVEL_FIELDS),
+            "extended_required_fields": list(V1_EXTENDED_REQUIRED_FIELDS),
+        }
+    ]
+
+
+def _preflight_inventory_lines(inventories: list[dict]) -> list[str]:
+    """Render the absent-input inventories for the human-readable report."""
+    lines: list[str] = []
+    for row in inventories:
+        lines.append(
+            f"PREFLIGHT: {row['stage']} input absent: "
+            f"{row['missing_input']}; the version-1 sidecar contract "
+            "requires these top-level fields: "
+            + ", ".join(
+                f"'{name}'" for name in row["required_top_level_fields"]
+            )
+        )
+        lines.append(
+            "PREFLIGHT: version-1 sidecar extended required fields "
+            f"(records dated on or after {EXTENDED_SIDECAR_MIN_DATE}): "
+            + ", ".join(
+                f"'{name}'" for name in row["extended_required_fields"]
+            )
+        )
+    return lines
+
+
+def cmd_preflight(
+    args: argparse.Namespace,
+    target: Path,
+    *,
+    expected_digest: str | None = None,
+    source_kind: str | None = None,
+    corrections_context: dict | None = None,
+) -> int:
+    """Preflight full-inventory mode (authoring staging preflight and
+    certification-order gates plan, Task 1): one report-only pass over a
+    staging pair that reports every stage's findings together.
+
+    Defensive continuation: a stage whose input is absent reports that
+    stage's required-input inventory (derived from this file's schema
+    constants) instead of stopping the run, and the remaining stages still
+    execute against the inputs that exist. Report-only exit semantics:
+    findings never move the exit code (every findings-bearing run exits 0
+    with OUTCOME: pass); only the outcome contract's tool_error class exits
+    non-zero (the unreadable-input probe and usage violations stay in the
+    caller, shared with the plain run). The ``--hard`` posture is untouched.
+    """
+    result = validate_staging_file(
+        target,
+        hard=False,
+        expected_digest=expected_digest,
+        source_kind=source_kind,
+        corrections_context=corrections_context,
+    )
+    # Corrections grading indeterminate keeps the outcome contract's own
+    # class (uncertainty is not a findings-class failure and must not read
+    # as a pass); plain authoring runs carry no corrections context and
+    # never reach this arm.
+    if getattr(result, "indeterminate_reason", None):
+        if args.json:
+            payload = result.to_dict()
+            payload["outcome"] = OUTCOME_LABELS[2]
+            payload["indeterminate_reason"] = result.indeterminate_reason
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                "INDETERMINATE: %s" % result.indeterminate_reason,
+                file=sys.stderr,
+            )
+            print("OUTCOME: %s" % OUTCOME_LABELS[2])
+        return 2
+    inventories = _preflight_stage_inventories(target)
+    exit_code = 0  # report-only: findings never grade
+    if args.json:
+        payload = result.to_dict()
+        payload["outcome"] = OUTCOME_LABELS[exit_code]
+        if inventories:
+            payload["preflight"] = {
+                "report_only": True,
+                "stage_inventories": inventories,
+            }
+        print(json.dumps(payload, indent=2))
+    else:
+        for warning in result.warnings:
+            print(f"WARN: {warning}", file=sys.stderr)
+        for error in result.errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        if result.ok:
+            print(f"OK: {target}")
+        else:
+            print(f"FAIL: {target}", file=sys.stderr)
+        for line in _preflight_inventory_lines(inventories):
+            print(line, file=sys.stderr)
+        print("OUTCOME: %s" % OUTCOME_LABELS[exit_code])
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: one self-timed wall span across the full run (the
+    invocation-telemetry plan). The body runs under try/finally so the
+    fail-open self-timed append fires on the SystemExit paths too (usage
+    errors, refusals); the writer's own failure never touches the exit
+    status or either contract channel."""
+    started = time.time()
+    try:
+        return _main(argv)
+    finally:
+        if invocation_telemetry is not None and not _selftest_telemetry_suppressed:
+            invocation_telemetry.record_invocation(
+                "validate_review_staging.py",
+                "review-validation",
+                invocation_telemetry.elapsed_ms(started),
+            )
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = OutcomeArgumentParser(description="Validate review staging markdown")
     parser.add_argument("path", nargs="?", help="Staging markdown file")
     parser.add_argument(
@@ -15030,6 +17921,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit 1 when validation fails",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON result on stdout")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help=(
+            "Report-only full-inventory pass: every stage's findings in one "
+            "run; a stage whose input is absent reports that stage's "
+            "required-input inventory (the version-1 sidecar's required "
+            "top-level fields) and the remaining stages still run; findings "
+            "never move the exit code (exit 0), only unreadable inputs and "
+            "usage violations exit 3"
+        ),
+    )
     parser.add_argument(
         "--newest-for-branch",
         metavar="BRANCH",
@@ -15077,6 +17980,46 @@ def main(argv: list[str] | None = None) -> int:
             "type-checked rather than asserted in prose."
         ),
     )
+    parser.add_argument(
+        "--source-code-repo",
+        metavar="ROOT",
+        help=(
+            "Code-source context root: the repository of the certified "
+            "code artifact. "
+            "Reads the local certification seal from the named source checkout "
+            "(.ai-playbook/review-certs/<artifact-slug>.md), requires the "
+            "sidecar's recorded range to equal the seal's, regenerates the "
+            "reviewed diff and the current diff "
+            "(git diff <reviewed_base>...<head>), and grades the declared "
+            "corrections chain through the code verifier legs. Requires "
+            "--source-code-plan; mutually exclusive with the source-file "
+            "flags."
+        ),
+    )
+    parser.add_argument(
+        "--source-code-plan",
+        metavar="SIDECAR-PATH",
+        help=(
+            "The code review's stats sidecar (source_kind=code) whose "
+            "recorded range, round, artifact slug, and declared corrections "
+            "the code-source context grades; the expected digest is "
+            "re-derived from the repository instead of a file. Requires "
+            "--source-code-repo."
+        ),
+    )
+    parser.add_argument(
+        "--ack-witness",
+        metavar="PATH",
+        help=(
+            "Operator-ack witness record path threaded into the plan and "
+            "code corrections contexts, so an operator-acked corrections "
+            "row resolves its receipt out of band against this record "
+            "through the graded gates. Requires a source surface "
+            "(--source-plan or --source-code-repo/--source-code-plan). "
+            "Absent keeps the unattended default: the receipt leg refuses "
+            "and the re-review default applies."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # r5 F9: an empty-string source-flag value must fail LOUDLY. The routing
@@ -15090,6 +18033,29 @@ def main(argv: list[str] | None = None) -> int:
                 f"{flag_name} value must not be empty; an empty value would "
                 "silently skip the stale-digest gate (unset shell variable?)"
             )
+    for flag_name in ("--source-code-repo", "--source-code-plan",
+                      "--ack-witness"):
+        flag_value = getattr(
+            args, flag_name.lstrip("-").replace("-", "_"))
+        if flag_value is not None and not str(flag_value).strip():
+            parser.error(
+                f"{flag_name} value must not be empty; an empty value would "
+                "silently skip the stale-digest gate (unset shell variable?)"
+            )
+
+    # Code-source context exclusivity: the two flags are jointly required
+    # and mutually exclusive with the source-file flags, so one run grades
+    # exactly one source kind through exactly one freshness recipe.
+    code_flags_supplied = bool(args.source_code_repo) or bool(
+        args.source_code_plan
+    )
+    if code_flags_supplied and not (
+        args.source_code_repo and args.source_code_plan
+    ):
+        parser.error(
+            "--source-code-repo and --source-code-plan must be supplied "
+            "together; one alone would grade half a code-source context"
+        )
 
     if args.selftest:
         return run_selftest()
@@ -15122,18 +18088,35 @@ def main(argv: list[str] | None = None) -> int:
     source_kind: str | None = None
     source_path: Path | None = None
     source_flag_name: str | None = None  # for the stale-digest error hint
+    corrections_context: dict | None = None
+    expected_plan_identity: str | None = None
     supplied = [
         (flag_name, dest, kind)
         for flag_name, dest, kind in _SOURCE_FLAG_TABLE
         if getattr(args, dest)
     ]
-    if len(supplied) > 1:
+    # The code-source context is ONE surface (its two flags are jointly
+    # required above), so the exclusivity count treats it as a single
+    # source alongside the three source-file flags.
+    source_surfaces = len(supplied) + (1 if code_flags_supplied else 0)
+    if args.ack_witness and source_surfaces == 0:
+        parser.error(
+            "--ack-witness requires a source surface (--source-plan or "
+            "--source-code-repo/--source-code-plan) to thread the witness "
+            "record path into"
+        )
+    if source_surfaces > 1:
         # F4 (r5): derive the enumeration from the table so a new kind
         # registered in _SOURCE_FLAG_TABLE is reported here without a
         # second sync point. The terminal "and" is restored per the
-        # 2026-09-05 backlog item; the wording is byte-identical to
-        # pre-c341e07.
+        # 2026-09-05 backlog item; the table-only wording is byte-identical
+        # to pre-c341e07. The code-source context flags join the same
+        # exclusivity surface (review-cert-graded-binding plan, Task 5);
+        # they extend the listed flags only when they participate in the
+        # conflict, so the table-only message stays byte-identical.
         flags = [f for f, _d, _k in _SOURCE_FLAG_TABLE]
+        if code_flags_supplied:
+            flags += ["--source-code-repo", "--source-code-plan"]
         parser.error(
             f"{', '.join(flags[:-1])}, and {flags[-1]} "
             "are mutually exclusive"
@@ -15148,39 +18131,219 @@ def main(argv: list[str] | None = None) -> int:
         source_path = Path(getattr(args, dest)).expanduser().resolve()
 
     if source_kind is not None:
-        if not source_path.is_file():
-            payload = {
-                "ok": False,
-                "errors": [f"source file not found: {source_path}"],
-                "outcome": OUTCOME_LABELS[3],
-            }
-            if args.json:
-                print(json.dumps(payload))
-            else:
-                print(f"ERROR: source file not found: {source_path}", file=sys.stderr)
-                print("OUTCOME: %s" % OUTCOME_LABELS[3])
-            return 3
-        try:
-            source_bytes = source_path.read_bytes()
-        except OSError as exc:
-            payload = {
-                "ok": False,
-                "errors": [f"cannot read source file: {exc}"],
-                "outcome": OUTCOME_LABELS[3],
-            }
-            if args.json:
-                print(json.dumps(payload))
-            else:
-                print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
-                print("OUTCOME: %s" % OUTCOME_LABELS[3])
-            return 3
+        # Directory plans (plan-directory-shape plan, Task 1): the plan
+        # operand resolves through the shared shape resolver BEFORE the
+        # regular-file gate, so a directory plan verifies against its
+        # manifest digest while a missing operand still fails as the tool
+        # error below. The resolver rides the sibling-degradation pattern:
+        # a validator copy deployed without it keeps the legacy refusal
+        # for directory operands (a named tool error), never a crash, and
+        # a malformed directory refuses through the resolver's named arms.
+        source_shape = None
+        if source_kind == "plan" and source_path.is_dir():
+            ps_module = _sibling_module("plan_shape")
+            if ps_module is None:
+                gap = (
+                    "plan_shape.py is not importable next to this "
+                    "validator copy; cannot resolve the directory plan "
+                    f"operand: {source_path}"
+                )
+                payload = {
+                    "ok": False,
+                    "errors": [gap],
+                    "outcome": OUTCOME_LABELS[3],
+                }
+                if args.json:
+                    print(json.dumps(payload))
+                else:
+                    print(f"ERROR: {gap}", file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[3])
+                return 3
+            try:
+                source_shape = ps_module.resolve_plan_operand(source_path)
+            except ps_module.PlanShapeRefusal as exc:
+                payload = {
+                    "ok": False,
+                    "errors": [str(exc)],
+                    "outcome": OUTCOME_LABELS[3],
+                }
+                if args.json:
+                    print(json.dumps(payload))
+                else:
+                    print(f"ERROR: {exc}", file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[3])
+                return 3
+        if source_shape is None:
+            if not source_path.is_file():
+                payload = {
+                    "ok": False,
+                    "errors": [f"source file not found: {source_path}"],
+                    "outcome": OUTCOME_LABELS[3],
+                }
+                if args.json:
+                    print(json.dumps(payload))
+                else:
+                    print(f"ERROR: source file not found: {source_path}", file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[3])
+                return 3
+            try:
+                source_bytes = source_path.read_bytes()
+            except OSError as exc:
+                payload = {
+                    "ok": False,
+                    "errors": [f"cannot read source file: {exc}"],
+                    "outcome": OUTCOME_LABELS[3],
+                }
+                if args.json:
+                    print(json.dumps(payload))
+                else:
+                    print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[3])
+                return 3
+        else:
+            source_bytes = source_shape.digest_payload
         expected_digest = compute_source_digest(source_kind, source_bytes)
         # Stash the path so the stale-digest error can name it (F7: an agent
         # that points the source flag at the wrong file gets an actionable hint
         # instead of an opaque "artifact may have changed").
         _SOURCE_PATH_FOR_ERROR = str(source_path)
+        # The plan family's corrections context: the certified artifact's
+        # repository is the git repository containing the plan file; a plan
+        # outside any repository keeps the legacy exact-match disposition
+        # (no repository context, no graded arm).
+        if source_kind == "plan":
+            plan_repo_root = repository_root(source_path.parent)
+            if plan_repo_root is not None:
+                expected_plan_identity = normalize_plan_path(
+                    source_path, plan_repo_root
+                )
+            cr_module = _sibling_module("corrections_record")
+            toplevel = (
+                cr_module.git_text(source_path.parent, "rev-parse",
+                                   "--show-toplevel")
+                if cr_module is not None else None
+            )
+            if cr_module is not None and toplevel:
+                repo_root = Path(toplevel.strip())
+                corrections_context = {
+                    "family": "plan",
+                    "repo": repo_root,
+                    "artifact_path": source_path.relative_to(
+                        repo_root).as_posix(),
+                    "current_bytes": source_bytes,
+                    "witness_path": args.ack_witness or None,
+                }
     else:
         _SOURCE_PATH_FOR_ERROR = None
+
+    if code_flags_supplied:
+        # The code-source context (review-cert-graded-binding plan, Task 5):
+        # read the certification seal's binding facts from the
+        # named sidecar, re-derive the expected digest from the repository
+        # (git diff <reviewed_base>...<head>), and grade the declared
+        # corrections chain through the code verifier legs.
+        cr_module = _sibling_module("corrections_record")
+        if cr_module is None:
+            payload = {
+                "ok": False,
+                "errors": ["corrections_record.py is not importable next to "
+                           "this validator copy"],
+                "outcome": OUTCOME_LABELS[3],
+            }
+            if args.json:
+                print(json.dumps(payload))
+            else:
+                print("ERROR: corrections_record.py is not importable next "
+                      "to this validator copy", file=sys.stderr)
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        code_sidecar_path = Path(args.source_code_plan).expanduser().resolve()
+        try:
+            code_sidecar = json.loads(
+                code_sidecar_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "errors": ["cannot read the --source-code-plan sidecar %s: "
+                           "%s" % (code_sidecar_path, exc)],
+                "outcome": OUTCOME_LABELS[3],
+            }
+            if args.json:
+                print(json.dumps(payload))
+            else:
+                print("ERROR: cannot read the --source-code-plan sidecar "
+                      "%s: %s" % (code_sidecar_path, exc), file=sys.stderr)
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        if not isinstance(code_sidecar, dict) or \
+                code_sidecar.get("source_kind") != "code":
+            parser.error(
+                "--source-code-plan must name a code-source sidecar "
+                "(source_kind code)"
+            )
+        code_toplevel = cr_module.git_text(
+            args.source_code_repo, "rev-parse", "--show-toplevel")
+        if not code_toplevel:
+            payload = {
+                "ok": False,
+                "errors": ["--source-code-repo %s is not inside a git "
+                           "repository" % args.source_code_repo],
+                "outcome": OUTCOME_LABELS[3],
+            }
+            if args.json:
+                print(json.dumps(payload))
+            else:
+                print("ERROR: --source-code-repo %s is not inside a git "
+                      "repository" % args.source_code_repo, file=sys.stderr)
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        code_repo = Path(code_toplevel.strip())
+        code_round = _corrections_round(code_sidecar)
+        if code_round is None:
+            parser.error(
+                "--source-code-plan sidecar carries no resolvable round "
+                "(an rN string or an integer) for the certification seal"
+            )
+        code_slug = code_sidecar.get("artifact_slug")
+        if not isinstance(code_slug, str) or not code_slug:
+            parser.error(
+                "--source-code-plan sidecar carries no artifact_slug for "
+                "the certification seal path"
+            )
+        source_kind = "code"
+        code_range = _extensions_member(
+            code_sidecar, CERTIFIED_RANGE_EXTENSION_KEY)
+        if isinstance(code_range, dict) and \
+                isinstance(code_range.get("base"), str):
+            # The current diff recipe: git diff <reviewed_base>...<head>;
+            # a plumbing failure over the resolved refs classifies
+            # indeterminate naming the diff.
+            current_diff = cr_module.diff_bytes(
+                code_repo, code_range["base"], "HEAD")
+            if current_diff is None:
+                reason = (
+                    "git diff %s...HEAD failed over the certified range's "
+                    "base in %s" % (code_range["base"], code_repo)
+                )
+                if args.json:
+                    print(json.dumps({
+                        "ok": False,
+                        "errors": [reason],
+                        "outcome": OUTCOME_LABELS[2],
+                    }))
+                else:
+                    print("INDETERMINATE: %s" % reason, file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[2])
+                return 2
+            expected_digest = cr_module.sha256_hex(current_diff)
+        corrections_context = {
+            "family": "code",
+            "repo": code_repo,
+            "artifact_path": None,
+            "head": "HEAD",
+            "slug": code_slug,
+            "witness_path": args.ack_witness or None,
+        }
 
     # Outcome contract: the CLI's own input must be openable. A missing or
     # unreadable staging path is tool error (exit 3) naming the path, never
@@ -15207,12 +18370,41 @@ def main(argv: list[str] | None = None) -> int:
             print("OUTCOME: %s" % OUTCOME_LABELS[3])
         return 3
 
+    if args.preflight:
+        return cmd_preflight(
+            args,
+            target,
+            expected_digest=expected_digest,
+            source_kind=source_kind,
+            corrections_context=corrections_context,
+        )
+
     result = validate_staging_file(
         target,
         hard=args.hard,
         expected_digest=expected_digest,
         source_kind=source_kind,
+        corrections_context=corrections_context,
+        expected_plan_identity=expected_plan_identity,
     )
+    # Corrections grading indeterminate (review-cert-graded-binding plan,
+    # Task 5): the graded stale arm reports an unresolvable anchor or a git
+    # plumbing failure over resolved inputs through indeterminate_reason;
+    # the run classifies indeterminate naming where and never rides the
+    # fail channel (uncertainty is not a findings-class failure).
+    if getattr(result, "indeterminate_reason", None):
+        if args.json:
+            payload = result.to_dict()
+            payload["outcome"] = OUTCOME_LABELS[2]
+            payload["indeterminate_reason"] = result.indeterminate_reason
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                "INDETERMINATE: %s" % result.indeterminate_reason,
+                file=sys.stderr,
+            )
+            print("OUTCOME: %s" % OUTCOME_LABELS[2])
+        return 2
     # Panel profile date branch (review staging and infra quality plan,
     # Task 5; r1 F1 date-gated): a hard-mode record whose date (staging
     # filename date, falling back to the fail-closed sidecar ``date``
@@ -15250,14 +18442,19 @@ def main(argv: list[str] | None = None) -> int:
                 source_hint=profile_source_hint,
             )
     # Outcome contract: the exit code and the final OUTCOME label carry the
-    # outcome together. A --hard invalid record stays fail (exit 1); a valid
-    # record and every soft-mode run stay pass (exit 0, warnings inside the
-    # pass). A --json run rides the JSON `outcome` field with no stdout
-    # OUTCOME line (the declared placement deviation).
+    # outcome together for the gating (--hard) form. The final label and the
+    # JSON `outcome` field always carry the validation verdict (result.ok),
+    # never the gated exit code (review-staging-outcome-and-counts-contract):
+    # a soft plain run over a findings-bearing record reports OUTCOME: fail at
+    # exit 0 (soft runs report, they never gate; the report-only reading rule
+    # in scripts/OUTCOME_CONTRACT.md), and a caller that gates on a result
+    # must invoke the --hard form. A --json run rides the JSON `outcome` field
+    # with no stdout OUTCOME line (the declared placement deviation).
     exit_code = 1 if (args.hard and not result.ok) else 0
+    verdict_label = OUTCOME_LABELS[0 if result.ok else 1]
     if args.json:
         payload = result.to_dict()
-        payload["outcome"] = OUTCOME_LABELS[exit_code]
+        payload["outcome"] = verdict_label
         print(json.dumps(payload, indent=2))
     else:
         for warning in result.warnings:
@@ -15280,7 +18477,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"OK: {target}")
         else:
             print(f"FAIL: {target}", file=sys.stderr)
-        print("OUTCOME: %s" % OUTCOME_LABELS[exit_code])
+        print("OUTCOME: %s" % verdict_label)
     return exit_code
 
 

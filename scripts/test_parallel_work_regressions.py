@@ -83,7 +83,7 @@ class ParallelWorkRegressionTest(unittest.TestCase):
             'plans_dir = "docs/history/plans/"\n'
             'plans_completed_dir = "docs/history/plans/completed/"\n'
             'backlog_dir = "docs/history/backlog/"\n'
-            'reviews_dir = "docs/reviews/"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
             'tmp_dir = "docs/tmp/"\n'
             "```\n",
             encoding="utf-8",
@@ -157,7 +157,11 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         return path
 
     def _stub_staging_validator(self) -> Path:
-        """Exit-0 validator stub recording every invoked staging path."""
+        """Exit-0 validator stub recording every invoked staging path.
+
+        Prints the final ``OUTCOME: pass`` line the validator contract
+        requires (a silent exit 0 classifies as tool error, never a pass).
+        """
         stub = self.root / "scripts" / "stub_review_staging_validator.py"
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(
@@ -166,6 +170,7 @@ class ParallelWorkRegressionTest(unittest.TestCase):
             "log = __file__ + '.invocations'\n"
             "with open(log, 'a', encoding='utf-8') as fh:\n"
             "    fh.write('\\n'.join(sys.argv[1:]) + '\\n')\n"
+            "print('OUTCOME: pass')\n"
             "sys.exit(0)\n",
             encoding="utf-8",
         )
@@ -194,7 +199,7 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         file stays byte-identical on disk."""
         # Task-owned ignored deliverables, written inside the session window.
         own_review = self._write(
-            "docs/reviews/2026-09-23-branch-review-r1.md",
+            ".ai-playbook/reviews/2026-09-23-branch-review-r1.md",
             "# Review\n\ntask-owned staging record\n",
         )
         own_log = self._write(
@@ -204,13 +209,13 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         # Unrelated peer artifacts: an old staging-shaped doc outside the
         # window, and in-window scratch files that are not staging-shaped.
         peer_old_review = self._write(
-            "docs/reviews/2026-09-20-branch-review-r1.md",
+            ".ai-playbook/reviews/2026-09-20-branch-review-r1.md",
             "# Peer review\n\npeer-owned record from an earlier session\n",
         )
         old_t = time.time() - 86400
         os.utime(peer_old_review, (old_t, old_t))
         peer_scratch_review = self._write(
-            "docs/reviews/peer-scratch-notes.md",
+            ".ai-playbook/reviews/peer-scratch-notes.md",
             "peer scratch next to the review records\n",
         )
         peer_scratch_tmp = self._write(

@@ -83,6 +83,15 @@ class DirtRegressionGateTest(unittest.TestCase):
         self._commit("app.txt", HEAD_TEXT, "head gains lines")
         return base_sha
 
+    def _seed_baseabsent_head_file(self) -> str:
+        """Commit a seed, then a file the merge base lacks; return base sha."""
+        self._commit("seed.txt", "seed\n", "seed")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit(
+            "new.txt", "one\ntwo\nthree\nfour\nfive\n", "head adds new file"
+        )
+        return base_sha
+
     def test_reverting_hunk_is_regression(self):
         base_sha = self._seed_head_gained_lines()
         # Dirt restores the exact base-era file: a byte-identical whole-file
@@ -234,6 +243,100 @@ class DirtRegressionGateTest(unittest.TestCase):
         self._git("rm", "-q", "app.txt")
         code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
         self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+
+    def test_baseabsent_file_removalonly_hunk_passes(self) -> None:
+        base_sha = self._seed_baseabsent_head_file()
+        # The merge base lacks new.txt (the branch introduced it), so no
+        # base-era text exists for a hunk to restore: deleting one
+        # HEAD-gained line is an intentional forward refactor, not a
+        # regression (the witnessed false-positive shape; today's vacuous
+        # removal-only reading of the added-line condition flags it).
+        self._set_dirt("new.txt", "one\ntwo\nthree\nfive\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "new.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_baseabsent_file_replacement_hunk_passes(self) -> None:
+        base_sha = self._seed_baseabsent_head_file()
+        # Same base-absent fixture with a HEAD-gained line replaced by new
+        # text absent from every version: the non-vacuous added set already
+        # passes today; pinned so the newly-introduced rule cannot regress it.
+        self._set_dirt("new.txt", "one\ntwo-replaced\nthree\nfour\nfive\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "new.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_baseabsent_file_whole_deletion_is_regression(self) -> None:
+        base_sha = self._seed_baseabsent_head_file()
+        # Unstaged whole-file deletion of a base-absent file: every deleted
+        # line is HEAD-gained by definition, so this is the maximal
+        # regression shape (uncommitted loss of committed branch work),
+        # distinct from the partial-edit removal-only hunk above, which
+        # stays clean as intentional forward refactoring.
+        (self.repo / "new.txt").unlink()
+        code, stdout, stderr = self._run_gate("--base", base_sha, "new.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION", stdout)
+        self.assertIn("new.txt", stdout)
+
+    def test_baseabsent_file_staged_whole_deletion_is_regression(self) -> None:
+        base_sha = self._seed_baseabsent_head_file()
+        # Staged whole-file deletion (git rm: index removal) of a
+        # base-absent file exercises the staged-deletion arm: the removal
+        # classifies through the same HEAD-gained-lines rule as the
+        # unstaged deletion, never as a pass.
+        self._git("rm", "-q", "new.txt")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "new.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION", stdout)
+        self.assertIn("new.txt", stdout)
+
+    def test_emptybase_file_removalonly_hunk_still_regression(self) -> None:
+        # The file EXISTS at the base with empty content: existence, not
+        # base-set emptiness, decides newly-introduced classification, so a
+        # removal-only hunk of HEAD-gained lines is still a regression here.
+        self._commit("app.txt", "", "base with empty file")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", HEAD_TEXT, "head gains lines")
+        self._set_dirt("app.txt", "alpha\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("app.txt", stdout)
+        self.assertIn("dirt REGRESSION", stdout)
+
+    def test_baseabsent_binary_dirt_stays_indeterminate(self) -> None:
+        self._commit("seed.txt", "seed\n", "seed")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        binary = self.repo / "new.bin"
+        binary.write_bytes(b"\x00\x01\x02binary\n")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "head adds binary file")
+        # Binary dirt on a base-absent file: the hunk-less indeterminate
+        # shape check precedes the newly-introduced clean classification, so
+        # an unmodelable diff shape still reports indeterminate, never a pass.
+        binary.write_bytes(b"\x00\x01\x03changed\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "new.bin")
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt INDETERMINATE", stdout)
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_mixed_baseabsent_refactor_and_basepresent_revert_reports_regression(self) -> None:
+        self._commit("app.txt", BASE_TEXT, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("new.txt", "one\ntwo\nthree\nfour\nfive\n", "head adds new file")
+        self._commit("app.txt", HEAD_TEXT, "head gains app lines")
+        # One invocation over a base-absent forward refactor and a
+        # base-present genuine revert: the revert still fails and only the
+        # base-present path is named; the base-absent refactor is not.
+        self._set_dirt("new.txt", "one\ntwo\nthree\nfive\n")
+        self._set_dirt("app.txt", BASE_TEXT)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "new.txt", "app.txt"
+        )
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        self.assertNotIn("dirt REGRESSION: new.txt", stdout)
+        self.assertIn("OUTCOME: fail", stdout)
 
     def test_unreadable_stamp_treated_as_absent(self) -> None:
         base_sha = self._seed_head_gained_lines()

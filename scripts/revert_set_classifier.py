@@ -61,6 +61,16 @@ def indeterminate(message):
     return 2
 
 
+def attempted_suffix(attempted):
+    """The evidence-completeness clause a per-path-loop collection failure
+    appends to its message: the failing path stays named, and every path
+    that already emitted a row before the failure is carried (sorted,
+    comma-separated; `none` when the failure fired on the first path).
+    The pinned evidence span lives exactly here, once in this file."""
+    names = ", ".join(sorted(attempted)) if attempted else "none"
+    return "; paths attempted before failure: %s" % names
+
+
 def tool_error(message):
     """An input that never resolved (repo, ref): the classifier cannot
     even address the question (exit 3, tool error)."""
@@ -212,68 +222,84 @@ def classify(repo, head, restrict=None):
             if p not in paths:
                 paths.append(p)
     rows = []
+    attempted = []
     reversal = 0
     foreign = 0
     for path in paths:
         if path not in dirty:
             h = head_state(repo, path)
             if h is None:
-                return indeterminate("ls-tree failed for %s" % path)
+                return indeterminate("ls-tree failed for %s%s"
+                                     % (path, attempted_suffix(attempted)))
             if h[0] is False:
                 # A restricted named path absent from both HEAD and disk:
                 # the queried deletion matches no reachable addition.
                 rows.append("foreign: %s deletion matches no reachable "
                             "addition" % path)
+                attempted.append(path)
                 foreign += 1
             else:
                 rows.append("clean: %s" % path)
+                attempted.append(path)
             continue
         h = head_state(repo, path)
         if h is None:
-            return indeterminate("ls-tree failed for %s" % path)
+            return indeterminate("ls-tree failed for %s%s"
+                                 % (path, attempted_suffix(attempted)))
         e = effective_state(repo, path)
         if e is None:
-            return indeterminate("effective state failed for %s" % path)
+            return indeterminate("effective state failed for %s%s"
+                                 % (path, attempted_suffix(attempted)))
         present, blob, _ = e
         if present == h[0] and blob == h[1]:
             rows.append("clean: %s" % path)
+            attempted.append(path)
             continue
         if not present:
             add = addition_commit(repo, path)
             if add is None:
-                return indeterminate("addition lookup failed for %s" % path)
+                return indeterminate("addition lookup failed for %s%s"
+                                     % (path, attempted_suffix(attempted)))
             if add:
                 rows.append("reversal: %s deletion reverts the addition at %s"
                             % (path, add))
+                attempted.append(path)
                 reversal += 1
             else:
                 rows.append("foreign: %s deletion matches no reachable addition"
                             % path)
+                attempted.append(path)
                 foreign += 1
             continue
         if h[0] is False:
             if path in untracked:
                 rows.append("foreign: %s untracked (never reversal damage)"
                             % path)
+                attempted.append(path)
                 foreign += 1
                 continue
             v = vintage_match(repo, path, blob)
             if v is None:
-                return indeterminate("vintage walk failed for %s" % path)
+                return indeterminate("vintage walk failed for %s%s"
+                                     % (path, attempted_suffix(attempted)))
             rows.append("foreign: %s dirty state matches no ancestor vintage"
                         % path)
+            attempted.append(path)
             foreign += 1
             continue
         v = vintage_match(repo, path, blob)
         if v is None:
-            return indeterminate("vintage walk failed for %s" % path)
+            return indeterminate("vintage walk failed for %s%s"
+                                 % (path, attempted_suffix(attempted)))
         if v:
             rows.append("reversal: %s dirty state equals ancestor %s vintage "
                         "(HEAD: %s)" % (path, v, head))
+            attempted.append(path)
             reversal += 1
         else:
             rows.append("foreign: %s dirty state matches no ancestor vintage"
                         % path)
+            attempted.append(path)
             foreign += 1
     # The summary scopes to the actual dirty set: restricted named paths
     # that are clean, or queried foreign rows for absent-everywhere paths,

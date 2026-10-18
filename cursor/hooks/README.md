@@ -83,7 +83,7 @@ Path note: `command` is relative to `~/.cursor/` (user hooks), not the project r
 | `git commit -m "..."` mentioning `git clean` in the message | allow |
 | Force push to `main` / `master` / `pre-release` | ask |
 
-Ephemeral dirs allowed for scoped clean: `docs/tmp/`, `docs/history/reviews/`, `docs/reviews/`, `.ai-playbook/`.
+Ephemeral dirs allowed for scoped clean: `docs/tmp/`, `.ai-playbook/reviews/`, `../../.ai-playbook/reviews/reviews`, `.ai-playbook/`.
 
 ## Verify
 

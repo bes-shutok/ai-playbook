@@ -13,9 +13,22 @@ Run from the repository root:
     PYTHONPATH=scripts python3 -m unittest scripts.test_plan_readiness
 """
 
+import json
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
-from plan_readiness import scope_classification_problem
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import runtime_capabilities
+from execute_plan_runtime import _named_evidence_limit_error
+from plan_readiness import (
+    _clean_reviews_dir,
+    _write_clean_state,
+    evaluate_readiness,
+    scope_classification_problem,
+)
 
 
 def _plan_with_task_section(task_body: str) -> str:
@@ -240,6 +253,471 @@ class PlanReadinessFenceBalanceTest(unittest.TestCase):
         self.assertNotEqual(rc, 0, (out, err))
         self.assertIn("src/unlisted.py", err, (out, err))
         self.assertIn("Review Scope", err, (out, err))
+
+
+# --------------------------------------------------------------------------- #
+# Pre-round execution budget sizing warnings: the non-blocking stderr warning
+# class over the optional `Execution budget:` header line (strictly-greater
+# thresholds: total over 3.0h, largest task over 1.5h, task count over 4).
+# --------------------------------------------------------------------------- #
+
+
+def _budget_plan_text(
+    budget_line: str | None,
+    task_count: int = 1,
+    *,
+    drop_trailer: bool = False,
+) -> str:
+    """Plan text with an optional `Execution budget:` line in the header
+    region (between the title line and the first `## ` heading), N task
+    sections, and an Assumptions trailer that can be dropped to force a
+    structural-probe failure."""
+    tasks = "".join(
+        f"### Task {n}: Do the thing\n\n"
+        "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n\n"
+        for n in range(1, task_count + 1)
+    )
+    header = "# P\n\n"
+    if budget_line is not None:
+        header += f"{budget_line}\n\n"
+    trailer = (
+        "Decision points requiring a grill: none remain.\n\n"
+        if not drop_trailer
+        else "Some high-confidence assumption with its basis.\n\n"
+    )
+    return (
+        f"{header}"
+        "## Assumptions\n\n"
+        f"{trailer}"
+        "## Tasks\n\n"
+        f"{tasks}"
+    )
+
+
+class PreRoundExecutionBudgetTest(unittest.TestCase):
+    """The pre-round sizing warnings: one stderr line per breached
+    threshold, silent when the line is absent, never blocking."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="pre-round-budget-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_fixture(self, plan_text: str) -> Path:
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=plan_text,
+            date="2026-09-26",
+            slug="budget-sizing",
+        )
+        return plan
+
+    def test_pre_round_budget_warning_over_total(self):
+        plan = self._write_fixture(
+            _budget_plan_text("Execution budget: 4.0h total, largest task 1.0h")
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(
+            err.count("readiness PRE-ROUND WARNING:"), 1, err
+        )
+        self.assertIn(
+            "execution budget total 4.0h exceeds the 3.0h plan cap", err
+        )
+        # The stdout OK line is unchanged: warnings never block.
+        self.assertIn(
+            "readiness PRE-ROUND OK: structural checks clean "
+            "(review record not consulted)",
+            out,
+        )
+
+    def test_pre_round_budget_warning_largest_task(self):
+        plan = self._write_fixture(
+            _budget_plan_text("Execution budget: 2.0h total, largest task 1.6h")
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(
+            err.count("readiness PRE-ROUND WARNING:"), 1, err
+        )
+        self.assertIn(
+            "execution budget largest task 1.6h exceeds the 1.5h task cap",
+            err,
+        )
+
+    def test_pre_round_budget_warning_task_count(self):
+        plan = self._write_fixture(
+            _budget_plan_text(
+                "Execution budget: 1.0h total, largest task 0.5h",
+                task_count=5,
+            )
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(
+            err.count("readiness PRE-ROUND WARNING:"), 1, err
+        )
+        self.assertIn(
+            "execution budget task count 5 exceeds the 4-task cap", err
+        )
+
+    def test_pre_round_budget_absent_silent(self):
+        plan = self._write_fixture(_budget_plan_text(None))
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        # Byte-identical to the pre-plan behavior: the exact OK line plus
+        # the outcome contract's OUTCOME line on stdout and nothing on
+        # stderr.
+        self.assertEqual(
+            out,
+            "readiness PRE-ROUND OK: structural checks clean "
+            "(review record not consulted)\nOUTCOME: pass\n",
+        )
+        self.assertEqual(err, "")
+
+    def test_pre_round_budget_malformed_warns(self):
+        plan = self._write_fixture(
+            _budget_plan_text("Execution budget: TBD")
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(
+            err.count("readiness PRE-ROUND WARNING:"), 1, err
+        )
+        self.assertIn("does not match the required grammar", err)
+        self.assertIn("non-negative decimal hours", err)
+
+    def test_pre_round_budget_at_threshold_silent(self):
+        plan = self._write_fixture(
+            _budget_plan_text(
+                "Execution budget: 3.0h total, largest task 1.5h",
+                task_count=4,
+            )
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        # At-threshold values are silent (strictly-greater comparisons).
+        self.assertEqual(err, "")
+
+    def test_pre_round_budget_integer_hours_in_grammar(self):
+        plan = self._write_fixture(
+            _budget_plan_text("Execution budget: 4h total, largest task 1h")
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        # Integers parse as whole hours; 4h is over the 3.0h total cap,
+        # 1h is not over the 1.5h task cap, so exactly one warning.
+        self.assertEqual(
+            err.count("readiness PRE-ROUND WARNING:"), 1, err
+        )
+        self.assertIn(
+            "execution budget total 4h exceeds the 3.0h plan cap", err
+        )
+
+    def test_pre_round_budget_multi_breach_order(self):
+        plan = self._write_fixture(
+            _budget_plan_text(
+                "Execution budget: 4.0h total, largest task 1.6h",
+                task_count=5,
+            )
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        warnings = [
+            line
+            for line in err.splitlines()
+            if line.startswith("readiness PRE-ROUND WARNING:")
+        ]
+        self.assertEqual(len(warnings), 3, err)
+        # Declared order: total, then largest task, then task count.
+        self.assertIn("plan cap", warnings[0], err)
+        self.assertIn("task cap", warnings[1], err)
+        self.assertIn("task count", warnings[2], err)
+
+    def test_pre_round_budget_failure_path_no_warnings(self):
+        plan = self._write_fixture(
+            _budget_plan_text(
+                "Execution budget: 4.0h total, largest task 1.0h",
+                drop_trailer=True,
+            )
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness PRE-ROUND FAILED:", err)
+        self.assertNotIn("PRE-ROUND WARNING:", err)
+        self.assertNotIn("readiness PRE-ROUND OK", out)
+
+
+# --------------------------------------------------------------------------- #
+# Files:-coverage warning arm (machinery registry row
+# script:plan-files-coverage-arm): the warning-only report naming
+# acceptance-item path tokens missing from task Files: lists, driven through
+# BOTH CLI entries (the pre-round gate and the full gate's main path).
+# --------------------------------------------------------------------------- #
+
+
+def _coverage_task(title: str, files: list, items: list) -> str:
+    """One task section: a `Files:` block (each entry `*(new)*` so the
+    ownership existence check passes in the scratch root) followed by the
+    acceptance checkboxes."""
+    parts = [f"### {title}\n\n"]
+    if files:
+        parts.append("Files:\n")
+        parts.extend(f"- `{path}` *(new)*\n" for path in files)
+        parts.append("\n")
+    parts.extend(
+        f"- [ ] {item} [class: IMPLEMENTATION_REQUIRED]\n" for item in items
+    )
+    return "".join(parts)
+
+
+def _coverage_plan_text(*tasks: str) -> str:
+    """Plan text whose Tasks section carries the given task sections."""
+    return (
+        "# P\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: none remain.\n\n"
+        "## Tasks\n\n" + "".join(tasks)
+    )
+
+
+_COVERAGE_LOUD_ITEM = "Update `src/module.py` now"
+
+
+class PlanFilesCoverageTest(unittest.TestCase):
+    """The Files:-coverage arm at the CLI boundary: the loud warning
+    naming task, path, and quoting item and the softened sibling variant
+    fire on BOTH entries with unchanged exits; the silent boundaries (a
+    conforming task, prose without path-shaped tokens, an unbackticked
+    path, a scheme-bearing token) print zero lines; every failure path
+    prints zero warning lines."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="files-coverage-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_fixture(self, plan_text: str) -> Path:
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=plan_text,
+            date="2026-09-26",
+            slug="files-coverage",
+        )
+        return plan
+
+    @staticmethod
+    def _coverage_lines(text: str) -> list:
+        return [
+            line
+            for line in text.splitlines()
+            if line.startswith("readiness FILES-COVERAGE WARNING:")
+        ]
+
+    def _loud_plan(self) -> str:
+        return _coverage_plan_text(
+            _coverage_task(
+                "Task 1: Do the thing",
+                ["src/other.py"],
+                [_COVERAGE_LOUD_ITEM],
+            )
+        )
+
+    def test_loud_warning_on_both_entries(self):
+        plan = self._write_fixture(self._loud_plan())
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        lines = self._coverage_lines(err)
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("Task 1", lines[0])
+        self.assertIn("`src/module.py`", lines[0])
+        self.assertIn(_COVERAGE_LOUD_ITEM, lines[0])
+        self.assertIn("readiness PRE-ROUND OK", out)
+        # Full-gate main path: same bytes, same single warning, stderr
+        # only, unchanged exit contract.
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        lines = self._coverage_lines(err)
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("Task 1", lines[0])
+        self.assertIn("`src/module.py`", lines[0])
+        self.assertIn(_COVERAGE_LOUD_ITEM, lines[0])
+        self.assertNotIn("FILES-COVERAGE", out)
+        self.assertIn("readiness OK", out)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_sibling_variant_on_both_entries(self):
+        plan = self._write_fixture(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Write the module",
+                    ["src/module.py"],
+                    ["Write the module"],
+                ),
+                _coverage_task(
+                    "Task 2: Polish the module",
+                    ["src/other.py"],
+                    ["Polish `src/module.py` again"],
+                ),
+            )
+        )
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            lines = self._coverage_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            # The softened variant names the quoting task, the path, and
+            # the declaring sibling; the loud wording never fires.
+            self.assertIn("Task 2", lines[0])
+            self.assertIn("`src/module.py`", lines[0])
+            self.assertIn("Task 1's Files: list", lines[0])
+            self.assertIn("sibling-declared", lines[0])
+            self.assertNotIn("no task's Files: list declares it", err)
+
+    def _assert_silent_both_entries(self, plan_text: str) -> None:
+        plan = self._write_fixture(plan_text)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(err, "")
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(err, "")
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_conforming_task_silent_on_both_entries(self):
+        self._assert_silent_both_entries(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["src/module.py"],
+                    [_COVERAGE_LOUD_ITEM],
+                )
+            )
+        )
+
+    def test_prose_without_path_token_silent(self):
+        self._assert_silent_both_entries(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["src/other.py"],
+                    ["Write the module with care"],
+                )
+            )
+        )
+
+    def test_unbackticked_path_silent(self):
+        # Plain-prose tokens are out of scope (the _plan_item_path_tokens
+        # divergence of record): an unbackticked path never warns.
+        self._assert_silent_both_entries(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["src/other.py"],
+                    ["Update src/module.py in place"],
+                )
+            )
+        )
+
+    def test_scheme_bearing_token_silent(self):
+        # The scheme exclusion: a URI is not a repository path even though
+        # its slashes are path-shaped.
+        self._assert_silent_both_entries(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["src/other.py"],
+                    ["See `https://example.com/docs/module.md` for context"],
+                )
+            )
+        )
+
+    def test_pre_round_failure_path_no_coverage_warnings(self):
+        plan_text = (
+            "# P\n\n"
+            "## Assumptions\n\n"
+            "Some high-confidence assumption with its basis.\n\n"
+            "## Tasks\n\n"
+            + _coverage_task(
+                "Task 1: Do the thing",
+                ["src/other.py"],
+                [_COVERAGE_LOUD_ITEM],
+            )
+        )
+        plan = self._write_fixture(plan_text)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness PRE-ROUND FAILED:", err)
+        self.assertNotIn("FILES-COVERAGE", err)
+
+    def test_full_gate_failure_path_no_coverage_warnings(self):
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=self._loud_plan(),
+            verdict="no",
+            date="2026-09-26",
+            slug="files-coverage",
+        )
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness FAILED:", err)
+        self.assertNotIn("FILES-COVERAGE", err)
+
+    def test_full_gate_undecodable_plan_skips_arm(self):
+        plan, review = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=self._loud_plan(),
+            date="2026-09-26",
+            slug="files-coverage",
+        )
+        plan_bytes = b"\xff\xfe undecodable files-coverage plan"
+        plan.write_bytes(plan_bytes)
+        sidecar = review.with_suffix(".stats.json")
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        payload["source_digest"] = vrs.compute_source_digest(
+            "plan", plan_bytes
+        )
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("cannot read plan bytes", err)
+        self.assertNotIn("FILES-COVERAGE", err)
 
 
 # --------------------------------------------------------------------------- #
@@ -513,10 +991,136 @@ def _cap_closure_finding(**overrides):
     return finding
 
 
+class PlanReviewSourceIdentityTest(unittest.TestCase):
+    """Regression for the 2026-10-15 duplicate-r1 cross-plan interruption.
+
+    The two evidence-recovery plans had one canonical slug, so the selector
+    combined their rounds and refused before it could emit a staging path.
+    """
+
+    def test_discovery_and_name_probe_bind_same_slug_to_plan_path(self):
+        import subprocess
+        import plan_readiness
+        from review_plan_identity import identity_token
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plans = root / "docs" / "plans"
+            reviews = root / ".ai-playbook" / "reviews"
+            plans.mkdir(parents=True)
+            reviews.mkdir(parents=True)
+            plan_a = plans / "2026-10-14-same-feature.md"
+            plan_b = plans / "2026-10-15-same-feature.md"
+            plan_a.write_text("A", encoding="utf-8")
+            plan_b.write_text("B", encoding="utf-8")
+            identities = [
+                plan.relative_to(root).as_posix() for plan in (plan_a, plan_b)
+            ]
+            records = []
+            for date_value, identity in zip(("2026-10-14", "2026-10-15"), identities):
+                record = reviews / f"{date_value}-plan-review-same-feature-r1.md"
+                record.write_text(
+                    f"## Metadata\n- URL or Artifact: {identity}\n",
+                    encoding="utf-8",
+                )
+                record.with_suffix(".stats.json").write_text(
+                    json.dumps({"artifact_slug": "same-feature", "round": 1}),
+                    encoding="utf-8",
+                )
+                records.append(record)
+
+            for identity, expected in zip(identities, records):
+                self.assertEqual(
+                    plan_readiness.latest_review_round(
+                        reviews, "same-feature", identity
+                    ),
+                    (expected, 1),
+                )
+
+            token = identity_token(identities[0])
+            qualified = reviews / f"2026-10-16-plan-review-same-feature-p{token}-r2.md"
+            qualified.write_text(
+                f"## Metadata\n- URL or Artifact: {identities[0]}\n",
+                encoding="utf-8",
+            )
+            qualified.with_suffix(".stats.json").write_text(
+                json.dumps({
+                    "artifact_slug": "same-feature",
+                    "round": 2,
+                    "extensions": {"plan_identity": identities[0]},
+                }),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                plan_readiness.check_review_name(plan_a, qualified, reviews),
+                (True, None),
+            )
+            ok, reason = plan_readiness.check_review_name(plan_b, qualified, reviews)
+            self.assertFalse(ok)
+            self.assertIn("source plan identity", reason)
+
+    def test_discovery_refuses_legacy_round_with_unknown_plan_identity(self):
+        import subprocess
+        import plan_readiness
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plans = root / "docs" / "plans"
+            reviews = root / ".ai-playbook" / "reviews"
+            plans.mkdir(parents=True)
+            reviews.mkdir(parents=True)
+            plan = plans / "2026-10-15-same-feature.md"
+            plan.write_text("same bytes", encoding="utf-8")
+            record = reviews / "2026-10-15-plan-review-same-feature-r1.md"
+            record.write_text("## Metadata\n- Type: Plan Review\n", encoding="utf-8")
+            record.with_suffix(".stats.json").write_text(
+                json.dumps({"round": 1, "source_digest": "a" * 64}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(plan_readiness.AmbiguousReviewSeries):
+                plan_readiness.latest_review_round(
+                    reviews,
+                    "same-feature",
+                    plan.relative_to(root).as_posix(),
+                )
+
+            ok, reason = plan_readiness.evaluate_readiness(plan, plans, reviews)
+            self.assertFalse(ok)
+            self.assertIn("cannot resolve plan identity", reason)
+
+    def test_record_identity_unwraps_markdown_code_span_path(self):
+        from review_plan_identity import markdown_identity
+
+        self.assertEqual(
+            markdown_identity(
+                "## Metadata\n- URL or Artifact: `docs/plans/2026-10-15-same-feature.md`\n"
+            ),
+            "docs/plans/2026-10-15-same-feature.md",
+        )
+
+    def test_pre_round_identity_collision_warning_names_other_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plans = Path(directory) / "plans"
+            completed = plans / "completed"
+            plans.mkdir()
+            completed.mkdir()
+            active = plans / "2026-10-16-shared-feature.md"
+            older = completed / "2026-10-15-shared-feature.md"
+            active.write_text("# active\n", encoding="utf-8")
+            older.write_text("# completed\n", encoding="utf-8")
+            warnings = plan_readiness.plan_review_identity_warnings(active, plans)
+            self.assertEqual(len(warnings), 1)
+            self.assertIn("2026-10-15-shared-feature.md", warnings[0])
+            self.assertIn("source-plan identity keeps review series separate", warnings[0])
+
+
 class CapClosureContractTest(unittest.TestCase):
     """The ``validate_cap_closure_contract`` shape gate (contract level).
 
-    Mirrors the ``validate_address_fanout_contract`` idiom: version-1-only
+    Uses the version-1-only
     with unknown-key rejection, called with the ``payload, result,
     schema_class`` idiom. The negative cases are table-driven and include
     declarations whose unknown keys are themselves named with the routed
@@ -981,10 +1585,15 @@ class CapClosureReadinessTest(unittest.TestCase):
     # -- new gate arms (RED before the probe existed) -----------------------
 
     def test_gate_accepts_cap_closure_terminal_shape(self):
-        """verdict "no" with a conforming declaration passes: the sidecar
+        """The generic shape passes without project-type facts: verdict "no"
+        with a conforming declaration passes, and the sidecar
         round deliberately uses the paired-but-different type (sidecar the
         integer ``5``, declaration ``"5"``), proving string normalization
         is load-bearing."""
+        self.assertEqual(
+            {"plan_section", "round", "residuals", "pre_fold_digest"},
+            set(_cap_closure_declaration()),
+        )
         plan = self._accept_fixture()
         ok, reason = self._evaluate(plan)
         self.assertTrue(ok, reason)
@@ -1435,5 +2044,1250 @@ class OutcomeContractTest(unittest.TestCase):
         self.assertIn("sweep FAILED", out)
 
 
+# --------------------------------------------------------------------------- #
+# Graded readiness fixtures (review-cert-graded-binding plan, Task 6): the
+# full readiness gate over hermetic scratch git repos whose committed plan
+# history and certification seal the shared verifier re-derives from git.
+# --------------------------------------------------------------------------- #
+
+import collections
+import subprocess
+import sys
+
+import corrections_record as cr
+
+_GRADED_DATE = "2026-09-22"
+_GRADED_SLUG = "acme-plan"
+_GRADED_PLAN_NAME = "2026-09-22-acme-plan.md"
+_GRADED_PLAN_REL = "docs/history/plans/" + _GRADED_PLAN_NAME
+# The em dash is built from an escape at run time: these fixture bytes never
+# carry the character itself. D2 is the typography-only comma form of D1;
+# D3 is the smuggled shape, a plain Assumptions word change no exempt class
+# can prove.
+_GRADED_PLAN_HEAD = (
+    "# P\n\n"
+    "## Assumptions\n\n"
+    "Decision points requiring a grill: none remain.\n\n"
+)
+_GRADED_PLAN_TAIL = (
+    "\n## Tasks\n\n"
+    "### Task 1: Do the thing\n\n"
+    "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+)
+_GRADED_D1 = (
+    _GRADED_PLAN_HEAD + "alpha \u2014 bravo." + _GRADED_PLAN_TAIL
+).encode("utf-8")
+_GRADED_D2 = (
+    _GRADED_PLAN_HEAD + "alpha, bravo." + _GRADED_PLAN_TAIL
+).encode("utf-8")
+_GRADED_D3 = (
+    _GRADED_PLAN_HEAD + "alpha omega." + _GRADED_PLAN_TAIL
+).encode("utf-8")
+_GRADED_FACTS_BODY = (
+    "# facts\n\n```toml\n"
+    'plans_dir = "docs/history/plans"\n'
+    'reviews_dir = ".ai-playbook/reviews"\n'
+    "```\n"
+)
+
+GradedFixture = collections.namedtuple(
+    "GradedFixture", "repo plans_dir reviews_dir start close hop"
+)
+
+
+def _graded_payload(digest: str, *, last_fix: str | None = None) -> dict:
+    """A current-v1 clear-review sidecar carrying the graded fields (the
+    Task 5 fixture shape): the declared source kind and digest, the round,
+    and the artifact slug the certification seal resolves by."""
+    payload = vrs._post_window_fixture_payload("plan")
+    payload["schema_version"] = 1
+    payload["review_type"] = "Branch Review"
+    payload["artifact_slug"] = _GRADED_SLUG
+    payload["round"] = "r1"
+    payload["source_kind"] = "plan"
+    payload["source_digest"] = digest
+    payload["verdict"] = "yes"
+    payload["deduplication_groups"] = []
+    payload["discarded"] = []
+    payload["severity_calibration"] = []
+    payload["triage_outcomes"] = []
+    payload["soften_watchlist"] = []
+    if last_fix is not None:
+        payload["last_fix_commit"] = last_fix
+    return payload
+
+
+def _graded_markdown(last_fix: str | None = None) -> str:
+    """The Markdown twin of ``_graded_payload`` (the Task 5 fixture shape),
+    with the ``Last fix commit`` Metadata line re-pointed when the fixture
+    declares one, so the cross-surface agreement gate sees one surface."""
+    markdown = vrs._post_window_fixture_markdown("plan")
+    if last_fix is not None:
+        markdown = markdown.replace(
+            "- Last fix commit: none",
+            "- Last fix commit: %s" % last_fix,
+            1,
+        )
+    return markdown
+
+
+class PlanReadinessGradedTest(unittest.TestCase):
+    """The five graded full-gate fixtures over scratch repos: the
+    typography re-bind passes, the honest clean shape passes with no
+    record, the same edit without the record keeps the stale reason, a row
+    claiming exempt over a word change takes the corrections classification
+    family, a bare digest rewrite refuses as an unwitnessed mutation, a
+    vacuous hop refuses naming its leg, and a moved seal anchor passes
+    undetected since the history-witness retirement; the
+    routing-order pin holds the caller dispatch, and the graded
+    indeterminate class maps to exit 2."""
+
+    def _graded_fixture(
+        self,
+        *,
+        hop_bytes: bytes | None = _GRADED_D2,
+        with_seal: bool = True,
+        seal_after_hop: bool = False,
+    ) -> GradedFixture:
+        """The shared fixture recipe: a scratch git repo (hermetic builder,
+        TemporaryDirectory with addCleanup teardown) holding the D1 plan
+        bytes committed with explicit author and committer dates, the
+        round-close commit, the on-disk seal entry for the fixture round
+        (round-start commit and digest) so the anchor locator resolves, and
+        the committed hop to the current bytes. ``seal_after_hop`` mints
+        the seal entry after the hop: the moved-anchor shape (undetected
+        since the history-witness retirement)."""
+        repo = cr.build_scratch_repo(self)
+        plans_dir = repo.root / "docs" / "history" / "plans"
+        reviews_dir = repo.root / ".ai-playbook" / "reviews"
+        plans_dir.mkdir(parents=True)
+        reviews_dir.mkdir(parents=True)
+        (repo.root / ".ai-playbook").mkdir(exist_ok=True)
+        (repo.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8"
+        )
+        start = repo.commit_file(_GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = repo.commit_allow_empty("round 1 close")
+        hop = None
+        if with_seal and not seal_after_hop:
+            # Fixture shape: the seal entry is committed in the fixture at
+            # round close, before any correction hop it anchors (production
+            # writes the seal as an untracked run artifact).
+            repo.append_seal_entry(
+                _GRADED_SLUG, 1, _GRADED_PLAN_REL, start,
+                cr.sha256_hex(_GRADED_D1), close,
+            )
+        if hop_bytes is not None:
+            hop = repo.commit_file(
+                _GRADED_PLAN_REL, hop_bytes, "apply the correction"
+            )
+        if with_seal and seal_after_hop:
+            # The moved anchor: the seal entry is minted after the hop it
+            # claims to anchor (the tamper shape; the gate no longer dates
+            # the entry's introduction, so nothing refuses it).
+            self.assertIsNotNone(hop)
+            repo.append_seal_entry(
+                _GRADED_SLUG, 1, _GRADED_PLAN_REL, start,
+                cr.sha256_hex(_GRADED_D1), close,
+            )
+        return GradedFixture(
+            repo=repo,
+            plans_dir=plans_dir,
+            reviews_dir=reviews_dir,
+            start=start,
+            close=close,
+            hop=hop,
+        )
+
+    def _write_round(self, fx: GradedFixture, payload: dict, markdown: str):
+        review = fx.reviews_dir / (
+            "%s-plan-review-%s-r1.md" % (_GRADED_DATE, _GRADED_SLUG)
+        )
+        if "- URL or Artifact:" not in markdown:
+            markdown = markdown.replace(
+                "## Metadata\n",
+                "## Metadata\n- URL or Artifact: %s\n" % _GRADED_PLAN_REL,
+                1,
+            )
+        review.write_text(markdown, encoding="utf-8")
+        review.with_suffix(".stats.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return review
+
+    def _mint_row(self, fx: GradedFixture) -> dict:
+        """The CLI-produced correction row anchored at D1 (the classifier
+        CLI is the only row producer), minted through the real
+        ``--emit-row`` subprocess inside the fixture repo."""
+        script = (
+            Path(plan_readiness.__file__).resolve().parent
+            / "plan_delta_classifier.py"
+        )
+        proc = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--plan", str(fx.repo.root / _GRADED_PLAN_REL),
+                "--since", fx.start,
+                "--emit-row",
+            ],
+            capture_output=True,
+            text=True,
+            env=cr.hermetic_git_env(),
+        )
+        self.assertEqual(proc.returncode, 0, (proc.stdout, proc.stderr))
+        rows = [
+            line.split(": ", 1)[1]
+            for line in proc.stdout.splitlines()
+            if line.startswith("corrections-row-json: ")
+        ]
+        self.assertEqual(len(rows), 1, proc.stdout)
+        return json.loads(rows[0])
+
+    def _run_gate(self, fx: GradedFixture):
+        """The full readiness gate pointed at the fixture through its
+        resolved repository root (the facts block resolves against the
+        scratch repo the process cwd lands in)."""
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(fx.repo.root)
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(
+                    [str(fx.plans_dir / _GRADED_PLAN_NAME)]
+                )
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_typography_record_passes(self):
+        fx = self._graded_fixture()
+        row = self._mint_row(fx)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1))
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+
+    def test_clean_pass_with_seal(self):
+        # The honest clean shape: the declared digest equals both the
+        # current bytes and the seal's round-start digest, with no record.
+        fx = self._graded_fixture(hop_bytes=None)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1)),
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+
+    def test_same_edit_without_record_fails(self):
+        # The identical typography edit with the record stripped keeps
+        # today's stale reason family.
+        fx = self._graded_fixture()
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1)),
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("sidecar source_digest is stale", err)
+        self.assertNotIn(cr.MARKER_PREFIX, err)
+
+    def test_smuggled_edit_fails(self):
+        # A row claiming exempt over an Assumptions word change: every
+        # digest leg binds (the row was composed over the true hop bytes),
+        # and the classification leg refuses it.
+        fx = self._graded_fixture(hop_bytes=_GRADED_D3)
+        row = {
+            "kind": cr.KIND_SCRIPT_VERIFIED,
+            "before_digest": cr.sha256_hex(_GRADED_D1),
+            "after_digest": cr.sha256_hex(_GRADED_D3),
+            "evidence_commit": fx.hop,
+            "hunks": [{"header": "@@ -7 +7 @@",
+                       "digest": cr.sha256_hex(b"hunk-bytes")}],
+            "recorded_at": "2026-10-04T00:00:00Z",
+            "recorded_by": "plan_delta_classifier",
+        }
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D3))
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("classification", err)
+        self.assertIn("not exempt", err)
+
+    def test_bare_rewrite_refuses(self):
+        # The declared digest equals the current bytes while the
+        # round-anchored locator resolves a different digest: an
+        # unwitnessed sidecar digest mutation.
+        fx = self._graded_fixture()
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D2)),
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("bare rewrite", err)
+
+    def test_moved_anchor_and_vacuous_hop_refuse(self):
+        # Witness-retirement fence (2026-10-11 seal-home re-point): the
+        # seal is read from the working tree and the committed-history
+        # witness (the introductions walk and its dating legs) is retired,
+        # so the moved-anchor tamper below is undetectable by design; this
+        # arm asserts the post-retirement pass instead of the former
+        # seal-leg refusal. The row is still composed with the true hop
+        # digests (the classifier CLI cannot mint here: its evidence
+        # resolution reads HEAD, which the postdated seal commit now is),
+        # so a pass proves every surviving digest leg binds.
+        fx = self._graded_fixture(seal_after_hop=True)
+        row = {
+            "kind": cr.KIND_SCRIPT_VERIFIED,
+            "before_digest": cr.sha256_hex(_GRADED_D1),
+            "after_digest": cr.sha256_hex(_GRADED_D2),
+            "evidence_commit": fx.hop,
+            "hunks": [{"header": "@@ -7 +7 @@",
+                       "digest": cr.sha256_hex(b"hunk-bytes")}],
+            "recorded_at": "2026-10-04T00:00:00Z",
+            "recorded_by": "plan_delta_classifier",
+        }
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1), last_fix=fx.hop)
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(last_fix=fx.hop),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        self.assertNotIn(cr.MARKER_PREFIX, err)
+        # Vacuous hop: a record whose before and after digests are equal
+        # names the vacuous rule.
+        fx2 = self._graded_fixture()
+        row2 = dict(self._mint_row(fx2),
+                    before_digest=cr.sha256_hex(_GRADED_D2))
+        self._write_round(
+            fx2,
+            _graded_payload(cr.sha256_hex(_GRADED_D2))
+            | {"extensions": {"corrections": [row2]}},
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx2)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("vacuous", err)
+
+    def test_graded_indeterminate_names_where_and_exits_2(self):
+        # A declared record whose round has no resolvable seal entry is the
+        # graded arm's indeterminate class: the gate refuses (never
+        # passes), and the CLI maps it to exit 2 naming where.
+        fx = self._graded_fixture(with_seal=False)
+        row = self._mint_row(fx)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1))
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 2, (out, err))
+        self.assertTrue(out.rstrip().endswith("OUTCOME: indeterminate"), out)
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("no resolvable entry", err)
+
+    def test_marker_check_outranks_the_substring_branches(self):
+        # Routing home: the corrections marker check is the FIRST test in
+        # the caller-level dispatch, before the coverage, source_kind, and
+        # source_digest substring branches. The fixture reason deliberately
+        # carries the banned routing literal "source_digest": production
+        # verifier reasons never carry it (pinned in corrections_record's
+        # MarkerConstantsTest); this one test-only string exists to prove
+        # the marker check outranks the source_digest substring branch.
+        synthetic = cr.MARKER_PREFIX + (
+            "anchor leg refused: bare rewrite of source_digest"
+        )
+        reason = plan_readiness._first_gate_error_reason(
+            synthetic, {"source_kind": "plan"}, 3
+        )
+        self.assertEqual(reason, synthetic)
+        # The pre-existing digest families keep their routing on
+        # marker-free errors (the stale family unchanged).
+        stale = plan_readiness._first_gate_error_reason(
+            "current sidecar source_digest is stale (mismatch vs "
+            "expected_digest)",
+            {"source_kind": "plan"},
+            3,
+        )
+        self.assertIn("sidecar source_digest is stale", stale)
+        self.assertIn("r3", stale)
+        self.assertNotIn(cr.MARKER_PREFIX, stale)
+
+
+# --------------------------------------------------------------------------- #
+# --print-artifact-slug: the read-only slug SOT flag (CLI level).
+# --------------------------------------------------------------------------- #
+
+class TestPrintArtifactSlug(unittest.TestCase):
+    """The read-only slug print answers the canonical artifact slug."""
+
+    def test_flag_prints_canonical_slug(self):
+        root = Path(tempfile.mkdtemp(prefix="slug-flag-fixture-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        plan = root / "2026-09-01-DEMO-609-Fixture-Story.md"
+        plan.write_text("# Fixture story\n", encoding="utf-8")
+        script = Path(__file__).resolve().parent / "plan_readiness.py"
+        proc = subprocess.run(
+            [sys.executable, str(script), "--print-artifact-slug", str(plan)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.splitlines()[0], "demo-609-fixture-story")
+        self.assertTrue(
+            proc.stdout.rstrip().endswith("OUTCOME: pass"), proc.stdout
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Directory-form plan operands (plan-directory-shape plan, Task 1): the
+# readiness gate and the pre-round path accept a charter-plus-tasks
+# directory beside the single-file shape (sections from the charter, tasks
+# from the sorted task files, slug from the directory name, per-file fence
+# scanning, manifest digest, directory ordinal grammar), while single-file
+# behavior stays byte-identical.
+# --------------------------------------------------------------------------- #
+
+import contextlib
+import io
+import json
+import shutil
+import tempfile
+from pathlib import Path
+
+import plan_readiness
+import validate_review_staging as vrs
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+_LANDED_COMPLETED_PLAN = _REPOSITORY_ROOT / (
+    "docs/history/plans/completed/"
+    "2026-10-05-plan-sizing-execution-budget.md"
+)
+# Fires all three date-gated probes (trailer 2026-09-08, Review Scope
+# 2026-09-09, plan structure 2026-09-19) while matching the in-file
+# selftest's gated-arm sidecar shape (plain _clear_sidecar at 2026-09-19).
+_GATED_SIDECAR_DATE = "2026-09-19"
+
+_DIRECTORY_CHARTER = (
+    "# Plan: directory fixture\n"
+    "\n"
+    "Backlog origin: none\n"
+    "Driving force: efficiency\n"
+    "\n"
+    "## Terms\n"
+    "\n"
+    "none.\n"
+    "\n"
+    "## Why\n"
+    "\n"
+    "The fixture proves the directory shape passes readiness end to end.\n"
+    "\n"
+    "## Gist & Examples\n"
+    "\n"
+    "TLDR: charter sections plus task files pass the gate, efficiency.\n"
+    "\n"
+    "## Outcome\n"
+    "\n"
+    "The readiness gate reads the shared sections from the charter and the"
+    " tasks from the files.\n"
+    "\n"
+    "## Assumptions\n"
+    "\n"
+    "- assume the charter carries the shared sections; basis: the fixture"
+    " contract.\n"
+    "\n"
+    "Decision points requiring a grill: none remain.\n"
+    "\n"
+    "## Evaluation Criteria\n"
+    "\n"
+    "**Done when:**\n"
+    "- the readiness gate passes this fixture.\n"
+    "\n"
+    "## Review Scope\n"
+    "\n"
+    "**Production code:**\n"
+    "- `scripts/fixture_module.py` *(new)*\n"
+    "\n"
+    "**Tests:**\n"
+    "- `scripts/test_fixture_module.py` *(new)*\n"
+    "\n"
+    "## Validation Commands\n"
+    "\n"
+    "- python3 -m pytest scripts/test_fixture_module.py -q\n"
+)
+
+_DIRECTORY_TASKS = {
+    "01-module.md": (
+        "### Task 1: the module (TDD)\n"
+        "\n"
+        "Files:\n"
+        "- `scripts/fixture_module.py` *(new)*\n"
+        "\n"
+        "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+    ),
+    "02-tests.md": (
+        "### Task 2: the tests (TDD)\n"
+        "\n"
+        "Files:\n"
+        "- `scripts/test_fixture_module.py` *(new)*\n"
+        "\n"
+        "- [ ] Pin the module contract. [class: REPOSITORY_TEST]\n"
+    ),
+}
+
+
+def _directory_plan_fixture(
+    plans_dir: Path,
+    slug: str = "2026-09-19-dirfixture",
+    charter_text: str | None = None,
+    task_texts: dict[str, str] | None = None,
+) -> Path:
+    """Write a directory-form plan under plans_dir and return its path."""
+    plan_dir = plans_dir / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        charter_text if charter_text is not None else _DIRECTORY_CHARTER,
+        encoding="utf-8",
+    )
+    texts = task_texts if task_texts is not None else _DIRECTORY_TASKS
+    for name, text in texts.items():
+        (plan_dir / "tasks" / name).write_text(text, encoding="utf-8")
+    return plan_dir
+
+
+def _write_directory_clean_state(
+    plans_dir: Path,
+    reviews_dir: Path,
+    slug: str = "2026-09-19-dirfixture",
+    charter_text: str | None = None,
+    task_texts: dict[str, str] | None = None,
+    verdict: str = "yes",
+    date: str = _GATED_SIDECAR_DATE,
+) -> Path:
+    """Directory plan plus a clear review round bound to its manifest digest."""
+    import plan_shape  # in-function: the single-file suite collects before the resolver lands
+
+    plan_dir = _directory_plan_fixture(
+        plans_dir, slug=slug, charter_text=charter_text, task_texts=task_texts
+    )
+    shape = plan_shape.resolve_plan_operand(plan_dir)
+    digest = vrs.compute_source_digest("plan", shape.digest_payload)
+    sidecar = plan_readiness._clear_sidecar(digest)
+    sidecar["date"] = date
+    slug_name = plan_readiness.feature_slug(plan_dir)
+    review = reviews_dir / f"{date}-plan-review-{slug_name}-r1.md"
+    review.write_text(
+        plan_readiness._review_markdown(verdict=verdict), encoding="utf-8"
+    )
+    review.with_suffix(".stats.json").write_text(
+        json.dumps(sidecar), encoding="utf-8"
+    )
+    return plan_dir
+
+
+class ReadinessDirectoryEndToEndTest(unittest.TestCase):
+    """test_readiness_directory_end_to_end: the full gate passes a directory."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="dirshape-e2e-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.plans_dir = self.root / "plans"
+        self.reviews_dir = self.root / "reviews"
+        self.plans_dir.mkdir()
+        self.reviews_dir.mkdir()
+
+    def test_full_gate_passes_well_formed_directory_plan(self):
+        plan_dir = _write_directory_clean_state(
+            self.plans_dir, self.reviews_dir
+        )
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan_dir, self.plans_dir, self.reviews_dir
+        )
+        self.assertTrue(ok, f"reason={reason}")
+        self.assertIsNone(reason)
+
+    def test_pre_round_passes_directory_plan_with_charter_sections(self):
+        plan_dir = _directory_plan_fixture(self.plans_dir)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = plan_readiness.run_pre_round(plan_dir, self.plans_dir)
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertEqual(err.getvalue(), "")
+
+    def test_charter_fence_imbalance_names_the_file(self):
+        charter = _DIRECTORY_CHARTER + "```python\nunterminated = true\n"
+        plan_dir = _directory_plan_fixture(
+            self.plans_dir, charter_text=charter
+        )
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = plan_readiness.run_pre_round(plan_dir, self.plans_dir)
+        self.assertEqual(rc, 1)
+        self.assertIn("PLAN.md", err.getvalue())
+        self.assertIn("unclosed fence opener", err.getvalue())
+
+
+class ReadinessDirectoryOrdinalGrammarTest(unittest.TestCase):
+    """test_readiness_directory_ordinal_grammar: the deliberate divergence."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="dirshape-ordinal-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.plans_dir = self.root / "plans"
+        self.reviews_dir = self.root / "reviews"
+        self.plans_dir.mkdir()
+        self.reviews_dir.mkdir()
+
+    def test_task_file_missing_ordinal_refuses_naming_the_file(self):
+        task_texts = {
+            "01-module.md": _DIRECTORY_TASKS["01-module.md"],
+            "02-tests.md": "no task heading in this file\n",
+        }
+        plan_dir = _directory_plan_fixture(
+            self.plans_dir, task_texts=task_texts
+        )
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan_dir, self.plans_dir, self.reviews_dir
+        )
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self.assertIn("tasks/02-tests.md", reason)
+
+    def test_duplicate_ordinal_refuses_naming_both_files(self):
+        task_texts = {
+            "01-module.md": _DIRECTORY_TASKS["01-module.md"],
+            "02-tests.md": (
+                "### Task 1: the tests (TDD)\n"
+                "\n"
+                "Files:\n"
+                "- `scripts/test_fixture_module.py` *(new)*\n"
+                "\n"
+                "- [ ] Pin the module contract. [class: REPOSITORY_TEST]\n"
+            ),
+        }
+        plan_dir = _directory_plan_fixture(
+            self.plans_dir, task_texts=task_texts
+        )
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan_dir, self.plans_dir, self.reviews_dir
+        )
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self.assertIn("tasks/01-module.md", reason)
+        self.assertIn("tasks/02-tests.md", reason)
+        self.assertIn("Task 1", reason)
+
+    def test_single_file_repeated_ordinals_still_accepted(self):
+        plan_text = (
+            "# Plan: repeated ordinals\n"
+            "\n"
+            "## Assumptions\n"
+            "\n"
+            "Decision points requiring a grill: none remain.\n"
+            "\n"
+            "## Review Scope\n"
+            "\n"
+            "**Production code:**\n"
+            "- `scripts/fixture_module.py` *(new)*\n"
+            "\n"
+            "## Tasks\n"
+            "\n"
+            "### Task 1: the module (TDD)\n"
+            "\n"
+            "Files:\n"
+            "- `scripts/fixture_module.py` *(new)*\n"
+            "\n"
+            "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+            "\n"
+            "### Task 1: the module, revisited\n"
+            "\n"
+            "- [ ] Extend the module. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        plan, _review = plan_readiness._write_clean_state(
+            self.plans_dir, self.reviews_dir, plan_text=plan_text
+        )
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan, self.plans_dir, self.reviews_dir
+        )
+        self.assertTrue(ok, f"reason={reason}")
+        self.assertIsNone(reason)
+
+
+class ReadinessSingleFileUnchangedTest(unittest.TestCase):
+    """Single-file gate surfaces over the landed completed plan byte-shape."""
+
+    def test_landed_plan_pre_round_refuses_on_envelope(self):
+        """The landed plan (over-cap acceptance criteria, 538 and 981 bytes) refuses
+        --pre-round with step 9's byte-identical envelope label: the
+        pre-round-gate-dimension-parity plan extends the pre-round mode
+        with the plan-private step 9 probes, and the former exit-0
+        byte-identical pin encoded the pre-extension surface (its own
+        docstring records that history; the measured 7-of-16 corpus
+        refusal rate in that plan's Gate delta prices this flip)."""
+        script = Path(__file__).resolve().parent / "plan_readiness.py"
+        proc = subprocess.run(
+            [sys.executable, str(script), "--pre-round", str(_LANDED_COMPLETED_PLAN)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "readiness PRE-ROUND FAILED:", proc.stderr
+        )
+        self.assertIn(
+            "evidence criterion exceeds UTF-8 item byte limit", proc.stderr
+        )
+        self.assertEqual(proc.stdout, "OUTCOME: fail\n")
+
+    def test_file_operand_digest_matches_raw_bytes(self):
+        import plan_shape
+
+        raw = _LANDED_COMPLETED_PLAN.read_bytes()
+        shape = plan_shape.resolve_plan_operand(_LANDED_COMPLETED_PLAN)
+        self.assertEqual(
+            vrs.compute_source_digest("plan", shape.digest_payload),
+            vrs.compute_source_digest("plan", raw),
+        )
+
+    def test_full_gate_passes_single_file_plan(self):
+        root = Path(tempfile.mkdtemp(prefix="dirshape-single-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        plans_dir = root / "plans"
+        reviews_dir = root / "reviews"
+        plans_dir.mkdir()
+        reviews_dir.mkdir()
+        plan_text = (
+            "# Plan: single file\n"
+            "\n"
+            "## Assumptions\n"
+            "\n"
+            "Decision points requiring a grill: none remain.\n"
+            "\n"
+            "## Review Scope\n"
+            "\n"
+            "**Production code:**\n"
+            "- `scripts/fixture_module.py` *(new)*\n"
+            "\n"
+            "## Tasks\n"
+            "\n"
+            "### Task 1: the module (TDD)\n"
+            "\n"
+            "Files:\n"
+            "- `scripts/fixture_module.py` *(new)*\n"
+            "\n"
+            "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        plan, _review = plan_readiness._write_clean_state(
+            plans_dir, reviews_dir, plan_text=plan_text
+        )
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan, plans_dir, reviews_dir
+        )
+        self.assertTrue(ok, f"reason={reason}")
+        self.assertIsNone(reason)
+
+
+class ExecutePlanProfilePlacementCompatibilityTest(unittest.TestCase):
+    """Pin the declared profile eligibility rule, the shared placement
+    resolution matrix, and the profile-specific primary-placement branch
+    arms (personal/pet base-branch only; company operator task-branch
+    choice) plus the company maintenance guard."""
+
+    def test_direct_execution_matrix_preserves_all_profile_placement_pairs(self):
+        root = Path(__file__).resolve().parents[1]
+        execute_plan = (root / "agents/skills/execute-plan/SKILL.md").read_text(encoding="utf-8")
+        maintenance = (root / "agents/skills/maintenance/SKILL.md").read_text(encoding="utf-8")
+        policy_start = execute_plan.index("**Project worktree policy (consulted at dispatch):**")
+        policy_end = execute_plan.index("\n\n", policy_start)
+        placement_policy = execute_plan[policy_start:policy_end]
+        profile_start = execute_plan.index("**Profile and placement:**")
+        profile_contract = execute_plan[profile_start:policy_start]
+
+        self.assertIn("direct execute-plan invocation remains available under personal and company profiles", profile_contract)
+        self.assertIn("Resolve placement independently under this paragraph", profile_contract)
+        # Primary-placement branch requirements vary by profile: personal and
+        # pet runs are valid only from the base branch, while a company run
+        # gains the per-run operator choice and records its task branch.
+        self.assertIn("for personal and pet profiles, a primary-placement run is valid only when the primary checkout's current branch is the base branch at run start", placement_policy)
+        self.assertIn("a company-profile primary-placement run gains the per-run operator choice beside that base-branch-only rule", placement_policy)
+        self.assertIn("the chosen or created task branch records into the execution claim and the manifest identity block", placement_policy)
+        self.assertIn("a resume finding the shared checkout on any other branch stands down naming the recorded branch", placement_policy)
+
+        maintenance_mode = next(
+            line for line in maintenance.splitlines() if line.startswith("Mode binding.")
+        )
+        self.assertIn("survey-only", maintenance_mode)
+        self.assertIn("class-guard-survey-only", maintenance_mode)
+
+        # This declared cross-product is valid because profile eligibility is
+        # separate from placement, and the placement resolutions below are the
+        # shared matrix both profiles consult; only the primary-placement
+        # branch requirement differs by profile (pinned above).
+        cases = (
+            ("personal", "worktrees", "`worktree_policy = \"worktrees\"` (enabling ad-hoc worktrees"),
+            ("personal", "primary", '`worktree_policy = "primary"` runs all its work, ordinary and named lanes including plan authoring and plan execution, in the primary checkout on its current branch'),
+            ("company", "worktrees", "`worktree_policy = \"worktrees\"` (enabling ad-hoc worktrees"),
+            ("company", "primary", '`worktree_policy = "primary"` runs all its work, ordinary and named lanes including plan authoring and plan execution, in the primary checkout on its current branch'),
+        )
+        for profile, policy_name, policy_resolution in cases:
+            with self.subTest(profile=profile, policy=policy_name):
+                self.assertIn(profile, profile_contract)
+                self.assertIn(policy_resolution, placement_policy)
+
+
+class ReviewTrajectoryPolicyFixtureTest(unittest.TestCase):
+    """Pin paired no-progress cases at and between configured checkpoints."""
+
+    def test_no_progress_stop_requires_checkpoint_pause(self):
+        fixture = Path(__file__).with_name("review_policy_sample_contexts.md").read_text(encoding="utf-8")
+        self.assertIn("A cap is never a stop by itself", fixture)
+        self.assertIn("Total-round checkpoints: r5, r10, r15", fixture)
+        self.assertIn("Full-panel checkpoints: F5, F10, F15", fixture)
+        self.assertIn("one reflection at each checkpoint", fixture)
+        self.assertIn("r5", fixture)
+        self.assertIn("pause for operator direction", fixture)
+        self.assertIn("H1, pause at checkpoint", fixture)
+        self.assertIn("H2, pause between checkpoints", fixture)
+        self.assertIn("Cap closure is unavailable; pause only under the independent operator request", fixture)
+        self.assertIn("| C, r15 | Full/F9; R=15, F=9 | Both intervals due; emit one reflection", fixture)
+        self.assertIn("| I, r15 | Full/F15; R=15, F=15 | R15 and F15 coincide", fixture)
+        self.assertIn("| I, complete 5/3 schedule | Full panel each round | Full-panel F3/F6/F9/F12/F15", fixture)
+        self.assertIn("| I, r3 | Full/F3; R=3, F=3 | Full-panel first hit; total counter remains below 5", fixture)
+        self.assertIn("| I, r5 | Full/F5; R=5, F=5 | Total first hit while F remains below 6", fixture)
+        self.assertIn("total R5/R10/R15", fixture)
+        self.assertIn("Coincidences at r5 and r15", fixture)
+        self.assertIn("r10 is a total-round-only reflection", fixture)
+        self.assertIn("reflect for F3 while R=3 is below 5", fixture)
+        self.assertIn("reflect for R5 while F=5 is below 6", fixture)
+        self.assertIn("Continue the next review without asking", fixture)
+        self.assertIn("| J, fresh loop r1 | Positive blockers; no prior blocker count and no churn or recurrence trigger", fixture)
+        self.assertIn("Continue one round, then apply the measured convergence rule", fixture)
+        self.assertIn("Active churn overrides blocker decline", fixture)
+        self.assertIn("falling blocker count", fixture)
+        self.assertIn("| H1, r5 | No progress; independent operator pause coincides", fixture)
+        self.assertIn("| H2, r4 | No progress; independent operator pause before any checkpoint", fixture)
+        execute_plan = Path(__file__).resolve().parents[1] / "agents/skills/execute-plan/SKILL.md"
+        policy = execute_plan.read_text(encoding="utf-8")
+        self.assertIn("At every configured `max_review_rounds` or `max_full_panel_rounds` interval", policy)
+        self.assertIn("record the reflection before deciding whether to continue", policy)
+        self.assertIn("launches one host-native implementation worker at a time, in plan order", policy)
+        self.assertIn("native delegation is unavailable before launch", policy)
+        self.assertIn("a timed-out worker is verified terminal", policy)
+        self.assertIn("If liveness is unknown, do not edit task paths or launch a duplicate", policy)
+        self.assertIn("Review-panel workers may run in parallel", policy)
+
+    def test_self_heal_trajectories_are_bounded_to_one_attempt(self):
+        fixture = Path(__file__).with_name("review_policy_sample_contexts.md").read_text(encoding="utf-8")
+        self.assertIn("find none, then pause", fixture)
+        self.assertIn("same blockers remain, so pause", fixture)
+        self.assertIn("| G, authorized attempt | New artifact chain starts at r1 with unused state bound to its `review-run-id` | Reserve consumed state with the stable `run_id` before mutation | Apply one attempt and carry the consumed state unchanged |", fixture)
+        self.assertIn("| G, unauthorized attempt | Plan does not authorize; state is unused | The authorization gate prevents mutation | Pause before changing the branch |", fixture)
+        self.assertIn("| G, resumed after attempt | Latest state is consumed for r3 with stable `run_id` and digest | Resume reads and preserves the consumed marker | Pause before a second attempt |", fixture)
+        self.assertIn("| G, new invocation | A new artifact chain starts at r1 with a newly minted `review-run-id` | Orchestrator writes `unused` with matching `run_id` | New invocation receives its own one-attempt allowance |", fixture)
+        self.assertIn("| G, legacy resume | Prior record or sidecar is missing or malformed | Record `unknown` with this round's `review-run-id`; validator rejects `unused` | Pause before self-heal |", fixture)
+        self.assertIn("| Fold-defect plus wording must be strictly greater than half of staged findings | 2 of 4 is exactly half | 3 of 4 is greater than half | 2 of 4 does not trigger; 3 of 4 triggers reconciliation |", fixture)
+        self.assertIn("| Staged finding totals are checked across the two most recent rounds | 4 to 3 decreases | 4 to 4 is flat; 4 to 5 increases | 4 to 3 does not trigger; 4 to 4 and 4 to 5 trigger reconciliation |", fixture)
+        self.assertIn("| Positive blocker counts are checked across two consecutive rounds | 2 to 1 decreases | 2 to 2 stays positive and flat | 2 to 1 does not trigger; 2 to 2 triggers reconciliation |", fixture)
+        root = Path(__file__).resolve().parents[1]
+        review_plan = (root / "agents/skills/review-plan/SKILL.md").read_text(encoding="utf-8")
+        plans = (root / "agents/skills/plans/SKILL.md").read_text(encoding="utf-8")
+        review_loop = (root / "agents/skills/review-loop/SKILL.md").read_text(encoding="utf-8")
+        execute_plan = (root / "agents/skills/execute-plan/SKILL.md").read_text(encoding="utf-8")
+        receiving_review = (root / "agents/skills/receiving-review/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("When no prior blocker count exists, continue one review round to establish the trajectory baseline", review_plan)
+        self.assertIn("at most one concrete simplification or refactor attempt", review_plan)
+        self.assertIn("pause for operator direction before another change or review", review_plan)
+        self.assertIn("for the entire review run", review_plan)
+        self.assertIn("never renews across later rounds or triggers", review_plan)
+        self.assertIn("the run-wide `self_heal_attempt` member", review_plan)
+        self.assertIn('"status":"consumed","run_id":"<stable-run-id>","round":"rN","source_digest":"<sha256>"', review_plan)
+        self.assertIn("A resumed post-fence workflow reads the latest value", review_plan)
+        self.assertIn("it is consumed or unknown", review_plan)
+        self.assertIn("resume records `status:\"unknown\"` with the current round's `review-run-id`", review_plan)
+        self.assertIn("Use the active mechanical-churn and recurrence triggers, convergence decisions, and bounded self-heal rule defined in `review-plan`", plans)
+        self.assertIn("review-plan`'s Scope and complexity policy", plans)
+        self.assertIn("review-plan`’s Scope and complexity policy", review_loop)
+        self.assertIn("per review-plan's Scope and complexity policy pause duty", execute_plan)
+        self.assertNotIn("must reduce the nonnegative blocker count", plans)
+        self.assertNotIn("at most one concrete simplification or refactor", review_loop)
+        self.assertNotIn("at most one concrete simplification or refactor", execute_plan)
+        self.assertNotIn("Before a sixth full-panel round, stop for user direction", plans)
+        self.assertIn("Reflect at every configured total-round and full-panel interval; intervals are checkpoints, not stop limits", review_loop)
+        self.assertNotIn("Max 5 full-panel rounds", review_loop)
+        self.assertIn("the execution plan expressly authorizes", receiving_review)
+
+
+class PlanLaunchTemplateRecordContractWitnessTest(unittest.TestCase):
+    """The Plan Quality Gate's sub-agent launch template carries the staging
+    record contract, and a record shaped exactly by that template validates
+    clean on the first pass while a missing required field is rejected."""
+
+    def test_launch_template_carries_validator_contract(self):
+        plans = (Path(__file__).resolve().parents[1] / "agents/skills/plans/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("review_usage_capture.py mint", plans)
+        self.assertIn("- review-run-id:", plans)
+        self.assertIn("- review-started-at-ms:", plans)
+        self.assertIn("- Record kind: canonical", plans)
+        self.assertIn("a `## Findings` section carrying", plans)
+        self.assertIn("populated `### Witness ledger` section", plans)
+        self.assertIn("top-level `record_kind` field", plans)
+        self.assertIn("- Coverage:", plans)
+        self.assertIn("- Witness ledger:", plans)
+        self.assertIn("- **Consequence**:", plans)
+        self.assertIn("- **Blocking**: true|false", plans)
+        self.assertIn("- **Reachability**:", plans)
+        self.assertIn("- **Blast radius**:", plans)
+        self.assertIn("- **Confidence**:", plans)
+        self.assertIn("- **Pattern**:", plans)
+        self.assertIn("- **Triage**:", plans)
+        self.assertIn("#### Comment", plans)
+        self.assertIn("#### Analysis", plans)
+        self.assertIn("`blocking`, `consequence`, `reachability`, `blast_radius`, `confidence`", plans)
+        self.assertIn("extensions.convergence.self_heal_attempt", plans)
+        self.assertIn("schema source of truth", plans)
+
+    def test_template_shaped_record_validates_clean_and_rejects_missing_field(self):
+        import hashlib
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from datetime import date
+
+        root = Path(__file__).resolve().parents[1]
+        validator = Path(__file__).with_name("validate_review_staging.py")
+        run_id = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        started_ms = "1791632600000"
+        slug = "launch-template-witness"
+        record_date = date.today().isoformat()
+        plan_text = (
+            "# Witness plan\n\n"
+            "A minimal plan artifact shaped for the plans-skill launch-template contract witness.\n"
+            "\n"
+            "### Task 1: record a sample finding\n\n"
+            "Files:\n"
+            "- docs/example.md\n"
+        )
+        digest = hashlib.sha256(plan_text.encode("utf-8")).hexdigest()
+        markdown = f"""# Plan Review: launch template witness (r1)
+
+## Metadata
+- Type: Plan Review
+- Record kind: canonical
+- Date: {record_date}
+- URL or Artifact: plan.md
+- Depth: full
+- Domains: review-staging
+- Round: r1
+- Review mode: fresh-adversarial
+- Changed-risk signals: none
+- Prior findings supplied as filter: no
+- Last fix commit: N/A
+- Witness ledger: N/A (no public mutators)
+- Coverage: clean
+- Panel mode: focused
+- Selection reason: single-worker witness fixture under the shared selection rules
+- review-run-id: {run_id}
+- review-started-at-ms: {started_ms}
+- Source digest: {digest}
+- Findings: 1
+- Status: STAGED
+
+## Review Statistics
+
+### Panel
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| correctness-completeness | quality, implementation | none | complete | 1 | 1 | 0 | no |
+
+### Counts
+- Workers launched: 1
+- Workers skipped: 0
+- Raw findings (all workers): 1
+- Staged findings: 1
+- Discarded during synthesis: 0
+- Solo staged (unique agent origin): 1
+- Echo staged (multi-agent dedup): 0
+
+### Deduplication groups
+None (each staged finding had a single agent origin).
+
+### Discarded findings
+None.
+
+### Severity calibration
+None (agent severities matched staged severities).
+
+### Triage outcomes
+| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |
+|--------|------|--------|-------|---------|----------|---------|
+| correctness-completeness | quality | 1 | 0 | 0 | 0 | 1 |
+
+## Findings
+
+### Critical
+
+None.
+
+### High
+
+None.
+
+### Medium
+
+#### F1. Sample finding for the launch-template witness
+- **Severity**: Medium
+- **Blocking**: false
+- **Consequence**: A template-launched worker could omit the field and fail the staging gate after the round.
+- **Reachability**: common
+- **Blast radius**: single-service
+- **Confidence**: verified
+- **Pattern**: quality#sample-witness-gap
+- **Workers**: correctness-completeness
+- **Triage**: pending
+- **Anchor**: plan.md, the Task 1 heading
+- **Source**: [Prose]
+
+#### Comment (posted as-is when approved)
+Keep the witness fixture aligned with the validator's current contract.
+
+#### Analysis (not posted)
+The block mirrors the launch template's field bullets so the validator's finding gate exercises the same shape a template-launched worker emits.
+
+### Low
+
+None.
+
+## Summary
+Counts (Critical | High | Medium | Low): 0 | 0 | 1 | 0
+Blocking findings: none
+Verdict: ready=no (one pending non-blocking sample finding exercises the finding gate)
+
+## Verdict for this round (before fixes)
+ready=no (the sample finding is the fixture's finding-gate exercise, not a defect report)
+"""
+        sidecar = {
+            "schema_version": 1,
+            "review_type": "Plan Review",
+            "date": record_date,
+            "artifact_slug": slug,
+            "round": "r1",
+            "depth": "full",
+            "domains": ["review-staging"],
+            "panel_mode": "focused",
+            "selection_reason": "single-worker witness fixture under the shared selection rules",
+            "source_kind": "plan",
+            "source_digest": digest,
+            "escalation_reason": "none; single-worker witness fixture",
+            "review_mode": "fresh-adversarial",
+            "risk_signals": [],
+            "prior_findings_filter": False,
+            "last_fix_commit": None,
+            "record_kind": "canonical",
+            "coverage": {
+                "outcome": "clean",
+                "material_lens_set": ["quality", "implementation"],
+                "completed": ["quality", "implementation"],
+                "missing": [],
+            },
+            "counts": {
+                "workers_launched": 1,
+                "raw_findings": 1,
+                "staged_findings": 1,
+                "discarded": 0,
+                "solo_staged": 1,
+                "echo_staged": 0,
+            },
+            "panel": [
+                {
+                    "worker": "correctness-completeness",
+                    "lenses": ["quality", "implementation"],
+                    "parent_worker": None,
+                    "descendant_launches": [],
+                    "status": "complete",
+                    "raw": 1,
+                    "solo": 1,
+                    "echo": 0,
+                    "relaunch": False,
+                }
+            ],
+            "deduplication_groups": [],
+            "discarded": [],
+            "severity_calibration": [],
+            "triage_outcomes": [
+                {
+                    "worker": "correctness-completeness",
+                    "lens": "quality",
+                    "staged": 1,
+                    "fixed": 0,
+                    "dropped": 0,
+                    "deferred": 0,
+                    "pending": 1,
+                }
+            ],
+            "findings": [
+                {
+                    "id": 1,
+                    "severity": "Medium",
+                    "blocking": False,
+                    "consequence": "A template-launched worker could omit the field and fail the staging gate after the round.",
+                    "reachability": "common",
+                    "blast_radius": "single-service",
+                    "confidence": "verified",
+                    "pattern": "quality#sample-witness-gap",
+                    "workers": ["correctness-completeness"],
+                    "triage": "pending",
+                    "theme": "Launch-template witness",
+                }
+            ],
+            "overflow": [],
+            "soften_watchlist": [],
+            "verdict": "no",
+            "extensions": {
+                "raw_findings": 1,
+                "staged_findings": 1,
+                "blocking": 0,
+                "nonblocking": 1,
+                "convergence": {
+                    "self_heal_attempt": {"status": "unused", "run_id": run_id}
+                },
+            },
+        }
+
+        def run_validator(staging_path, plan_path):
+            return subprocess.run(
+                [sys.executable, str(validator), "--hard", "--source-plan", str(plan_path), str(staging_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(root),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            plan_path = tmp_dir / "plan.md"
+            plan_path.write_text(plan_text, encoding="utf-8")
+            staging_path = tmp_dir / f"{record_date}-plan-review-{slug}-r1.md"
+            staging_path.write_text(markdown, encoding="utf-8")
+            sidecar_path = tmp_dir / f"{record_date}-plan-review-{slug}-r1.stats.json"
+            sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+            clean = run_validator(staging_path, plan_path)
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+            self.assertIn("OUTCOME: pass", clean.stdout)
+            mutated = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            del mutated["findings"][0]["consequence"]
+            sidecar_path.write_text(json.dumps(mutated, indent=2) + "\n", encoding="utf-8")
+            rejected = run_validator(staging_path, plan_path)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("OUTCOME: fail", rejected.stdout)
+
+
+
+def _named_evidence_label(criteria):
+    """The driver's full named Phase 0 evidence-refusal label for the
+    criteria, built through the same single-homed wrap the create boundary
+    raises."""
+    try:
+        runtime_capabilities.evidence_criterion_ids(list(criteria))
+    except ValueError as error:
+        return str(_named_evidence_limit_error({"task-1": {"required_criteria": list(criteria)}}, error))
+    raise AssertionError("fixture criteria must exceed an evidence limit")
+
+
+class ExtractionRuleParityTest(unittest.TestCase):
+    """Parity fixtures (contract single-sourcing Task 2): a plan the create
+    boundary refuses at Phase 0 on an extraction-rule ground fails
+    certification with the same full label text. The classification labels
+    are witnessed at unit level over the SAME owned function both surfaces
+    call (the create boundary's --plan path derives matching actions, so
+    those labels are seeding-shape grounds not expressible as plan files);
+    the clone-signature arm is the plan's recorded residual (its inputs are
+    discovery-internal)."""
+
+    def _readiness_reason(self, plan_text):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        plans_dir = Path(tmp.name) / "plans"
+        reviews_dir = Path(tmp.name) / "reviews"
+        plans_dir.mkdir()
+        reviews_dir.mkdir()
+        plan, _ = _write_clean_state(plans_dir, reviews_dir, plan_text=plan_text)
+        reason = evaluate_readiness(plan, plans_dir, reviews_dir)[1]
+        _clean_reviews_dir(reviews_dir)
+        return reason
+
+    def test_evidence_item_bytes_parity(self):
+        criterion = "x" * 600
+        reason = self._readiness_reason(
+            "# Fixture plan\n\n### Task 1: fixture\n\n- [ ] " + criterion + "\n"
+        )
+        expected = _named_evidence_label([criterion])
+        self.assertIsNotNone(reason, "certification must fail on the item-bytes ground")
+        self.assertIn(expected, reason)
+
+    def test_evidence_aggregate_bytes_parity(self):
+        criteria = [f"c{index}-" + "y" * 500 for index in range(9)]
+        body = "\n".join(f"- [ ] {criterion}" for criterion in criteria)
+        reason = self._readiness_reason("# Fixture plan\n\n### Task 1: fixture\n\n" + body + "\n")
+        expected = _named_evidence_label(criteria)
+        self.assertIsNotNone(reason, "certification must fail on the aggregate-bytes ground")
+        self.assertIn(expected, reason)
+
+    def test_evidence_criteria_count_parity(self):
+        criteria = [f"criterion-{index:03d}" for index in range(101)]
+        body = "\n".join(f"- [ ] {criterion}" for criterion in criteria)
+        reason = self._readiness_reason("# Fixture plan\n\n### Task 1: fixture\n\n" + body + "\n")
+        expected = _named_evidence_label(criteria)
+        self.assertIsNotNone(reason, "certification must fail on the count ground")
+        self.assertIn(expected, reason)
+
+    def test_clean_plan_certifies_past_extraction_arm(self):
+        reason = self._readiness_reason(
+            "# Fixture plan\n\n### Task 1: fixture\n\n- [ ] small criterion\n- [ ] Commit: land the fixture\n"
+        )
+        self.assertIsNone(reason, f"a clean plan must certify: {reason}")
+
+    def test_classification_labels_unit_parity(self):
+        # The classification labels are single-homed: the same function the
+        # driver's create boundary calls raises the exact strings, and the
+        # driver's create manifest surfaces them unchanged for a seeding
+        # shape that skips discovery.
+        item = {"task_body": "- [ ] do a thing\n", "checklist_actions": None}
+        with self.assertRaises(ValueError) as refused:
+            runtime_capabilities.check_checklist_action_classification("task-1", item)
+        self.assertEqual(str(refused.exception), "task task-1 has unclassified checklist actions")
+        item = {"task_body": "- [ ] do a thing\n", "checklist_actions": [{"text": "other", "owner": "worker"}]}
+        with self.assertRaises(ValueError) as refused:
+            runtime_capabilities.check_checklist_action_classification("task-1", item)
+        self.assertEqual(str(refused.exception), "task task-1 checklist action classification is incomplete")
+        item = {"task_body": "", "checklist_actions": [{"text": "", "owner": "worker"}]}
+        with self.assertRaises(ValueError) as refused:
+            runtime_capabilities.check_checklist_action_classification("task-1", item)
+        self.assertEqual(str(refused.exception), "task task-1 has an unclassified checklist action")
+
+
 if __name__ == "__main__":
+
     unittest.main()

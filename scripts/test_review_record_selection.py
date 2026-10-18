@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import hashlib
 import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -42,8 +44,25 @@ try:
 except ImportError as exc:  # pragma: no cover - repo layout regression
     vrs = None  # type: ignore[assignment]
 
+try:
+    import corrections_record as cr
+    _CR_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:  # pragma: no cover - repo layout regression
+    cr = None  # type: ignore[assignment]
+    _CR_IMPORT_ERROR = exc
+
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
+
+# The four extended freshness Metadata lines a post-EXTENDED-fence v1
+# fixture carries (the same quartet the validator selftests insert), so
+# both fixture builders share one spelling.
+V1_FRESHNESS_META = (
+    "- Review mode: targeted",
+    "- Changed-risk signals: none",
+    "- Prior findings supplied as filter: no",
+    "- Last fix commit: none",
+)
 
 
 class SelectionHelperTest(unittest.TestCase):
@@ -89,30 +108,11 @@ class SelectionHelperTest(unittest.TestCase):
         )
         return md, sidecar
 
+    # The pair-grammar cases address families other than `demo`, so the
+    # slug is a parameter here instead of the hardcoded fixture value.
     def select_in(
-        self, directory: Path, digest: str, *extra: str
+        self, directory: Path, digest: str, *extra: str, slug: str = "demo"
     ) -> tuple[int, dict, str]:
-        code, out, err = self.run_cli(
-            "select",
-            "--dir",
-            str(directory),
-            "--slug",
-            "demo",
-            "--source-digest",
-            digest,
-            *extra,
-        )
-        payload = json.loads(out) if out.strip() else {}
-        return code, payload, err
-
-    def select(self, digest: str, *extra: str) -> tuple[int, dict, str]:
-        return self.select_in(self.reviews, digest, *extra)
-
-    def select_slug(
-        self, directory: Path, slug: str, digest: str, *extra: str
-    ) -> tuple[int, dict, str]:
-        # The pair-grammar cases address families other than `demo`, so the
-        # slug is a parameter here instead of the hardcoded fixture value.
         code, out, err = self.run_cli(
             "select",
             "--dir",
@@ -125,6 +125,9 @@ class SelectionHelperTest(unittest.TestCase):
         )
         payload = json.loads(out) if out.strip() else {}
         return code, payload, err
+
+    def select(self, digest: str, *extra: str) -> tuple[int, dict, str]:
+        return self.select_in(self.reviews, digest, *extra)
 
     # -- the eight named cases --------------------------------------------
 
@@ -141,17 +144,144 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertFalse(md.exists())
         self.assertFalse(sidecar.exists())
 
-    def test_select_preserves_uppercase_feature_slug(self) -> None:
+    def test_plan_review_selection_scopes_rounds_to_source_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            code, payload, err = self.select_slug(
-                Path(directory), "PROJ-607-fact-reconcile-worker", DIGEST_A,
-                "--kind", "plan-review"
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plans = root / "docs" / "plans"
+            reviews = root / ".ai-playbook" / "reviews"
+            plans.mkdir(parents=True)
+            reviews.mkdir(parents=True)
+            plan_a = plans / "2026-10-14-same-feature.md"
+            plan_b = plans / "2026-10-15-same-feature.md"
+            plan_a.write_text("plan A", encoding="utf-8")
+            plan_b.write_text("plan B", encoding="utf-8")
+            emitted_names = []
+            for plan, digest in ((plan_a, DIGEST_A), (plan_b, DIGEST_B)):
+                base = f"{plan.name[:10]}-plan-review-same-feature-r1"
+                md = reviews / f"{base}.md"
+                md.write_text(
+                    f"## Metadata\n- URL or Artifact: docs/plans/{plan.name}\n",
+                    encoding="utf-8",
+                )
+                md.with_suffix(".stats.json").write_text(
+                    json.dumps({"source_digest": digest, "round": 1}),
+                    encoding="utf-8",
+                )
+            for plan, digest in ((plan_a, DIGEST_A), (plan_b, DIGEST_B)):
+                code, out, err = self.run_cli(
+                    "select", "--dir", str(reviews), "--slug", "same-feature",
+                    "--kind", "plan-review", "--source-plan", str(plan),
+                    "--source-digest", digest, "--explicit-new-round",
+                )
+                self.assertEqual(code, 0, err)
+                selected = json.loads(out)
+                self.assertEqual(selected["decision"], "new-round")
+                self.assertEqual(selected["plan_identity"], f"docs/plans/{plan.name}")
+                self.assertIn("-p", Path(selected["markdown"]).name)
+                self.assertTrue(Path(selected["markdown"]).name.endswith("-r2.md"))
+                emitted_names.append(Path(selected["markdown"]).name)
+            self.assertNotEqual(emitted_names[0], emitted_names[1])
+
+    def test_plan_review_duplicate_rounds_refuse_within_one_source_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plan = root / "2026-10-15-same-feature.md"
+            plan.write_text("plan", encoding="utf-8")
+            reviews = root / "reviews"
+            reviews.mkdir()
+            identity = plan.relative_to(root).as_posix()
+            for base in ("2026-10-14-plan-review-same-feature-r1", "2026-10-15-plan-review-same-feature-r1"):
+                md = reviews / f"{base}.md"
+                md.write_text(f"## Metadata\n- URL or Artifact: {identity}\n", encoding="utf-8")
+                md.with_suffix(".stats.json").write_text(
+                    json.dumps({"source_digest": DIGEST_A, "round": 1}),
+                    encoding="utf-8",
+                )
+            code, _out, err = self.run_cli(
+                "select", "--dir", str(reviews), "--slug", "same-feature",
+                "--kind", "plan-review", "--source-plan", str(plan),
+                "--source-digest", DIGEST_A,
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("ambiguous duplicate round number(s) r1", err)
+
+    def test_plan_review_selection_ignores_foreign_orphan_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plans = root / "docs" / "plans"
+            reviews = root / ".ai-playbook" / "reviews"
+            plans.mkdir(parents=True)
+            reviews.mkdir(parents=True)
+            plan_a = plans / "2026-10-14-same-feature.md"
+            plan_b = plans / "2026-10-15-same-feature.md"
+            plan_a.write_text("plan A", encoding="utf-8")
+            plan_b.write_text("plan B", encoding="utf-8")
+            foreign_orphan = reviews / "2026-10-14-plan-review-same-feature-r1.stats.json"
+            foreign_orphan.write_text(
+                json.dumps({
+                    "extensions": {
+                        "plan_identity": plan_b.relative_to(root).as_posix()
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            _pairs, orphans, _backups = helper._enumerate(
+                reviews,
+                "same-feature",
+                review_kind="plan-review",
+                source_plan_identity=plan_a.relative_to(root).as_posix(),
+            )
+
+            self.assertEqual(orphans, [])
+
+    def test_plan_review_selection_keeps_same_plan_orphan_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            plan = root / "docs" / "plans" / "2026-10-14-same-feature.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text("plan", encoding="utf-8")
+            reviews = root / ".ai-playbook" / "reviews"
+            reviews.mkdir(parents=True)
+            owned_orphan = reviews / "2026-10-14-plan-review-same-feature-r1.stats.json"
+            owned_orphan.write_text(
+                json.dumps({
+                    "extensions": {
+                        "plan_identity": plan.relative_to(root).as_posix()
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            _pairs, orphans, _backups = helper._enumerate(
+                reviews,
+                "same-feature",
+                review_kind="plan-review",
+                source_plan_identity=plan.relative_to(root).as_posix(),
+            )
+
+            self.assertEqual(orphans, [owned_orphan])
+
+    def test_select_preserves_case_for_non_plan_kind(self) -> None:
+        # Case preservation is the documented behavior for non-plan review
+        # kinds only: the plan-review kind requires the canonical
+        # (lowercased) artifact slug, so this uppercase-slug assertion lives
+        # under branch-review and no longer pins the divergent shape for
+        # --kind plan-review.
+        with tempfile.TemporaryDirectory() as directory:
+            code, payload, err = self.select_in(
+                Path(directory), DIGEST_A, "--kind", "branch-review",
+                slug="PROJ-607-fact-reconcile-worker",
             )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
         self.assertTrue(
             payload["markdown"].endswith(
-                "-plan-review-PROJ-607-fact-reconcile-worker-r1.md"
+                "-branch-review-PROJ-607-fact-reconcile-worker-r1.md"
             )
         )
 
@@ -163,6 +293,25 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
         self.assertEqual(payload["sidecar"], str(sidecar))
+
+    def test_select_reuses_unnumbered_singleton_as_round_one(self) -> None:
+        md, sidecar = self.write_pair(self.reviews, f"{self.today}-demo", DIGEST_A)
+        code, payload, err = self.select(DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        code, payload, err = self.select(DIGEST_B, "--explicit-new-round")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-round")
+        self.assertTrue(payload["markdown"].endswith("-demo-r2.md"), payload)
+
+    def test_select_refuses_duplicate_unnumbered_and_numbered_round_one(self) -> None:
+        self.write_pair(self.reviews, f"{self.today}-demo", DIGEST_A)
+        self.write_pair(self.reviews, f"{self.today}-demo-r1", DIGEST_A)
+        code, _payload, err = self.select(DIGEST_A)
+        self.assertEqual(code, 1)
+        self.assertIn("ambiguous duplicate round number(s) r1", err)
 
     def test_select_refuses_changed_digest_without_decision(self) -> None:
         base = f"{self.today}-demo-r1"
@@ -820,6 +969,78 @@ class SelectionHelperTest(unittest.TestCase):
             self.assertEqual(list(self.reviews.iterdir()), [])
 
 
+    # -- supersession self-reference (review round record lifecycle gaps
+    #    plan, Task 1) ------------------------------------------------------
+
+    def test_self_referential_supersession_link_refuses(self) -> None:
+        # A round record built from the prior record's body inherits the
+        # prior's 'Superseded by:' link, so the copied value resolves
+        # against the successor's own directory back to the successor
+        # itself (the witnessed copy shape). The gate refuses it, naming
+        # the line and the strip duty with the helper as the only writer;
+        # a correctly marked prior record whose link resolves to a real
+        # successor validates unchanged.
+        if vrs is None:  # pragma: no cover - repo layout regression
+            self.fail("validate_review_staging import failed")
+        prior_name = f"{self.today}-demo-r1.md"
+        copy_name = f"{self.today}-demo-r2.md"
+
+        # The witnessed copy shape: the successor holds the prior's link,
+        # whose value now names the successor itself (bare co-located
+        # spelling, the shape the helper records).
+        successor = self.reviews / copy_name
+        successor.write_text(
+            "# Branch Review: demo\n\n## Metadata\n\n"
+            f"- Superseded by: {copy_name}\n",
+            encoding="utf-8",
+        )
+        result = vrs.ValidationResult(path=successor)
+        vrs.validate_supersession_links(
+            successor, successor.read_text(encoding="utf-8"), result
+        )
+        self.assertEqual(len(result.errors), 1, result.errors)
+        self.assertIn("Superseded by:", result.errors[0])
+        self.assertIn(copy_name, result.errors[0])
+        self.assertIn("strip", result.errors[0])
+        self.assertIn("mark-superseded", result.errors[0])
+
+        # An absolute spelling of the same self-reference refuses too.
+        successor.write_text(
+            "# Branch Review: demo\n\n## Metadata\n\n"
+            f"- Superseded by: {successor.resolve()}\n",
+            encoding="utf-8",
+        )
+        result = vrs.ValidationResult(path=successor)
+        vrs.validate_supersession_links(
+            successor, successor.read_text(encoding="utf-8"), result
+        )
+        self.assertEqual(len(result.errors), 1, result.errors)
+        self.assertIn("resolves to the record itself", result.errors[0])
+
+        # A correctly marked prior record: the link resolves to a real
+        # successor, never to the prior itself, so the gate is silent.
+        successor.write_text("# successor body\n", encoding="utf-8")
+        prior = self.reviews / prior_name
+        prior.write_text(
+            "# Branch Review: demo\n\n## Metadata\n\n"
+            f"- Superseded by: {copy_name}\n",
+            encoding="utf-8",
+        )
+        result = vrs.ValidationResult(path=prior)
+        vrs.validate_supersession_links(
+            prior, prior.read_text(encoding="utf-8"), result
+        )
+        self.assertEqual(result.errors, [])
+
+        # A record with no supersession line at all stays ungated.
+        plain = self.reviews / f"{self.today}-demo-r3.md"
+        plain.write_text("# Branch Review: demo\n\n## Metadata\n", encoding="utf-8")
+        result = vrs.ValidationResult(path=plain)
+        vrs.validate_supersession_links(
+            plain, plain.read_text(encoding="utf-8"), result
+        )
+        self.assertEqual(result.errors, [])
+
     # -- pair grammar pass additions (suffix shadowing) ---------------------
 
     def test_pair_pattern_cross_slug_negative(self) -> None:
@@ -829,7 +1050,7 @@ class SelectionHelperTest(unittest.TestCase):
         # infix), so the foreign pair is invisible and the decision is a
         # fresh own-family `-r1` pair with no prior and no supersedes.
         self.write_pair(self.reviews, "2026-09-19-review-plan-r1", DIGEST_A)
-        code, payload, err = self.select_slug(self.reviews, "plan", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="plan")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
         md = Path(payload["markdown"])
@@ -844,8 +1065,9 @@ class SelectionHelperTest(unittest.TestCase):
         # new-record (never new-round) and must not link a foreign record
         # as prior or supersedes.
         self.write_pair(self.reviews, "2026-09-19-review-plan-r1", DIGEST_A)
-        code, payload, err = self.select_slug(
-            self.reviews, "plan", DIGEST_B, "--explicit-new-round"
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_B, "--explicit-new-round",
+            slug="plan",
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
@@ -858,7 +1080,7 @@ class SelectionHelperTest(unittest.TestCase):
         # round 2 record and is reused on a matching digest.
         base = "2026-09-08-plan-review-demo-r2"
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
-        code, payload, err = self.select_slug(self.reviews, "demo", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="demo")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
@@ -873,7 +1095,7 @@ class SelectionHelperTest(unittest.TestCase):
         # record and is reused on a matching digest.
         base = "2026-09-19-demo-r3"
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
-        code, payload, err = self.select_slug(self.reviews, "demo", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="demo")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
@@ -891,8 +1113,8 @@ class SelectionHelperTest(unittest.TestCase):
             self.reviews, "2026-09-19-review-plan-r1", DIGEST_A
         )
         self.write_pair(self.reviews, "2026-09-08-plan-review-demo-r2", DIGEST_B)
-        code, payload, err = self.select_slug(
-            self.reviews, "review-plan", DIGEST_A
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_A, slug="review-plan"
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
@@ -915,7 +1137,7 @@ class SelectionHelperTest(unittest.TestCase):
         self.write_pair(
             self.reviews, "2026-07-24-branch-review-update-stacked-branches-r2", DIGEST_B
         )
-        code, payload, err = self.select_slug(self.reviews, "main", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="main")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(own_md))
@@ -923,6 +1145,12 @@ class SelectionHelperTest(unittest.TestCase):
         pairs, orphans, _backups = helper._enumerate(self.reviews, "main")
         self.assertEqual([pair.round for pair in pairs], [6])
         self.assertEqual(orphans, [])
+
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_B, "--explicit-new-round", slug="main"
+        )
+        self.assertEqual(code, 0, err)
+        self.assertTrue(payload["markdown"].endswith("-branch-review-main-r7.md"), payload)
 
     def test_pair_pattern_code_review_family_positive(self) -> None:
         # The corpus's code-review kind (written today): the artifact slug
@@ -933,7 +1161,7 @@ class SelectionHelperTest(unittest.TestCase):
         )
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
         slug = "scheduler-operations-discipline-quota-peaks-locks"
-        code, payload, err = self.select_slug(self.reviews, slug, DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug=slug)
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
@@ -951,7 +1179,7 @@ class SelectionHelperTest(unittest.TestCase):
         )
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
         slug = "backlog-long-tail-prose-predicates-small-mechanics"
-        code, payload, err = self.select_slug(self.reviews, slug, DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug=slug)
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
@@ -968,8 +1196,9 @@ class SelectionHelperTest(unittest.TestCase):
         # slug `review-review-coverage-pass-2`, which no caller passes).
         base = "2026-09-15-review-review-coverage-pass-2-r3"
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
-        code, payload, err = self.select_slug(
-            self.reviews, "review-coverage-pass-2", DIGEST_A
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_A,
+            slug="review-coverage-pass-2",
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
@@ -991,16 +1220,18 @@ class SelectionHelperTest(unittest.TestCase):
         self.write_pair(
             self.reviews, "2026-09-15-review-vrs-freshness-round2-r1", DIGEST_A
         )
-        code, payload, err = self.select_slug(
-            self.reviews, "vrs-freshness-round2", DIGEST_A
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_A,
+            slug="vrs-freshness-round2",
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
         self.assertIsNone(payload["prior"])
         self.assertIsNone(payload["supersedes"])
         # The full-rest slug does own the record and reuses it.
-        code, payload, err = self.select_slug(
-            self.reviews, "review-vrs-freshness-round2", DIGEST_A
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_A,
+            slug="review-vrs-freshness-round2",
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
@@ -1016,13 +1247,14 @@ class SelectionHelperTest(unittest.TestCase):
         # documented in the _pair_pattern docstring and pinned here.)
         base = "2026-09-19-branch-review-plan-r1"
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
-        code, payload, err = self.select_slug(self.reviews, "plan", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="plan")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
         self.assertEqual(payload["markdown"], str(md))
         self.assertEqual(payload["sidecar"], str(sidecar))
-        code, payload, err = self.select_slug(
-            self.reviews, "branch-review-plan", DIGEST_A
+        code, payload, err = self.select_in(
+            self.reviews, DIGEST_A,
+            slug="branch-review-plan",
         )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "reuse")
@@ -1035,7 +1267,7 @@ class SelectionHelperTest(unittest.TestCase):
         # the widened set reproduces the rest `plan-review-plan` from the
         # slug `review-plan`).
         self.write_pair(self.reviews, "2026-09-19-plan-review-plan-r1", DIGEST_A)
-        code, payload, err = self.select_slug(self.reviews, "review-plan", DIGEST_A)
+        code, payload, err = self.select_in(self.reviews, DIGEST_A, slug="review-plan")
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
         self.assertIsNone(payload["prior"])
@@ -1095,6 +1327,758 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertIn("demo.backup-x", err)
         self.assertNotIn("orphaned record half", err)
 
+    # -- verify-digest additions (review-wave contract gaps plan, Task 3) --
+
+    def verify_fixture(
+        self, sidecar_extensions: dict | None = None
+    ) -> tuple[object, Path, str, str, str]:
+        """A one-round code-review record over a two-commit scratch repo:
+        the seed commit is the recorded base, the change commit is the
+        reviewed head, and the sidecar's source_digest carries the
+        canonical recomputation of the base...head diff bytes. Returns
+        ``(repo, md, base, head, recomputed)``."""
+        if cr is None:  # pragma: no cover - repo layout regression
+            self.fail(f"corrections_record import failed: {_CR_IMPORT_ERROR}")
+        repo = cr.build_scratch_repo(self)
+        # The reviews corpus is gitignored in the real corpus, so the
+        # record pair never rides into a later commit (a later commit_all
+        # runs git add -A; an unstaged pair keeps every commit's tree
+        # reviewed-scope-only).
+        repo.write_file(".gitignore", "docs/reviews/\n")
+        base = repo.commit_file("src/app.py", "one\n", "seed the reviewed scope")
+        head = repo.commit_file("src/app.py", "two\n", "the reviewed change")
+        diff = subprocess.run(
+            ["git", "-C", str(repo.root), "diff", base + "..." + head],
+            capture_output=True,
+        ).stdout
+        recomputed = hashlib.sha256(diff).hexdigest()
+        reviews = repo.root / "docs" / "reviews"
+        reviews.mkdir(parents=True)
+        md, _sidecar = self.write_pair(
+            reviews, f"{self.today}-demo-code-review-r1", recomputed
+        )
+        if sidecar_extensions is not None:
+            sidecar = md.with_suffix(".stats.json")
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+            payload["extensions"] = sidecar_extensions
+            sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        return repo, md, base, head, recomputed
+
+    def verify_record(
+        self, repo_root: Path, record: Path, reviews: Path, base: str, expect_head: str
+    ) -> tuple[int, dict, str]:
+        # verify-digest reads the invoking process's repository, so the
+        # CLI runs with cwd pinned to the scratch repo (the same chdir
+        # seam the validator round-trip case uses).
+        original_cwd = os.getcwd()
+        os.chdir(repo_root)
+        try:
+            code, out, err = self.run_cli(
+                "verify-digest",
+                "--record",
+                str(record),
+                "--dir",
+                str(reviews),
+                "--base",
+                base,
+                "--expect-head",
+                expect_head,
+            )
+        finally:
+            os.chdir(original_cwd)
+        payload = json.loads(out) if out.strip() else {}
+        return code, payload, err
+
+    def test_verify_digest_match_and_mismatch(self) -> None:
+        repo, md, base, head, recomputed = self.verify_fixture()
+        sidecar = md.with_suffix(".stats.json")
+        reviews = md.parent
+
+        # Match arm: the recomputed reviewed-scope digest equals the
+        # sidecar source_digest and HEAD equals the round's recorded
+        # verified head; the pass receipt names the digest values and the
+        # verified HEAD.
+        code, payload, err = self.verify_record(repo.root, md, reviews, base, head)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "fresh", payload)
+        self.assertEqual(payload["recorded_digest"], recomputed)
+        self.assertEqual(payload["recomputed_digest"], recomputed)
+        self.assertEqual(payload["verified_head"], head)
+
+        # Mismatch arm: a base whose recomputed digest differs (the head
+        # itself recomputes an empty diff) exits 1 with the named stale
+        # refusal carrying the recorded and recomputed digests and the
+        # record path, as a one-line error.
+        empty_digest = hashlib.sha256(b"").hexdigest()
+        code, payload, err = self.verify_record(repo.root, md, reviews, head, head)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("stale review record", err)
+        self.assertIn(recomputed, err)
+        self.assertIn(empty_digest, err)
+        self.assertIn(md.name, err)
+
+        # HEAD moved past the round's recorded head with identical
+        # reviewed-scope bytes (an empty closeout commit): the
+        # HEAD-movement refusal fires even though the digest still
+        # matches, naming both heads and the unchanged bytes.
+        moved = repo.commit_allow_empty("closeout bookkeeping")
+        self.assertNotEqual(moved, head)
+        code, payload, err = self.verify_record(repo.root, md, reviews, base, head)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("moved HEAD", err)
+        self.assertIn("past the recorded verified head", err)
+        self.assertIn(head, err)
+        self.assertIn(moved, err)
+        self.assertIn("unchanged", err)
+
+        # The pinned precedence: a sidecar corrections chain whose
+        # verified terminal binds the current bytes and HEAD (the chain's
+        # after-head being the movement) supersedes the HEAD-movement
+        # refusal with the named accepted-stale pass, which names both
+        # heads; the subcommand mutates nothing across every arm.
+        sidecar_payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        sidecar_payload["extensions"] = {
+            "corrections": [
+                {
+                    "kind": "script-verified",
+                    "before_digest": recomputed,
+                    "after_digest": recomputed,
+                    "hunks": [{"header": "@@ -1 +1 @@", "digest": recomputed}],
+                    "recorded_at": self.today,
+                    "recorded_by": "fixture",
+                    "before_base": base,
+                    "before_head": head,
+                    "after_base": base,
+                    "after_head": moved,
+                }
+            ]
+        }
+        sidecar.write_text(json.dumps(sidecar_payload), encoding="utf-8")
+        sidecar_bytes = sidecar.read_bytes()
+        md_bytes = md.read_bytes()
+        code, payload, err = self.verify_record(repo.root, md, reviews, base, head)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "accepted-stale", payload)
+        self.assertEqual(payload["expected_head"], head)
+        self.assertEqual(payload["verified_head"], moved)
+        self.assertEqual(payload["corrections_after_head"], moved)
+        self.assertEqual(payload["recomputed_digest"], recomputed)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+        self.assertEqual(md.read_bytes(), md_bytes)
+
+    def test_verify_digest_refusals(self) -> None:
+        # The record-state refusal arms decide before any git operand is
+        # consulted, so the placeholder commit arguments are never
+        # resolved here and no repository is needed.
+        def run(record: Path) -> tuple[int, dict, str]:
+            code, out, err = self.run_cli(
+                "verify-digest",
+                "--record",
+                str(record),
+                "--dir",
+                str(self.reviews),
+                "--base",
+                "HEAD",
+                "--expect-head",
+                "HEAD",
+            )
+            payload = json.loads(out) if out.strip() else {}
+            return code, payload, err
+
+        # An absent record refuses with the named one-line error and
+        # creates nothing.
+        absent = self.reviews / f"{self.today}-demo-code-review-r1.md"
+        code, payload, err = run(absent)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("absent record", err)
+        self.assertIn(absent.name, err)
+        self.assertEqual(list(self.reviews.iterdir()), [])
+
+        # Orphan posture: a canonical Markdown without its sidecar twin
+        # is refused, naming the missing twin, and the orphan bytes stay
+        # untouched.
+        orphan = self.reviews / f"{self.today}-demo-code-review-r2.md"
+        orphan.write_text(
+            "# Branch Review: demo\n\n## Metadata\n", encoding="utf-8"
+        )
+        before = orphan.read_bytes()
+        code, payload, err = run(orphan)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("orphaned record half", err)
+        self.assertIn(orphan.with_suffix(".stats.json").name, err)
+        self.assertEqual(orphan.read_bytes(), before)
+
+        # The existing read helper's failure mode: a sidecar without a
+        # source_digest string is refused through the same helper the
+        # overwrite guard uses, and the refusing pair is untouched.
+        digestless_base = f"{self.today}-demo-code-review-r3"
+        md = self.reviews / f"{digestless_base}.md"
+        md.write_text("# Branch Review: demo\n\n## Metadata\n", encoding="utf-8")
+        sidecar = self.reviews / f"{digestless_base}.stats.json"
+        sidecar.write_text(json.dumps({"round": 3}), encoding="utf-8")
+        pair_before = (md.read_bytes(), sidecar.read_bytes())
+        code, payload, err = run(md)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("carries no source_digest", err)
+        self.assertEqual((md.read_bytes(), sidecar.read_bytes()), pair_before)
+
+        # A backup-shaped name is archived bytes, never the live record.
+        backup = self.reviews / f"{digestless_base}.backup-20261005T000000.md"
+        backup.write_text("# backup\n", encoding="utf-8")
+        code, payload, err = run(backup)
+        self.assertEqual(code, 1)
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("backup pair", err)
+
+        # A record outside the named reviews directory is an invalid
+        # invocation (the explicit --dir bounds the corpus verify-digest
+        # checks against), not a record refusal.
+        outside = Path(self._tmp.name) / "outside.md"
+        outside.write_text("# x\n", encoding="utf-8")
+        code, payload, err = run(outside)
+        self.assertEqual(code, 2)
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("outside the reviews directory", err)
+
+    # -- recover-orphan additions (review round record lifecycle gaps
+    #    plan, Task 3) ------------------------------------------------------
+
+    def scratch_reviews(self):
+        """A scratch git repo whose reviews directory is the corpus the
+        validator's default facts-less resolution derives (the receipt's
+        repo-relative evidence link needs the repository anchor)."""
+        if cr is None:  # pragma: no cover - repo layout regression
+            self.fail(f"corrections_record import failed: {_CR_IMPORT_ERROR}")
+        repo = cr.build_scratch_repo(self)
+        reviews = repo.root / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        return repo, reviews
+
+    def recover_cli(self, record: Path, *extra: str) -> tuple[int, dict, str]:
+        code, out, err = self.run_cli(
+            "recover-orphan", "--record", str(record), *extra
+        )
+        payload = json.loads(out) if out.strip() else {}
+        return code, payload, err
+
+    def write_orphan(self, directory: Path, base: str) -> Path:
+        orphan = directory / f"{base}.md"
+        orphan.write_text(
+            "# Branch Review: demo\n\n## Metadata\n\n"
+            f"- Source digest: {DIGEST_A}\n",
+            encoding="utf-8",
+        )
+        return orphan
+
+    def test_recover_orphan_happy_path(self) -> None:
+        repo, reviews = self.scratch_reviews()
+        # The kind-prefixed canonical shape the selector enumerates for
+        # slug demo with --kind code-review.
+        orphan = self.write_orphan(reviews, f"{self.today}-code-review-demo-r1")
+        original_bytes = orphan.read_bytes()
+        # The orphan refusal fires pre-recovery (the witnessed fail-closed
+        # state) so the post-recovery select proves the path was vacated.
+        code, _payload, err = self.select_in(reviews, DIGEST_A)
+        self.assertEqual(code, 1)
+        self.assertIn("orphaned record half", err)
+
+        frozen = "20261005T120000"
+        original_ts = helper.ORPHAN_TIMESTAMP_SOURCE
+        helper.ORPHAN_TIMESTAMP_SOURCE = lambda: frozen
+        self.addCleanup(setattr, helper, "ORPHAN_TIMESTAMP_SOURCE", original_ts)
+        code, payload, err = self.recover_cli(
+            orphan, "--slug", "demo", "--kind", "code-review"
+        )
+        self.assertEqual(code, 0, err)
+        # The receipt names the preserved path, the allocated pair, and
+        # the exact evidence-link Metadata line (repo-relative).
+        preserved = Path(payload["preserved"])
+        self.assertEqual(
+            preserved.name,
+            f"{self.today}-code-review-demo-r1.orphan-{frozen}.md",
+        )
+        self.assertTrue(preserved.is_file())
+        # Byte-identical preservation; the canonical path was vacated by
+        # a rename, not a copy.
+        self.assertEqual(preserved.read_bytes(), original_bytes)
+        self.assertFalse(orphan.exists())
+        fresh_md = Path(payload["markdown"])
+        fresh_sidecar = Path(payload["sidecar"])
+        self.assertEqual(
+            fresh_md, reviews / f"{self.today}-code-review-demo-r1.md"
+        )
+        self.assertEqual(fresh_sidecar, fresh_md.with_suffix(".stats.json"))
+        # The allocation emits paths, it never writes the pair.
+        self.assertFalse(fresh_md.exists())
+        self.assertFalse(fresh_sidecar.exists())
+        self.assertEqual(
+            payload["metadata_line"],
+            f"Orphan recovery: .ai-playbook/reviews/{preserved.name}",
+        )
+        self.assertIn(preserved.name, err)
+
+        # The preserved name never matches the canonical discovery
+        # shapes: the enumerator sees no pairs and no orphans.
+        pairs, orphans, _backups = helper._enumerate(reviews, "demo")
+        self.assertEqual(
+            [pair.base for pair in pairs], [], "preserved name enumerated"
+        )
+        self.assertEqual(orphans, [], "preserved name read as an orphan")
+
+        # A follow-up select --explicit-new-round for the same slug
+        # succeeds post-recovery: the canonical orphan path is vacated
+        # (the same kind-prefixed path the orphan occupied is re-emitted).
+        code, payload2, err2 = self.select_in(
+            reviews, DIGEST_B, "--explicit-new-round", "--kind", "code-review",
+            slug="demo",
+        )
+        self.assertEqual(code, 0, err2)
+        self.assertEqual(payload2["decision"], "new-record")
+        self.assertEqual(
+            Path(payload2["markdown"]),
+            reviews / f"{self.today}-code-review-demo-r1.md",
+        )
+
+    def test_recover_orphan_refusals(self) -> None:
+        def snapshot() -> list:
+            return sorted(
+                (p.name, p.read_bytes()) for p in self.reviews.iterdir()
+            )
+
+        # Arm 1: a record whose sidecar exists is not an orphan.
+        base = f"{self.today}-demo-r1"
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        before = snapshot()
+        code, payload, err = self.recover_cli(md, "--slug", "demo")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("not an orphan", err)
+        self.assertIn(sidecar.name, err)
+        self.assertEqual(snapshot(), before)
+
+        # Arm 2: an absent record refuses.
+        absent = self.reviews / f"{self.today}-demo-r9.md"
+        before = snapshot()
+        code, payload, err = self.recover_cli(absent, "--slug", "demo")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("absent record", err)
+        self.assertIn(absent.name, err)
+        self.assertEqual(snapshot(), before)
+
+        # Arm 3: an already-preserved .orphan- path refuses (a second
+        # recovery cannot double-suffix).
+        preserved = self.reviews / f"{base}.orphan-20261005T120000.md"
+        preserved.write_text("preserved bytes\n", encoding="utf-8")
+        before = snapshot()
+        code, payload, err = self.recover_cli(preserved, "--slug", "demo")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn(".orphan-", err)
+        self.assertIn("already", err)
+        self.assertEqual(snapshot(), before)
+
+    def test_orphan_recovery_link_validates(self) -> None:
+        repo, reviews = self.scratch_reviews()
+        # Pin the emitted fixture dates to the plan's landing date (pre
+        # mint gate): the recovery fixtures must never drift across the
+        # USAGE_MINT_PAIR_MIN_DATE boundary with the real clock.
+        pinned = datetime.date.fromisoformat("2026-10-05")
+        self.today = pinned.isoformat()
+        original_date_source = helper.DATE_SOURCE
+        helper.DATE_SOURCE = lambda: pinned
+        self.addCleanup(
+            setattr, helper, "DATE_SOURCE", original_date_source
+        )
+        orphan = self.write_orphan(reviews, f"{self.today}-demo-code-review-r1")
+        frozen = "20261005T120000"
+        original_ts = helper.ORPHAN_TIMESTAMP_SOURCE
+        helper.ORPHAN_TIMESTAMP_SOURCE = lambda: frozen
+        self.addCleanup(setattr, helper, "ORPHAN_TIMESTAMP_SOURCE", original_ts)
+        code, payload, err = self.recover_cli(
+            orphan, "--slug", "demo", "--kind", "code-review"
+        )
+        self.assertEqual(code, 0, err)
+        preserved = Path(payload["preserved"])
+        link_line = payload["metadata_line"]
+
+        def stage_v1(
+            name: str, extra_meta: tuple[str, ...], path: Path | None = None
+        ) -> Path:
+            """A canonical v1 record per the recovery procedure, carrying
+            optional Metadata lines beside the kind twin and the
+            freshness quartet (the same fixture shape the validator
+            selftests use)."""
+            record_payload = json.loads(json.dumps(vrs._version1_payload()))
+            record_payload["date"] = self.today
+            record_payload["source_kind"] = "code"
+            record_payload["review_mode"] = "targeted"
+            record_payload["risk_signals"] = []
+            record_payload["prior_findings_filter"] = False
+            record_payload["last_fix_commit"] = None
+            record_payload["record_kind"] = "canonical"
+            block = "\n".join((*extra_meta, *V1_FRESHNESS_META, "- Record kind: canonical"))
+            md = vrs._version1_markdown().replace(
+                "- Panel mode: full", f"- Panel mode: full\n{block}", 1
+            )
+            if path is None:
+                path = reviews / f"{self.today}-branch-review-orphan-{name}-r1.md"
+            path.write_text(md, encoding="utf-8")
+            path.with_suffix(".stats.json").write_text(
+                json.dumps(record_payload), encoding="utf-8"
+            )
+            return path
+
+        # The fresh record created per the recovery procedure, carrying
+        # the printed evidence link verbatim, validates end-to-end.
+        fresh_md = Path(payload["markdown"])
+        stage_v1("fresh", (f"- {link_line}",), path=fresh_md)
+        result = vrs.validate_staging_file(fresh_md, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
+        # A malformed link (an absolute path) refuses with the named
+        # format error.
+        path = stage_v1(
+            "absolute", ("- Orphan recovery: /tmp/evil.orphan-x.md",)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(
+                "Orphan recovery link is malformed" in e and "absolute" in e
+                for e in result.errors
+            ),
+            result.errors,
+        )
+
+        # A link escaping the reviews directory refuses too.
+        path = stage_v1(
+            "escaping", ("- Orphan recovery: docs/elsewhere/x.orphan-x.md",)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("escapes the reviews directory" in e for e in result.errors),
+            result.errors,
+        )
+
+        # The preserved orphan itself is never selected by the canonical
+        # discovery shapes and never validates (a partial record never
+        # masquerades as a validated review). The fresh pair staged above
+        # legitimately enumerates; the preserved base never does.
+        self.assertFalse(vrs.is_staging_review_path(preserved))
+        pairs, orphans, _backups = helper._enumerate(reviews, "demo")
+        preserved_base = preserved.name[: -len(".md")]
+        self.assertNotIn(
+            preserved_base, [pair.base for pair in pairs], "preserved name enumerated"
+        )
+        self.assertNotIn(preserved, orphans)
+        result = vrs.validate_staging_file(preserved, hard=True)
+        self.assertFalse(result.ok)
+
+    def test_preserved_orphan_is_staging_invisible(self) -> None:
+        """Exec review F1: a preserved-orphan name is discovery-invisible
+        on every staging shape. STAGING_NAME_RE makes the ``-r<N>`` tail
+        optional, so without the staging-path predicate's ``.orphan-``
+        infix exclusion a preserved plan-review, branch-review, rfc-
+        review, confluence-review, PR-N, or bare-family name matches the
+        staging grammar, and newest_staging_for_branch would hand the
+        partial record to branch-discovery consumers."""
+        frozen = "20261005T120000"
+        preserved_names = (
+            f"2026-10-05-demo-plan-review-r1.orphan-{frozen}.md",
+            f"2026-10-05-demo-branch-review-r2.orphan-{frozen}.md",
+            f"2026-10-05-demo-rfc-review-r1.orphan-{frozen}.md",
+            f"2026-10-05-confluence-review-demo-r1.orphan-{frozen}.md",
+            f"PR-42-demo-r1.orphan-{frozen}.md",
+            # A code-review shape carries no staging family word and so
+            # never matched the grammar; pinned so the exclusion stays
+            # uniform across every kind shape.
+            f"2026-10-05-code-review-demo-r1.orphan-{frozen}.md",
+            # Bare family: no date prefix, no slug, no round tail.
+            f"branch-review.orphan-{frozen}.md",
+        )
+        for name in preserved_names:
+            path = self.reviews / name
+            path.write_text("preserved bytes\n", encoding="utf-8")
+            self.assertFalse(
+                vrs.is_staging_review_path(path),
+                f"preserved orphan {name} reads as an active staging record",
+            )
+
+        # Branch discovery: a preserved plan-review orphan as the only
+        # staging-shaped file is a clean skip (None), never the partial
+        # record and never a hard failure. newest_staging_for_branch
+        # resolves .ai-playbook/reviews under the given root (no facts
+        # file exists in the scratch root, so the default applies).
+        repo_root = Path(self._tmp.name) / "repo"
+        reviews_dir = repo_root / ".ai-playbook" / "reviews"
+        reviews_dir.mkdir(parents=True)
+        only = reviews_dir / f"2026-10-05-demo-plan-review-r1.orphan-{frozen}.md"
+        only.write_text("preserved bytes\n", encoding="utf-8")
+        self.assertIsNone(vrs.newest_staging_for_branch(repo_root, "demo"))
+
+
+class MintPairGateTest(unittest.TestCase):
+    """The usage-mint presence and format gate (review round record
+    lifecycle gaps plan, Task 2). A record_kind-canonical record dated on
+    or after the validator's USAGE_MINT_PAIR_MIN_DATE constant must carry
+    the well-formed review-run-id/review-started-at-ms Metadata pair or
+    the exact usage-attribution: bare-capture-fallback marker; non-
+    canonical kinds and pre-constant records stay outside the gate. The
+    fixture shape mirrors the validator selftest's canonical_pair and
+    supplemental fixtures (v1 payload + the four freshness Metadata
+    lines); every fixture is temporary, no repository state consulted."""
+
+    RUN_ID = "ab12cd34" * 4
+    STARTED_AT = "1780000000000"
+    FRESHNESS_META = V1_FRESHNESS_META
+
+    def setUp(self) -> None:
+        if vrs is None:  # pragma: no cover - repo layout regression
+            self.fail("validate_review_staging import failed")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.reviews = Path(self._tmp.name) / "reviews"
+        self.reviews.mkdir()
+        self.gate_date = vrs.USAGE_MINT_PAIR_MIN_DATE
+        self.pre_date = (
+            datetime.date.fromisoformat(self.gate_date)
+            - datetime.timedelta(days=1)
+        ).isoformat()
+
+    def stage(
+        self,
+        name: str,
+        date_value: str,
+        extra_meta: tuple[str, ...],
+        *,
+        record_kind: str | None = "canonical",
+        worker_fields: bool = False,
+    ) -> Path:
+        payload = json.loads(json.dumps(vrs._version1_payload()))
+        payload["date"] = date_value
+        payload["source_kind"] = "code"
+        payload["review_mode"] = "targeted"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        mirrors: tuple[str, ...] = ()
+        if worker_fields:
+            # The supplemental worker-evidence shape (mirroring the
+            # validator selftest's worker fixture): focused panel, empty
+            # findings, the four sidecar fields with Metadata mirrors.
+            payload["record_kind"] = record_kind
+            payload["panel_mode"] = "focused"
+            payload["selection_reason"] = "single-worker supplemental pass"
+            payload["panel"] = [
+                {
+                    "worker": "correctness-completeness",
+                    "lenses": ["quality"],
+                    "parent_worker": None,
+                    "descendant_launches": [],
+                    "status": "complete",
+                    "raw": 0,
+                    "solo": 0,
+                    "echo": 0,
+                    "relaunch": False,
+                }
+            ]
+            payload["counts"] = {"workers_launched": 1, "staged_findings": 0}
+            payload["findings"] = []
+            payload["overflow"] = []
+            payload["deduplication_groups"] = []
+            payload["discarded"] = []
+            payload["severity_calibration"] = []
+            payload["soften_watchlist"] = []
+            payload["triage_outcomes"] = []
+            payload["worker"] = "correctness-completeness"
+            payload["lens"] = "quality"
+            payload["status"] = "complete"
+            payload["source_ref"] = "docs/history/plans/sample-plan.md"
+            mirrors = (
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Worker status: complete",
+                "- Source: docs/history/plans/sample-plan.md",
+            )
+        elif record_kind is not None:
+            payload["record_kind"] = record_kind
+        meta_lines = (*mirrors, *extra_meta, *self.FRESHNESS_META)
+        if record_kind is not None:
+            # The Metadata twin the record-kind gate requires on a
+            # post-fence filename dated on or after RECORD_KIND fence.
+            meta_lines = (*meta_lines, f"- Record kind: {record_kind}")
+        block = "\n".join(meta_lines)
+        md = vrs._version1_markdown().replace(
+            "- Panel mode: full", f"- Panel mode: full\n{block}", 1
+        )
+        path = self.reviews / f"{date_value}-branch-review-mint-{name}-r1.md"
+        path.write_text(md, encoding="utf-8")
+        path.with_suffix(".stats.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return path
+
+    def mint_pair_meta(self) -> tuple[str, str]:
+        return (
+            f"- review-run-id: {self.RUN_ID}",
+            f"- review-started-at-ms: {self.STARTED_AT}",
+        )
+
+    def mint_error(self, result) -> str | None:
+        for error in result.errors:
+            if "USAGE_MINT_PAIR_MIN_DATE" in error or "mint pair" in error:
+                return error
+        return None
+
+    def test_mint_pair_presence_gate(self) -> None:
+        # A canonical record dated exactly on the gate constant validates
+        # with the well-formed pair present.
+        run_id_line, started_line = self.mint_pair_meta()
+        path = self.stage(
+            "pair-ok", self.gate_date, (run_id_line, started_line)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
+        # The same-date record with neither the pair nor the marker
+        # refuses, naming both remedy spellings (the mint and the exact
+        # fallback marker).
+        path = self.stage("silent", self.gate_date, ())
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        error = self.mint_error(result)
+        self.assertIsNotNone(error, result.errors)
+        self.assertIn("review-run-id", error)
+        self.assertIn("review_usage_capture.py mint", error)
+        self.assertIn("usage-attribution: bare-capture-fallback", error)
+
+        # A record carrying the marker but no pair validates as the
+        # documented non-attributable fallback.
+        path = self.stage(
+            "marker-only", self.gate_date, ("- usage-attribution: bare-capture-fallback",)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
+        # A record dated before the gate constant validates with neither,
+        # unchanged (accepted-legacy exemption).
+        path = self.stage("pre-fence", self.pre_date, ())
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
+        # Worker-evidence records stay outside the gate, mirroring the
+        # coverage fence: the same-date worker-evidence record without
+        # the pair or the marker passes hard.
+        path = self.stage(
+            "worker-outside",
+            self.gate_date,
+            (),
+            record_kind="worker-evidence",
+            worker_fields=True,
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertTrue(result.ok, result.errors)
+        self.assertIsNone(self.mint_error(result))
+
+        # A pre-fence record that declares no record_kind at all fails on
+        # the record-kind gate only; it never reaches the mint gate (the
+        # date fence alone already keeps it outside).
+        path = self.stage("no-kind", self.pre_date, (), record_kind=None)
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertIsNone(self.mint_error(result))
+        self.assertTrue(result.errors, "expected the record-kind failures")
+        self.assertTrue(
+            all("record_kind" in error or "Record kind:" in error for error in result.errors),
+            result.errors,
+        )
+
+        # The kind-based exemption holds at the gate boundary itself: a
+        # record dated exactly on USAGE_MINT_PAIR_MIN_DATE that declares
+        # no record_kind at all stays outside the mint gate. The
+        # record-kind gate owns the omission, so the record still fails,
+        # on record-kind errors only (never on the mint pair).
+        path = self.stage(
+            "no-kind-at-gate", self.gate_date, (), record_kind=None
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertIsNone(self.mint_error(result))
+        self.assertTrue(result.errors, "expected the record-kind failures")
+        self.assertTrue(
+            all("record_kind" in error or "Record kind:" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_mint_pair_format_gate(self) -> None:
+        # An empty or non-32-hex review-run-id refuses with the malformed
+        # field named, matching the capture producer's own grammar.
+        _, started_line = self.mint_pair_meta()
+        for bad in ("", "xyz", "AB12CD34" * 4, "ab12" * 8 + "ff"):
+            path = self.stage(
+                "bad-run-id", self.gate_date, (f"- review-run-id: {bad}", started_line)
+            )
+            result = vrs.validate_staging_file(path, hard=True)
+            self.assertFalse(result.ok, (bad, result.errors))
+            error = self.mint_error(result)
+            self.assertIsNotNone(error, (bad, result.errors))
+            self.assertIn("review-run-id", error)
+            self.assertIn("malformed", error)
+
+        # A non-positive-integer review-started-at-ms refuses with the
+        # malformed field named.
+        run_id_line, _ = self.mint_pair_meta()
+        for bad in ("0", "-5", "1e3", "later"):
+            path = self.stage(
+                "bad-started", self.gate_date, (run_id_line, f"- review-started-at-ms: {bad}")
+            )
+            result = vrs.validate_staging_file(path, hard=True)
+            self.assertFalse(result.ok, (bad, result.errors))
+            error = self.mint_error(result)
+            self.assertIsNotNone(error, (bad, result.errors))
+            self.assertIn("review-started-at-ms", error)
+            self.assertIn("malformed", error)
+
+        # A half pair (one field present, the other missing) refuses
+        # naming the missing field.
+        path = self.stage(
+            "half-pair", self.gate_date, (run_id_line,)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        error = self.mint_error(result)
+        self.assertIsNotNone(error, result.errors)
+        self.assertIn("review-started-at-ms", error)
+        path = self.stage("half-pair-2", self.gate_date, (started_line,))
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        error = self.mint_error(result)
+        self.assertIsNotNone(error, result.errors)
+        self.assertIn("review-run-id", error)
+
+        # A well-formed pair validates (format gate passes; presence is
+        # covered by test_mint_pair_presence_gate).
+        path = self.stage(
+            "format-ok", self.gate_date, (*self.mint_pair_meta(),)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
 
 class FenceMaskSeamTest(unittest.TestCase):
     """The helper fence mask consumes the validator's shared fence classifier
@@ -1146,6 +2130,124 @@ class FenceMaskSeamTest(unittest.TestCase):
         # index unchanged.
         _mask, unclosed = helper._fence_mask(["```", "x"])
         self.assertEqual(unclosed, 0)
+
+
+class EmbeddedRecipeExampleTest(unittest.TestCase):
+    """The review-staging skill's embedded finding-construction example pair
+    (finding-template plan, Task 1). The pair fenced in the recipe section is
+    load-bearing documentation: this suite extracts it verbatim through the
+    validator's declared seam (the shared marker grammar and skill-path
+    helper), materializes both files into a temporary directory, and holds
+    the hard schema check green, so a schema edit that invalidates the
+    documented shape fails at this task boundary in the same edit. The
+    load-bearing arm proves no example field is vacuously accepted: each
+    malformed variant fails with its named error, and the recipe's inlined
+    Closed enums line asserts set equality with the validator's confidence,
+    reachability, and blast-radius vocabularies. No repository state and no
+    live corpus path is consulted: the materialization is temporary."""
+
+    def extract(self) -> dict:
+        if vrs is None:
+            self.fail("validate_review_staging import failed")
+        skill_path = vrs.embedded_example_skill_path()
+        if not skill_path.is_file():
+            self.fail(f"embedded example skill file missing: {skill_path}")
+        try:
+            return vrs.extract_embedded_recipe_example(
+                skill_path.read_text(encoding="utf-8")
+            )
+        except ValueError as exc:
+            self.fail(f"embedded example extraction failed: {exc}")
+
+    def materialize(
+        self, example: dict, *, md: str | None = None, payload: dict | None = None
+    ) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        staging = Path(tmp.name) / vrs.EMBEDDED_EXAMPLE_STAGING_NAME
+        staging.write_text(
+            example["staging-doc"] if md is None else md, encoding="utf-8"
+        )
+        sidecar = (
+            json.loads(example["stats-sidecar"]) if payload is None else payload
+        )
+        staging.with_suffix(".stats.json").write_text(
+            json.dumps(sidecar), encoding="utf-8"
+        )
+        return staging
+
+    def test_embedded_example_validates_green(self) -> None:
+        example = self.extract()
+        self.assertEqual(set(example), set(vrs.EMBEDDED_EXAMPLE_ROLES))
+        staging = self.materialize(example)
+        result = vrs.validate_staging_file(staging, hard=True)
+        self.assertTrue(result.ok, result.errors)
+
+    def test_example_fields_are_load_bearing(self) -> None:
+        example = self.extract()
+        base_md = example["staging-doc"]
+        base_payload = json.loads(example["stats-sidecar"])
+        finding = base_payload["findings"][0]
+
+        # A non-integer finding id fails with the named integer error.
+        bad_id = json.loads(json.dumps(base_payload))
+        bad_id["findings"][0] = {**finding, "id": "1"}
+        path = self.materialize(example, payload=bad_id)
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("id must be an integer" in e for e in result.errors),
+            result.errors,
+        )
+
+        # An out-of-enum confidence fails with the named enum error.
+        bad_confidence = json.loads(json.dumps(base_payload))
+        bad_confidence["findings"][0] = {**finding, "confidence": "probable"}
+        path = self.materialize(example, payload=bad_confidence)
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("invalid confidence" in e for e in result.errors),
+            result.errors,
+        )
+
+        # A missing reachability fails with the named missing-field error.
+        missing_reachability = json.loads(json.dumps(base_payload))
+        del missing_reachability["findings"][0]["reachability"]
+        path = self.materialize(example, payload=missing_reachability)
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("missing reachability" in e for e in result.errors),
+            result.errors,
+        )
+
+        # A noncanonical F<N> heading fails with the named conservation error.
+        path = self.materialize(
+            example, md=base_md.replace("#### F1. ", "#### F1 ", 1)
+        )
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(
+                "no matching Markdown #### F block" in e for e in result.errors
+            ),
+            result.errors,
+        )
+
+        # The recipe's inlined Closed enums line equals the validator's
+        # closed vocabularies set-for-set, so a drifted spelling fails here.
+        skill_text = vrs.embedded_example_skill_path().read_text(
+            encoding="utf-8"
+        )
+        vocabs = vrs._embedded_example_enum_vocabs(skill_text)
+        self.assertEqual(vocabs.get("confidence"), set(vrs.VALID_CONFIDENCE))
+        self.assertEqual(
+            vocabs.get("reachability"), set(vrs.VALID_REACHABILITY)
+        )
+        self.assertEqual(
+            vocabs.get("blast radius"), set(vrs.VALID_BLAST_RADIUS)
+        )
 
 
 if __name__ == "__main__":

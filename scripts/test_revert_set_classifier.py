@@ -283,6 +283,57 @@ class RevertSetClassifierTest(unittest.TestCase):
         self.assertNotIn("tool failure", proc.stderr)
         self.assert_single_final_outcome(proc, "indeterminate")
 
+    def test_nested_repository_debris_is_indeterminate_exit_2(self):
+        # The witnessed 2026-10-04 form: an untracked directory at the
+        # scratch repo root carrying its own .git. The classifier cannot
+        # compute an effective dirty state for the nested-repository
+        # directory and refuses the whole verdict (exit 2, the fail-closed
+        # indeterminate contract), never classifying the nested tree's
+        # contents and never reporting a reversal finding.
+        nested = make_repo(self.root / "h")
+        commit_file(nested, "inner.txt", "nested\n", "nested commit")
+        proc = run(["classify", "--repo", str(self.root)])
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn(
+            "revert-set-classifier: effective state failed for h/",
+            proc.stderr)
+        self.assert_single_final_outcome(proc, "indeterminate")
+
+    def test_addition_lookup_failure_reports_attempted_paths(self):
+        # Path-selective git-shim variant: a.txt's addition lookup answers,
+        # b.txt's fails mid-walk, so the per-path loop stops on the second
+        # path. The indeterminate evidence must keep the failing path named
+        # AND carry every path attempted before the failure (a.txt's
+        # collected row), not silently discard the collected evidence.
+        (self.root / "a.txt").unlink()
+        (self.root / "b.txt").unlink()
+        real_git = shutil.which("git")
+        shim = Path(self._tmp.name) / "git-shim"
+        shim.mkdir()
+        script = shim / "git"
+        script.write_text(
+            "#!/bin/sh\n"
+            "is_add_lookup=0\n"
+            "is_second_path=0\n"
+            'prev=""\n'
+            'for a in "$@"; do\n'
+            '  if [ "$a" = "--diff-filter=A" ]; then is_add_lookup=1; fi\n'
+            '  if [ "$prev" = "--" ] && [ "$a" = "b.txt" ]; then'
+            " is_second_path=1; fi\n"
+            '  prev="$a"\n'
+            "done\n"
+            'if [ "$is_add_lookup" = "1" ] && [ "$is_second_path" = "1" ];'
+            " then exit 1; fi\n"
+            'exec "%s" "$@"\n' % real_git,
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        proc = run_with_shim(["classify", "--repo", str(self.root)], shim)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("addition lookup failed for b.txt", proc.stderr)
+        self.assertIn("paths attempted before failure: a.txt", proc.stderr)
+        self.assert_single_final_outcome(proc, "indeterminate")
+
 
 if __name__ == "__main__":
     unittest.main()

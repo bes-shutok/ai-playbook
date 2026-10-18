@@ -22,8 +22,12 @@ Two subcommands over one parentage/ancestry core:
       --expected-base value that does not resolve is a tool error.
   post-landing --repo ROOT --pre-tip SHA --default-ref NAME [--origin-ref REF]
       After a landing: the default branch must still descend from PRE-TIP
-      (evaluated and reported first) and, when --origin-ref resolves, from
-      that ref too; a non-resolving origin ref is a named skip, not a refusal.
+      (evaluated and reported first). When --origin-ref resolves, a
+      divergence from that ref is informational only: the landing commit
+      descends from the checked pre-landing tip, so any such divergence
+      predates the landing (the landing cannot have changed the origin
+      ref's ancestry relationship). A non-resolving origin ref is a named
+      skip, not a refusal.
 
 Exit codes (outcome contract): 0 pass, 1 fail (a modeled refusal), 2
 indeterminate (the git plumbing answered outside its 0/1 answer vocabulary
@@ -280,7 +284,6 @@ def cmd_post_landing(args):
         print("refuse: default branch no longer descends from pre-landing tip")
         refused = True
     origin_note = None
-    origin_refusal = False
     if args.origin_ref:
         origin = _resolve_commit(repo, args.origin_ref)
         if origin is None:
@@ -296,12 +299,12 @@ def cmd_post_landing(args):
                         origin, default_ref),
                     "origin ancestry"))
             if not origin_leg:
-                print("refuse: default branch no longer descends from %s"
-                      % args.origin_ref)
-                origin_refusal = True
+                origin_note = (
+                    "note: default branch does not descend from %s; the"
+                    " divergence predates the landing" % args.origin_ref)
     if origin_note:
         print(origin_note)
-    if refused or origin_refusal:
+    if refused:
         return 1
     print("ok: default branch ancestry verified")
     return 0

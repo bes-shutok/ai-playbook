@@ -5,7 +5,7 @@ Two responsibilities, both stdlib-only and agent-agnostic:
 
 1. **Facts-FILE key resolution.** Parses ``.ai-playbook/facts.md`` for keys that
    live in DIFFERENT on-disk formats (they cannot share one parser):
-   - ``plans_dir`` / ``tmp_dir`` are TOML-fence ``key = "value"`` lines in the
+   - ``plans_dir`` / ``tmp_dir`` are TOML-fence ``key = "value"`` lines (basic or literal strings) in the
      REPO facts file -> ``resolve_toml_key`` -> ``resolve_plans_dir`` /
      ``resolve_tmp_dir``.
    - ``shared_docs_dir`` is a markdown table row ``| `key` | `value` |`` searched
@@ -118,6 +118,13 @@ def resolve_toml_key_raw(start_dir: Path, key: str) -> str | None:
     ``start_dir`` is the directory whose ``.ai-playbook/facts.md`` is read (the
     repo root). TOML-fence keys are repo-scoped, so ONLY the repo candidate is
     consulted (NOT the home facts file).
+
+    Supported subset: single-line basic strings (escapes processed; an escape
+    outside the TOML set, or a ``\\u``/``\\U`` escape that is invalid or not a
+    Unicode scalar, makes the line unsupported) and
+    literal string (single-quoted) support; multi-line strings, non-string
+    values, unclosed quotes, and lines with trailing content are unsupported
+    and resolve as absent.
     """
     facts_path = Path(start_dir) / ".ai-playbook" / "facts.md"
     if not facts_path.is_file():
@@ -136,17 +143,95 @@ def resolve_toml_key_raw(start_dir: Path, key: str) -> str | None:
         # Inside the fence: a closing fence ends the block.
         if line.lstrip().startswith("```"):
             break
-        m = re.match(r'^\s*(' + re.escape(key) + r')\s*=\s*"([^"]*)"\s*$', line)
+        m = re.match(r'^\s*(' + re.escape(key) + r')\s*=\s*(.*)$', line)
         if m:
-            return m.group(2).strip()
+            value = _facts_toml_string_value(m.group(2))
+            if value is not None:
+                return value.strip()
     return None
+
+
+def _facts_toml_string_value(raw: str) -> str | None:
+    """Decode one single-line TOML string value (the text after ``=``).
+
+    Supported subset: single-line basic strings (escapes processed; an escape
+    outside the TOML set, or a ``\\u``/``\\U`` escape that is invalid or not a
+    Unicode scalar, makes the line unsupported) and literal string
+    (single-quoted) support; multi-line strings, non-string values, unclosed
+    quotes, and lines with trailing content are unsupported and resolve as
+    absent. Returns ``None`` for every unsupported input (no exception).
+    """
+    if raw.startswith('"'):
+        inner_end = -1
+        i = 1
+        while i < len(raw):
+            ch = raw[i]
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                inner_end = i
+                break
+            i += 1
+        if inner_end == -1:
+            return None
+        if raw[inner_end + 1:].strip():
+            return None
+        return _decode_basic_toml_escapes(raw[1:inner_end])
+    if raw.startswith("'"):
+        close = raw.find("'", 1)
+        if close == -1:
+            return None
+        if raw[close + 1:].strip():
+            return None
+        return raw[1:close]
+    return None
+
+
+def _decode_basic_toml_escapes(inner: str) -> str | None:
+    """Process the TOML basic-string escape set; ``None`` on any invalid
+    escape (an escape outside the set, or a ``\\u``/``\\U`` escape that is
+    malformed or not a Unicode scalar value)."""
+    out: list[str] = []
+    i = 0
+    simple = {"b": "\b", "t": "\t", "n": "\n", "f": "\f", "r": "\r",
+              '"': '"', "\\": "\\"}
+    while i < len(inner):
+        ch = inner[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 1 >= len(inner):
+            return None
+        esc = inner[i + 1]
+        if esc in simple:
+            out.append(simple[esc])
+            i += 2
+            continue
+        if esc in ("u", "U"):
+            width = 4 if esc == "u" else 8
+            digits = inner[i + 2:i + 2 + width]
+            if len(digits) != width or any(
+                c not in "0123456789abcdefABCDEF" for c in digits
+            ):
+                return None
+            codepoint = int(digits, 16)
+            if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+                return None
+            out.append(chr(codepoint))
+            i += 2 + width
+            continue
+        return None
+    return "".join(out)
 
 
 def resolve_toml_key(start_dir: Path, key: str) -> Path | None:
     """Parse the REPO ``.ai-playbook/facts.md`` TOML-fence block for ``key``.
 
     The repo facts file opens a ```toml fenced block containing
-    ``key = "value"`` lines. Returns the resolved value as a ``Path`` (tilde-
+    ``key = "value"`` lines (the value written in either TOML quoting form,
+    double- or single-quoted). Returns the resolved value as a ``Path`` (tilde-
     expanded, resolved), or ``None`` if the file or key is absent. Delegates the
     fence parse to ``resolve_toml_key_raw`` (the SINGLE parser) and then
     ``.expanduser().resolve()`` the raw value.
@@ -457,6 +542,72 @@ def selftest() -> int:
             "resolve_toml_key_raw: resolve_toml_key shares the same parser",
             resolved is not None and resolved.name == Path(rel_value).name,
             f"resolved={resolved}",
+        )
+    # ---- resolve_toml_key_raw: both TOML string forms (the quoting incident)
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        (td_path / ".ai-playbook").mkdir()
+        (td_path / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            'shared_tmp_basic = "/tmp/ai-tmp/"\n'
+            "shared_tmp_literal = '/tmp/ai-tmp/'\n"
+            'esc_backslash = "C:\\\\tools\\\\"\n'
+            'esc_quote = "a \\\"quoted\\\" word"\n'
+            "win_literal = 'C:\\temp\\'\n"
+            'flip_backslash_quote = "C:\\tmp\\"\n'
+            "refuse_unclosed_basic = \"/tmp/never-closed\n"
+            "refuse_unclosed_literal = '/tmp/never-closed\n"
+            "refuse_non_string = 3\n"
+            'refuse_multiline = """started\n'
+            'refuse_invalid_escape = "C:\\Users\\x"\n'
+            'refuse_scalar_escape = "\\U00110000"\n'
+            'refuse_trailing_comment = "v" # note\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        basic = resolve_toml_key_raw(td_path, "shared_tmp_basic")
+        literal = resolve_toml_key_raw(td_path, "shared_tmp_literal")
+        check(
+            "resolve_toml_key_raw: single-quoted value equals its double-quoted form",
+            basic == "/tmp/ai-tmp/" and literal == basic,
+            f"basic={basic!r} literal={literal!r}",
+        )
+        esc_backslash = resolve_toml_key_raw(td_path, "esc_backslash")
+        esc_quote = resolve_toml_key_raw(td_path, "esc_quote")
+        check(
+            "resolve_toml_key_raw: escaped quote inside a basic string",
+            esc_backslash == "C:\\tools\\"
+            and esc_quote == 'a "quoted" word',
+            f"esc_backslash={esc_backslash!r} esc_quote={esc_quote!r}",
+        )
+        win_literal = resolve_toml_key_raw(td_path, "win_literal")
+        check(
+            "resolve_toml_key_raw: literal string keeps backslashes verbatim",
+            win_literal == "C:\\temp\\",
+            f"win_literal={win_literal!r}",
+        )
+        flip = resolve_toml_key_raw(td_path, "flip_backslash_quote")
+        check(
+            "resolve_toml_key_raw: backslash-terminated quote resolves as absent",
+            flip is None,
+            f"flip={flip!r}",
+        )
+        refusal_keys = [
+            "refuse_unclosed_basic",
+            "refuse_unclosed_literal",
+            "refuse_non_string",
+            "refuse_multiline",
+            "refuse_invalid_escape",
+            "refuse_scalar_escape",
+            "refuse_trailing_comment",
+        ]
+        refusal_values = [
+            resolve_toml_key_raw(td_path, key) for key in refusal_keys
+        ]
+        check(
+            "resolve_toml_key_raw: unclosed quote resolves as absent",
+            all(value is None for value in refusal_values),
+            f"refusal_values={refusal_values!r}",
         )
 
     # ---- shared_docs_dir_unchanged: against the REAL home facts file ----

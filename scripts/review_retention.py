@@ -26,8 +26,8 @@ three, overridable per run with ``--months N`` or per repository with the
 optional ``review_retention_months`` facts key read from the `````toml`
 fence in ``.ai-playbook/facts.md``). The filename date alone decides
 candidacy; filesystem mtime is never consulted. The configured ``tmp_dir``
-(the ``tmp_dir`` facts key, default ``docs/tmp/``) is never scanned, not
-even when a ``--reviews-dir`` override points at its parent.
+(the ``tmp_dir`` facts key, the single source with no default) is never
+scanned, not even when a ``--reviews-dir`` override points at its parent.
 
 Modes:
 
@@ -99,9 +99,8 @@ REVIEWS_DIR_KEY = "reviews_dir"
 
 TMP_DIR_KEY = "tmp_dir"
 
-DEFAULT_REVIEWS_DIR = "docs/reviews/"
-
-DEFAULT_TMP_DIR = "docs/tmp/"
+# No default dir literals: the facts block is the single source for repo
+# paths; an unresolvable reviews_dir/tmp_dir key fails the run loudly.
 
 MANIFEST_SCHEMA = "review-retention-manifest/1"
 
@@ -1022,15 +1021,24 @@ def _run(args: argparse.Namespace) -> int:
     today = DATE_SOURCE()
     cutoff = _shift_months(today, months)
 
-    tmp_dir = _resolve_against(
-        _facts_value(anchor, TMP_DIR_KEY) or DEFAULT_TMP_DIR, anchor
-    )
+    tmp_raw = _facts_value(anchor, TMP_DIR_KEY)
+    if tmp_raw is None or not tmp_raw.strip():
+        raise RetentionUsageError(
+            "cannot resolve tmp_dir from .ai-playbook/facts.md; "
+            "the facts block is the single source for repo paths"
+        )
+    tmp_dir = _resolve_against(tmp_raw, anchor)
     if args.reviews_dir:
         reviews_dirs = sorted(
             {_resolve_against(raw, anchor) for raw in args.reviews_dir}
         )
     else:
-        reviews_raw = _facts_value(anchor, REVIEWS_DIR_KEY) or DEFAULT_REVIEWS_DIR
+        reviews_raw = _facts_value(anchor, REVIEWS_DIR_KEY)
+        if reviews_raw is None or not reviews_raw.strip():
+            raise RetentionUsageError(
+                "cannot resolve reviews_dir from .ai-playbook/facts.md; "
+                "pass --reviews-dir or complete the facts block"
+            )
         reviews_dirs = [_resolve_against(reviews_raw, anchor)]
     keep_paths = sorted({_realpath(Path(raw)) for raw in args.keep})
 

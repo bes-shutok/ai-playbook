@@ -111,7 +111,7 @@ def current_branch() -> str | None:
         return None
 
 def newest_staging(root: Path, branch: str | None) -> Path | None:
-    reviews = root / "docs" / "history" / "reviews"
+    reviews = root / ".ai-playbook" / "reviews"
     facts = root / ".ai-playbook" / "facts.md"
     if facts.is_file():
         text = facts.read_text(encoding="utf-8", errors="replace")

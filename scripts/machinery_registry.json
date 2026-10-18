@@ -1,1635 +1,1880 @@
 {
- "entries": [
-  {
-   "disposition": "keep",
-   "id": "script:check-instruction-size.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/check-instruction-size.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check-no-em-dash.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/check-no-em-dash.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_backlog_claimed.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/check_backlog_claimed.py"
-   ],
-   "tests": [
-    "scripts/test_check_backlog_claimed.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_check_backlog_claimed.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_backlog_inbox_location.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/receiving-review/SKILL.md)",
-   "paths": [
-    "scripts/check_backlog_inbox_location.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/receiving-review/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_cleanup_scope_baseline.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/plans/SKILL.md)",
-   "paths": [
-    "scripts/check_cleanup_scope_baseline.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/plans/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_lesson_scope.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/check_lesson_scope.py"
-   ],
-   "tests": [
-    "scripts/test_check_lesson_scope.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_check_lesson_scope.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_maintenance_pins.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
-   "paths": [
-    "scripts/check_maintenance_pins.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/zcode.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_plan_origins_closed.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/check_plan_origins_closed.py"
-   ],
-   "tests": [
-    "scripts/test_check_plan_origins_closed.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_check_plan_origins_closed.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_prompt_log_origins.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks; registered by the landing plan named in the witness, which also wires the pins-sweep invocation",
-   "paths": [
-    "scripts/check_prompt_log_origins.py"
-   ],
-   "tests": [
-    "scripts/test_check_prompt_log_origins.py"
-   ],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/history/plans/completed/2026-10-01-prompt-log-prune-check.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_review_agent_portability.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/check_review_agent_portability.py"
-   ],
-   "tests": [
-    "scripts/test_check_review_agent_portability.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_check_review_agent_portability.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:codex_hook_config.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/codex_hook_config.py"
-   ],
-   "tests": [
-    "scripts/test_codex_hook_config.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_codex_hook_config.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:confluence-mirror-hygiene.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/docs-branch/SKILL.md)",
-   "paths": [
-    "scripts/confluence-mirror-hygiene.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/docs-branch/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:dirt_regression_gate.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/dirt_regression_gate.py"
-   ],
-   "tests": [
-    "scripts/test_dirt_regression_gate.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_dirt_regression_gate.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:doc_registry_validator.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
-   "paths": [
-    "scripts/doc_registry_validator.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/execute-plan/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:docs_branch_backlog_dedupe.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/docs_branch_backlog_dedupe.py"
-   ],
-   "tests": [
-    "scripts/test_docs_branch_backlog_dedupe.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_docs_branch_backlog_dedupe.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:docs_branch_plan_guard.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/docs_branch_plan_guard.py"
-   ],
-   "tests": [
-    "scripts/test_docs_branch_plan_guard.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_docs_branch_plan_guard.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:done-lock.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
-   "paths": [
-    "scripts/done-lock.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/zcode.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:done_sweep_gates.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/done/SKILL.md)",
-   "paths": [
-    "scripts/done_sweep_gates.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/done/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:done_sweep_gates_lib.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/done_sweep_gates_lib.py"
-   ],
-   "tests": [
-    "scripts/test_done_sweep_gates_lib.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_done_sweep_gates_lib.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:execute_plan_address_fanout.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/execute_plan_address_fanout.py"
-   ],
-   "tests": [
-    "scripts/test_execute_plan_address_fanout.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_address_fanout.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:execute_plan_resume_watcher.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/execute_plan_resume_watcher.py"
-   ],
-   "tests": [
-    "scripts/test_execute_plan_resume_watcher.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_resume_watcher.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:execute_plan_runtime.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/execute_plan_runtime.py"
-   ],
-   "tests": [
-    "scripts/test_execute_plan_runtime.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_runtime.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:execute_plan_runtime_codex.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/execute_plan_runtime_codex.py"
-   ],
-   "tests": [
-    "scripts/test_execute_plan_runtime_codex.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_runtime_codex.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:execute_plan_worker_registry.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/execute_plan_worker_registry.py"
-   ],
-   "tests": [
-    "scripts/test_execute_plan_worker_registry.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_worker_registry.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:facts_paths.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
-   "paths": [
-    "scripts/facts_paths.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/execute-plan/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:friction_audit_quant.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/friction_audit_quant.py"
-   ],
-   "tests": [
-    "scripts/test_friction_audit_quant.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_friction_audit_quant.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:harness_detection.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/harness_detection.py"
-   ],
-   "tests": [
-    "scripts/test_harness_detection.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_harness_detection.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:hooks_log_summary.py",
-   "kind": "script",
-   "note": "standing written instruction: two hook READMEs (lessons-recall, skill-gate) reference this summary script",
-   "paths": [
-    "scripts/hooks_log_summary.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/hooks/lessons-recall/README.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:hooks_probe.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/hooks_probe.py"
-   ],
-   "tests": [
-    "scripts/test_hooks_probe.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_hooks_probe.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:land_squash.sh",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks; registering the lock-bound squash-landing helper delivered by the squash-landing failure-path guard plan (born-conformant under the script outcome contract)",
-   "paths": [
-    "scripts/land_squash.sh"
-   ],
-   "tests": [
-    "scripts/test_land_squash.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_land_squash.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:landing_parentage_gate.py",
-   "kind": "script",
-   "note": "superseded by kept-set row landing-parentage-gate (same file, citation lives there)",
-   "paths": [],
-   "tests": [
-    "scripts/test_landing_parentage_gate.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_landing_parentage_gate.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (AGENTS.md)",
-   "paths": [
-    "scripts/lessons.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "AGENTS.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_adopt.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/lessons_adopt.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_classify.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/lessons-migrate/SKILL.md)",
-   "paths": [
-    "scripts/lessons_classify.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/lessons-migrate/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_corpus.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/lessons_corpus.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_index.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/lessons_index.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_migrate.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/lessons_migrate.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:lessons_recall.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/done/SKILL.md)",
-   "paths": [
-    "scripts/lessons_recall.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/done/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:machinery_inventory.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/machinery_inventory.py"
-   ],
-   "tests": [
-    "scripts/test_machinery_inventory.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_machinery_inventory.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:plan_readiness.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/plan_readiness.py"
-   ],
-   "tests": [
-    "scripts/test_plan_readiness.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_plan_readiness.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:quota_governor.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/quota_governor.py"
-   ],
-   "tests": [
-    "scripts/test_quota_governor.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_quota_governor.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:quota_pressure_stats.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/quota_pressure_stats.py"
-   ],
-   "tests": [
-    "scripts/test_quota_pressure_stats.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_quota_pressure_stats.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:quota_window_probe.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/quota_window_probe.py"
-   ],
-   "tests": [
-    "scripts/test_quota_window_probe.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_quota_window_probe.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:rearm_on_touch.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/rearm_on_touch.py"
-   ],
-   "tests": [
-    "scripts/test_rearm_on_touch.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_rearm_on_touch.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:release-authoring.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
-   "paths": [
-    "scripts/release-authoring.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/release/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:release-rewrite.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
-   "paths": [
-    "scripts/release-rewrite.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/release/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:reverse_squash_guard.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/reverse_squash_guard.py"
-   ],
-   "tests": [
-    "scripts/test_reverse_squash_guard.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_reverse_squash_guard.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:review_record_selection.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/review_record_selection.py"
-   ],
-   "tests": [
-    "scripts/test_review_record_selection.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_review_record_selection.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:review_retention.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/review_retention.py"
-   ],
-   "tests": [
-    "scripts/test_review_retention.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_review_retention.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:review_thread_gate.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/review_thread_gate.py"
-   ],
-   "tests": [
-    "scripts/test_review_thread_gate.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_review_thread_gate.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:review_usage_capture.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/review-staging/SKILL.md)",
-   "paths": [
-    "scripts/review_usage_capture.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/review-staging/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:runtime_capabilities.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/runtime_capabilities.py"
-   ],
-   "tests": [
-    "scripts/test_runtime_capabilities.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_runtime_capabilities.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:scan-public-hygiene.sh",
-   "kind": "script",
-   "note": "standing written instruction references this script (AGENTS.md)",
-   "paths": [
-    "scripts/scan-public-hygiene.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "AGENTS.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:session_channel.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/session_channel.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:skill_distribution_check.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/skill_distribution_check.py"
-   ],
-   "tests": [
-    "scripts/test_skill_distribution_check.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_skill_distribution_check.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:skill_gate.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
-   "paths": [
-    "scripts/skill_gate.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/learn/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:summarize_review_stats.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/maintenance/SKILL.md)",
-   "paths": [
-    "scripts/summarize_review_stats.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:help_probe.py",
-   "kind": "script",
-   "note": "suite red test exercises it through runtime_capabilities",
-   "paths": [
-    "scripts/testdata/execute-plan/activation/help_probe.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_runtime_capabilities.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:tool_runtime_stats.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/tool_runtime_stats.py"
-   ],
-   "tests": [
-    "scripts/test_tool_runtime_stats.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_tool_runtime_stats.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:validate_review_staging.py",
-   "kind": "script",
-   "note": "standing written instruction references this script (agents/skills/rfc-design/SKILL.md)",
-   "paths": [
-    "scripts/validate_review_staging.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/rfc-design/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:worktree_closeout_migrate.py",
-   "kind": "script",
-   "note": "red test in the suite fails when this script breaks",
-   "paths": [
-    "scripts/worktree_closeout_migrate.py"
-   ],
-   "tests": [
-    "scripts/test_worktree_closeout_migrate.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_worktree_closeout_migrate.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:budget-guard",
-   "kind": "hook",
-   "note": "standing written instruction references this hook (agents/skills/maintenance/zcode.md)",
-   "paths": [
-    "agents/hooks/budget-guard/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/zcode.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:codex-budget-reset-guard",
-   "kind": "hook",
-   "note": "user-decision: hook README standing registration instruction",
-   "paths": [
-    "agents/hooks/codex-budget-reset-guard/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/hooks/codex-budget-reset-guard/README.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:codex-execute-plan",
-   "kind": "hook",
-   "note": "standing written instruction references this hook (docs/maintenance/document-registry.md)",
-   "paths": [
-    "agents/hooks/codex-execute-plan/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/maintenance/document-registry.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:codex-model-guard",
-   "kind": "hook",
-   "note": "standing written instruction references this hook (docs/maintenance/codex-worker-model-guard.md)",
-   "paths": [
-    "agents/hooks/codex-model-guard/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/maintenance/codex-worker-model-guard.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:lessons-recall",
-   "kind": "hook",
-   "note": "standing written instruction references this hook (docs/maintenance/document-registry.md)",
-   "paths": [
-    "agents/hooks/lessons-recall/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/maintenance/document-registry.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:plan-readiness",
-   "kind": "hook",
-   "note": "standing written instruction references this hook (agents/skills/review-loop/SKILL.md)",
-   "paths": [
-    "agents/hooks/plan-readiness/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/review-loop/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "hook:skill-gate",
-   "kind": "hook",
-   "note": "user-decision: hook README standing instruction",
-   "paths": [
-    "agents/hooks/skill-gate/"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/hooks/skill-gate/README.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:alert",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:authoring_cycle_gate",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:execution_priority",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:execution_queue",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:loop_mode",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:next_turn_at",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:parent_absent_since",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:parent_automation_form",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:parent_automation_id",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:park_proposals",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:pending_dispatch",
-   "kind": "state-field",
-   "note": "schema home: the maintenance SKILL.md State file section defines the pending_dispatch field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:pending_landing",
-   "kind": "state-field",
-   "note": "schema home: the maintenance SKILL.md State file section defines the pending_landing field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:pending_rearm",
-   "kind": "state-field",
-   "note": "schema home: the maintenance SKILL.md State file section defines the pending_rearm field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:pricing_cache",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:quota_at_decision",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:quota_signal",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:rate_limited_events",
-   "kind": "state-field",
-   "note": "schema home: the maintenance SKILL.md State file section defines the rate_limited_events field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:rearm_note",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "state-field:turn_error",
-   "kind": "state-field",
-   "note": "field defined and consumed by the tracked State file schema section",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/maintenance/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:five-round-review-cap",
-   "kind": "protocol",
-   "note": "configuration home: agents/skills/review-loop/SKILL.md pins max_full_panel_rounds default 5 (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep); agents/skills/plans/SKILL.md pins the cap-closure terminal shape without the value",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/skills/review-loop/SKILL.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:review-staging-governance",
-   "kind": "protocol",
-   "note": "resolved via plan_readiness suite: no dedicated validate_review_staging test file exists; plan_readiness invokes the validator hard gates and its suite covers them",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_plan_readiness.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:plan-readiness-gate",
-   "kind": "protocol",
-   "note": "certification oracle suite",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_plan_readiness.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:digest-recert-fencing",
-   "kind": "protocol",
-   "note": "execute-plan runtime suite covers digest re-certification and generation fencing",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_runtime.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:merge-landing-lock",
-   "kind": "protocol",
-   "note": "resolved to red test: the named churn-prevention incident document does not exist; the done-lock lib suite is the covering red test (incident witness: the 2026-09-27 orphan-history rebuild recorded in memory and development_lessons.md)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_done_sweep_gates_lib.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:budget-pause-protocol",
-   "kind": "protocol",
-   "note": "resume-watcher suite covers the budget pause protocol",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_execute_plan_resume_watcher.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:done-sweep-gates",
-   "kind": "protocol",
-   "note": "done-sweep gates lib suite",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_done_sweep_gates_lib.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:reverse-squash-dirt-gates",
-   "kind": "protocol",
-   "note": "staged-reverse-squash dirt incident recorded in development_lessons.md",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "incident",
-    "ref": "projects/.ai-playbook/development_lessons.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:skills-gate-markers",
-   "kind": "protocol",
-   "note": "user-decision: skill-gate hook README standing instruction",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "agents/hooks/skill-gate/README.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:quota-probing-budget-guard",
-   "kind": "protocol",
-   "note": "ref substituted at execution: the named open sibling origin was fold-then-deleted at that plan's execution (squash main 1f404537); the landed completed plan is the boundary record",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "sibling-boundary",
-    "ref": "docs/history/plans/completed/2026-09-28-account-quota-governor.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:worktree-recipe",
-   "kind": "protocol",
-   "note": "archived worktree-first plan owns the canonical worktree lifecycle recipe",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "sibling-boundary",
-    "ref": "docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "protocol:residual-acceptance-exit",
-   "kind": "protocol",
-   "note": "archived residual-exit plan owns the same-day ordering gates (renamed at archival from the deleted open item 2026-09-19-residual-exit-same-day-ordering-semantics.md)",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/history/plans/completed/2026-09-28-residual-exit-same-day-ordering-gates.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "public-hygiene-scan",
-   "kind": "protocol",
-   "note": "origin Expected kept set; deployed scanner home is ~/.ai-playbook/scripts/scan-public-hygiene.sh, mandated by AGENTS.md commit rules; ref re-pointed at fold from the deleted origin to the archived plan",
-   "paths": [
-    "docs/scan-public-hygiene.patterns.example",
-    "AGENTS.md"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "origin-kept-set",
-    "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "landing-parentage-gate",
-   "kind": "script",
-   "note": "origin Expected kept set; prevents the 2026-09-27 orphan-squash history severing (parentless root); ref re-pointed at fold from the deleted origin to the archived plan",
-   "paths": [
-    "scripts/landing_parentage_gate.py",
-    "scripts/test_landing_parentage_gate.py"
-   ],
-   "tests": [
-    "scripts/test_landing_parentage_gate.py"
-   ],
-   "witness": {
-    "class": "origin-kept-set",
-    "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "disk-truth-verification",
-   "kind": "protocol",
-   "note": "origin Expected kept set; protocol defined in the plans skill degraded-generation section (digest re-derivation from disk, stop on cross-check mismatch); ref re-pointed at fold from the deleted origin to the archived plan",
-   "paths": [
-    "agents/skills/plans/SKILL.md"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "origin-kept-set",
-    "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "claim-if-concurrent",
-   "kind": "protocol",
-   "note": "origin Expected kept set; mandated by the tracked maintenance authoring blueprint (agents/skills/maintenance/prompt-templates.md); the gitignored claims directory docs/tmp/authoring-claims/ is named here only, never as a resolving path; ref re-pointed at fold from the deleted origin to the archived plan",
-   "paths": [],
-   "tests": [],
-   "witness": {
-    "class": "origin-kept-set",
-    "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "review-store-disposition-inventory",
-   "kind": "script",
-   "note": "plan 2026-10-02-review-store-disposition-reconciliation Task 3; enumerates canonical review-store records and writes the disposition ledger skeleton feeding docs/history/review-store-disposition-ledger.md (the ledger documents the script's role and is tracked; the witness class uses the validator's red-test vocabulary because its WITNESS_CLASSES tuple does not carry a tracked-document class)",
-   "paths": [
-    "scripts/review_store_disposition_inventory.py"
-   ],
-   "tests": [
-    "scripts/test_review_store_disposition_inventory.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_review_store_disposition_inventory.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_backlog_root_closure.py",
-   "kind": "script",
-   "note": "registering the done-root closure checker delivered by the fold-delete enforcement execution",
-   "paths": [
-    "scripts/check_backlog_root_closure.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/history/plans/completed/2026-10-01-done-origin-fold-delete-enforcement.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_investigate_entries.py",
-   "kind": "script",
-   "note": "registering the investigate entry validator delivered by the Stage 3 self-check investigation",
-   "paths": [
-    "scripts/check_investigate_entries.py"
-   ],
-   "tests": [
-    "scripts/test_check_investigate_entries.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_check_investigate_entries.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_review_landing_receipt.py",
-   "kind": "script",
-   "note": "registering the review posting landing receipt checker delivered by the posting workflow gate plan",
-   "paths": [
-    "scripts/check_review_landing_receipt.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/history/plans/completed/2026-09-30-review-posting-landing-receipt.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:check_skill_description_length.py",
-   "kind": "script",
-   "note": "registering the description-length gate delivered by the done pre-commit sweep plan",
-   "paths": [
-    "scripts/check_skill_description_length.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "user-decision",
-    "ref": "docs/history/plans/completed/2026-09-30-skill-description-length-gate.md"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:codex_model_guard_probe.py",
-   "kind": "script",
-   "note": "registering the model-guard activation probe delivered by the codex model-guard runtime alignment plan",
-   "paths": [
-    "scripts/codex_model_guard_probe.py"
-   ],
-   "tests": [
-    "scripts/test_codex_model_guard_probe.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_codex_model_guard_probe.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:prestage_freshness_gate.py",
-   "kind": "script",
-   "note": "registering the pre-stage freshness gate delivered by the worktree-complete landing lifecycle plan",
-   "paths": [
-    "scripts/prestage_freshness_gate.py"
-   ],
-   "tests": [
-    "scripts/test_prestage_freshness_gate.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_prestage_freshness_gate.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:reconcile_post_landing.py",
-   "kind": "script",
-   "note": "registering the post-landing checkout reconcile delivered by the p102 reconciliation plan",
-   "paths": [
-    "scripts/reconcile_post_landing.py"
-   ],
-   "tests": [
-    "scripts/test_reconcile_post_landing.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_reconcile_post_landing.py"
-   }
-  },
-  {
-   "disposition": "keep",
-   "id": "script:revert_set_classifier.py",
-   "kind": "script",
-   "note": "registering the revert-set classifier delivered by the primary revert-set adjudication plan",
-   "paths": [
-    "scripts/revert_set_classifier.py"
-   ],
-   "tests": [
-    "scripts/test_revert_set_classifier.py"
-   ],
-   "witness": {
-    "class": "red-test",
-    "ref": "scripts/test_revert_set_classifier.py"
-   }
-  }
- ],
- "removals": [
-  {
-   "disposition": "delete",
-   "id": "script:deploy_runtime_scripts.sh",
-   "kind": "script",
-   "note": "unwitnessed: zero tracked references outside completed history; no red test; twin deployment is described as plain cp in the skills",
-   "paths": [
-    "scripts/deploy_runtime_scripts.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "none",
-    "ref": null
-   }
-  },
-  {
-   "disposition": "delete",
-   "id": "script:migrate_backlog_completed.py",
-   "kind": "script",
-   "note": "spent witness: one-shot backlog-completed archive migration executed 2026-09-25 (completed plan docs/history/plans/completed/2026-09-25-backlog-completed-archive-policy.md)",
-   "paths": [
-    "scripts/migrate_backlog_completed.py"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "none",
-    "ref": null
-   }
-  },
-  {
-   "disposition": "delete",
-   "id": "script:sweep-tmp.sh",
-   "kind": "script",
-   "note": "unwitnessed: manual /tmp cleaner with zero tracked references and no red test",
-   "paths": [
-    "scripts/sweep-tmp.sh"
-   ],
-   "tests": [],
-   "witness": {
-    "class": "none",
-    "ref": null
-   }
-  }
- ],
- "schema_version": 1
+  "entries": [
+    {
+      "disposition": "keep",
+      "id": "claim-if-concurrent",
+      "kind": "protocol",
+      "note": "origin Expected kept set; mandated by the tracked maintenance authoring blueprint (agents/skills/maintenance/prompt-templates.md); the gitignored claims directory docs/tmp/authoring-claims/ is named here only, never as a resolving path; ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "disk-truth-verification",
+      "kind": "protocol",
+      "note": "origin Expected kept set; protocol defined in the plans skill degraded-generation section (digest re-derivation from disk, stop on cross-check mismatch); ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "agents/skills/plans/SKILL.md"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:budget-guard",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "agents/hooks/budget-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:codex-budget-reset-guard",
+      "kind": "hook",
+      "note": "user-decision: hook README standing registration instruction",
+      "paths": [
+        "agents/hooks/codex-budget-reset-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/codex-budget-reset-guard/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:codex-model-guard",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (docs/maintenance/codex-worker-model-guard.md)",
+      "paths": [
+        "agents/hooks/codex-model-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/codex-worker-model-guard.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:lessons-recall",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (docs/maintenance/document-registry.md)",
+      "paths": [
+        "agents/hooks/lessons-recall/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/document-registry.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:plan-readiness",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (agents/skills/review-loop/SKILL.md)",
+      "paths": [
+        "agents/hooks/plan-readiness/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-loop/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:skill-gate",
+      "kind": "hook",
+      "note": "user-decision: hook README standing instruction",
+      "paths": [
+        "agents/hooks/skill-gate/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/skill-gate/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "landing-parentage-gate",
+      "kind": "script",
+      "note": "origin Expected kept set; prevents the 2026-09-27 orphan-squash history severing (parentless root); ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "scripts/landing_parentage_gate.py",
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "tests": [
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:budget-pause-protocol",
+      "kind": "protocol",
+      "note": "resume-watcher suite covers the budget pause protocol",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_resume_watcher.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:done-sweep-gates",
+      "kind": "protocol",
+      "note": "done-sweep gates lib suite",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:five-round-review-cap",
+      "kind": "protocol",
+      "note": "configuration home: agents/skills/review-loop/SKILL.md pins max_full_panel_rounds default 5 (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep); agents/skills/plans/SKILL.md pins the cap-closure terminal shape without the value",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-loop/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:merge-landing-lock",
+      "kind": "protocol",
+      "note": "resolved to red test: the named churn-prevention incident document does not exist; the done-lock lib suite is the covering red test (incident witness: the 2026-09-27 orphan-history rebuild recorded in memory and development_lessons.md)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:plan-readiness-gate",
+      "kind": "protocol",
+      "note": "certification oracle suite",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:quota-probing-budget-guard",
+      "kind": "protocol",
+      "note": "ref substituted at execution: the named open sibling origin was fold-then-deleted at that plan's execution (squash main 1f404537); the landed completed plan is the boundary record",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/plans/completed/2026-09-28-account-quota-governor.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:residual-acceptance-exit",
+      "kind": "protocol",
+      "note": "archived residual-exit plan owns the same-day ordering gates (renamed at archival from the deleted open item 2026-09-19-residual-exit-same-day-ordering-semantics.md)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-09-28-residual-exit-same-day-ordering-gates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:reverse-squash-dirt-gates",
+      "kind": "protocol",
+      "note": "staged-reverse-squash dirt incident recorded in development_lessons.md",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "projects/.ai-playbook/development_lessons.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:review-staging-governance",
+      "kind": "protocol",
+      "note": "resolved via plan_readiness suite: no dedicated validate_review_staging test file exists; plan_readiness invokes the validator hard gates and its suite covers them",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:skills-gate-markers",
+      "kind": "protocol",
+      "note": "user-decision: skill-gate hook README standing instruction",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/skill-gate/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:worktree-recipe",
+      "kind": "protocol",
+      "note": "archived worktree-first plan owns the canonical worktree lifecycle recipe",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "public-hygiene-scan",
+      "kind": "protocol",
+      "note": "origin Expected kept set; deployed scanner home is ~/.ai-playbook/scripts/scan-public-hygiene.sh, mandated by AGENTS.md commit rules; ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "docs/scan-public-hygiene.patterns.example",
+        "AGENTS.md"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check-instruction-size.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-6-instruction-updates.md, agents/skills/learn/step-completion.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/check-instruction-size.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-6-instruction-updates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check-no-em-dash.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-1-extract.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/check-no-em-dash.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-1-extract.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_backlog_claimed.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_backlog_claimed.py"
+      ],
+      "tests": [
+        "scripts/test_check_backlog_claimed.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_backlog_claimed.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_backlog_inbox_location.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/receiving-review/SKILL.md)",
+      "paths": [
+        "scripts/check_backlog_inbox_location.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/receiving-review/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_backlog_root_closure.py",
+      "kind": "script",
+      "note": "registering the done-root closure checker delivered by the fold-delete enforcement execution",
+      "paths": [
+        "scripts/check_backlog_root_closure.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-01-done-origin-fold-delete-enforcement.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_cleanup_scope_baseline.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/plans/SKILL.md)",
+      "paths": [
+        "scripts/check_cleanup_scope_baseline.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/plans/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_investigate_entries.py",
+      "kind": "script",
+      "note": "registering the investigate entry validator delivered by the Stage 3 self-check investigation",
+      "paths": [
+        "scripts/check_investigate_entries.py"
+      ],
+      "tests": [
+        "scripts/test_check_investigate_entries.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_investigate_entries.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_lesson_scope.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_lesson_scope.py"
+      ],
+      "tests": [
+        "scripts/test_check_lesson_scope.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_lesson_scope.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_maintenance_pins.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "scripts/check_maintenance_pins.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_plan_origins_closed.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_plan_origins_closed.py"
+      ],
+      "tests": [
+        "scripts/test_check_plan_origins_closed.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_plan_origins_closed.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_prompt_log_origins.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; registered by the landing plan named in the witness, which also wires the pins-sweep invocation",
+      "paths": [
+        "scripts/check_prompt_log_origins.py"
+      ],
+      "tests": [
+        "scripts/test_check_prompt_log_origins.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-01-prompt-log-prune-check.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_review_agent_portability.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_review_agent_portability.py"
+      ],
+      "tests": [
+        "scripts/test_check_review_agent_portability.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_review_agent_portability.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_review_landing_receipt.py",
+      "kind": "script",
+      "note": "registering the review posting landing receipt checker delivered by the posting workflow gate plan",
+      "paths": [
+        "scripts/check_review_landing_receipt.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-09-30-review-posting-landing-receipt.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_skill_description_length.py",
+      "kind": "script",
+      "note": "registering the description-length gate delivered by the done pre-commit sweep plan",
+      "paths": [
+        "scripts/check_skill_description_length.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-09-30-skill-description-length-gate.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:codex_hook_config.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/codex_hook_config.py"
+      ],
+      "tests": [
+        "scripts/test_codex_hook_config.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_codex_hook_config.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:codex_model_guard_probe.py",
+      "kind": "script",
+      "note": "registering the model-guard activation probe delivered by the codex model-guard runtime alignment plan",
+      "paths": [
+        "scripts/codex_model_guard_probe.py"
+      ],
+      "tests": [
+        "scripts/test_codex_model_guard_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_codex_model_guard_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:confluence-mirror-hygiene.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/docs-branch/SKILL.md)",
+      "paths": [
+        "scripts/confluence-mirror-hygiene.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/docs-branch/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:dirt_regression_gate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/dirt_regression_gate.py"
+      ],
+      "tests": [
+        "scripts/test_dirt_regression_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_dirt_regression_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:doc_registry_validator.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
+      "paths": [
+        "scripts/doc_registry_validator.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/execute-plan/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:docs_branch_sync.sh",
+      "kind": "script",
+      "note": "single allowlisted docs-branch sync runner; unconditional CAS backend and retention behavior are covered by focused repository fixtures",
+      "paths": [
+        "scripts/docs_branch_sync.sh"
+      ],
+      "tests": [
+        "scripts/test_docs_branch_sync.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_docs_branch_sync.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done-lock.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "scripts/done-lock.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done_sweep_gates.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/done/SKILL.md, the collapsed spine's landing-sweep sentence; re-aimed 2026-10-11, the done target-state flip dissolved the module homes)",
+      "paths": [
+        "scripts/done_sweep_gates.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/done/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done_sweep_gates_lib.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/done_sweep_gates_lib.py"
+      ],
+      "tests": [
+        "scripts/test_done_sweep_gates_lib.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_resume_watcher.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_resume_watcher.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_resume_watcher.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_runtime.py",
+      "kind": "script",
+      "note": "retained clocked-order and plans-authoring watcher CLI operations are exercised by the resume-watcher suite",
+      "paths": [
+        "scripts/execute_plan_runtime.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_resume_watcher.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:facts_paths.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
+      "paths": [
+        "scripts/facts_paths.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/execute-plan/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:friction_audit_quant.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/friction_audit_quant.py"
+      ],
+      "tests": [
+        "scripts/test_friction_audit_quant.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_friction_audit_quant.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:harness_detection.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/harness_detection.py"
+      ],
+      "tests": [
+        "scripts/test_harness_detection.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_harness_detection.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:hooks_log_summary.py",
+      "kind": "script",
+      "note": "standing written instruction: two hook READMEs (lessons-recall, skill-gate) reference this summary script",
+      "paths": [
+        "scripts/hooks_log_summary.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/lessons-recall/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:hooks_probe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/hooks_probe.py"
+      ],
+      "tests": [
+        "scripts/test_hooks_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_hooks_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:land_squash.sh",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; registering the lock-bound squash-landing helper delivered by the squash-landing failure-path guard plan (born-conformant under the script outcome contract)",
+      "paths": [
+        "scripts/land_squash.sh"
+      ],
+      "tests": [
+        "scripts/test_land_squash.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_land_squash.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:landing_parentage_gate.py",
+      "kind": "script",
+      "note": "superseded by kept-set row landing-parentage-gate (same file, citation lives there)",
+      "paths": [],
+      "tests": [
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_landing_parentage_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (AGENTS.md)",
+      "paths": [
+        "scripts/lessons.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "AGENTS.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_adopt.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-6-instruction-updates.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/lessons_adopt.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-6-instruction-updates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_classify.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/lessons-migrate/SKILL.md)",
+      "paths": [
+        "scripts/lessons_classify.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/lessons-migrate/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_corpus.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-6-instruction-updates.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/lessons_corpus.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-6-instruction-updates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_index.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-6-instruction-updates.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/lessons_index.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-6-instruction-updates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_migrate.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/step-6-instruction-updates.md; re-aimed 2026-10-11, done-closeout-lock-span plan Task 5 router split)",
+      "paths": [
+        "scripts/lessons_migrate.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/step-6-instruction-updates.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_recall.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/done/SKILL.md, the collapsed commit step's lesson-scope audit; re-aimed 2026-10-11, the done target-state flip dissolved the module homes)",
+      "paths": [
+        "scripts/lessons_recall.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/done/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:machinery_inventory.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/machinery_inventory.py"
+      ],
+      "tests": [
+        "scripts/test_machinery_inventory.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_machinery_inventory.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan_readiness.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/plan_readiness.py"
+      ],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan_shape.py",
+      "kind": "script",
+      "note": "shared plan-shape resolver (directory charter + tasks/, manifest digest, named refusals); every plan consumer imports it (landed by the plan-directory-shape execution)",
+      "paths": [
+        "scripts/plan_shape.py"
+      ],
+      "tests": [
+        "scripts/test_plan_shape.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_shape.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:prestage_freshness_gate.py",
+      "kind": "script",
+      "note": "registering the pre-stage freshness gate delivered by the worktree-complete landing lifecycle plan",
+      "paths": [
+        "scripts/prestage_freshness_gate.py"
+      ],
+      "tests": [
+        "scripts/test_prestage_freshness_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_prestage_freshness_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_governor.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_governor.py"
+      ],
+      "tests": [
+        "scripts/test_quota_governor.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_governor.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_pressure_stats.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_pressure_stats.py"
+      ],
+      "tests": [
+        "scripts/test_quota_pressure_stats.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_pressure_stats.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_window_probe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_window_probe.py"
+      ],
+      "tests": [
+        "scripts/test_quota_window_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_window_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:rearm_on_touch.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/rearm_on_touch.py"
+      ],
+      "tests": [
+        "scripts/test_rearm_on_touch.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_rearm_on_touch.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:reconcile_post_landing.py",
+      "kind": "script",
+      "note": "registering the post-landing checkout reconcile delivered by the p102 reconciliation plan",
+      "paths": [
+        "scripts/reconcile_post_landing.py"
+      ],
+      "tests": [
+        "scripts/test_reconcile_post_landing.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_reconcile_post_landing.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-authoring.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
+      "paths": [
+        "scripts/release-authoring.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/release/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-rewrite.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
+      "paths": [
+        "scripts/release-rewrite.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/release/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:reverse_squash_guard.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/reverse_squash_guard.py"
+      ],
+      "tests": [
+        "scripts/test_reverse_squash_guard.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_reverse_squash_guard.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:revert_set_classifier.py",
+      "kind": "script",
+      "note": "registering the revert-set classifier delivered by the primary revert-set adjudication plan",
+      "paths": [
+        "scripts/revert_set_classifier.py"
+      ],
+      "tests": [
+        "scripts/test_revert_set_classifier.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_revert_set_classifier.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_record_selection.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_record_selection.py"
+      ],
+      "tests": [
+        "scripts/test_review_record_selection.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_record_selection.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_retention.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_retention.py"
+      ],
+      "tests": [
+        "scripts/test_review_retention.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_retention.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_thread_gate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_thread_gate.py"
+      ],
+      "tests": [
+        "scripts/test_review_thread_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_thread_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_usage_capture.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/review-staging/SKILL.md)",
+      "paths": [
+        "scripts/review_usage_capture.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-staging/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:runtime_capabilities.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/runtime_capabilities.py"
+      ],
+      "tests": [
+        "scripts/test_runtime_capabilities.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_runtime_capabilities.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:scan-public-hygiene.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (AGENTS.md)",
+      "paths": [
+        "scripts/scan-public-hygiene.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "AGENTS.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:session_channel.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/session_channel.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:skill_distribution_check.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/skill_distribution_check.py"
+      ],
+      "tests": [
+        "scripts/test_skill_distribution_check.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_skill_distribution_check.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:skill_gate.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/skill_gate.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:summarize_review_stats.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/SKILL.md)",
+      "paths": [
+        "scripts/summarize_review_stats.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:tool_runtime_stats.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/tool_runtime_stats.py"
+      ],
+      "tests": [
+        "scripts/test_tool_runtime_stats.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_tool_runtime_stats.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:validate_review_staging.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/rfc-design/SKILL.md)",
+      "paths": [
+        "scripts/validate_review_staging.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/rfc-design/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:worktree_closeout_migrate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/worktree_closeout_migrate.py"
+      ],
+      "tests": [
+        "scripts/test_worktree_closeout_migrate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_worktree_closeout_migrate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:alert",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:authoring_cycle_gate",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:execution_priority",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:execution_queue",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:next_turn_at",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_absent_since",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_automation_form",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_automation_id",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:park_proposals",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_dispatch",
+      "kind": "state-field",
+      "note": "schema home: the maintenance SKILL.md State file section defines the pending_dispatch field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_landing",
+      "kind": "state-field",
+      "note": "schema home: the maintenance SKILL.md State file section defines the pending_landing field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_rearm",
+      "kind": "state-field",
+      "note": "schema home: the maintenance SKILL.md State file section defines the pending_rearm field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pricing_cache",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:quota_at_decision",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:quota_signal",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:rate_limited_events",
+      "kind": "state-field",
+      "note": "schema home: the maintenance SKILL.md State file section defines the rate_limited_events field (prior open-sibling witness deleted by the 2026-10-02 done-corpus sweep)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:rearm_note",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:turn_error",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "skill-text-duplication-report",
+      "kind": "script",
+      "note": "Machinery admission test (read-only; never gates): scripts/skill_text_duplication.py, the repository guidelines anti-growth rules' quantified substrate (the Part 2 method of docs/maintenance/maintenance-skill-refactor-analysis-2026-10-09.md; incident: the 35-commit one-shrink ratchet and the roughly 89K-token per-turn doctrine load; cadence: weekly rider plus per-cycle consolidation reads, docs/maintenance/recurring-tasks/weekly-measurement-rider.md; false-positive cost zero, the script never gates; sunset: if no consumer reads the report across six consecutive weekly rider windows, the script and this row are removed). Pre-registered removals commitment: at removal time this row moves to this registry's removals record with the sunset witness (a removals-record row while the path exists fails scripts/machinery_inventory.py --check, so the commitment is pre-registered here per the two-mode registry-move precedent).",
+      "paths": [
+        "scripts/skill_text_duplication.py"
+      ],
+      "tests": [
+        "scripts/test_skill_text_duplication.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/maintenance/maintenance-skill-refactor-analysis-2026-10-09.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "done-skill:landing-cost-record-writer",
+      "kind": "protocol",
+      "note": "plan docs/history/plans/completed/2026-10-10-landing-cost-telemetry.md Task 1 (machinery audit Part 4 item 8): the done skill's Step 7 appends one never-blocking JSONL record per landing to .ai-playbook/metrics/landing-costs.jsonl (every field nullable, absence-reason-carrying, fail-open). Admission fields: concrete incident = the audit's incident-derived ratings bias (its Limits section) plus the 700k-950k-token friction-audit mining runs (Part 4 item 7); expected catch frequency = one append per landing, read monthly; false-positive cost = zero blocking (fail-open, never gates); sunset = three consecutive monthly machinery reviews with no machinery removal or demotion decision citing the JSONL remove the writer duty. Path re-aimed 2026-10-11 to the collapsed SKILL.md (the done target-state flip; the appends moved into the finalize subcommand's advisory stage)",
+      "paths": [
+        "agents/skills/done/SKILL.md"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-10-landing-cost-telemetry.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:skill_text_budget.py",
+      "kind": "script",
+      "note": "plan docs/history/plans/2026-10-10-maintenance-skill-size-refactor.md Task 2 (machinery audit Part 5 item 2): fleet-wide WARNING-ONLY byte-budget gate over every agents/skills skill file, wired advisory into the pins suite (a breach line never moves the exit code at this landing). Admission test: the 35-commit/one-shrink ratchet and the ~89K-token per-turn doctrine load (the measured analysis docs/maintenance/maintenance-skill-refactor-analysis-2026-10-09.md). Expected catch frequency: one breach line on any landing that grows a file past its cap; false-positive cost: zero blocking (fail-open, bounded by the seeded margin). Sunset two-phase: no removal path until the growth-telemetry consumer lands (the doc-hygiene row owns that rider wiring); then six consecutive weekly windows with zero reported breaches AND non-increasing fleet byte totals arm the removal this entry's removals row names",
+      "paths": [
+        "scripts/skill_text_budget.py",
+        "scripts/skill_text_budget_caps.json"
+      ],
+      "tests": [
+        "scripts/test_skill_text_budget.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-10-maintenance-skill-size-refactor.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:origins-coverage-undercount-audit",
+      "kind": "script",
+      "note": "warning-only; concrete incident: 2026-10-08 reproduction of origins parser undercount with a vacuous hard-gate pass; expected catch frequency: one per parser/grammar regression; false-positive cost: one warning line and operator review; review date: 2027-01-11; promotion: promote to blocking only after the first production true catch, in a separate reviewed change; no-catch sunset: at the 2027-01-11 review, if no production true catch, remove only the undercount-audit helper and its call sites, preserve the shared checker, and move this row to the removals record with a no-catch sunset witness.",
+      "paths": [],
+      "tests": [
+        "scripts/test_check_plan_origins_closed.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_plan_origins_closed.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan-files-coverage-arm",
+      "kind": "script",
+      "note": "Warning-only Files:-coverage arm in scripts/plan_readiness.py (mirrors the warning-only entry shape of script:origins-coverage-undercount-audit; the readiness validator path stays owned by script:plan_readiness.py, hence paths empty). The arm prints one stderr warning line per acceptance-item backticked path token missing from every task Files: list, called by the pre-round gate after its probes pass and by the full gate's pass path before its summary and OUTCOME lines; it never changes an exit code and adds no schema field. Concrete incident: docs/history/backlog/2026-10-11-plan-task3-scope-omits-required-cleanup-paths.md (a plan task declaring one Files: path while its acceptance items required deleting one backlog row and editing two others, caught only by the execution driver's allowlist refusal after launch; eight review rounds missed it). Expected catch frequency: any plan whose acceptance items name repository paths absent from every task Files: list (witnessed once in this cluster). False-positive cost: one warning line at the readiness boundary adjudicated by the author, contained by the arm's backticked-span extraction scope. Review date: 2027-01-12. Promotion: the first witnessed adjudicated-true warning, promoted via a separate reviewed change. No-catch sunset: at the 2027-01-12 review, when the window holds no witnessed adjudicated-true warning, remove only the arm and this row. Catch record: an adjudicated-true warning is recorded by one line the adjudicating run appends to this note field, the tracked HEAD-durable surface both criteria read.",
+      "paths": [],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan-review-identity-warning",
+      "kind": "script",
+      "note": "Warning-only plan authoring check in scripts/plan_readiness.py: identifies other dated plan paths with the same canonical review slug and reports that source-plan identity keeps review series separate. Incident: PlanReviewSourceIdentityTest in scripts/test_plan_readiness.py records the 2026-10-15 duplicate-r1 interruption caused by two evidence-recovery plans sharing a canonical slug. Expected catch frequency: any new plan sharing a canonical slug with an existing dated plan; corpus-wide rate unknown. False-positive cost: one stderr warning for intentional slug reuse, adjudicated by the author; no lane block or exit-code change. Review date: 2027-01-15. No-catch sunset: if no adjudicated useful warning exists by review, remove only this warning function, its call site, test, and row. This warning must remain non-blocking because path-aware selection resolves the collision.",
+      "paths": [],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:execute-plan-legacy-run-cutover",
+      "kind": "protocol",
+      "note": "One-time read-only cutover survey and removal safety record. Incident links: `docs/history/backlog/2026-10-10-execute-plan-worker-terminal-reconciliation.md` and `docs/history/backlog/2026-10-09-execute-plan-timeout-reconcile-missing-launch-reservation.md`; the active-looking candidate `docs/tmp/execute-plan/plan-origins-coverage-parse/runtime_state.json` was declared invalid by the operator and is excluded; no live run was verified. Expected catch frequency: one survey; estimate zero or one active/resumable adapter run per configured root; no verified live catch observed. False-positive cost: read-only terminal verification and possible removal delay; task data unchanged. Warning-only through verified closure; review at 2026-10-18. Remove only after route activation everywhere or verified rollback; if incomplete, retain this entry and the no-launch hold and stop for separate reviewed reauthorization. Promote only after a verified production true catch in a separate reviewed change.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/2026-10-11-execute-plan-sequential-only-adapter-removal.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "unclaimed-plan-deletion-fence",
+      "kind": "protocol",
+      "note": "Plan docs/history/plans/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md Tasks 1 and 2: the claim-free plans-root deletion class fenced warning-only at the sweep boundary (the unclaimed-deletion warning leg and the rejected-state sanction in scripts/reverse_squash_guard.py check-claim-fence) and named at the landing boundary (check-landing's stale-base absent-plan leg); the guard, pins-suite, and sweep-lib surfaces stay owned by their existing rows (script:reverse_squash_guard.py, script:check_maintenance_pins.sh, script:done_sweep_gates_lib.py), hence paths empty per the claim-if-concurrent precedent. Machinery admission (the plan's Outcome): incident = the stale-base tree-commit landing 617d5b0ee deleting the r5-certified never-executed renewal-trigger plan from the plans root, restored byte-equal by fdee5ce9e; the incident's origin backlog row docs/history/backlog/2026-10-10-landing-deleted-unclaimed-execution-ready-plan.md was deleted at this plan's own authoring-lane landing per the commit guidelines (never kept as a covered stub), so the witness ref points at this plan, the incident facts' surviving carrier, and carries the re-point duty: at landing, re-point the ref to this plan's completed/ twin docs/history/plans/completed/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md (the claim-if-concurrent re-point convention). Expected catch frequency: rare but data-destroying (any stale-base landing over a foreign unclaimed plan). False-positive cost: bounded, because landings that own their deletions already name archive twins, rejected-state moves, or Plans-Deletion-Ack trailers; the fence's live claim read (the primary checkout's claim directories at sweep time) can flap with a peer creating or deleting a claim mid-sweep, and a flap is repaired by bounded retry or park-for-operator, never by editing the gate mid-lane. Sunset: warning-only at landing; promotes on its first true catch, scoped to the sweep leg (the landing-boundary leg stays a naming line inside the stale-base refusal); review 2026-12; the promotion flip is one commit updating the guard posture, the done-skill span sentence, the warning-literal pins, and this row together. Residual coverage: a land-mode invocation that skips the probe and the execute-plan judge carries no landing-boundary signal, a fresh-based landing that deletes a foreign plan reaches neither boundary leg, and the tree-commit landing class from the incident remains outside both boundary surfaces; the sweep-fence warning leg is the backstop over committed ranges at the next done run. Pre-registered removals commitment (the removals record cannot hold this row while the fence surfaces exist, so the commitment lives here per the skill-text-duplication-report convention): at the 2026-12 review with no first true catch, the sweep-fence warning leg and this row are removed together in one reviewed change, this row moving to the removals record with the no-catch sunset witness.",
+      "paths": [],
+      "tests": [
+        "scripts/test_reverse_squash_guard.py (ReverseSquashGuardClaimFenceTest)",
+        "scripts/test_reverse_squash_guard.py (ReverseSquashGuardTest absent-plan rehearsal fixture)",
+        "scripts/test_done_sweep_gates_lib.py (plans-root-claim-fence gate fixture)"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:invocation-telemetry-writer",
+      "kind": "protocol",
+      "note": "plan docs/history/plans/2026-10-14-script-runtime-cost-telemetry.md Tasks 1-3 (machinery audit Part 3 root cause 6 and Part 1 family 8): the four hot machinery scripts (the pins suite, the review validator, the readiness gate, the closeout battery) each self-time one fail-open JSONL line per invocation (script, invocation_kind, wall_ms, lane_class, worker, recorded_at, absence notes) to invocation-costs.jsonl in the facts-resolved metrics home (.ai-playbook/metrics default, resolved through scripts/facts_paths.py); the telemetry is read-only forever and never gates. This row owns the shared library; the four integration sites stay owned by their existing rows or baseline debt per the claim-if-concurrent precedent (script:check_maintenance_pins.sh, script:validate_review_staging.py, and script:plan_readiness.py own their files; the done_run.sh finalize arm rides unregistered, as one of the pre-existing unregistered-script rows of the machinery inventory baseline (its failure set is recorded in the recurring machinery inventory check, unchanged by this landing)). Admission fields: concrete incident = the machinery audit's Part 3 root cause 6 (no cost feedback into authoring; the 16h/100M-token execution noticed only after the fact) plus its Part 1 family 8 (the per-plan ceremony tax of gate, validator, and probe invocations), docs/maintenance/machinery-blocker-audit-2026-10-09.md; expected catch frequency = every lane, continuous; false-positive cost = one fail-open JSONL line per invocation plus each bash integration's two interpreter spawns as measurement overhead (the measured pair ~28.5 ms, recorded in the tmp run log docs/tmp/execute-plan/script-runtime-cost-telemetry/implement-2.log.md, named as citation only); retention rule owner = the monthly friction-audit review's bounded-window read and prune of invocation-costs.jsonl (the cost-question rule paragraph of docs/maintenance/recurring-tasks/friction-audit.md); sunset = the pre-registered removals row protocol:invocation-telemetry-writer in this registry's removals array (the 90-day idle-data review)",
+      "paths": [
+        "scripts/invocation_telemetry.py"
+      ],
+      "tests": [
+        "scripts/test_invocation_telemetry.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-14-script-runtime-cost-telemetry.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:review-staging-series-sweep",
+      "kind": "protocol",
+      "note": "plan docs/history/plans/completed/2026-10-14-review-staging-series-wide-round-close-scope.md Tasks 1-2: the warning-only series sweep at non-certification plan-review round closes (review-staging's Record validation levels subsection, the Series sweep bullet; the three consumer clauses in review-plan Step 4, the plans staging-pair duty, and review-loop's mechanical-gate sentence name it by reference; the touched surfaces (agents/skills/review-staging/SKILL.md, agents/skills/review-plan/SKILL.md, agents/skills/plans/SKILL.md, agents/skills/review-loop/SKILL.md) are named here only, their registry ownership staying with the standing entries). Admission record: concrete incident = the origin row docs/history/backlog/2026-10-09-review-staging-series-wide-round-close-gate.md, deleted at execution completion with its disposition carried here and by the completed plan twin (the 2026-10-08 memory-index-consolidation post-close renormalization across the r2 and r3 sidecars); expected catch frequency = every multi-round plan-review series at each non-certification close, surfacing cross-round lint-detectable record or sidecar defects at the introducing close rather than at certification; false-positive cost = one report-only warning line per non-clean member, never blocking; execution cost shape = per-close passes equal the earlier-member count, the series total quadratic in rounds and bounded by the round cap, accepted because the duty replaces certification-time renormalization passes; landing posture = warning-only, promotion to blocking only through the guard liveness ledger's first-true-catch path with this removals row's criteria. Origin disposition: the origin row flips covered at this plan's landing and is deleted at execution completion in the same change; the re-point duty names the completed plan twin (docs/history/plans/completed/2026-10-14-review-staging-series-wide-round-close-scope.md) as the witness ref (the registry's claim-fence precedent)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-14-review-staging-series-wide-round-close-scope.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:primary-freshness-sweep",
+      "kind": "protocol",
+      "note": "plan 2026-10-14-post-landing-reconciliation-enforcement Task 3: the warning-only read-only primary freshness sweep probe (agents/skills/maintenance/survey-arms.md, the Primary-freshness sweep probe bullet; the --check-primary mode of scripts/reconcile_post_landing.py and its fixtures are the probe's implementation, named here only, their registry ownership staying with the standing reconciler surfaces). Admission record: concrete incident = docs/history/backlog/2026-10-13-landing-staged-reversal-in-primary-index.md, witnesses 4 through 6, plus the silent variant (witness 5's roughly three-hour stale-primary window caught only by manual audit); expected catch frequency = every worktree-landed landing whose session skips the prose recipe, four deterministic firings across 2026-10-13/14 plus the silent variant, one sweep pass per survey turn; false-positive cost = one warning line per stale witness, never blocking, never restoring; landing posture = warning-only, promotion to blocking only through the guard liveness ledger's first true catch with this removals row's criteria.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-13-landing-staged-reversal-in-primary-index.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:readability-method-check",
+      "kind": "protocol",
+      "note": "Warning-only quality#method-readability check, linked to JVM guideline section 28. Admission incident: the origin profile-merge method had complexity 7 but 65 counted lines and a method-local record, while earlier review did not report the length/readability issue; see the origin backlog. Expected catch frequency: each review of changed code with a qualifying callback, nested-block, local-type, or near-limit method signal; rate unmeasured without consumer source. False-positive cost: one blocking:false finding for reviewer adjudication, with no readiness effect. True catch: an adjudicated real issue found by this check. Review date: 2027-04-15. Promotion only in a separate reviewed change after this check's own true catch. No-catch sunset: at the review date, remove this check if it has no own true catch and retain its pre-registered removals row with the sunset witness.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:readability-focused-panel-advisory",
+      "kind": "protocol",
+      "note": "Warning-only focused-panel recommendation for changed-code readability signals, linked to the origin incident: the earlier focused follow-up omitted the relevant quality lens while targeting other changes. Expected catch frequency: each focused code round with a changed-code readability signal whose selected panel does not load quality; rate unmeasured without consumer source. False-positive cost: one optional invocation of the existing correctness-completeness worker if followed, and zero if declined; no new role, round, launch requirement, or readiness effect. True catch: an actionable issue found only by correctness-completeness after this recommendation, which would otherwise have been missed by the selected focused panel. Review date: 2027-04-15. Promotion only in a separate reviewed change after this advisory's own true catch. No-catch sunset: at the review date, remove this advisory if it has no own true catch and retain its pre-registered removals row with the sunset witness.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    }
+  ],
+  "removals": [
+    {
+      "disposition": "delete",
+      "id": "state-field:loop_mode",
+      "kind": "state-field",
+      "note": "retired persisted loop-mode field deleted by plan docs/history/plans/completed/2026-10-06-two-mode-loop-policy.md Task 2 (per-session mode binding in the Loop modes section replaced it)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-06-two-mode-loop-policy.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:deploy_runtime_scripts.sh",
+      "kind": "script",
+      "note": "unwitnessed: zero tracked references outside completed history; no red test; twin deployment is described as plain cp in the skills",
+      "paths": [
+        "scripts/deploy_runtime_scripts.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:migrate_backlog_completed.py",
+      "kind": "script",
+      "note": "spent witness: one-shot backlog-completed archive migration executed 2026-09-25 (completed plan docs/history/plans/completed/2026-09-25-backlog-completed-archive-policy.md)",
+      "paths": [
+        "scripts/migrate_backlog_completed.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:sweep-tmp.sh",
+      "kind": "script",
+      "note": "unwitnessed: manual /tmp cleaner with zero tracked references and no red test",
+      "paths": [
+        "scripts/sweep-tmp.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:docs_branch_backlog_dedupe.py",
+      "kind": "script",
+      "note": "retired in favor of the canonical allowlisted docs-branch runner",
+      "paths": [
+        "scripts/docs_branch_backlog_dedupe.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-09-docs-branch-scope-and-tmp-retention.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:docs_branch_plan_guard.py",
+      "kind": "script",
+      "note": "retired in favor of the canonical allowlisted docs-branch runner",
+      "paths": [
+        "scripts/docs_branch_plan_guard.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-09-docs-branch-scope-and-tmp-retention.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:docs_branch_sync_noworktree.sh",
+      "kind": "script",
+      "note": "retired in favor of the canonical allowlisted docs-branch runner",
+      "paths": [
+        "scripts/docs_branch_sync_noworktree.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-09-docs-branch-scope-and-tmp-retention.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "review-store-disposition-inventory",
+      "kind": "script",
+      "note": "inventory leg deleted by plan docs/history/plans/2026-10-10-disposition-ledger-removal.md Task 1 (machinery audit Part 4 item 7): the audited 677-line/606-finding ledger with zero fixed-here entries is this leg's product over a store that no longer holds records; the cap-round ledger leg was re-scoped out at review r1 (live machinery) - the re-scope note beside the origin row carries it",
+      "paths": [
+        "scripts/review_store_disposition_inventory.py"
+      ],
+      "tests": [
+        "scripts/test_review_store_disposition_inventory.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-10-10-disposition-ledger-removal.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "done-skill:landing-cost-record-writer",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/completed/2026-10-10-landing-cost-telemetry.md Task 1): the writer duty removes itself when three consecutive monthly machinery reviews pass with no machinery removal or demotion decision citing .ai-playbook/metrics/landing-costs.jsonl",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/machinery-blocker-audit-2026-10-09.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:skill_text_budget.py",
+      "kind": "script",
+      "note": "pre-registered removals row (maintenance-skill-size-refactor plan Task 2): the gate's two-phase sunset - armed only when the growth-telemetry consumer lands and its first six consecutive weekly windows report zero breaches and non-increasing fleet byte totals; a dormant gate over a still-growing corpus is never the removal case",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/machinery-blocker-audit-2026-10-09.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:execute-plan-legacy-run-cutover",
+      "kind": "protocol",
+      "note": "Pre-registered removal: delete the temporary cutover survey gate after all configured-root surveys and affected-run terminal dispositions are recorded in Task 1's implement log and the route change is active everywhere or verified rollback is complete. Sunset/review no later than 2026-10-18; stop and reauthorize if incomplete. Promotion requires a separate reviewed change after the first true catch.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/2026-10-11-execute-plan-sequential-only-adapter-removal.md"
+      }
+    },
+    {
+      "id": "guard:maintenance-pins-recorded-red-consult",
+      "kind": "guard",
+      "disposition": "delete",
+      "paths": [
+        "scripts/check_maintenance_pins.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-13-red-on-main-baseline-repair-and-auto-demote.md"
+      },
+      "note": "Pre-registered removal of the pins suite's recorded-red consult. Misfire class: a recorded red masking a distinct new failure on the same pin name. Admission record: incident, the red-on-main baseline (the pins suite exited non-zero on main with a 21-failure set every lane silently inherited while machinery landings continued over it) plus the dormant tail (docs/history/backlog/2026-10-13-maintenance-pins-dormant-tail-baseline.md; a negative-arm run with a deliberately broken span produced a failure set byte-identical to the unbroken run, so a red baseline also hid new pins behind the first firing checkpoint); expected catch, every lane run while any standing red exists; false-positive cost, a recorded red masking a same-name new failure, bounded by the review-by expiry and the loud per-run summary. Review no later than 2026-11-13 (recording date 2026-10-14 plus 30 days). Promotion criteria: a true catch (an expired review-by re-blocking a drifted pin) keeps the consult standing and retires this removals row; a confirmed misfire of the masking class deletes the consult in the same change that retires this row."
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:invocation-telemetry-writer",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/2026-10-14-script-runtime-cost-telemetry.md Task 4): the writer duty removes itself when three consecutive monthly machinery reviews pass with no review decision, optimization or removal or demotion, citing the invocation-costs.jsonl readout (the 90-day idle-data review sunset); the two-phase discipline mirrors the budget gate's row (script:skill_text_budget.py): the removal arms only once the read side is live, and the consuming monthly review, the retention rule owner (the bounded-window read and prune in the friction-audit body's cost-question rule), lands in the same change, so the sunset arms at landing",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/machinery-blocker-audit-2026-10-09.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:review-staging-series-sweep",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/completed/2026-10-14-review-staging-series-wide-round-close-scope.md Task 2): co-removal set removed together in one reviewed change = the Record validation levels subsection's Series sweep duty bullet, the three consumer clauses (review-plan Step 4, the plans staging-pair duty, review-loop's mechanical-gate sentence), the pins re-aims this landing made beside the duty, and both registry rows (this removals row and the admission entry); sunset = review at 90 days from landing or at the first promotion decision, whichever first; promotion criteria = a first true catch recorded on the guard liveness ledger's review-staging-validator entry (warning-only until then per the Machinery admission protocol)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-14-review-staging-series-wide-round-close-scope.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:primary-freshness-sweep",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/completed/2026-10-14-post-landing-reconciliation-enforcement.md Task 3): co-removal set is the survey arm bullet (agents/skills/maintenance/survey-arms.md, the Primary-freshness sweep probe bullet), the --check-primary mode in scripts/reconcile_post_landing.py, its fixtures in scripts/test_reconcile_post_landing.py, and both registry rows (this removals row and the admission entry); sunset = 90 days from landing or the first promotion decision, whichever first; promotion criteria = a first true catch recorded on the guard liveness ledger (warning-only until then per the Machinery admission protocol).",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-14-post-landing-reconciliation-enforcement.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:readability-method-check",
+      "kind": "protocol",
+      "note": "Pre-registered removals row for the method-readability check. Its true catch is an adjudicated real issue found by quality#method-readability. At the 2027-04-15 review, remove only this check if it has no own true catch, update its active registry entry, and retain this row with the review record as the no-catch sunset witness. Promotion requires this mechanism's own true catch and a separate reviewed change.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:readability-focused-panel-advisory",
+      "kind": "protocol",
+      "note": "Pre-registered removals row for the focused-panel advisory. Its true catch is an actionable issue found only by correctness-completeness after this advisory, which would otherwise have been missed by the selected focused panel. At the 2027-04-15 review, remove only this advisory if it has no own true catch, update its active registry entry, and retain this row with the review record as the no-catch sunset witness. Promotion requires this mechanism's own true catch and a separate reviewed change.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    }
+  ],
+  "schema_version": 1
 }

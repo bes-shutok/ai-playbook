@@ -59,6 +59,23 @@ Exit codes: 0 when every live checkout is verified complete, 1 when block
 rows exist (the caller records them as named blocks), 2 on tool failure. A
 ``--base``, ``--pre-tip``, or ``--post-tip`` value git cannot resolve is exit
 2 with zero writes, never a silent pass.
+
+Read-only primary freshness sweep (between landings):
+
+    python3 scripts/reconcile_post_landing.py --check-primary [--repo ROOT]
+
+``--check-primary`` is mutually exclusive with ``--base``, ``--pre-tip``, and
+``--post-tip`` (a combined invocation is a usage error exiting 2 with zero
+writes). The mode classifies the primary checkout (the first
+``git worktree list --porcelain`` block) per the stale-checkout
+discriminator over its own status entries, printing one
+``stale <path> <matching-commit> <arm>`` row per stale witness (the worktree
+arm is tested before the index arm; a row whose worktree file mtime postdates
+the matching commit's committer time carries the ``fresh-mtime`` witness),
+one ``note <path> midflight <witness>`` row when the primary is mid-merge or
+mid-rebase, and nothing otherwise. The mode is warning-only and performs no
+restore, no remove, and no index operation. Exit codes: 0 when no stale
+witness was found, 1 when at least one stale row printed, 2 on tool failure.
 """
 
 import argparse
@@ -615,18 +632,101 @@ def run(inv):
     return result.exit_code
 
 
+def sweep_primary(repo):
+    """Read-only primary freshness sweep: classify the primary checkout's own
+    status entries per the stale-checkout discriminator and print stale rows,
+    warning-only; exit 0 clean, 1 when a stale row printed, 2 on tool failure."""
+    blocks = parse_worktrees(repo)
+    if not blocks:
+        sys.stderr.write("tool failure: no worktree blocks resolved\n")
+        return 2
+    wt = blocks[0]["worktree"]
+    witness = midflight_witness(wt)
+    if witness:
+        sys.stdout.write("note %s midflight %s\n" % (wt, witness))
+        return 0
+    out = git(wt, "status", "--porcelain", "-z").stdout
+    fields = out.split("\0")
+    head = rev_parse_verify(repo, "HEAD")
+    stale_seen = False
+    skip_next = False
+    for field in fields:
+        if skip_next:
+            skip_next = False
+            continue
+        if len(field) < 4 or field[2] != " ":
+            continue
+        if field[0] in ("R", "C"):
+            skip_next = True
+        if field[0] == "?" and field[1] == "?":
+            # untracked-only entries carry no ancestor semantics
+            continue
+        path = field[3:]
+        idx = index_blob(wt, path)
+        wt_blob = worktree_blob(wt, path)
+        if idx is None and wt_blob is None:
+            continue
+        try:
+            log = git(repo, "log", "--format=%H", "HEAD", "--", path).stdout
+        except ToolFailure as exc:
+            sys.stderr.write("tool failure: %s\n" % exc)
+            return 2
+        for line in log.splitlines():
+            commit = line.strip()
+            if not commit or commit == head:
+                continue
+            blob = blob_at(repo, commit, path)
+            if not blob:
+                # a deletion or rename-source commit: skip, never a match
+                continue
+            arm = None
+            if wt_blob is not None and wt_blob == blob:
+                arm = "worktree"
+            elif idx is not None and idx == blob:
+                arm = "index"
+            if arm is None:
+                continue
+            row = "stale %s %s %s" % (path, commit, arm)
+            if arm == "worktree" and worktree_mtime_postdates(
+                wt, path, commit_time(repo, commit)
+            ):
+                row += " fresh-mtime"
+            sys.stdout.write(row + "\n")
+            stale_seen = True
+            break
+    return 1 if stale_seen else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Reconcile every live checkout of the base branch after a "
-            "ref-level landing; per-path restores are discriminator-gated."
+            "ref-level landing; per-path restores are discriminator-gated. "
+            "With --check-primary, run the read-only between-landings "
+            "freshness sweep over the primary checkout instead."
         )
     )
-    parser.add_argument("--base", required=True, help="the base branch the landing moved")
-    parser.add_argument("--pre-tip", dest="pre_tip", required=True, help="the pre-landing tip")
-    parser.add_argument("--post-tip", dest="post_tip", required=True, help="the post-landing tip")
+    parser.add_argument("--base", default=None, help="the base branch the landing moved")
+    parser.add_argument("--pre-tip", dest="pre_tip", default=None, help="the pre-landing tip")
+    parser.add_argument("--post-tip", dest="post_tip", default=None, help="the post-landing tip")
+    parser.add_argument("--check-primary", dest="check_primary", action="store_true",
+                        help="read-only primary freshness sweep; mutually exclusive "
+                             "with --base/--pre-tip/--post-tip")
     parser.add_argument("--repo", default=None, help="repository root (default: cwd)")
     args = parser.parse_args(argv)
+    if args.check_primary:
+        if args.base or args.pre_tip or args.post_tip:
+            parser.error(
+                "--check-primary is mutually exclusive with --base, --pre-tip, "
+                "and --post-tip"
+            )
+        try:
+            return sweep_primary(args.repo or os.getcwd())
+        except ToolFailure as exc:
+            sys.stderr.write("tool failure: %s\n" % exc)
+            return 2
+    if not args.base or not args.pre_tip or not args.post_tip:
+        parser.error("--base, --pre-tip, and --post-tip are required without --check-primary")
     inv = Invocation(args.base, args.pre_tip, args.post_tip, args.repo)
     if not resolve_invocation_or_exit2(inv):
         return 2

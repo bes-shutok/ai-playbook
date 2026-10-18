@@ -20,7 +20,7 @@ fi
 is_ephemeral_git_clean_path() {
   local p="${1%/}"
   case "$p" in
-    docs/tmp|docs/tmp/*|docs/history/reviews|docs/history/reviews/*|docs/reviews|docs/reviews/*|.ai-playbook|.ai-playbook/*)
+    docs/tmp|docs/tmp/*|.ai-playbook/reviews|.ai-playbook/reviews/*|docs/reviews|docs/reviews/*|.ai-playbook|.ai-playbook/*)
       return 0
       ;;
     *)
@@ -74,7 +74,7 @@ if [[ "$command" =~ [Cc]o-[Aa]uthored-[Bb]y: ]] || [[ "$command" =~ git[[:space:
 fi
 
 # Whole-repo git clean deletes untracked WIP (docs-branch orphan first run used this).
-# Allow only scoped clean on ephemeral LLM/runtime dirs (docs/tmp, docs/history/reviews, .ai-playbook).
+# Allow only scoped clean on ephemeral LLM/runtime dirs (docs/tmp, .ai-playbook/reviews, .ai-playbook).
 # Skip when the shell command is git commit — commit messages may mention git clean.
 if [[ "$command" =~ git[[:space:]]+clean ]] && [[ ! "$command" =~ (^|[;&|][[:space:]]*)git[[:space:]]+commit[[:space:]] ]]; then
   if git_clean_is_scoped_to_ephemeral "$command"; then
@@ -85,7 +85,7 @@ if [[ "$command" =~ git[[:space:]]+clean ]] && [[ ! "$command" =~ (^|[;&|][[:spa
     --arg cmd "$command" \
     '{
       permission: "deny",
-      user_message: "git clean is blocked unless scoped to ephemeral dirs (docs/tmp/, docs/history/reviews/, .ai-playbook/). Use docs-branch untracked backup instead of whole-repo clean.",
+      user_message: "git clean is blocked unless scoped to ephemeral dirs (docs/tmp/, .ai-playbook/reviews/, .ai-playbook/). Use docs-branch untracked backup instead of whole-repo clean.",
       agent_message: ("Blocked destructive git clean. Do not run git clean -fdq on the repo root. Snapshot untracked files with git ls-files --others --exclude-standard, or use scoped clean only. Command: " + $cmd)
     }'
   exit 0

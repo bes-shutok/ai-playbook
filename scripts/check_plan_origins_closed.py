@@ -30,7 +30,14 @@ root; conventional repo-relative defaults back a missing key, and no
 machine-specific absolute path is hardcoded. Origins are the backtick
 quoted backlog paths inside the origins paragraph (the header line
 through its first blank line); a plan may also open its scope with a single `Backlog origin:` line, which this gate parses the same way. Review, guideline, and script paths quoted
-in the same paragraph are ignored. Stdlib only; no network.
+in the same paragraph are ignored. Directory operands: a plan may be a
+directory (the plan-directory shape), in which case the gated plan reads
+its origins block from its charter and the corpus walk treats the
+directory as one plan unit beside file plans (member files never scan as
+separate plans); the covered witness matches a covering directory plan by
+its directory slug. The operand grammar itself resolves through the
+shared helper ``plan_shape.resolve_plan_operand`` (a malformed directory
+is a named tool error). Stdlib only; no network.
 
 Exit codes (outcome contract): 0 pass, 1 fail (modeled stragglers or
 coverage conflicts), 2 indeterminate (an origin unreadable at
@@ -56,6 +63,8 @@ try:
     import facts_paths
 except ImportError:  # pragma: no cover
     facts_paths = None  # type: ignore
+
+import plan_shape
 
 OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 
@@ -185,6 +194,46 @@ def _dispositions_basenames(
     return names
 
 
+def _listed_but_unparsed_basenames(
+    parsed_basenames: list[str],
+    plan_text: str,
+    backlog_dir: Path,
+    completed_dir: Path,
+) -> list[str]:
+    """Return disposition basenames absent from the parsed origins."""
+    parsed = set(parsed_basenames)
+    return [
+        name
+        for name in _dispositions_basenames(plan_text, backlog_dir, completed_dir)
+        if name not in parsed
+    ]
+
+
+def _undercount_message(
+    plan_path: Path,
+    plan_text: str,
+    parsed_basenames: list[str],
+    missing: list[str],
+    listed_count: int,
+) -> str:
+    has_origins_header = any(
+        ORIGINS_HEADER_RE.match(line) or ORIGIN_SINGULAR_RE.match(line)
+        for line in plan_text.splitlines()
+    )
+    parsed_shape = (
+        "matched origins block parsed no basenames"
+        if has_origins_header and not parsed_basenames
+        else "origins header line was unmatched"
+        if not parsed_basenames
+        else f"origins block parsed {len(parsed_basenames)} basenames"
+    )
+    return (
+        f"{plan_path.name}: origins dispositions list {listed_count} "
+        f"basenames but the {parsed_shape}; listed but unparsed: "
+        f"{', '.join(missing)}"
+    )
+
+
 def _warn(message: str) -> None:
     print(f"warning: {message}", file=sys.stderr)
 
@@ -310,6 +359,53 @@ def _facts_raw(repo_root: Path, key: str) -> str | None:
     return facts_paths.resolve_toml_key_raw(repo_root, key)
 
 
+def _plan_text(plan_path: Path) -> str:
+    """The plan text the origins parsers read: the file's text for the
+    single-file shape, the charter's text for a directory operand (the
+    shared sections live in the charter)."""
+    if plan_path.is_dir():
+        return (plan_path / plan_shape.CHARTER_FILENAME).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    return plan_path.read_text(encoding="utf-8", errors="replace")
+
+
+def _require_plan_operand(
+    parser: OutcomeArgumentParser, plan_path: Path, missing_message: str
+) -> None:
+    """Operand gate for the plan-taking modes: a file passes as today; a
+    directory resolves through the shared shape resolver (a malformed
+    directory is a named usage error carrying the refusal); anything else
+    is the missing-operand error."""
+    if plan_path.is_dir():
+        try:
+            plan_shape.resolve_plan_operand(plan_path)
+        except plan_shape.PlanShapeRefusal as exc:
+            parser.error(f"plan operand rejected: {exc}")
+        return
+    if not plan_path.is_file():
+        parser.error(f"{missing_message}: {plan_path}")
+
+
+def _corpus_plan_units(plans_dir: Path) -> list[Path]:
+    """Every plan unit under a plans directory: file plans beside
+    directory plans. A directory plan (a directory carrying the charter)
+    is ONE unit; its member files never scan as separate plans. Units
+    sort by path for deterministic report order."""
+    charter_dirs = [
+        charter.parent
+        for charter in sorted(plans_dir.rglob(plan_shape.CHARTER_FILENAME))
+        if charter.is_file()
+    ]
+    units: list[Path] = []
+    for path in sorted(plans_dir.rglob("*.md")):
+        if any(path.is_relative_to(charter_dir) for charter_dir in charter_dirs):
+            continue
+        units.append(path)
+    units.extend(charter_dirs)
+    return sorted(units, key=str)
+
+
 def _is_backlog_ref(
     text: str, backlog_dir: Path, completed_dir: Path
 ) -> bool:
@@ -384,6 +480,20 @@ def extract_origin_basenames(
             continue
         if not header_just_matched:
             items_seen = True
+        if re.match(r"^\s*[-*+]\s+", line):
+            item = re.sub(r"^\s*[-*+]\s+", "", line, count=1)
+            parts = item.split(maxsplit=1)
+            candidate = parts[0] if parts else ""
+            if len(candidate) >= 2 and candidate.startswith("`") and candidate.endswith("`"):
+                candidate = candidate[1:-1]
+            candidate = candidate.rstrip(".,;:")
+            if candidate.endswith(".md") and _is_backlog_ref(
+                candidate, backlog_dir, completed_dir
+            ):
+                name = Path(candidate.replace(os.sep, "/")).name
+                if name and name not in seen:
+                    seen.add(name)
+                    basenames.append(name)
         for span in BACKTICK_SPAN_RE.findall(line):
             text = span.strip()
             if not text.endswith(".md"):
@@ -495,12 +605,24 @@ def _witness_plan_exists(
     ``witness_basename`` anywhere under the active plans directory or
     ``plans_completed_dir`` (never the literal witness path, and never
     corpus mode's active-directory liveness reading, which would call a
-    witness stale the moment its covering plan archived)."""
+    witness stale the moment its covering plan archived), or a directory
+    plan whose slug equals ``witness_basename`` (the directory operand's
+    charter sits at ``<slug>/<charter>``, so the match re-derives the
+    directory slug; a witness literally naming the charter filename never
+    matches that arm)."""
     for directory in (active_plans_dir, completed_plans_dir):
         if not directory.is_dir():
             continue
         for plan in directory.rglob("*.md"):
-            if plan.name == witness_basename and plan.is_file():
+            if not plan.is_file():
+                continue
+            if plan.name == witness_basename:
+                return True
+            if (
+                witness_basename != plan_shape.CHARTER_FILENAME
+                and plan.name == plan_shape.CHARTER_FILENAME
+                and plan.parent.name == witness_basename
+            ):
                 return True
     return False
 
@@ -516,9 +638,10 @@ def run_plan_mode(
     """Archive gate: only THIS plan's origins can block, and only without
     ``--warn``. No origins block passes trivially. An origin unreadable at
     classification time makes the run indeterminate (exit 2) naming the
-    origin, dominant over any stragglers, which are still named."""
+    origin, dominant over any stragglers, which are still named. A
+    directory operand reads its origins block from the charter."""
     try:
-        text = plan_path.read_text(encoding="utf-8", errors="replace")
+        text = _plan_text(plan_path)
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
         return 3
@@ -617,10 +740,11 @@ def run_corpus_mode(
     repo_root: Path | None = None,
     active_plans_dir: Path | None = None,
 ) -> int:
-    """Corpus warn arm: scan every archived plan, warn per unresolved
-    origin, exit 0 (the maintenance survey owns this surface) only for
-    fully-resolved runs; observed unreadable evidence flips the run to
-    indeterminate (exit 2)."""
+    """Corpus warn arm: scan every archived plan (file plans beside
+    directory-plan units, the walk from ``_corpus_plan_units``), warn per
+    unresolved origin, exit 0 (the maintenance survey owns this surface)
+    only for fully-resolved runs; observed unreadable evidence flips the
+    run to indeterminate (exit 2)."""
     if not plans_dir.is_dir():
         _warn(f"plans directory not found: {plans_dir}")
         print("check_plan_origins_closed: corpus scan: no archived plans; exit 0")
@@ -633,7 +757,7 @@ def run_corpus_mode(
             file=sys.stderr,
         )
         return 3
-    plans = sorted(plans_dir.rglob("*.md"))
+    plans = _corpus_plan_units(plans_dir)
     registry: Path | None = None
     if repo_root is not None:
         registry = resolve_dir(
@@ -643,7 +767,7 @@ def run_corpus_mode(
     unreadable_evidence = False
     for plan in plans:
         try:
-            text = plan.read_text(encoding="utf-8", errors="replace")
+            text = _plan_text(plan)
         except OSError as exc:
             _warn(f"cannot read archived plan {plan.name}: {exc}")
             unreadable_evidence = True
@@ -754,13 +878,20 @@ def run_check_coverage_mode(
     completed_plans_dir: Path,
 ) -> int:
     """Duplicate-origin coverage gate: exit 0 clean, 1 conflict naming the
-    covering plan and the state-specific remedy, 3 tool error."""
+    covering plan and the state-specific remedy, 3 tool error. A directory
+    operand reads its origins block from the charter."""
     try:
-        text = plan_path.read_text(encoding="utf-8", errors="replace")
+        text = _plan_text(plan_path)
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
         return 3
     names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
+    missing = _listed_but_unparsed_basenames(
+        names, text, backlog_dir, completed_dir
+    )
+    if missing:
+        listed_count = len(_dispositions_basenames(text, backlog_dir, completed_dir))
+        _warn(_undercount_message(plan_path, text, names, missing, listed_count))
     if not names:
         print("check_plan_origins_closed: no origins; coverage gate trivially clean")
         return 0
@@ -820,13 +951,21 @@ def run_mark_covered_mode(
     header Status becomes ``covered (<repo-relative plan path>)``. Exit 0
     on success/no-op-with-skips, 1 on a different-plan-witness conflict
     (bytes unchanged), 2 indeterminate when an origin is unreadable at
-    classification time, 3 on tool error."""
+    classification time, 3 on tool error. A directory operand's witness
+    is the directory path (the natural slug form ``<plans-root>/<slug>``),
+    read from the charter."""
     try:
-        text = plan_path.read_text(encoding="utf-8", errors="replace")
+        text = _plan_text(plan_path)
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
         return 3
     names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
+    missing = _listed_but_unparsed_basenames(
+        names, text, backlog_dir, completed_dir
+    )
+    if missing:
+        listed_count = len(_dispositions_basenames(text, backlog_dir, completed_dir))
+        _warn(_undercount_message(plan_path, text, names, missing, listed_count))
     if not names:
         print("check_plan_origins_closed: no origins; nothing to mark covered")
         return 0
@@ -956,8 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
         plan_path = Path(target).expanduser()
         if not plan_path.is_absolute():
             plan_path = repo_root / plan_path
-        if not plan_path.is_file():
-            parser.error(f"plan file not found: {plan_path}")
+        _require_plan_operand(parser, plan_path, "plan file not found")
         if args.mark_covered:
             code = run_mark_covered_mode(
                 plan_path, backlog_dir, completed_dir, repo_root
@@ -980,8 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
         plan_path = Path(args.plan).expanduser()
         if not plan_path.is_absolute():
             plan_path = repo_root / plan_path
-        if not plan_path.is_file():
-            parser.error(f"--plan file not found: {plan_path}")
+        _require_plan_operand(parser, plan_path, "--plan file not found")
         active_plans_dir = resolve_dir(
             args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
         )

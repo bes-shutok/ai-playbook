@@ -42,7 +42,11 @@ REPO_SHARED_RULES = [
     "docs/AGENTS.md",
 ]
 
-# Skill surfaces changed or verified by this plan's Task 3.
+# Skill surfaces changed or verified by this plan's Task 3. The done skill's
+# per-concern module files (the done-closeout-lock-span plan's Task 4 router
+# split) dissolved in the done target-state flip (2026-10-11): the collapsed
+# SKILL.md is the one inventoried done surface, and a module file reappearing
+# beside it would be an un-inventoried dispatchable body.
 REPO_SKILL_SURFACES = [
     "agents/skills/slack-message/SKILL.md",
     "agents/skills/done/SKILL.md",
@@ -190,7 +194,10 @@ EXTERNAL_WRITE_GATES = [
     ("git force-push", "never force-push without approval"),
     ("slack outbound", "never send, post, schedule, edit, delete, or react in slack"),
     ("confluence pages owned by someone else", "never update confluence pages created by someone else"),
-    ("personal projects remote actions", "local git only unless user asks"),
+    # Re-aimed 2026-10-11: the shared contract's personal-projects bullet was
+    # rewritten by the local-only enforcement change (202d8b7f0); the frozen
+    # gate phrase follows the canonical bullet's own wording.
+    ("personal projects remote actions", "agents work locally only"),
 ]
 
 # Agent or tool-specific bindings that must not appear inside the rewritten

@@ -111,11 +111,11 @@ CLASSES = (
 
 # Discovery allowlist path-exclusion fragments. Any discovered path containing
 # one of these is rejected (never ingested). The discovery predicate is an
-# ALLOWLIST, not a glob.
+# ALLOWLIST, not a glob. The sanctioned reviews home (.ai-playbook/reviews/)
+# is deliberately NOT denied: it is the corpus home the allowlist scans.
 EXCLUDED_PATH_FRAGMENTS = (
     "/tmp/",
     ".ai-playbook/tmp/",
-    ".ai-playbook/reviews/",
     ".ai-playbook/review-telemetry/",
 )
 
@@ -458,7 +458,7 @@ def telemetry_lock(telemetry_dir: Path) -> Iterator[None]:
 def is_path_excluded(path: Path) -> bool:
     """Return True if ``path`` matches an exclusion fragment (denylist on top
     of the allowlist). The discovery predicate is an ALLOWLIST (per-repo
-    ``reviews_dir`` + legacy ``docs/history/reviews/``); this exclusion is a
+    ``reviews_dir`` + legacy ``.ai-playbook/reviews/``); this exclusion is a
     defense-in-depth backstop for the excluded fragments.
     """
     s = str(path)
@@ -493,12 +493,13 @@ def discover_sidecars(
     For each repo root, every immediate child repo is consulted:
     - its configured ``reviews_dir`` (resolved via the repo's own
       ``.ai-playbook/facts.md`` TOML key, falling back to
-      ``docs/history/reviews``); and
-    - the legacy ``docs/history/reviews/`` directory of the repo itself.
+      ``.ai-playbook/reviews``); and
+    - the legacy ``.ai-playbook/reviews/`` directory of the repo itself.
     Real (non-symlink) ``*.stats.json`` files under those directories are
     discovered. Excluded fragments (``/tmp/``, ``.ai-playbook/tmp/``,
-    ``.ai-playbook/reviews/``, ``.ai-playbook/review-telemetry/``) are never
-    ingested. Duplicate real paths are deduped.
+    ``.ai-playbook/review-telemetry/``) are never ingested; the sanctioned
+    corpus home ``.ai-playbook/reviews/`` is deliberately not excluded.
+    Duplicate real paths are deduped.
 
     Returns a sorted, de-duplicated list of discovered sidecar paths.
     """
@@ -507,7 +508,7 @@ def discover_sidecars(
         for repo in iter_repos_under_root(root):
             reviews_dir = _repo_reviews_dir(repo)
             _ingest_sidecars(reviews_dir, found)
-            legacy = repo / "docs" / "history" / "reviews"
+            legacy = repo / ".ai-playbook" / "reviews"
             _ingest_sidecars(legacy, found)
     return sorted(found)
 
@@ -525,7 +526,7 @@ def _repo_reviews_dir(repo: Path) -> Path:
     """
     text_value = facts_paths.resolve_toml_key_raw(repo, "reviews_dir")
     if text_value is None:
-        return repo / "docs" / "history" / "reviews"
+        return repo / ".ai-playbook" / "reviews"
     # Absolute value: use it as-is (tilde-expand). Relative: anchor at the repo.
     candidate = Path(text_value).expanduser()
     if not candidate.is_absolute():
@@ -1024,6 +1025,18 @@ def _empty_severity() -> dict[str, int]:
     return {sev: 0 for sev in vrs.SEVERITY_ORDER}
 
 
+def _findings_list(value) -> list:
+    """Normalize a raw ``findings`` payload value to a list.
+
+    Returns the value only when it is a list; every other shape (missing,
+    null, a scalar count, a sized string) yields the empty list. This one
+    ``isinstance(value, list)`` rule is the shared rule the metrics pass's
+    skip gate uses (Task 2 of the findings-guard plan), so the seams and the
+    gate cannot disagree about what counts as malformed.
+    """
+    return value if isinstance(value, list) else []
+
+
 def _triage_from_findings(findings: list) -> dict[str, int]:
     """Tally final-triage counts plus ``pending`` from staged findings.
 
@@ -1321,7 +1334,7 @@ def aggregate_current(payload: dict) -> dict:
         if isinstance(lenses, list):
             lens_launches += len(lenses)
 
-    findings = payload.get("findings") or []
+    findings = _findings_list(payload.get("findings"))
     return {
         "schema": "current",
         "worker_launches": worker_launches,
@@ -1350,7 +1363,7 @@ def aggregate_legacy(payload: dict) -> dict:
     raw_findings = _coerce_int(
         counts.get("raw_findings") if "raw_findings" in counts else payload.get("raw_findings")
     )
-    findings = payload.get("findings") or []
+    findings = _findings_list(payload.get("findings"))
     staged = _coerce_int(
         counts.get("staged_findings") if "staged_findings" in counts else payload.get("staged_findings"),
         default=len(findings),
@@ -1460,7 +1473,7 @@ def accepted_unique_count(review_payload: dict) -> int:
     Counts staged findings whose final triage is in ``ACCEPTED_TRIAGE_VALUES``
     (``{fixed, deferred}``). ``pending`` and ``dropped`` are excluded.
     """
-    findings = review_payload.get("findings") or []
+    findings = _findings_list(review_payload.get("findings"))
     return sum(
         1
         for f in findings
@@ -1480,7 +1493,7 @@ def triage_coverage(review_payloads: list[dict]) -> float:
         return 1.0
     coverages = []
     for payload in review_payloads:
-        triage = _triage_from_findings(payload.get("findings") or [])
+        triage = _triage_from_findings(_findings_list(payload.get("findings")))
         finalized = triage["fixed"] + triage["deferred"] + triage["dropped"]
         total = finalized + triage["pending"]
         coverages.append(1.0 if total == 0 else finalized / total)
@@ -1897,7 +1910,9 @@ def build_effectiveness_report(
     ever emitted: only aggregate counts and cohort verdicts.
 
     A single malformed sidecar (one whose ``cohort_key`` raises the integrity
-    assert in ``derive_size_bucket``) does NOT abort the whole report: it is
+    assert in ``derive_size_bucket``, or one whose findings field is present
+    and not a list -- the same predicate the metrics pass's skip gate and the
+    aggregation seams' helper use) does NOT abort the whole report: it is
     skipped per-sidecar and the count is surfaced in
     ``availability.skipped_malformed`` (F4). The integrity assert itself is kept
     (the plan mandates it); only its blast radius is bounded.
@@ -1908,6 +1923,15 @@ def build_effectiveness_report(
     skipped_malformed = 0
     clean: list[tuple[str, dict]] = []
     for period, payload in classified_sidecars:
+        findings_value = payload.get("findings")
+        if findings_value is not None and not isinstance(findings_value, list):
+            # Same present-and-not-list predicate the metrics pass's skip
+            # gate and the aggregation seams' helper use, so a malformed
+            # sidecar counts into the existing skipped_malformed channel
+            # (no path emission on this surface) and both passes exclude
+            # the class instead of disagreeing.
+            skipped_malformed += 1
+            continue
         try:
             cohort_key(payload)
         except SummarizerError:
@@ -2378,7 +2402,7 @@ def _iter_historical_artifacts(repo_roots: list[Path]) -> Iterator[Path]:
     """Yield historical review Markdown and sidecars discovered under repo roots.
 
     Covers the same allowlist as sidecar discovery (per-repo ``reviews_dir`` and
-    legacy ``docs/history/reviews/``) but ALSO yields sibling ``*.md`` review
+    legacy ``.ai-playbook/reviews/``) but ALSO yields sibling ``*.md`` review
     documents, since historical Markdown is immutable read-only input alongside
     the sidecars. Symlinks and excluded fragments are rejected.
     """
@@ -2391,7 +2415,7 @@ def _iter_historical_artifacts(repo_roots: list[Path]) -> Iterator[Path]:
                 if rp not in seen:
                     seen.add(rp)
                     yield p
-            legacy = repo / "docs" / "history" / "reviews"
+            legacy = repo / ".ai-playbook" / "reviews"
             for p in _iter_review_artifacts(legacy):
                 rp = p.resolve()
                 if rp not in seen:
@@ -3104,22 +3128,70 @@ def _sidecar_fails_validation(payload: dict) -> bool:
     return bool(result.errors)
 
 
+def _warn_malformed_findings_skip(sidecar: Path, repo_root: Path | None) -> None:
+    """Emit the one-line malformed-findings skip warning for one sidecar.
+
+    The path prints repo-relative when it sits under ``repo_root`` (the repo
+    being scanned); an out-of-root path emits its basename plus a fixed
+    ``(outside scanned repo root)`` placeholder instead of the resolved
+    absolute path (public outputs stay aggregate-only; the strict-audit
+    publish note's paths-stay-private precedent). The interpolated path
+    passes through a one-line control-character strip so a hostile filename
+    cannot forge extra warning lines.
+    """
+    if repo_root is not None:
+        try:
+            display = str(sidecar.resolve().relative_to(repo_root.resolve()))
+        except ValueError:
+            display = f"{sidecar.name} (outside scanned repo root)"
+    else:
+        display = f"{sidecar.name} (outside scanned repo root)"
+    display = "".join(ch if ch.isprintable() else "?" for ch in display)
+    sys.stderr.write(
+        f"metrics: skipping {display}: findings field is not a list\n"
+    )
+
+
 def _loops_from_sidecars(
-    sidecars: list[Path], buffers: dict[Path, bytes]
-) -> tuple[dict[str, list[dict]], int]:
+    sidecars: list[Path],
+    buffers: dict[Path, bytes],
+    repo_root: Path | None = None,
+) -> tuple[dict[str, list[dict]], int, int]:
     """Group discovered sidecars into per-slug loop round records.
 
-    Returns ``(loops, legacy_count)``: ``loops`` maps each artifact slug to
-    its round records sorted by round index; ``legacy_count`` counts sidecars
-    that failed validation or carry no usable loop identity (the unknown-band
-    legacy bucket; the pass never fails on them). A duplicate slug+round pair
-    keeps the first record in sorted-path order (deterministic; no
-    double-counting).
+    Returns ``(loops, legacy_count, malformed_skips)``: ``loops`` maps each
+    artifact slug to its round records sorted by round index;
+    ``legacy_count`` counts sidecars that failed validation or carry no
+    usable loop identity (the unknown-band legacy bucket; the pass never
+    fails on them); ``malformed_skips`` counts the sidecars skipped by the
+    findings-shape gate (a present, non-list findings field). A duplicate
+    slug+round pair keeps the first record in sorted-path order
+    (deterministic; no double-counting).
+
+    The findings-shape skip gate sits before the validation branch, so an
+    unsupported-schema malformed sidecar also gets the warning and the
+    count. Each skip writes one stderr line naming the sidecar path
+    (repo-relative when it sits under ``repo_root``, the repo being scanned;
+    otherwise its basename plus a fixed ``(outside scanned repo root)``
+    placeholder -- the basename form is intentionally non-unique across
+    external review trees, the accepted privacy tradeoff, so a collision is
+    never fixed by restoring absolute paths), with the interpolated path
+    passed through a one-line control-character strip before emission.
     """
     slots: dict[str, dict[int, dict]] = {}
     legacy = 0
+    malformed_skips = 0
     for sidecar in sidecars:  # caller passes sorted paths
         payload, _ = parse_payload(buffers.get(sidecar, b""))
+        if payload is not None:
+            findings_value = payload.get("findings")
+            if findings_value is not None and not isinstance(
+                findings_value, list
+            ):
+                legacy += 1
+                malformed_skips += 1
+                _warn_malformed_findings_skip(sidecar, repo_root)
+                continue
         if payload is None or _sidecar_fails_validation(payload):
             legacy += 1
             continue
@@ -3135,7 +3207,7 @@ def _loops_from_sidecars(
     loops = {
         slug: [slot[rnd] for rnd in sorted(slot)] for slug, slot in slots.items()
     }
-    return loops, legacy
+    return loops, legacy, malformed_skips
 
 
 def _empty_band_stats() -> dict:
@@ -3200,7 +3272,9 @@ def _band_stats(loops: list[list[dict]]) -> dict:
 
 
 def build_metrics_report(
-    band_loops: dict[str, list[list[dict]]], legacy_count: int
+    band_loops: dict[str, list[list[dict]]],
+    legacy_count: int,
+    malformed_findings_skips: int = 0,
 ) -> dict:
     """Build the aggregate-only metrics report.
 
@@ -3243,6 +3317,11 @@ def build_metrics_report(
         "bands": bands,
         "overall": overall,
         "usage_analysis": usage_analysis,
+        # Internal runtime key (underscore-prefixed): the malformed-findings
+        # skip count, read by cmd_metrics for the zero-suppressed stdout
+        # count and popped by serialize_metrics_json so the tracked JSON
+        # bytes stay aggregate-only and unchanged in schema.
+        "_malformed_findings_skips": malformed_findings_skips,
     }
 
 
@@ -3397,8 +3476,18 @@ def build_usage_analysis(
 
 
 def serialize_metrics_json(report: dict) -> bytes:
-    """Canonical JSON bytes for the metrics report (deterministic)."""
-    return (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    """Canonical JSON bytes for the metrics report (deterministic).
+
+    Pops the underscore-prefixed internal ``_malformed_findings_skips`` key
+    from a shallow copy (with a default, never mutating the caller's dict and
+    tolerating its absence) before ``json.dumps``, so the tracked JSON bytes
+    stay aggregate-only and unchanged in schema by construction while
+    ``cmd_metrics``'s post-write stdout read still sees the count on the
+    caller's dict.
+    """
+    payload = dict(report)
+    payload.pop("_malformed_findings_skips", None)
+    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 def _fmt_rate(value: float) -> str:
@@ -3436,7 +3525,8 @@ def serialize_metrics_markdown(report: dict) -> bytes:
     lines.append("# Review corpus metrics")
     lines.append("")
     lines.append(
-        f"Loops: {report['loops']}; sidecars in legacy bucket: "
+        f"Loops: {report['loops']}; sidecars in legacy bucket (validation "
+        f"failures, unusable loop identity, skipped for malformed findings): "
         f"{report['sidecars_legacy_bucket']}"
     )
     lines.append("")
@@ -3535,26 +3625,36 @@ def run_metrics_pass(repo_roots: list[Path]) -> dict:
     Reuses the facts-driven discovery primitives (repo walk, reviews-dir
     resolution, sidecar ingestion, pinned single reads, delegated
     validation) and never fails on a legacy or unparseable sidecar (legacy
-    bucket). Returns the aggregate-only report (see
+    bucket). A sidecar whose findings field is present and not a list is
+    skipped into the legacy bucket with one stderr warning line naming the
+    sidecar path (repo-relative under the scanned repo, else basename plus
+    the ``(outside scanned repo root)`` placeholder), and the skip count
+    travels on the report under the underscore-prefixed internal key
+    ``_malformed_findings_skips`` (popped before the tracked JSON bytes are
+    serialized). Returns the aggregate-only report (see
     ``build_metrics_report``).
     """
     band_loops: dict[str, list[list[dict]]] = {
         band: [] for band in COMPLEXITY_BANDS
     }
     legacy = 0
+    malformed = 0
     for root in repo_roots:
         for repo in iter_repos_under_root(root):
             found: set[Path] = set()
             _ingest_sidecars(_repo_reviews_dir(repo), found)
-            _ingest_sidecars(repo / "docs" / "history" / "reviews", found)
+            _ingest_sidecars(repo / ".ai-playbook" / "reviews", found)
             sidecars = sorted(found)
             buffers = {s: read_byte_buffer(s) for s in sidecars}
-            loops, legacy_count = _loops_from_sidecars(sidecars, buffers)
+            loops, legacy_count, malformed_skips = _loops_from_sidecars(
+                sidecars, buffers, repo
+            )
             legacy += legacy_count
+            malformed += malformed_skips
             plans_dirs = _repo_plans_dirs(repo)
             for slug in sorted(loops):
                 band_loops[_resolve_band(slug, plans_dirs)].append(loops[slug])
-    return build_metrics_report(band_loops, legacy)
+    return build_metrics_report(band_loops, legacy, malformed)
 
 
 def cmd_metrics(
@@ -3566,7 +3666,12 @@ def cmd_metrics(
 
     Aggregate-only outputs (no per-file path rows) are written atomically to
     the caller-supplied paths. Never fails on a legacy or unparseable
-    sidecar: failing sidecars land in the unknown-band legacy bucket.
+    sidecar: failing sidecars land in the unknown-band legacy bucket, and a
+    sidecar whose findings field is present and not a list is skipped into
+    that bucket with one stderr warning line naming its path (repo-relative
+    under the scanned repo, else basename plus the ``(outside scanned repo
+    root)`` placeholder). The stdout summary line carries the malformed
+    skip count zero-suppressed (absent when zero).
     """
     repo_roots = _roots_from_facts(user_facts)
     report = run_metrics_pass(repo_roots)
@@ -3574,10 +3679,14 @@ def cmd_metrics(
         _atomic_write_private(json_path, serialize_metrics_json(report))
     if markdown_path is not None:
         _atomic_write_private(markdown_path, serialize_metrics_markdown(report))
-    sys.stdout.write(
+    summary = (
         f"metrics: {report['loops']} loop(s); legacy bucket "
-        f"{report['sidecars_legacy_bucket']}\n"
+        f"{report['sidecars_legacy_bucket']}"
     )
+    malformed_skips = report.get("_malformed_findings_skips", 0)
+    if malformed_skips:
+        summary += f"; malformed findings skips {malformed_skips}"
+    sys.stdout.write(summary + "\n")
     return 0
 
 
@@ -3718,8 +3827,8 @@ def _t_discovery(check) -> None:
         )
         real_current = repo / "docs" / "reviews" / "a.stats.json"
         _write_private_sidecar(real_current, _make_current_payload(["quality"]))
-        # Legacy docs/history/reviews.
-        legacy = repo / "docs" / "history" / "reviews" / "b.stats.json"
+        # The re-aimed legacy walk home (the sanctioned runtime corpus).
+        legacy = repo / ".ai-playbook" / "reviews" / "b.stats.json"
         _write_private_sidecar(legacy, _make_legacy_payload())
 
         # Excluded siblings that must NOT be ingested.
@@ -3739,7 +3848,7 @@ def _t_discovery(check) -> None:
         found = discover_sidecars([root])
         names = {p.name for p in found}
         check("discovery: real current sidecar discovered", "a.stats.json" in names)
-        check("discovery: legacy sidecar discovered", "b.stats.json" in names)
+        check("discovery: legacy-walk home sidecar discovered", "b.stats.json" in names)
         check("discovery: tmp excluded", "leak1.stats.json" not in names)
         check("discovery: runtime reviews excluded", "leak2.stats.json" not in names)
         check("discovery: telemetry excluded", "leak3.stats.json" not in names)
@@ -3751,7 +3860,7 @@ def _t_discovery(check) -> None:
         )
         # Allowlist predicate: every found path is under reviews_dir or legacy.
         for p in found:
-            ok = "docs/reviews" in str(p) or "docs/history/reviews" in str(p)
+            ok = "docs/reviews" in str(p) or ".ai-playbook/reviews" in str(p)
             check(f"discovery: {p.name} under allowlist", ok, str(p))
 
 
@@ -7786,6 +7895,74 @@ def _t_metrics_bands(check) -> None:
 
 
 # ---- metrics ----
+@_test("summarize_review_stats#findings_guard_accepted_unique")
+def _t_findings_guard_accepted_unique(check) -> None:
+    """A payload whose findings field is 5 (not a list) returns 0 from
+    accepted_unique_count with no exception."""
+    check(
+        "findings_guard_accepted_unique: int findings returns 0",
+        accepted_unique_count({"findings": 5}) == 0,
+    )
+
+
+@_test("summarize_review_stats#findings_guard_aggregate_current")
+def _t_findings_guard_aggregate_current(check) -> None:
+    """A current-shaped payload whose findings field is 5 with a counts block
+    carrying staged_findings 3 aggregates with the staged total 3 and zeroed
+    triage and severity tallies; the sized-non-list leg (findings "abc", empty
+    counts block) pins the zeroed totalizing semantics (staged_findings 0,
+    today's len() default would count 3)."""
+    agg = aggregate_current({"schema_version": 1, "counts": {"staged_findings": 3}, "findings": 5})
+    check(
+        "findings_guard_aggregate_current: staged total from counts",
+        agg["staged_findings"] == 3,
+        repr(agg.get("staged_findings")),
+    )
+    check(
+        "findings_guard_aggregate_current: zeroed triage",
+        all(v == 0 for v in agg["triage"].values()),
+        repr(agg.get("triage")),
+    )
+    check(
+        "findings_guard_aggregate_current: zeroed severity",
+        all(v == 0 for v in agg["severity"].values()),
+        repr(agg.get("severity")),
+    )
+    sized = aggregate_current({"schema_version": 1, "counts": {}, "findings": "abc"})
+    check(
+        "findings_guard_aggregate_current: sized-non-list zeroed total",
+        sized["staged_findings"] == 0,
+        repr(sized.get("staged_findings")),
+    )
+
+
+@_test("summarize_review_stats#findings_guard_aggregate_legacy")
+def _t_findings_guard_aggregate_legacy(check) -> None:
+    """A versionless payload whose findings field is 5 aggregates with zeroed
+    finding tallies, no exception."""
+    agg = aggregate_legacy({"agents_launched": 2, "findings": 5})
+    check(
+        "findings_guard_aggregate_legacy: zeroed triage",
+        all(v == 0 for v in agg["triage"].values()),
+        repr(agg.get("triage")),
+    )
+    check(
+        "findings_guard_aggregate_legacy: zeroed severity",
+        all(v == 0 for v in agg["severity"].values()),
+        repr(agg.get("severity")),
+    )
+
+
+@_test("summarize_review_stats#findings_guard_triage_coverage")
+def _t_findings_guard_triage_coverage(check) -> None:
+    """A one-element cohort of payloads each carrying findings 5 yields
+    coverage 1.0 with no exception."""
+    check(
+        "findings_guard_triage_coverage: int findings coverage 1.0",
+        triage_coverage([{"findings": 5}]) == 1.0,
+    )
+
+
 @_test("summarize_review_stats#metrics_legacy_tolerance")
 def _t_metrics_legacy_tolerance(check) -> None:
     """Metrics pass beside a sidecar that fails version-1 validation
@@ -7803,9 +7980,10 @@ def _t_metrics_legacy_tolerance(check) -> None:
     try:
         root = td / "myrepos"
         repo = root / "legacy-tolerance-repo"
-        # No repo facts file: discovery exercises its legacy default reviews
-        # directory (docs/history/reviews/) in this case.
-        reviews = repo / "docs" / "history" / "reviews"
+        # No repo facts file: the default and the legacy walk both resolve
+        # the runtime reviews home (.ai-playbook/reviews/), which the
+        # fixture populates.
+        reviews = repo / ".ai-playbook" / "reviews"
         reviews.mkdir(parents=True)
         _write_private_sidecar(
             reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
@@ -7871,6 +8049,500 @@ def _t_metrics_legacy_tolerance(check) -> None:
         "metrics_legacy_tolerance: explicit temp-directory teardown",
         not td.exists(),
         f"{td} still exists",
+    )
+
+
+@_test("summarize_review_stats#metrics_skips_non_list_findings_legacy")
+def _t_metrics_skips_non_list_findings_legacy(check) -> None:
+    """A versionless sidecar with loop identity and findings 3 skips into the
+    legacy bucket with one repo-relative stderr warning; the valid two-round
+    loop beside it stays intact and the pass exits 0 with both outputs."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-skip-legacy-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "skip-legacy-repo"
+        # No repo facts file: the default and the legacy walk both resolve
+        # the runtime reviews home (.ai-playbook/reviews/), which the
+        # fixture populates.
+        reviews = repo / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
+            _metrics_v1_payload("valid-feature", 1, "no", [False] * 3),
+        )
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r2.stats.json",
+            _metrics_v1_payload("valid-feature", 2, "yes", [False]),
+        )
+        malformed_path = reviews / "2026-09-02-branch-review-broken-feature-r1.stats.json"
+        _write_private_sidecar(
+            malformed_path,
+            {"artifact_slug": "broken-feature", "round": 1, "findings": 3},
+        )
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report = run_metrics_pass([root])
+        check(
+            "metrics_skips_non_list_findings_legacy: legacy bucket 1",
+            report["sidecars_legacy_bucket"] == 1,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        check(
+            "metrics_skips_non_list_findings_legacy: valid loop intact",
+            report["loops"] == 1
+            and report["overall"]["findings_by_round"] == {1: 3, 2: 1},
+            str(report["overall"]["findings_by_round"]),
+        )
+        warning = err.getvalue().strip().splitlines()
+        check(
+            "metrics_skips_non_list_findings_legacy: one repo-relative warning",
+            len(warning) == 1
+            and warning[0]
+            == "metrics: skipping .ai-playbook/reviews/"
+            + malformed_path.name
+            + ": findings field is not a list",
+            repr(warning),
+        )
+
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        out = io.StringIO()
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err2):
+            exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_skips_non_list_findings_legacy: cmd exits 0 with outputs",
+            exit_code == 0
+            and json_out.is_file()
+            and md_out.is_file(),
+            str(exit_code),
+        )
+        check(
+            "metrics_skips_non_list_findings_legacy: cmd stderr warning",
+            len(err2.getvalue().strip().splitlines()) == 1,
+            repr(err2.getvalue()),
+        )
+        check(
+            "metrics_skips_non_list_findings_legacy: stdout carries skip count",
+            "malformed findings skips 1" in out.getvalue(),
+            repr(out.getvalue()),
+        )
+    finally:
+        shutil.rmtree(td)
+    check(
+        "metrics_skips_non_list_findings_legacy: explicit temp teardown",
+        not td.exists(),
+    )
+
+
+@_test("summarize_review_stats#metrics_skips_non_list_findings_v1")
+def _t_metrics_skips_non_list_findings_v1(check) -> None:
+    """A v1 sidecar whose findings field is 5 (validator-silent) skips with
+    the same warning and count; the command layer's written JSON carries no
+    underscore-prefixed internal key."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-skip-v1-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "skip-v1-repo"
+        # No repo facts file: the default and the legacy walk both resolve
+        # the runtime reviews home (.ai-playbook/reviews/), which the
+        # fixture populates.
+        reviews = repo / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
+            _metrics_v1_payload("valid-feature", 1, "yes", [False]),
+        )
+        broken = _metrics_v1_payload("broken-v1-feature", 1, "no", [True])
+        broken["findings"] = 5
+        malformed_path = reviews / "2026-09-02-branch-review-broken-v1-r1.stats.json"
+        _write_private_sidecar(malformed_path, broken)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report = run_metrics_pass([root])
+        check(
+            "metrics_skips_non_list_findings_v1: legacy bucket 1",
+            report["sidecars_legacy_bucket"] == 1,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        check(
+            "metrics_skips_non_list_findings_v1: valid loop intact",
+            report["loops"] == 1,
+            str(report["loops"]),
+        )
+        warning = err.getvalue().strip().splitlines()
+        check(
+            "metrics_skips_non_list_findings_v1: one repo-relative warning",
+            len(warning) == 1
+            and warning[0]
+            == "metrics: skipping .ai-playbook/reviews/"
+            + malformed_path.name
+            + ": findings field is not a list",
+            repr(warning),
+        )
+
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        out = io.StringIO()
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err2):
+            exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_skips_non_list_findings_v1: cmd stderr warning again",
+            len(err2.getvalue().strip().splitlines()) == 1,
+            repr(err2.getvalue()),
+        )
+        check(
+            "metrics_skips_non_list_findings_v1: cmd exits 0",
+            exit_code == 0 and json_out.is_file() and md_out.is_file(),
+            str(exit_code),
+        )
+        written = json.loads(json_out.read_text(encoding="utf-8"))
+        check(
+            "metrics_skips_non_list_findings_v1: JSON carries no internal key",
+            "_malformed_findings_skips" not in written,
+            "internal key leaked into tracked JSON bytes",
+        )
+        check(
+            "metrics_skips_non_list_findings_v1: stdout carries skip count",
+            "malformed findings skips 1" in out.getvalue(),
+            repr(out.getvalue()),
+        )
+    finally:
+        shutil.rmtree(td)
+    check(
+        "metrics_skips_non_list_findings_v1: explicit temp teardown",
+        not td.exists(),
+    )
+
+
+@_test("summarize_review_stats#metrics_skips_falsy_present_scalar")
+def _t_metrics_skips_falsy_present_scalar(check) -> None:
+    """A versionless sidecar with loop identity whose findings field is 0
+    (falsy-present non-list) skips with one warning; the valid loop beside it
+    stays intact and the stdout line keeps today's shape when no skips
+    remain... this fixture HAS a skip, so the falsy-shape pin is that the
+    legacy bucket reads 1 and exactly one warning line fires."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-skip-falsy-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "skip-falsy-repo"
+        # No repo facts file: the default and the legacy walk both resolve
+        # the runtime reviews home (.ai-playbook/reviews/), which the
+        # fixture populates.
+        reviews = repo / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
+            _metrics_v1_payload("valid-feature", 1, "yes", [False]),
+        )
+        malformed_path = reviews / "2026-09-02-branch-review-zero-feature-r1.stats.json"
+        _write_private_sidecar(
+            malformed_path,
+            {"artifact_slug": "zero-feature", "round": 1, "findings": 0},
+        )
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report = run_metrics_pass([root])
+        check(
+            "metrics_skips_falsy_present_scalar: legacy bucket 1",
+            report["sidecars_legacy_bucket"] == 1,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        check(
+            "metrics_skips_falsy_present_scalar: valid loop intact",
+            report["loops"] == 1,
+            str(report["loops"]),
+        )
+        warning = err.getvalue().strip().splitlines()
+        check(
+            "metrics_skips_falsy_present_scalar: one warning line",
+            len(warning) == 1
+            and "findings field is not a list" in warning[0],
+            repr(warning),
+        )
+
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        out = io.StringIO()
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err2):
+            exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_skips_falsy_present_scalar: cmd stderr warning again",
+            exit_code == 0 and len(err2.getvalue().strip().splitlines()) == 1,
+            repr(err2.getvalue()),
+        )
+        check(
+            "metrics_skips_falsy_present_scalar: stdout carries skip count",
+            "malformed findings skips 1" in out.getvalue(),
+            repr(out.getvalue()),
+        )
+    finally:
+        shutil.rmtree(td)
+    check(
+        "metrics_skips_falsy_present_scalar: explicit temp teardown",
+        not td.exists(),
+    )
+
+
+@_test("summarize_review_stats#metrics_skips_out_of_root_sidecar")
+def _t_metrics_skips_out_of_root_sidecar(check) -> None:
+    """An external-reviews-dir malformed sidecar (schema 99, findings 5)
+    warns with basename plus the (outside scanned repo root) placeholder and
+    no absolute path; a second malformed sidecar with a tab in its filename
+    still yields exactly one line (control-character strip)."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-skip-outroot-"))
+    try:
+        root = td / "myrepos"
+        external_reviews = td / "external-reviews"
+        external_reviews.mkdir(parents=True)
+        repo = root / "outroot-repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        facts_dir = repo / ".ai-playbook"
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            f'```toml\nreviews_dir = "{external_reviews}"\n```\n',
+            encoding="utf-8",
+        )
+        _write_private_sidecar(
+            external_reviews / "2026-09-02-branch-review-external-r1.stats.json",
+            {"schema_version": 99, "findings": 5},
+        )
+        tab_name = "2026-09-02-branch-review-tab\tbed-r1.stats.json"
+        _write_private_sidecar(
+            external_reviews / tab_name,
+            {"artifact_slug": "tabbed", "round": 1, "findings": 5},
+        )
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report = run_metrics_pass([root])
+        check(
+            "metrics_skips_out_of_root_sidecar: legacy bucket 2",
+            report["sidecars_legacy_bucket"] == 2,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        lines = err.getvalue().strip().splitlines()
+        check(
+            "metrics_skips_out_of_root_sidecar: exactly two warning lines",
+            len(lines) == 2
+            and all("findings field is not a list" in ln for ln in lines),
+            repr(lines),
+        )
+        check(
+            "metrics_skips_out_of_root_sidecar: external line uses placeholder",
+            any(
+                "2026-09-02-branch-review-external-r1.stats.json (outside scanned repo root)"
+                in ln
+                for ln in lines
+            ),
+            repr(lines),
+        )
+        check(
+            "metrics_skips_out_of_root_sidecar: no absolute path in stderr",
+            str(external_reviews) not in err.getvalue()
+            and str(td / "myrepos") not in err.getvalue(),
+            repr(lines),
+        )
+        check(
+            "metrics_skips_out_of_root_sidecar: control char stripped to one line",
+            sum(
+                1
+                for ln in lines
+                if "2026-09-02-branch-review-tab" in ln
+            )
+            == 1,
+            repr(lines),
+        )
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        out = io.StringIO()
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err2):
+            exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_skips_out_of_root_sidecar: cmd stderr two lines again",
+            exit_code == 0
+            and len(err2.getvalue().strip().splitlines()) == 2,
+            repr(err2.getvalue()),
+        )
+        check(
+            "metrics_skips_out_of_root_sidecar: stdout carries skip count",
+            "malformed findings skips 2" in out.getvalue(),
+            repr(out.getvalue()),
+        )
+    finally:
+        shutil.rmtree(td)
+    check(
+        "metrics_skips_out_of_root_sidecar: explicit temp teardown",
+        not td.exists(),
+    )
+
+
+@_test("summarize_review_stats#metrics_falsy_findings_aggregate")
+def _t_metrics_falsy_findings_aggregate(check) -> None:
+    """Counts-only, null-findings, and empty-list versionless sidecars (each
+    a DISTINCT artifact_slug, distinct from the valid loop's slug) aggregate
+    as loops: legacy bucket 0, four loops, no warning line."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-falsy-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "falsy-repo"
+        # No repo facts file: the default and the legacy walk both resolve
+        # the runtime reviews home (.ai-playbook/reviews/), which the
+        # fixture populates.
+        reviews = repo / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
+            _metrics_v1_payload("valid-feature", 1, "yes", [False]),
+        )
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-counts-only-r1.stats.json",
+            {
+                "artifact_slug": "counts-only-feature",
+                "round": 1,
+                "counts": {"staged_findings": 2},
+            },
+        )
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-null-findings-r1.stats.json",
+            {"artifact_slug": "null-findings-feature", "round": 1, "findings": None},
+        )
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-empty-findings-r1.stats.json",
+            {"artifact_slug": "empty-findings-feature", "round": 1, "findings": []},
+        )
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report = run_metrics_pass([root])
+        check(
+            "metrics_falsy_findings_aggregate: all four loops",
+            report["loops"] == 4,
+            str(report["loops"]),
+        )
+        check(
+            "metrics_falsy_findings_aggregate: legacy bucket 0",
+            report["sidecars_legacy_bucket"] == 0,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        check(
+            "metrics_falsy_findings_aggregate: no warning line",
+            err.getvalue() == "",
+            repr(err.getvalue()),
+        )
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        out = io.StringIO()
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err2):
+            exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_falsy_findings_aggregate: cmd stderr stays empty",
+            exit_code == 0 and err2.getvalue() == "",
+            repr(err2.getvalue()),
+        )
+        check(
+            "metrics_falsy_findings_aggregate: stdout line stays today's shape",
+            out.getvalue()
+            == f"metrics: 4 loop(s); legacy bucket 0\n",
+            repr(out.getvalue()),
+        )
+    finally:
+        shutil.rmtree(td)
+    check(
+        "metrics_falsy_findings_aggregate: explicit temp teardown",
+        not td.exists(),
+    )
+
+
+@_test("summarize_review_stats#effectiveness_skips_malformed_findings")
+def _t_effectiveness_skips_malformed_findings(check) -> None:
+    """A classified cohort pair including one malformed-findings payload
+    counts it in availability.skipped_malformed and keeps it out of the
+    cohort buckets."""
+    good = {
+        "review_type": "plan-review",
+        "counts": {"workers_launched": 5, "staged_findings": 3},
+        "findings": [{"id": 1, "severity": "Low", "triage": "fixed"}] * 3,
+    }
+    malformed = {
+        "review_type": "plan-review",
+        "counts": {"workers_launched": 5, "staged_findings": 3},
+        "findings": 5,
+    }
+    report = build_effectiveness_report(
+        [
+            ("baseline", dict(good)),
+            ("growth", dict(good)),
+            ("baseline", dict(malformed)),
+        ]
+    )
+    check(
+        "effectiveness_skips_malformed_findings: skipped_malformed 1",
+        report["availability"]["skipped_malformed"] == 1,
+        str(report.get("availability")),
+    )
+    check(
+        "effectiveness_skips_malformed_findings: malformed excluded from cohorts",
+        report["availability"]["cohorts"] == 1
+        and report["availability"]["comparable_cohorts"] == 1,
+        str(report.get("availability")),
     )
 
 
@@ -8161,6 +8833,16 @@ _SUBSET_OF: dict[str, str] = {
     "summarize_review_stats#historical_immutability": "release",
     "summarize_review_stats#metrics_bands": "metrics",
     "summarize_review_stats#metrics_legacy_tolerance": "metrics",
+    "summarize_review_stats#findings_guard_accepted_unique": "aggregation",
+    "summarize_review_stats#findings_guard_aggregate_current": "aggregation",
+    "summarize_review_stats#findings_guard_aggregate_legacy": "aggregation",
+    "summarize_review_stats#findings_guard_triage_coverage": "aggregation",
+    "summarize_review_stats#metrics_skips_non_list_findings_legacy": "metrics",
+    "summarize_review_stats#metrics_skips_non_list_findings_v1": "metrics",
+    "summarize_review_stats#metrics_skips_falsy_present_scalar": "metrics",
+    "summarize_review_stats#metrics_skips_out_of_root_sidecar": "metrics",
+    "summarize_review_stats#metrics_falsy_findings_aggregate": "metrics",
+    "summarize_review_stats#effectiveness_skips_malformed_findings": "aggregation",
 }
 
 

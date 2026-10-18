@@ -1,23 +1,42 @@
 #!/usr/bin/env python3
-"""Base-branch reflog audit: name backward ref moves and empty landing receipts.
+"""Base-branch reflog audit: name raw ref writes, backward ref moves, and
+empty landing receipts.
 
-Witnessed shape (the 2026-10-03 overnight landing window on this
-repository's main): the base branch moved forward and then BACKWARD between
-two landing sessions of one plan, and the rollback-then-re-land left a
-message-bearing landing tip carrying an empty first-parent diff. A backward
-move that happens outside any sanctioned landing tail is visible only in
-the reflog, and a landing commit that carries nothing is visible only in a
-first-parent receipt sweep.
+Witnessed shapes on this repository's main:
+
+  The 2026-10-03 overnight landing window: the base branch moved forward
+  and then BACKWARD between two landing sessions of one plan, and the
+  rollback-then-re-land left a message-bearing landing tip carrying an
+  empty first-parent diff. A backward move that happens outside any
+  sanctioned landing tail is visible only in the reflog, and a landing
+  commit that carries nothing is visible only in a first-parent receipt
+  sweep.
+
+  2026-10-04 08:11:30: a bare `git update-ref` rewound main onto 10a22175,
+  a tip that is not a descendant of the previous tip 7ea6123e (the
+  granular lineage; 734 commits orphaned by the rewind), and the reflog
+  entry carries an empty description, so no message names the write. A raw
+  ref write that rewinds the base branch onto a non-descendant tip is
+  visible only as an empty-description entry in the reflog.
 
 Two subcommands over one base branch:
 
   reflog-window --repo ROOT --base-branch NAME --since-sha SHA
                 [--max-entries N]
-      Read the branch's reflog values newest first (v0..vk) via
-      `git reflog show refs/heads/<NAME> --format=%H` and audit the
-      consecutive pairs (v(i+1) -> v(i)) with
-      `git merge-base --is-ancestor v(i+1) v(i)`; each failing pair is one
-      `backward-move: <v(i+1)> -> <v(i)>` row. The walk stops after
+      Read the branch's reflog as value-plus-message pairs newest first
+      (v0..vk) via `git reflog show refs/heads/<NAME> --format=%H%x00%gs`
+      (per-field decode: the sha decodes as ASCII, the message as UTF-8
+      with replacement, so a message-bearing entry with a non-ASCII
+      subject stays a classified row) and audit the consecutive pairs
+      (v(i+1) -> v(i)) with `git merge-base --is-ancestor v(i+1) v(i)`.
+      A failing pair classifies on its message: an empty description is
+      one `raw-ref-write: <v(i)> (empty reflog description; new tip is
+      not a descendant of previous entry <v(i+1)>)` row (the bare-write
+      shape), and a message-bearing pair is one
+      `backward-move: <v(i+1)> -> <v(i)>` row. An empty-description pair
+      whose ancestry check passes prints no row: the adjacent
+      fast-forward raw-write shape (a plumbing-written landing commit) is
+      deliberately out of scope. The walk stops after
       auditing the first pair whose newer value v(i) equals the anchor
       (the move that created the anchor is itself audited); when no pair's
       newer value equals the anchor, the anchor is reached at the window's
@@ -105,17 +124,26 @@ def cmd_reflog_window(args):
     if anchor is None:
         return _tool_error("since-sha unresolvable: %s" % args.since_sha)
     ref = "refs/heads/" + args.base_branch
-    proc = _git(repo, "reflog", "show", ref, "--format=%H",
+    proc = _git(repo, "reflog", "show", ref, "--format=%H%x00%gs",
                 "-n", str(args.max_entries))
     if proc.returncode != 0:
         return _tool_error("base branch reflog unresolvable: %s%s"
                            % (ref, _stderr_note(proc.stderr)))
-    try:
-        values = [line.strip().decode("ascii")
-                  for line in proc.stdout.splitlines() if line.strip()]
-    except UnicodeDecodeError:
-        return _tool_error("reflog output not decodable as text: %s" % ref)
-    if not values:
+    entries = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        sha_bytes, sep, message_bytes = line.partition(b"\x00")
+        if not sep:
+            return _tool_error(
+                "unexpected git reflog output line (missing NUL separator): %s"
+                % line.decode("ascii", "replace"))
+        try:
+            sha = sha_bytes.strip().decode("ascii")
+        except UnicodeDecodeError:
+            return _tool_error("reflog output not decodable as text: %s" % ref)
+        entries.append((sha, message_bytes.decode("utf-8", "replace")))
+    if not entries:
         return _tool_error(
             "reflog for %s carries no entries; the operating-context "
             "assumption requires at least one entry" % ref)
@@ -123,14 +151,19 @@ def cmd_reflog_window(args):
     audited = 0
     stopped = False
     plumbing_failure = None
-    for i in range(len(values) - 1):
-        newer, older = values[i], values[i + 1]
+    for i in range(len(entries) - 1):
+        (newer, newer_message), (older, _) = entries[i], entries[i + 1]
         verdict = _git(repo, "merge-base", "--is-ancestor", older, newer)
         audited += 1
         if verdict.returncode == 0:
             pass
         elif verdict.returncode == 1:
-            rows.append("backward-move: %s -> %s" % (older, newer))
+            if newer_message.strip() == "":
+                rows.append(
+                    "raw-ref-write: %s (empty reflog description; new tip is "
+                    "not a descendant of previous entry %s)" % (newer, older))
+            else:
+                rows.append("backward-move: %s -> %s" % (older, newer))
         else:
             plumbing_failure = (older, newer, verdict.returncode,
                                 _stderr_note(verdict.stderr))
@@ -147,13 +180,13 @@ def cmd_reflog_window(args):
               "backward move could not be determined"
               % (code, older, newer, note))
         return 2
-    reached = stopped or values[-1] == anchor
+    reached = stopped or entries[-1][0] == anchor
     if not reached:
         print("indeterminate: anchor %s not reached within the walked "
               "reflog window (read %d entries, audited %d pairs, "
               "--max-entries %d); re-derive with a larger window or verify "
               "the anchor value"
-              % (anchor, len(values), audited, args.max_entries))
+              % (anchor, len(entries), audited, args.max_entries))
         return 2
     if rows:
         return 1

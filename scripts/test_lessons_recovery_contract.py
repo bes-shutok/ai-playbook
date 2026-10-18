@@ -18,7 +18,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEARN_SKILL = ROOT / "agents/skills/learn/SKILL.md"
+# Re-aimed 2026-10-11 (done-closeout-lock-span plan Task 5): the learn skill
+# is a router plus modules; the Step 6.6 user-corpus gate recovery recipe and
+# its anchor pair moved into the instruction-updates module.
+LEARN_SKILL = ROOT / "agents/skills/learn/step-6-instruction-updates.md"
+# Re-aimed 2026-10-11 (the done target-state flip): the Step 1 learn-blocked
+# recovery recipe and its anchor pair live in the collapsed done SKILL.md.
 DONE_SKILL = ROOT / "agents/skills/done/SKILL.md"
 VALIDATOR = ROOT / "scripts/lessons_index.py"
 

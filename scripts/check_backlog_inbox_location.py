@@ -9,7 +9,12 @@ basename:
   ``docs/tmp/``); scanned over a FILESYSTEM walk so untracked and gitignored
   files are seen. Intentional precedence: rule 1 fires BEFORE the backlog-home
   exclusion, so named hot dirs gate regardless of facts state, including when
-  a configured backlog home sits under a hot dir. Symlinked DIRECTORIES
+  a configured backlog home sits under a hot dir. One sanctioned carve-out
+  precedes both rules: a path under the facts-resolved recurring-tasks
+  home (key ``recurring_tasks_dir``, default
+  ``docs/maintenance/recurring-tasks``) is registered machinery, so its
+  files never fire rule 1 even inside a hot dir, nor rule 2, even when
+  their basenames carry the deferred-corpus vocabulary. Symlinked DIRECTORIES
   inside a hot dir whose targets stay inside it are traversed and their
   files reported under the symlink (link) path; escaping or broken
   directory targets (and broken file links) are skipped with a
@@ -18,13 +23,18 @@ basename:
   under its link name regardless of the target location (classification is
   filename-shape only; the target is never read).
 - rule 2: basename contains BOTH ``backlog`` AND ``deferred`` AND the path is
-  outside the backlog home; scanned over tracked files (``git ls-files -z``).
+  outside the backlog home AND outside the sanctioned recurring-tasks home;
+  scanned over tracked files (``git ls-files -z``).
 
 Backlog home resolves from ``.ai-playbook/facts.md`` TOML keys
 ``backlog_dir`` / ``backlog_completed_dir`` with fallback defaults and a
 stderr warning when missing. A value resolving (e.g. through a symlink)
 outside the repo root, or to the repo root itself, warns and falls back
-to the default. Two ``docs/tmp/`` carve-outs (path-segment
+to the default. The sanctioned recurring-tasks home resolves from the
+optional ``recurring_tasks_dir`` key through the same degenerate-value
+guards; a missing key falls back to the default silently (optional
+machinery, mirroring ``backlog_hot_dirs``), while a blank or degenerate
+value warns and falls back. Two ``docs/tmp/`` carve-outs (path-segment
 boundaries / basename prefix only) keep this repo's own conventions green.
 
 Rule 1's hot dirs come from the optional ``backlog_hot_dirs`` key: a
@@ -77,6 +87,7 @@ except ImportError:  # pragma: no cover
 HOT_DIRS = ("docs/maintenance", "docs/architecture", "docs/tmp")
 DEFAULT_BACKLOG_DIR = "docs/history/backlog"
 DEFAULT_BACKLOG_COMPLETED_DIR = "docs/history/backlog/completed"
+DEFAULT_RECURRING_TASKS_DIR = "docs/maintenance/recurring-tasks"
 TOKENS = ("backlog", "deferred")
 
 
@@ -91,102 +102,134 @@ def _hot_dir_parts(hot_dirs: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
     return tuple(tuple(h.replace("\\", "/").split("/")) for h in hot_dirs)
 
 
-def resolve_backlog_home(repo_root: Path) -> tuple[Path, Path]:
-    """Resolve (backlog_dir, backlog_completed_dir) from repo facts TOML.
+def _resolve_home(
+    repo_root: Path,
+    key: str,
+    default: str,
+    *,
+    warn_missing: bool,
+) -> Path:
+    """Resolve one sanctioned-home facts key with degenerate-value guards.
 
-    Missing, blank, or degenerate (``.`` or a relpath whose FIRST segment
-    is ``..``, i.e. at or above the repo root; a name merely starting with
-    ``..`` such as ``..backlog`` is a valid in-repo directory) values fall
-    back to the documented defaults
-    with a warning on stderr; such a home would make ``is_relative_to`` match
-    every path (or escape the repo) and silently disable rule 2. Values are anchored at ``repo_root`` (raw resolution, so
-    a repo-relative value is never anchored against the process CWD). A
-    value resolving (e.g. through a symlink) outside the repo root, or to
-    the repo root itself, warns and falls back to the default.
+    Shared resolver for the backlog home (``backlog_dir`` /
+    ``backlog_completed_dir``) and the recurring-tasks home
+    (``recurring_tasks_dir``). Missing, blank, or degenerate (``.`` or a
+    relpath whose FIRST segment is ``..``, i.e. at or above the repo root;
+    a name merely starting with ``..`` such as ``..backlog`` is a valid
+    in-repo directory) values fall back to ``default``; such a home would
+    make ``is_relative_to`` match every path (or escape the repo) and
+    silently disable the exclusions it feeds. Values are anchored at
+    ``repo_root`` (raw resolution, so a repo-relative value is never
+    anchored against the process CWD). A value resolving (e.g. through a
+    symlink) outside the repo root, or to the repo root itself, warns and
+    falls back to the default. A missing key warns only when
+    ``warn_missing`` is set; the recurring-tasks home passes false there
+    because its default names optional machinery (the same silent
+    fallback ``backlog_hot_dirs`` uses).
     """
-    resolved: list[Path] = []
-    if facts_paths is None:
+    home: Path | None = None
+    raw = (
+        facts_paths.resolve_toml_key_raw(repo_root, key)
+        if facts_paths is not None
+        else None
+    )
+    if raw is not None and not raw.strip():
         print(
-            "warning: facts parser unavailable (facts_paths.py not "
-            "importable); using default backlog home",
+            f"warning: {key} present but empty in "
+            f".ai-playbook/facts.md; falling back to {default}",
             file=sys.stderr,
         )
-    for key, default in (
-        ("backlog_dir", DEFAULT_BACKLOG_DIR),
-        ("backlog_completed_dir", DEFAULT_BACKLOG_COMPLETED_DIR),
-    ):
-        home: Path | None = None
-        raw = (
-            facts_paths.resolve_toml_key_raw(repo_root, key)
-            if facts_paths is not None
-            else None
-        )
-        if raw is not None and not raw.strip():
+    elif raw is not None:
+        p = Path(raw).expanduser()
+        home = p if p.is_absolute() else repo_root / p
+        try:
+            rel = os.path.relpath(home, repo_root)
+        except ValueError:
+            # Cross-drive homes (Windows): relpath raises instead of
+            # producing an escaping path; treat it as the degenerate
+            # case so the standard warn-and-fallback keeps the
+            # exclusions up.
             print(
-                f"warning: {key} present but empty in "
-                f".ai-playbook/facts.md; falling back to {default}",
+                f"warning: {key} resolves outside the repo root; "
+                f"falling back to {default}",
                 file=sys.stderr,
             )
-        elif raw is not None:
-            p = Path(raw).expanduser()
-            home = p if p.is_absolute() else repo_root / p
-            try:
-                rel = os.path.relpath(home, repo_root)
-            except ValueError:
-                # Cross-drive homes (Windows): relpath raises instead of
-                # producing an escaping path; treat it as the degenerate
-                # case so the standard warn-and-fallback keeps rule 2 up.
+            home = None
+        else:
+            if (
+                rel == "."
+                or rel == ".."
+                or rel.startswith(".." + os.sep)
+            ):
+                print(
+                    f"warning: {key} resolves to {rel} of the repo root; "
+                    f"falling back to {default}",
+                    file=sys.stderr,
+                )
+                home = None
+            elif not home.resolve().is_relative_to(repo_root):
+                # Resolved containment, mirroring the resolve_hot_dirs
+                # sibling key: a lexically inside-repo value that resolves
+                # (e.g. through a symlink) outside the repo root must not
+                # anchor the home there.
                 print(
                     f"warning: {key} resolves outside the repo root; "
                     f"falling back to {default}",
                     file=sys.stderr,
                 )
                 home = None
-            else:
-                if (
-                    rel == "."
-                    or rel == ".."
-                    or rel.startswith(".." + os.sep)
-                ):
-                    print(
-                        f"warning: {key} resolves to {rel} of the repo root; "
-                        f"falling back to {default}",
-                        file=sys.stderr,
-                    )
-                    home = None
-                elif not home.resolve().is_relative_to(repo_root):
-                    # Resolved containment, mirroring the resolve_hot_dirs
-                    # sibling key: a lexically inside-repo value that resolves
-                    # (e.g. through a symlink) outside the repo root must not
-                    # anchor the backlog home there.
-                    print(
-                        f"warning: {key} resolves outside the repo root; "
-                        f"falling back to {default}",
-                        file=sys.stderr,
-                    )
-                    home = None
-                elif home.resolve() == repo_root:
-                    # Resolved-equal-to-root: the lexical guard above cannot
-                    # see this (the value itself is inside-repo, e.g. a
-                    # symlink to "."), yet a root-equal home makes
-                    # is_relative_to match every path and silently disable
-                    # rule 2.
-                    print(
-                        f"warning: {key} resolves to the repo root; "
-                        f"falling back to {default}",
-                        file=sys.stderr,
-                    )
-                    home = None
-        if home is None:
-            if raw is None and facts_paths is not None:
+            elif home.resolve() == repo_root:
+                # Resolved-equal-to-root: the lexical guard above cannot
+                # see this (the value itself is inside-repo, e.g. a
+                # symlink to "."), yet a root-equal home makes
+                # is_relative_to match every path and silently disable
+                # the exclusions.
                 print(
-                    f"warning: {key} missing from .ai-playbook/facts.md; "
+                    f"warning: {key} resolves to the repo root; "
                     f"falling back to {default}",
                     file=sys.stderr,
                 )
-            home = repo_root / default
-        resolved.append(home)
-    return resolved[0], resolved[1]
+                home = None
+    if home is None:
+        if raw is None and facts_paths is not None and warn_missing:
+            print(
+                f"warning: {key} missing from .ai-playbook/facts.md; "
+                f"falling back to {default}",
+                file=sys.stderr,
+            )
+        home = repo_root / default
+    return home
+
+
+def resolve_backlog_home(repo_root: Path) -> tuple[Path, Path]:
+    """Resolve (backlog_dir, backlog_completed_dir) from repo facts TOML."""
+    if facts_paths is None:
+        print(
+            "warning: facts parser unavailable (facts_paths.py not "
+            "importable); using default backlog home",
+            file=sys.stderr,
+        )
+    return (
+        _resolve_home(
+            repo_root, "backlog_dir", DEFAULT_BACKLOG_DIR, warn_missing=True
+        ),
+        _resolve_home(
+            repo_root,
+            "backlog_completed_dir",
+            DEFAULT_BACKLOG_COMPLETED_DIR,
+            warn_missing=True,
+        ),
+    )
+
+
+def resolve_recurring_home(repo_root: Path) -> Path:
+    """Resolve the sanctioned recurring-tasks home from repo facts TOML."""
+    return _resolve_home(
+        repo_root,
+        "recurring_tasks_dir",
+        DEFAULT_RECURRING_TASKS_DIR,
+        warn_missing=False,
+    )
 
 
 def resolve_hot_dirs(repo_root: Path) -> tuple[str, ...]:
@@ -271,6 +314,7 @@ def classify_path(
     rel_path: str,
     backlog_home: tuple[Path, Path],
     hot_dir_parts: tuple[tuple[str, ...], ...],
+    recurring_home: Path | None,
 ) -> int | None:
     """Return the fired rule number (1 or 2) for a repo-relative path.
 
@@ -280,12 +324,19 @@ def classify_path(
     paths (see scan_repo), so ``is_relative_to`` compares like-for-like parts.
     ``hot_dir_parts`` carries the per-repo resolved hot dirs as segment
     tuples of arbitrary length (configured dirs need not be two segments).
+    ``recurring_home`` (repo-relative, or None when the resolved home is
+    degenerate) is the sanctioned recurring-tasks home: one early check
+    exempts paths under it from BOTH rules before classification, so the
+    two rules' different precedence (rule 1 fires before the backlog-home
+    exclusion) cannot make the carve-out drift per branch.
     """
     path = Path(os.path.normpath(rel_path))
     basename = path.name.lower()
     has_backlog = "backlog" in basename
     has_deferred = "deferred" in basename
     if not has_backlog and not has_deferred:
+        return None
+    if recurring_home is not None and path.is_relative_to(recurring_home):
         return None
     under_hot = any(path.parts[:len(hp)] == hp for hp in hot_dir_parts)
     if under_hot:
@@ -361,36 +412,41 @@ def _record(
     backlog_home: tuple[Path, Path],
     hot_dir_parts: tuple[tuple[str, ...], ...],
     violations: dict[str, int],
+    recurring_home: Path | None,
 ) -> None:
     """Classify one repo-relative path and record it (first rule wins).
 
     Shared tail of both scan loops (rule-1 walk and rule-2 ls-files):
     classify, then ``setdefault`` so a path seen by both surfaces keeps
     its first-assigned rule. ``hot_dir_parts`` carries the per-repo
-    resolved hot dirs through to ``classify_path``.
+    resolved hot dirs through to ``classify_path``; ``recurring_home``
+    carries the sanctioned recurring-tasks home the same way.
     """
-    rule = classify_path(rel_path, backlog_home, hot_dir_parts)
+    rule = classify_path(rel_path, backlog_home, hot_dir_parts, recurring_home)
     if rule is not None:
         violations.setdefault(rel_path, rule)
 
 
-def _check_home_rel(home_rel: Path) -> bool:
-    """Validate a computed backlog-home relpath; warn and reject degenerate.
+def _check_home_rel(home_rel: Path, label: str = "backlog home") -> bool:
+    """Validate a computed sanctioned-home relpath; warn and reject degenerate.
 
     Defense-in-depth for scan_repo: a home whose resolved relpath is ``.``
     (the repo root; matches every relative path in ``is_relative_to``) or
     whose FIRST segment is ``..`` (escapes the repo; a name merely starting
     with ``..`` is a valid in-repo directory) must not anchor a rule-2
     exclusion,
-    even if it passed the resolve-time checks in resolve_backlog_home
-    (resolve-vs-use TOCTOU).
+    even if it passed the resolve-time checks in the resolver
+    (resolve-vs-use TOCTOU): for the backlog home the degenerate relpath
+    would anchor a rule-2 exclusion, for the recurring-tasks home it
+    would anchor the both-rules exemption, and a dropped home fails
+    closed (no exclusion, no carve-out).
     """
     home_rel_str = str(home_rel)
     if home_rel_str == "." or home_rel_str == ".." or home_rel_str.startswith(
         ".." + os.sep
     ):
         print(
-            f"warning: backlog home resolves to {home_rel} of the repo "
+            f"warning: {label} resolves to {home_rel} of the repo "
             "root; dropping it",
             file=sys.stderr,
         )
@@ -554,6 +610,18 @@ def scan_repo(repo_root: Path) -> list[tuple[str, int]]:
         # paths) or anchor exclusions outside the repo.
         if _check_home_rel(home)
     )
+    recurring_resolved = Path(
+        os.path.relpath(resolve_recurring_home(repo_root).resolve(), repo_root)
+    )
+    # Same defense-in-depth as the backlog home above: a home swapped to
+    # the repo root or outside it between the resolve-time checks and
+    # this use must not exempt every candidate, so a degenerate relpath
+    # drops the exemption entirely (fail-closed to the ungated rules).
+    recurring_home: Path | None = (
+        recurring_resolved
+        if _check_home_rel(recurring_resolved, label="recurring-tasks home")
+        else None
+    )
     violations: dict[str, int] = {}
     hot_dirs = resolve_hot_dirs(repo_root)
     hot_dir_parts = _hot_dir_parts(hot_dirs)
@@ -578,7 +646,7 @@ def scan_repo(repo_root: Path) -> list[tuple[str, int]]:
             continue
         for absolute in _iter_hot_dir_files(hot_path):
             rel = os.path.relpath(absolute, repo_root)
-            _record(rel, backlog_home, hot_dir_parts, violations)
+            _record(rel, backlog_home, hot_dir_parts, violations, recurring_home)
 
     # Warn-only nested-.git detection (same run; never affects exit code).
     for rel, owner in detect_nested_git(repo_root):
@@ -624,7 +692,7 @@ def scan_repo(repo_root: Path) -> list[tuple[str, int]]:
         if not raw:
             continue
         rel = os.path.normpath(raw.decode("utf-8", "surrogateescape"))
-        _record(rel, backlog_home, hot_dir_parts, violations)
+        _record(rel, backlog_home, hot_dir_parts, violations, recurring_home)
 
     return sorted(violations.items())
 
@@ -914,6 +982,198 @@ def _selftest_main_repo(root: Path, check) -> None:
         )
     finally:
         index.write_bytes(backup)
+
+
+def _selftest_recurring_home_repo(root: Path, check) -> None:
+    """Sanctioned recurring-tasks home: rule-1 and rule-2 exemptions.
+
+    Arms: (1) a single-token file in the DEFAULT recurring subtree under a
+    hot dir is exempt (the witnessed registry false positive: the gate
+    fired on a sanctioned task file whose basename carried the
+    deferred-corpus vocabulary); (2) a token PAIR in the same subtree is
+    exempt through the single sanctioned-home check (under the default
+    hot-dir layout the pair would otherwise fire rule 1 inside the hot
+    dir); (3) a facts key override MOVES the exemption: the custom home is
+    exempt while the default subtree fires again, proving the exemption
+    is key-driven, not name-driven; (4) a blank key warns and falls back
+    to the default subtree; (5) with the hot dirs REPLACED by
+    ``backlog_hot_dirs`` and the recurring home OUTSIDE every hot dir, a
+    pair-token file in the home is exempt where only rule 2 could reach
+    it, and the replacement hot dir still fires; (6) a degenerate ``.``
+    key warns, falls back to the default subtree, and the control
+    violation still fires.
+    """
+    # Arms 1-2: default home (facts present, key absent).
+    repo = root / "recurring_default"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _write(
+        repo,
+        ".ai-playbook/facts.md",
+        "```toml\n"
+        'backlog_dir = "docs/history/backlog/"\n'
+        'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+        "```\n",
+    )
+    # Known hot-dir violation so exit 1 has a cause independent of the
+    # exemptions under test.
+    _write(repo, "docs/maintenance/TT-124-deferred-backlog.md")
+    _write(repo, "docs/maintenance/recurring-tasks/deferred-retriage.md")
+    _write(
+        repo,
+        "docs/maintenance/recurring-tasks/pair-deferred-backlog-task.md",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    code, stdout, stderr = _run_script(repo)
+    check(code == 1, f"recurring_default: expected exit 1, got {code} (stdout: {stdout!r})")
+    check(
+        "docs/maintenance/TT-124-deferred-backlog.md: rule 1" in stdout,
+        f"recurring_default: hot-dir violation missing (stdout: {stdout!r})",
+    )
+    check(
+        "docs/maintenance/recurring-tasks/deferred-retriage.md" not in stdout,
+        f"recurring_default: default-subtree fixture flagged (stdout: {stdout!r})",
+    )
+    check(
+        "docs/maintenance/recurring-tasks/pair-deferred-backlog-task.md" not in stdout,
+        f"recurring_default: pair fixture flagged (stdout: {stdout!r})",
+    )
+
+    # Arm 3: the key override moves the sanctioned home.
+    repo = root / "recurring_override"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _write(
+        repo,
+        ".ai-playbook/facts.md",
+        "```toml\n"
+        'backlog_dir = "docs/history/backlog/"\n'
+        'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+        'recurring_tasks_dir = "docs/architecture/registry-tasks"\n'
+        "```\n",
+    )
+    _write(repo, "docs/architecture/registry-tasks/deferred-retriage.md")
+    _write(repo, "docs/architecture/registry-tasks/pair-deferred-backlog.md")
+    _write(repo, "docs/maintenance/recurring-tasks/deferred-orphan.md")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    code, stdout, stderr = _run_script(repo)
+    check(code == 1, f"recurring_override: expected exit 1, got {code} (stdout: {stdout!r})")
+    check(
+        "docs/maintenance/recurring-tasks/deferred-orphan.md: rule 1" in stdout,
+        f"recurring_override: default-subtree orphan not flagged (stdout: {stdout!r})",
+    )
+    check(
+        "docs/architecture/registry-tasks/deferred-retriage.md" not in stdout,
+        f"recurring_override: custom-home fixture flagged (stdout: {stdout!r})",
+    )
+    check(
+        "docs/architecture/registry-tasks/pair-deferred-backlog.md" not in stdout,
+        f"recurring_override: custom-home pair flagged (stdout: {stdout!r})",
+    )
+
+    # Arm 4: blank key warns and falls back to the default subtree.
+    repo = root / "recurring_blank"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _write(
+        repo,
+        ".ai-playbook/facts.md",
+        "```toml\n"
+        'backlog_dir = "docs/history/backlog/"\n'
+        'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+        'recurring_tasks_dir = ""\n'
+        "```\n",
+    )
+    _write(repo, "docs/maintenance/TT-125-deferred-backlog.md")
+    _write(repo, "docs/maintenance/recurring-tasks/deferred-blankkey.md")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    code, stdout, stderr = _run_script(repo)
+    check(code == 1, f"recurring_blank: expected exit 1, got {code} (stdout: {stdout!r})")
+    check(
+        "docs/maintenance/TT-125-deferred-backlog.md: rule 1" in stdout,
+        f"recurring_blank: hot-dir violation missing (stdout: {stdout!r})",
+    )
+    check(
+        "docs/maintenance/recurring-tasks/deferred-blankkey.md" not in stdout,
+        f"recurring_blank: fallback-home fixture flagged (stdout: {stdout!r})",
+    )
+    check(
+        "present but empty" in stderr,
+        f"recurring_blank: empty-key warning missing (stderr: {stderr!r})",
+    )
+
+    # Arm 5: hot dirs replaced by backlog_hot_dirs, recurring home OUTSIDE
+    # every hot dir. Only rule 2 can reach the pair-token file in the home,
+    # so this arm discriminates the sanctioned-home exemption on the rule-2
+    # path (a regression there must fail the suite).
+    repo = root / "recurring_rule2"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _write(
+        repo,
+        ".ai-playbook/facts.md",
+        "```toml\n"
+        'backlog_dir = "docs/history/backlog/"\n'
+        'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+        'backlog_hot_dirs = "docs/escalation"\n'
+        'recurring_tasks_dir = "docs/registry"\n'
+        "```\n",
+    )
+    _write(repo, "docs/escalation/deferred-control.md")
+    _write(repo, "docs/registry/pair-deferred-backlog.md")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    code, stdout, stderr = _run_script(repo)
+    check(code == 1, f"recurring_rule2: expected exit 1, got {code} (stdout: {stdout!r})")
+    check(
+        "docs/escalation/deferred-control.md: rule 1" in stdout,
+        f"recurring_rule2: replacement-hot-dir control missing (stdout: {stdout!r})",
+    )
+    check(
+        "docs/registry/pair-deferred-backlog.md" not in stdout,
+        f"recurring_rule2: out-of-hot recurring-home pair flagged (stdout: {stdout!r})",
+    )
+
+    # Arm 6: degenerate "." key warns, falls back to the default subtree,
+    # and the exemption follows the fallback (never the repo root).
+    repo = root / "recurring_degenerate"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _write(
+        repo,
+        ".ai-playbook/facts.md",
+        "```toml\n"
+        'backlog_dir = "docs/history/backlog/"\n'
+        'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+        'recurring_tasks_dir = "."\n'
+        "```\n",
+    )
+    _write(repo, "docs/maintenance/kept-deferred-backlog.md")
+    _write(repo, "docs/maintenance/recurring-tasks/deferred-fallback.md")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    code, stdout, stderr = _run_script(repo)
+    check(code == 1, f"recurring_degenerate: expected exit 1, got {code} (stdout: {stdout!r})")
+    check(
+        "docs/maintenance/kept-deferred-backlog.md: rule 1" in stdout,
+        f"recurring_degenerate: control violation missing (stdout: {stdout!r})",
+    )
+    check(
+        "docs/maintenance/recurring-tasks/deferred-fallback.md" not in stdout,
+        f"recurring_degenerate: fallback-home fixture flagged (stdout: {stdout!r})",
+    )
+    check(
+        "resolves to . of the repo root" in stderr,
+        f"recurring_degenerate: degenerate-key warning missing (stderr: {stderr!r})",
+    )
 
 
 def _selftest_factsless_repo(root: Path, check) -> None:
@@ -1974,6 +2234,7 @@ def run_selftest() -> int:
             ("parser_unavailable_repo",
              _selftest_parser_unavailable_repo),
             ("hot_dirs_key_repo", _selftest_hot_dirs_key_repo),
+            ("recurring_home_repo", _selftest_recurring_home_repo),
             ("windows_portability", _selftest_windows_portability),
             ("hot_dir_symlink_repo", _selftest_hot_dir_symlink_repo),
             ("toplevel_anchor_repo", _selftest_toplevel_anchor_repo),

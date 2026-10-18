@@ -141,7 +141,10 @@ class ReverseSquashGuardTest(unittest.TestCase):
             self.assertIn(squash, out)
             self.assertIn("refuse:", out)
 
-    def test_staged_pure_code_inverse_with_padding_is_refused(self):
+    def test_staged_pure_code_inverse_with_padding_warns(self):
+        """Demotion program change 2: the pure inverse with padding fires the
+        mirror signature, which now reports and continues (rc 0, warning
+        naming the mirrored commit) instead of refusing."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
             repo.write("f1.py", "one\n")
@@ -155,10 +158,11 @@ class ReverseSquashGuardTest(unittest.TestCase):
             repo.write("pad.txt", "padding edit\n")
             repo.stage_all()
             proc = run_guard("check-staged", "--repo", str(repo.root))
-            self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+            self.assertEqual(proc.returncode, 0, proc.stdout.decode())
             out = proc.stdout.decode()
             self.assertIn(squash, out)
-            self.assertIn("refuse:", out)
+            self.assertIn("warning: mirror signature reported, not failing:", out)
+            self.assertNotIn("refuse:", out)
 
     def test_normal_edit_staged_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,20 +213,26 @@ class ReverseSquashGuardTest(unittest.TestCase):
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
 
-    def test_staged_rename_back_of_landed_rename_refused(self):
+    def test_staged_rename_back_of_landed_rename_warns(self):
+        """Demotion program change 2: the staged rename-back of a landed
+        rename with its content reverted fires the mirror signature, which
+        now reports and continues (rc 0, warning) instead of refusing."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
             repo.write("a.py", "a1\n")
             repo.commit_all("base")
             git(repo.root, "mv", "a.py", "b.py")
             repo.write("b.py", "a1\nnew1\nnew2\n")
-            repo.commit_all("rename with edit")
+            landed = repo.commit_all("rename with edit")
             git(repo.root, "mv", "b.py", "a.py")
             repo.write("a.py", "a1\n")
             repo.stage_all()
             proc = run_guard("check-staged", "--repo", str(repo.root))
-            self.assertEqual(proc.returncode, 1, proc.stdout.decode())
-            self.assertIn("refuse:", proc.stdout.decode())
+            self.assertEqual(proc.returncode, 0, proc.stdout.decode())
+            self.assertIn("warning: mirror signature reported, not failing:",
+                          proc.stdout.decode())
+            self.assertIn(landed, proc.stdout.decode())
+            self.assertNotIn("refuse:", proc.stdout.decode())
 
     def test_check_diff_mode_recovers_extended_header_egress(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,7 +308,12 @@ class ReverseSquashGuardTest(unittest.TestCase):
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
 
-    def test_check_diff_mode_refuses_diff_against_advanced_target(self):
+    def test_check_diff_mode_warns_diff_against_advanced_target(self):
+        """Demotion program change 2: the stale-branch diff whose inverse
+        mirrors the target squash fires the mirror signature in check-diff
+        mode, which now reports and continues (rc 0, warning naming the
+        mirrored target commit); the stale-base landing refusal itself lives
+        in check-landing and keeps its blocking posture."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
             repo.write("f.py", "one\n")
@@ -311,8 +326,11 @@ class ReverseSquashGuardTest(unittest.TestCase):
             diff = git(repo.root, "diff", "-M", target)
             proc = run_guard("check-diff", "--against", target,
                              "--repo", str(repo.root), stdin=diff.encode())
-            self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+            self.assertEqual(proc.returncode, 0, proc.stdout.decode())
             self.assertIn(target, proc.stdout.decode())
+            self.assertIn("warning: mirror signature reported, not failing:",
+                          proc.stdout.decode())
+            self.assertNotIn("refuse:", proc.stdout.decode())
 
     def test_unreachable_against_rev_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,7 +374,11 @@ class ReverseSquashGuardTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 1, proc.stdout.decode())
             self.assertIn("docs/history/backlog/completed/b.md", proc.stdout.decode())
 
-    def test_ack_suppresses_mirror_but_not_egress(self):
+    def test_mirror_signature_warns_and_ack_suppresses_not_egress(self):
+        """Demotion program change 2: the diffstat-mirror signature reports
+        and continues (rc 0, warning line); a repeatable --ack suppresses
+        named mirrored commits' warnings; the ack never suppresses an
+        archive egress."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
             repo.write("f1.py", "one\n")
@@ -369,8 +391,16 @@ class ReverseSquashGuardTest(unittest.TestCase):
             repo.write("f2.py", "two\n")
             repo.stage_all()
             first = run_guard("check-staged", "--repo", str(repo.root))
-            self.assertEqual(first.returncode, 1)
-            acked = run_guard("check-staged", "--repo", str(repo.root), "--ack", squash)
+            self.assertEqual(first.returncode, 0, first.stdout.decode())
+            self.assertIn("warning: mirror signature reported, not failing: "
+                          "diffstat mirror of landed commit %s" % squash,
+                          first.stdout.decode())
+            self.assertIn("ok: no refusing reverse-squash signature "
+                          "(mirror warning reported above)",
+                          first.stdout.decode())
+            self.assertNotIn("refuse:", first.stdout.decode())
+            acked = run_guard("check-staged", "--repo", str(repo.root),
+                              "--ack", squash)
             self.assertEqual(acked.returncode, 0, acked.stdout.decode())
             self.assertIn("ok: mirror %s acknowledged" % squash, acked.stdout.decode())
             # The same ack does not suppress an archive egress.
@@ -379,6 +409,66 @@ class ReverseSquashGuardTest(unittest.TestCase):
                 refused = run_guard("check-staged", "--repo", str(repo2.root),
                                     "--ack", squash)
                 self.assertEqual(refused.returncode, 1, refused.stdout.decode())
+
+    def test_repeatable_ack_suppresses_both_mirrors(self):
+        """Demotion program change 2 (the single-ack-slot incident arm): two
+        mirrored landed commits, both warnings named on one run, and one
+        invocation carrying BOTH --ack values silences both warnings while
+        the run stays rc 0 throughout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write("f1.py", "one\n")
+            repo.write("f2.py", "two\n")
+            repo.write("g1.py", "gone\n")
+            repo.write("g2.py", "also gone\n")
+            repo.commit_all("base")
+            repo.write("f1.py", "one\ne1\ne2\n")
+            repo.write("f2.py", "two\ne3\ne4\n")
+            first_squash = repo.commit_all("landed squash one")
+            repo.write("g1.py", "gone\nadded\nadded2\n")
+            repo.write("g2.py", "also gone\nadded\nadded2\n")
+            second_squash = repo.commit_all("landed squash two")
+            repo.write("f1.py", "one\n")
+            repo.write("f2.py", "two\n")
+            repo.write("g1.py", "gone\n")
+            repo.write("g2.py", "also gone\n")
+            repo.stage_all()
+            both = run_guard("check-staged", "--repo", str(repo.root))
+            self.assertEqual(both.returncode, 0, both.stdout.decode())
+            self.assertIn("diffstat mirror of landed commit %s" % first_squash,
+                          both.stdout.decode())
+            self.assertIn("diffstat mirror of landed commit %s" % second_squash,
+                          both.stdout.decode())
+            # The pre-change single-slot shape: one --ack silences only its
+            # own commit and the other warning still reports (rc stays 0).
+            single = run_guard("check-staged", "--repo", str(repo.root),
+                               "--ack", first_squash)
+            self.assertEqual(single.returncode, 0, single.stdout.decode())
+            self.assertIn("ok: mirror %s acknowledged" % first_squash,
+                          single.stdout.decode())
+            self.assertIn("diffstat mirror of landed commit %s" % second_squash,
+                          single.stdout.decode())
+            silenced = run_guard("check-staged", "--repo", str(repo.root),
+                                 "--ack", first_squash, "--ack", second_squash)
+            self.assertEqual(silenced.returncode, 0, silenced.stdout.decode())
+            self.assertIn("ok: mirror %s acknowledged" % first_squash,
+                          silenced.stdout.decode())
+            self.assertIn("ok: mirror %s acknowledged" % second_squash,
+                          silenced.stdout.decode())
+            self.assertNotIn("diffstat mirror of landed commit", silenced.stdout.decode())
+
+    def test_mirror_warning_coexists_with_refusal(self):
+        """Demotion program change 2 boundary: a mirror warning coexists with
+        a refusing signature (archive egress) in one run - the warning line
+        still prints beside the rc-1 refusal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, squash = self._egress_with_squash(tmp)
+            mixed = run_guard("check-staged", "--repo", str(repo.root))
+            self.assertEqual(mixed.returncode, 1, mixed.stdout.decode())
+            self.assertIn("warning: mirror signature reported, not failing: "
+                          "diffstat mirror of landed commit %s" % squash,
+                          mixed.stdout.decode())
+            self.assertIn("refuse:", mixed.stdout.decode())
 
     def _egress_with_squash(self, tmp):
         repo = ScratchRepo(tmp)
@@ -532,6 +622,26 @@ class ReverseSquashGuardCheckCommitTest(unittest.TestCase):
         git(repo.root, "checkout", "-q", "side")
         return repo, target, tip
 
+    def _absent_plan_fixture(self, tmp):
+        """The witnessed incident shape (plan
+        docs/history/plans/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md):
+        the source branch forked before the foreign plan's addition to the
+        base branch, so the target-to-source scan absents the foreign plan
+        (present at the target tip, absent from the source tree)."""
+        repo = ScratchRepo(tmp)
+        repo.write("a.py", "a1\n")
+        base = repo.commit_all("base")
+        target = git(repo.root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        git(repo.root, "checkout", "-qb", "feature")
+        repo.write("feature.txt", "feature\n")
+        repo.commit_all("feature work")
+        git(repo.root, "checkout", "-q", target)
+        foreign = "docs/history/plans/2026-10-11-foreign.md"
+        repo.write(foreign, "foreign plan body\n")
+        tip = repo.commit_all("target adds the foreign plan")
+        git(repo.root, "checkout", "-q", "feature")
+        return repo, target, tip, base, foreign
+
     def test_check_landing_fresh_branch_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, target, tip = self._landing_fixture(tmp)
@@ -584,6 +694,67 @@ class ReverseSquashGuardCheckCommitTest(unittest.TestCase):
                              "--target-ref", tip, "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 2, proc.stdout.decode())
             self.assertIn("tool failure", proc.stderr.decode())
+
+    def test_check_landing_stale_base_names_absent_protected_plan(self):
+        # Rehearsal (plan
+        # docs/history/plans/2026-10-11-landing-deleted-unclaimed-execution-ready-plan.md
+        # Task 2): a stale-base landing over a foreign plan added to the
+        # base branch after the fork names the absent protected plan with
+        # the merge base, beside the unchanged stale-base refusal.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, target, tip, base, foreign = self._absent_plan_fixture(tmp)
+            proc = run_guard("check-landing", "--source-branch", "feature",
+                             "--target-ref", target, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(
+                "claim-fence-warning: absent protected plan at the landing "
+                "boundary: %s (merge base %s)" % (foreign, base), out)
+            self.assertIn("refuse: landing base stale", out)
+
+    def test_check_landing_own_archive_twin_silent_at_boundary(self):
+        # A source branch archiving its own plan in the same landing
+        # prints no boundary warning for it: the same scan's
+        # completed-archive twin sanctions the deletion, while the broad
+        # stale arm still names the would-delete evidence.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            own = "docs/history/plans/2026-10-11-own.md"
+            repo.write("a.py", "a1\n")
+            repo.write(own, "own plan body\n")
+            repo.commit_all("base")
+            target = git(repo.root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+            git(repo.root, "checkout", "-qb", "feature")
+            repo.write("feature.txt", "feature\n")
+            repo.commit_all("feature work")
+            completed = repo.root / "docs" / "history" / "plans" / "completed"
+            completed.mkdir(parents=True, exist_ok=True)
+            git(repo.root, "mv", own,
+                "docs/history/plans/completed/2026-10-11-own.md")
+            repo.commit_all("archive the plan")
+            git(repo.root, "checkout", "-q", target)
+            repo.write("t1.txt", "t1\n")
+            repo.commit_all("target advance")
+            proc = run_guard("check-landing", "--source-branch", "feature",
+                             "--target-ref", target, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("refuse: landing base stale", out)
+            self.assertIn(own, out)
+            self.assertNotIn("claim-fence-warning:", out)
+
+    def test_check_landing_fresh_base_no_boundary_leg(self):
+        # A fresh base takes the unchanged early return: exit 0, the fresh
+        # ok line, and no boundary-leg output.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, target, tip, base, foreign = self._absent_plan_fixture(tmp)
+            git(repo.root, "rebase", "-q", target)
+            proc = run_guard("check-landing", "--source-branch", "feature",
+                             "--target-ref", target, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("landing base fresh", out)
+            self.assertNotIn("claim-fence-warning:", out)
 
 
 
@@ -714,10 +885,10 @@ class ReverseSquashGuardCheckLandedTest(unittest.TestCase):
             proc = run_guard("check-landed", "--rev", landed,
                              "--source-branch", "feature", "--pre-tip", pre_tip,
                              "--repo", str(repo.root),
-                             "--ack-deleted", "docs/reviews/x.md")
+                             "--ack-deleted", ".ai-playbook/reviews/x.md")
             self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
             self.assertIn("tool failure", proc.stderr.decode())
-            self.assertIn("docs/reviews/x.md",
+            self.assertIn(".ai-playbook/reviews/x.md",
                           proc.stdout.decode() + proc.stderr.decode())
 
     def test_check_landed_unused_ack_entry_warns(self):
@@ -872,7 +1043,7 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
     """reviews-home egress refusal class (revert-set clobber plan Task 3).
 
     Every guard invocation passes --repo <scratch root>. The deny set is
-    REVIEWS_HOME_PREFIXES (docs/reviews/, docs/history/reviews/); the class
+    REVIEWS_HOME_PREFIXES (.ai-playbook/reviews/); the class
     is addition-side and never suppressible: A, M, R, and C records all
     count via the post-side path.
     """
@@ -882,18 +1053,18 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
             repo = ScratchRepo(tmp)
             repo.write("a.py", "a1\n")
             base = repo.commit_all("base")
-            repo.write("docs/reviews/x.md", "review body\n")
+            repo.write(".ai-playbook/reviews/x.md", "review body\n")
             repo.stage_all()
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             out = proc.stdout.decode()
-            self.assertIn("reviews-home egress: docs/reviews/x.md", out)
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/x.md", out)
             # Never suppressible: an --ack naming a sha suppresses mirror
             # findings only, and the reviews-home finding persists.
             acked = run_guard("check-staged", "--repo", str(repo.root),
                               "--ack", base)
             self.assertEqual(acked.returncode, 1, acked.stdout + acked.stderr)
-            self.assertIn("reviews-home egress: docs/reviews/x.md",
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/x.md",
                           acked.stdout.decode())
 
     def test_check_staged_reviews_home_rename_into_refused(self):
@@ -901,24 +1072,24 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
             repo = ScratchRepo(tmp)
             repo.write("docs/a.md", "a\n")
             repo.commit_all("base")
-            (repo.root / "docs" / "reviews").mkdir()
-            git(repo.root, "mv", "docs/a.md", "docs/reviews/y.md")
+            (repo.root / ".ai-playbook" / "reviews").mkdir(parents=True)
+            git(repo.root, "mv", "docs/a.md", ".ai-playbook/reviews/y.md")
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-            self.assertIn("reviews-home egress: docs/reviews/y.md",
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/y.md",
                           proc.stdout.decode())
 
     def test_check_diff_reviews_home_addition_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
             repo.commit_all("base")
-            repo.write("docs/reviews/x.md", "review body\n")
+            repo.write(".ai-playbook/reviews/x.md", "review body\n")
             git(repo.root, "add", "-A")
             diff = git(repo.root, "diff", "--cached")
             proc = run_guard("check-diff", "--against", "HEAD",
                              "--repo", str(repo.root), stdin=diff.encode())
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-            self.assertIn("reviews-home egress: docs/reviews/x.md",
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/x.md",
                           proc.stdout.decode())
 
     def test_check_landing_reviews_home_addition_refused(self):
@@ -928,7 +1099,7 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
             repo.commit_all("base")
             trunk = git(repo.root, "rev-parse", "--abbrev-ref", "HEAD").strip()
             git(repo.root, "checkout", "-qb", "feature")
-            repo.write("docs/history/reviews/r.md", "review\n")
+            repo.write(".ai-playbook/reviews/r.md", "review\n")
             repo.commit_all("feature adds a review record")
             # Fresh-base landing (trunk is an ancestor of feature): the
             # egress refusal must fire with its dedicated refuse line,
@@ -937,7 +1108,7 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
                              "--target-ref", trunk, "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             out = proc.stdout.decode()
-            self.assertIn("reviews-home egress: docs/history/reviews/r.md", out)
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/r.md", out)
             self.assertIn("refuse: reviews-home egress in the landing", out)
             self.assertNotIn("refuse: landing base stale", out)
             self.assertNotIn("landing base fresh", out)
@@ -949,8 +1120,8 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
             repo.commit_all("base")
             trunk = git(repo.root, "rev-parse", "--abbrev-ref", "HEAD").strip()
             git(repo.root, "checkout", "-qb", "feature")
-            (repo.root / "docs" / "reviews").mkdir()
-            git(repo.root, "mv", "docs/a.md", "docs/reviews/y.md")
+            (repo.root / ".ai-playbook" / "reviews").mkdir(parents=True)
+            git(repo.root, "mv", "docs/a.md", ".ai-playbook/reviews/y.md")
             repo.commit_all("feature renames a record into the reviews home")
             # Proves the landing scan is not limited to A/M records: an R
             # record whose post-side path falls under the deny set refuses.
@@ -958,21 +1129,21 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
                              "--target-ref", trunk, "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             out = proc.stdout.decode()
-            self.assertIn("reviews-home egress: docs/reviews/y.md", out)
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/y.md", out)
             self.assertIn("refuse: reviews-home egress in the landing", out)
 
     def test_check_staged_reviews_home_modification_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/reviews/x.md", "v1\n")
+            repo.write(".ai-playbook/reviews/x.md", "v1\n")
             repo.commit_all("base")
-            repo.write("docs/reviews/x.md", "v1\nv2\n")
+            repo.write(".ai-playbook/reviews/x.md", "v1\nv2\n")
             repo.stage_all()
             # Proves M records are not skipped: a modified tracked record
             # under the home is the same witnessed harm.
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-            self.assertIn("reviews-home egress: docs/reviews/x.md",
+            self.assertIn("reviews-home egress: .ai-playbook/reviews/x.md",
                           proc.stdout.decode())
 
     def test_check_staged_reviews_home_deletion_clean(self):
@@ -980,9 +1151,9 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
         # untracks a force-added record) is never a reviews-home finding.
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/reviews/x.md", "v1\n")
+            repo.write(".ai-playbook/reviews/x.md", "v1\n")
             repo.commit_all("base")
-            git(repo.root, "rm", "-q", "docs/reviews/x.md")
+            git(repo.root, "rm", "-q", ".ai-playbook/reviews/x.md")
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             out = proc.stdout.decode()
@@ -994,9 +1165,9 @@ class ReverseSquashGuardReviewsHomeTest(unittest.TestCase):
         # deletion diff under the home is clean.
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/reviews/x.md", "v1\n")
+            repo.write(".ai-playbook/reviews/x.md", "v1\n")
             repo.commit_all("base")
-            git(repo.root, "rm", "-q", "docs/reviews/x.md")
+            git(repo.root, "rm", "-q", ".ai-playbook/reviews/x.md")
             diff = git(repo.root, "diff", "-M", "--cached")
             proc = run_guard("check-diff", "--against", "HEAD",
                              "--repo", str(repo.root), stdin=diff.encode())
@@ -1086,7 +1257,7 @@ class ReverseSquashGuardCheckArchiveTest(unittest.TestCase):
             # A filename match without the plan bytes' sha256 refuses: the
             # name-only leg is forgeable and must not pass.
             record = self._write_record(
-                repo, "docs/reviews", "2026-10-03-plan-review-x-exec-r1.md",
+                repo, ".ai-playbook/reviews", "2026-10-03-plan-review-x-exec-r1.md",
                 "exec review r1 for plan x; no digest quoted here\n")
             proc = run_guard("check-archive", "--rev", sha,
                              "--repo", str(repo.root))
@@ -1107,18 +1278,18 @@ class ReverseSquashGuardCheckArchiveTest(unittest.TestCase):
     def test_check_archive_passes_with_evidence(self):
         digest = hashlib.sha256(self.CHECKED_PLAN.encode()).hexdigest()
         record_body = "exec review r1\nplan bytes sha256: %s\n" % digest
-        # A digest-matching record in docs/reviews/ passes.
+        # A digest-matching record in .ai-playbook/reviews/ passes.
         with tempfile.TemporaryDirectory() as tmp:
             repo, sha, _blob = self._archived_repo(tmp, self.CHECKED_PLAN)
-            self._write_record(repo, "docs/reviews",
+            self._write_record(repo, ".ai-playbook/reviews",
                                "2026-10-03-plan-review-x-exec-r1.md", record_body)
             proc = run_guard("check-archive", "--rev", sha,
                              "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        # A record in docs/history/reviews/ passes identically.
+        # A record in .ai-playbook/reviews/ passes identically.
         with tempfile.TemporaryDirectory() as tmp:
             repo, sha, _blob = self._archived_repo(tmp, self.CHECKED_PLAN)
-            self._write_record(repo, "docs/history/reviews",
+            self._write_record(repo, ".ai-playbook/reviews",
                                "2026-10-03-plan-review-x-exec-r2.md", record_body)
             proc = run_guard("check-archive", "--rev", sha,
                              "--repo", str(repo.root))
@@ -1127,7 +1298,7 @@ class ReverseSquashGuardCheckArchiveTest(unittest.TestCase):
         # containment: plan slug x does not match bar-x's record).
         with tempfile.TemporaryDirectory() as tmp:
             repo, sha, _blob = self._archived_repo(tmp, self.CHECKED_PLAN)
-            self._write_record(repo, "docs/reviews",
+            self._write_record(repo, ".ai-playbook/reviews",
                                "2026-10-03-plan-review-bar-x-exec-r1.md",
                                record_body)
             proc = run_guard("check-archive", "--rev", sha,
@@ -1172,7 +1343,7 @@ class ReverseSquashGuardCheckArchiveTest(unittest.TestCase):
             repo.commit_all("base")
             git(repo.root, "rm", "-q", "docs/history/plans/2026-10-03-x.md")
             sha = repo.commit_all("delete the evidenced plan")
-            self._write_record(repo, "docs/reviews",
+            self._write_record(repo, ".ai-playbook/reviews",
                                "2026-10-03-plan-review-x-exec-r1.md",
                                "exec review r1\nplan bytes sha256: %s\n" % digest)
             proc = run_guard("check-archive", "--rev", sha,
@@ -1415,12 +1586,714 @@ class ReverseSquashGuardCheckArchiveTest(unittest.TestCase):
             git(repo.root, "mv", "docs/history/plans/2026-10-03-x.md",
                 "docs/tmp/2026-10-03-x.md")
             sha = repo.commit_all("move the evidenced plan aside")
-            self._write_record(repo, "docs/reviews",
+            self._write_record(repo, ".ai-playbook/reviews",
                                "2026-10-03-plan-review-x-exec-r1.md",
                                "exec review r1\nplan bytes sha256: %s\n" % digest)
             proc = run_guard("check-archive", "--rev", sha,
                              "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_nested_deletion_refuses_naming_path(self):
+        # A nested plans-root source (a file under docs/history/plans/
+        # outside the state subdirectories) is an egress-capable source
+        # exactly like a root-level file: its bare deletion refuses at
+        # check-archive naming the deleted nested path.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write("docs/history/plans/sub/plan-nested-deletion.md",
+                       self.UNCHECKED_PLAN)
+            repo.commit_all("base")
+            git(repo.root, "rm", "-q",
+                "docs/history/plans/sub/plan-nested-deletion.md")
+            sha = repo.commit_all("delete the nested plan")
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("plan-egress: docs/history/plans/sub/plan-nested-deletion.md",
+                          out)
+            self.assertIn("refuse:", out)
+
+    def test_nested_to_nested_rename_inside_one_root_sanctioned(self):
+        # A rename between two nested paths of the same plans root is
+        # sanctioned reorganization, never egress (both endpoints sit
+        # under the source root).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write("docs/history/plans/sub/a-nested.md", self.UNCHECKED_PLAN)
+            repo.commit_all("base")
+            self._ensure_dir(repo, "docs/history/plans/sub2")
+            git(repo.root, "mv", "docs/history/plans/sub/a-nested.md",
+                "docs/history/plans/sub2/b-nested.md")
+            sha = repo.commit_all("rename between nested paths")
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_nested_into_completed_refuses(self):
+        # A rename from a nested plans-root source into the completed/
+        # archive state directory is egress and refuses with the
+        # archive-ceremony evidence.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write("docs/history/plans/sub/c-nested.md", self.UNCHECKED_PLAN)
+            repo.commit_all("base")
+            self._ensure_dir(repo, "docs/history/plans/completed")
+            git(repo.root, "mv", "docs/history/plans/sub/c-nested.md",
+                "docs/history/plans/completed/2026-10-06-nested-egress.md")
+            sha = repo.commit_all("archive the nested plan")
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("plan-egress: docs/history/plans/sub/c-nested.md"
+                          " -> docs/history/plans/completed/2026-10-06-nested-egress.md",
+                          out)
+            self.assertIn("refuse:", out)
+
+
+class ReverseSquashGuardDirectoryEgressTest(unittest.TestCase):
+    """Directory-plan egresses (plan-directory-shape Task 2): the
+    name-status layer aggregates the N per-file rows under a common
+    <plans-root>/<slug>/ prefix into ONE directory egress keyed on the
+    directory slug before the evidence legs run; the evidence legs span
+    the charter plus every task file and key the exec-review record on
+    the directory slug; --ack-egress names the directory path once and
+    refuses a path that is not the egress."""
+
+    SLUG = "2026-10-08-x"
+    PLAN_DIR = "docs/history/plans/2026-10-08-x"
+    ARCHIVE_DIR = "docs/history/plans/completed/2026-10-08-x"
+
+    CHARTER_CHECKED = b"# plan x (directory)\n\n- [x] charter box\n"
+    TASK_ONE_CHECKED = b"### Task 1\n\n- [x] task one\n"
+    TASK_TWO_CHECKED = b"### Task 2\n\n- [x] task two\n"
+    TASK_ONE_UNCHECKED = b"### Task 1\n\n- [ ] task one\n"
+
+    def _directory_repo(self, tmp, task_one=TASK_ONE_CHECKED, message=None):
+        """Base commit carrying the directory plan, then the archive
+        commit renaming the whole directory into completed/. Returns
+        (repo, archive_sha)."""
+        repo = ScratchRepo(tmp)
+        repo.write(self.PLAN_DIR + "/PLAN.md",
+                   self.CHARTER_CHECKED.decode())
+        repo.write(self.PLAN_DIR + "/tasks/01-a.md", task_one.decode())
+        repo.write(self.PLAN_DIR + "/tasks/02-b.md",
+                   self.TASK_TWO_CHECKED.decode())
+        repo.commit_all("base")
+        self._ensure_dir(repo, "docs/history/plans/completed")
+        git(repo.root, "mv", self.PLAN_DIR, self.ARCHIVE_DIR)
+        sha = repo.commit_all(message or "plans: archive the directory plan")
+        return repo, sha
+
+    def _directory_repo_staged(self, tmp):
+        """The archive rename staged but uncommitted (the --staged arm)."""
+        repo = ScratchRepo(tmp)
+        repo.write(self.PLAN_DIR + "/PLAN.md",
+                   self.CHARTER_CHECKED.decode())
+        repo.write(self.PLAN_DIR + "/tasks/01-a.md",
+                   self.TASK_ONE_CHECKED.decode())
+        repo.write(self.PLAN_DIR + "/tasks/02-b.md",
+                   self.TASK_TWO_CHECKED.decode())
+        repo.commit_all("base")
+        self._ensure_dir(repo, "docs/history/plans/completed")
+        git(repo.root, "mv", self.PLAN_DIR, self.ARCHIVE_DIR)
+        repo.stage_all()
+        return repo
+
+    def _ensure_dir(self, repo, rel):
+        (repo.root / rel).mkdir(parents=True, exist_ok=True)
+
+    def _directory_bytes(self, files):
+        """The egress byte payload of the directory manifest: every file's
+        bytes concatenated in sorted relative-path order (the charter
+        sorts first)."""
+        return b"".join(files[rel] for rel in sorted(files))
+
+    def _write_record(self, repo, digest):
+        record = repo.root / ".ai-playbook" / "reviews" / (
+            "2026-10-08-plan-review-x-exec-r1.md")
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text("exec review r1\nplan bytes sha256: %s\n" % digest)
+        return record
+
+    def test_guard_directory_egress_aggregation(self):
+        # Layer level: N per-file R rows under one <slug>/ prefix collapse
+        # into ONE group keyed on the directory slug when the source
+        # directory carries the charter; a charterless directory keeps the
+        # per-file pairs.
+        records = [
+            {"status": "R", "old": self.PLAN_DIR + "/PLAN.md",
+             "path": self.ARCHIVE_DIR + "/PLAN.md"},
+            {"status": "R", "old": self.PLAN_DIR + "/tasks/01-a.md",
+             "path": self.ARCHIVE_DIR + "/tasks/01-a.md"},
+            {"status": "R", "old": self.PLAN_DIR + "/tasks/02-b.md",
+             "path": self.ARCHIVE_DIR + "/tasks/02-b.md"},
+        ]
+        groups = rsg.archive_egress_pairs(
+            records, is_plan_directory=lambda d: d == self.PLAN_DIR)
+        self.assertEqual(len(groups), 1, groups)
+        self.assertEqual(groups[0]["old"], self.PLAN_DIR)
+        self.assertEqual(groups[0]["new"], self.ARCHIVE_DIR)
+        self.assertEqual(len(groups[0]["files"]), 3, groups[0])
+        non_plan = rsg.archive_egress_pairs(records, is_plan_directory=lambda d: False)
+        self.assertEqual(len(non_plan), 3, non_plan)
+        # End to end: one egress finding keyed on the slug; the evidence
+        # legs span the charter plus every task file (a fully checked
+        # directory plan with a digest-bound record passes).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, sha = self._directory_repo(tmp)
+            files = {
+                "PLAN.md": self.CHARTER_CHECKED,
+                "tasks/01-a.md": self.TASK_ONE_CHECKED,
+                "tasks/02-b.md": self.TASK_TWO_CHECKED,
+            }
+            self._write_record(repo, hashlib.sha256(
+                self._directory_bytes(files)).hexdigest())
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(
+                proc.stdout.decode().count("plan-egress:"), 0)
+        # An unchecked box in ONE task file fails the spanned checkbox leg
+        # naming the directory path and exactly one egress finding (never
+        # N per-file findings).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, sha = self._directory_repo(tmp, task_one=self.TASK_ONE_UNCHECKED)
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertEqual(out.count("plan-egress:"), 1, out)
+            self.assertIn("plan-egress: " + self.PLAN_DIR
+                          + " -> " + self.ARCHIVE_DIR, out)
+            self.assertIn("1 unchecked", out)
+            self.assertIn("refuse:", out)
+        # A deletion of the whole directory plan aggregates the D rows the
+        # same way; the evidence legs read the parent-side bytes.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN_DIR + "/PLAN.md",
+                       self.CHARTER_CHECKED.decode())
+            repo.write(self.PLAN_DIR + "/tasks/01-a.md",
+                       self.TASK_ONE_CHECKED.decode())
+            repo.commit_all("base")
+            git(repo.root, "rm", "-q", "-r", self.PLAN_DIR)
+            sha = repo.commit_all("delete the directory plan")
+            digest = hashlib.sha256(self._directory_bytes({
+                "PLAN.md": self.CHARTER_CHECKED,
+                "tasks/01-a.md": self.TASK_ONE_CHECKED,
+            })).hexdigest()
+            self._write_record(repo, digest)
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            # Without the record the same deletion refuses on the
+            # aggregated pair.
+            for record in (repo.root / ".ai-playbook" / "reviews").rglob("*.md"):
+                record.unlink()
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertEqual(out.count("plan-egress:"), 1, out)
+            self.assertIn("plan-egress: " + self.PLAN_DIR, out)
+
+    def test_guard_ack_exactness(self):
+        # --staged: an ack naming the DIRECTORY path exactly once
+        # suppresses the aggregated egress (warning-level only, the staged
+        # arm cannot trailer-verify).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._directory_repo_staged(tmp)
+            proc = run_guard("check-archive", "--staged",
+                             "--repo", str(repo.root),
+                             "--ack-egress", self.PLAN_DIR)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("acknowledged plan egress (operator ack): "
+                          + self.PLAN_DIR, out)
+            self.assertIn("cannot be trailer-verified", out)
+        # An ack naming a member file (a path that is not the egress)
+        # refuses as unused.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._directory_repo_staged(tmp)
+            proc = run_guard("check-archive", "--staged",
+                             "--repo", str(repo.root),
+                             "--ack-egress", self.PLAN_DIR + "/PLAN.md")
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("unused", out)
+            self.assertIn("refuse:", out)
+        # --rev: an ack naming the directory path requires the matching
+        # Archive-egress-ack: trailer in the commit message; the trailer
+        # naming the directory path passes.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, sha = self._directory_repo(tmp)
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root),
+                             "--ack-egress", self.PLAN_DIR)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("not verified by a matching Archive-egress-ack:",
+                          out)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, sha = self._directory_repo(
+                tmp,
+                message="plans: archive the directory plan (ack)\n\n"
+                        "Archive-egress-ack: %s\n" % self.PLAN_DIR)
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root),
+                             "--ack-egress", self.PLAN_DIR)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("acknowledged plan egress (operator ack): "
+                          + self.PLAN_DIR, proc.stdout.decode())
+
+    def test_guard_directory_sideways_rename(self):
+        # A sideways rename of a whole directory plan aggregates to one
+        # egress keyed on the directory and refuses without evidence.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN_DIR + "/PLAN.md",
+                       self.CHARTER_CHECKED.decode())
+            repo.write(self.PLAN_DIR + "/tasks/01-a.md",
+                       self.TASK_ONE_CHECKED.decode())
+            repo.write(self.PLAN_DIR + "/tasks/02-b.md",
+                       self.TASK_TWO_CHECKED.decode())
+            repo.commit_all("base")
+            self._ensure_dir(repo, "docs/tmp")
+            git(repo.root, "mv", self.PLAN_DIR, "docs/tmp/" + self.SLUG)
+            sha = repo.commit_all("move the directory plan aside")
+            proc = run_guard("check-archive", "--rev", sha,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertEqual(out.count("plan-egress:"), 1, out)
+            self.assertIn("plan-egress: " + self.PLAN_DIR
+                          + " -> docs/tmp/" + self.SLUG, out)
+            self.assertIn("refuse:", out)
+
+
+class ReverseSquashGuardClaimFenceTest(unittest.TestCase):
+    """check-claim-fence: the plans-root deletion claim fence (plan
+    2026-10-05-live-claim-plan-deletion-fence Task 1; the warning leg and
+    the rejected-state sanction are plan
+    2026-10-11-landing-deleted-unclaimed-execution-ready-plan Task 1).
+
+    A deleted plans-root file (under the plans home, outside the
+    completed/, deferred/, and rejected/ state directories) is fenced when
+    a live claim under the primary checkout's execution-claims/ or
+    authoring-claims/ names it, unless the same commit adds the
+    completed-archive twin, moves the file into a rejected/ state
+    directory, or the message carries a Plans-Deletion-Ack: trailer naming
+    the path. A protected deletion with neither a naming claim nor a
+    sanction is the unclaimed-deletion warning class: a
+    claim-fence-warning: line and exit 0. Scratch repositories carry no
+    facts file, so
+    the plans home and tmp dir fall back to the guard's hard-coded
+    defaults; the scratch root is the primary checkout (the first
+    `git worktree list --porcelain` entry), so claims written under the
+    scratch root are the live claims the check reads at scan time. The
+    facts-anchoring regression test is the one exception: it carries this
+    repo's repo-relative facts values to pin that the resolved homes
+    anchor at the scanned --repo root, never at the process CWD (review
+    finding CF1).
+    """
+
+    PLAN = "docs/history/plans/2026-10-04-x.md"
+    CLAIM = "2026-10-04-x.md"
+
+    def _write_claim(self, repo, claim_dir, name):
+        """An untracked claim file (per-checkout state the guard reads at
+        check time); written after the commits so it stays untracked."""
+        d = repo.root / claim_dir
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("claim %s\n" % name)
+
+    def _deletion_fixture(self, tmp, message="delete the plan"):
+        """base seeds docs/history/plans/2026-10-04-x.md; the deleting
+        commit removes it. Returns (repo, base_sha, delete_sha)."""
+        repo = ScratchRepo(tmp)
+        repo.write(self.PLAN, "plan body\n")
+        base = repo.commit_all("base")
+        git(repo.root, "rm", "-q", self.PLAN)
+        delete = repo.commit_all(message)
+        return repo, base, delete
+
+    def test_claim_fence_witnessed_deletion_refuses(self):
+        # given a re-derived 7b8d1bff shape, a plans-root deletion with a
+        # live execution claim; expects exit 1 naming the path, the claim
+        # file, and the three sanctioned exits.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            plan = "docs/history/plans/2026-10-04-review-cert-graded-binding.md"
+            repo.write(plan, "certified plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", plan)
+            delete = repo.commit_all("queue prune")
+            self._write_claim(repo, "docs/tmp/execution-claims",
+                              "2026-10-04-review-cert-graded-binding.md")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(plan, out)
+            self.assertIn("docs/tmp/execution-claims/"
+                          "2026-10-04-review-cert-graded-binding.md", out)
+            self.assertIn("sanctioned exits", out)
+            self.assertIn("archive the file in the same commit", out)
+            self.assertIn("stand down and restore the file", out)
+            self.assertIn("Plans-Deletion-Ack:", out)
+            self.assertIn("OUTCOME: fail", out)
+
+    def test_claim_fence_archive_twin_same_commit_passes(self):
+        # given the deletion's completed-twin added by the same commit,
+        # expects exit 0 naming the sanction.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            completed = repo.root / "docs" / "history" / "plans" / "completed"
+            completed.mkdir(parents=True, exist_ok=True)
+            git(repo.root, "mv", self.PLAN,
+                "docs/history/plans/completed/" + self.CLAIM)
+            twin = repo.commit_all("archive the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", twin, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(self.PLAN, out)
+            # The sanction line stays byte-identical (plan
+            # 2026-10-11-landing-deleted-unclaimed-execution-ready-plan
+            # Task 1), and the sanctioned deletion never warns.
+            self.assertIn(
+                "ok: plans-root deletion sanctioned (same-commit archive "
+                "twin at docs/history/plans/completed/%s): %s"
+                % (self.CLAIM, self.PLAN), out)
+            self.assertNotIn("claim-fence-warning:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_retro_archive_in_later_commit_refuses(self):
+        # given the twin landed by a later commit in the range, expects the
+        # deleting commit's scan to refuse (the witnessed recovery shape:
+        # per-commit classification, never a range-wide archive credit).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            delete = repo.commit_all("delete the plan")
+            completed = repo.root / "docs" / "history" / "plans" / "completed"
+            completed.mkdir(parents=True, exist_ok=True)
+            (completed / self.CLAIM).write_text("plan body\n")
+            head = repo.commit_all("recover the plan into the archive")
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", head, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(self.PLAN, out)
+            self.assertIn("OUTCOME: fail", out)
+
+    def test_claim_fence_ack_trailer_passes(self):
+        # given a commit message carrying Plans-Deletion-Ack: naming the
+        # path, expects exit 0 (the operator ack sanctions the deletion
+        # even while the claim is live).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            ack = repo.commit_all(
+                "delete the plan\n\n"
+                "Plans-Deletion-Ack: %s\n" % self.PLAN)
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", ack, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("operator ack", out)
+            self.assertIn(self.PLAN, out)
+            # The sanction line stays byte-identical (plan
+            # 2026-10-11-landing-deleted-unclaimed-execution-ready-plan
+            # Task 1), and the sanctioned deletion never warns.
+            self.assertIn("ok: plans-root deletion sanctioned "
+                          "(operator ack trailer): %s" % self.PLAN, out)
+            self.assertNotIn("claim-fence-warning:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_ack_wrong_path_refuses(self):
+        # given a trailer naming a different path, expects the refusal: the
+        # whole trailer value is compared, so another path's ack sanctions
+        # nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            ack = repo.commit_all(
+                "delete the plan\n\n"
+                "Plans-Deletion-Ack: docs/history/plans/other.md\n")
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", ack, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(self.PLAN, out)
+            self.assertIn("OUTCOME: fail", out)
+
+    def test_claim_fence_rejected_state_move_sanctions(self):
+        # given the deleted basename moved into a rejected/ state directory
+        # by the same commit (a live execution claim is present), expects
+        # exit 0 naming the rejected-state sanction and no warning (plan
+        # 2026-10-11-landing-deleted-unclaimed-execution-ready-plan Task 1;
+        # the mirror of the archive-twin fixture).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            rejected = repo.root / "docs" / "history" / "plans" / "rejected"
+            rejected.mkdir(parents=True, exist_ok=True)
+            git(repo.root, "mv", self.PLAN,
+                "docs/history/plans/rejected/" + self.CLAIM)
+            moved = repo.commit_all("reject the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", moved, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(
+                "ok: plans-root deletion sanctioned (same-commit "
+                "rejected-state move at docs/history/plans/rejected/%s): %s"
+                % (self.CLAIM, self.PLAN), out)
+            self.assertNotIn("claim-fence-warning:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_unclaimed_deletion_warns(self):
+        # given a protected deletion no live claim names and no sanction
+        # covers (the claim-free window), expects exit 0 with the
+        # unclaimed-deletion warning: the warning line names the path and
+        # the deleting commit and the follow-on line enumerates the
+        # sanctioned exits (plan
+        # 2026-10-11-landing-deleted-unclaimed-execution-ready-plan Task 1).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, delete = self._deletion_fixture(tmp)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("claim-fence-warning: unclaimed plans-root "
+                          "deletion: %s (commit %s)" % (self.PLAN, delete),
+                          out)
+            self.assertIn(
+                "  sanctioned exits: a same-commit archive twin, a "
+                "same-commit rejected-state move, a Plans-Deletion-Ack: "
+                "%s trailer in the deleting commit's message, or standing "
+                "down and restoring the file" % self.PLAN, out)
+            self.assertNotIn("deleted while its claim is live", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_authoring_claim_refuses(self):
+        # given a live authoring claim, expects the identical refusal
+        # naming the authoring claim file.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, delete = self._deletion_fixture(tmp)
+            self._write_claim(repo, "docs/tmp/authoring-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(self.PLAN, out)
+            self.assertIn("docs/tmp/authoring-claims/" + self.CLAIM, out)
+            self.assertIn("OUTCOME: fail", out)
+
+    def test_claim_fence_date_prefix_stem_matches(self):
+        # given a slug-keyed claim (no date prefix) and a date-prefixed
+        # basename, expects the refusal under the post-date-stem equality
+        # arm of the record-stem rule.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            plan = "docs/history/plans/2026-10-04-graded-binding.md"
+            repo.write(plan, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", plan)
+            delete = repo.commit_all("delete the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims",
+                              "graded-binding.md")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("docs/tmp/execution-claims/graded-binding.md", out)
+            self.assertIn("OUTCOME: fail", out)
+
+    def test_guard_claim_fence_directory(self):
+        # A plans-root DIRECTORY plan deletion while a live claim keyed to
+        # the directory slug is live refuses through the check-claim-fence
+        # arm: every member path's deletion (the charter and each task
+        # file) matches the claim via the directory-slug arm.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            plan_dir = "docs/history/plans/2026-10-04-x"
+            repo.write(plan_dir + "/PLAN.md", "charter body\n")
+            repo.write(plan_dir + "/tasks/01-a.md", "task one\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", "-r", plan_dir)
+            delete = repo.commit_all("delete the directory plan")
+            self._write_claim(repo, "docs/tmp/execution-claims", "x.md")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(plan_dir + "/PLAN.md", out)
+            self.assertIn(plan_dir + "/tasks/01-a.md", out)
+            self.assertIn("docs/tmp/execution-claims/x.md", out)
+            self.assertIn("OUTCOME: fail", out)
+        # The unit-level stem match: a claim keyed to the directory slug
+        # matches member paths under <slug>/, and never matches a
+        # charterless sibling directory's files.
+        self.assertTrue(rsg.claim_stem_matches_path(
+            "x", "docs/history/plans/2026-10-04-x/PLAN.md"))
+        self.assertTrue(rsg.claim_stem_matches_path(
+            "x", "docs/history/plans/2026-10-04-x/tasks/01-a.md"))
+        self.assertFalse(rsg.claim_stem_matches_path(
+            "y", "docs/history/plans/2026-10-04-x/PLAN.md"))
+
+    def test_claim_fence_strict_subsequence_warns(self):
+        # given a claim stem appearing only as a strict subsequence of the
+        # deleted basename's hyphen segments (and a bare substring of its
+        # stem), expects exit 0 with the unclaimed-deletion warning:
+        # whole-segment equality never matches a subsequence, so the
+        # deletion is unclaimed (warned, never refused).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            plan = "docs/history/plans/2026-10-04-alpha-beta-gamma.md"
+            repo.write(plan, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", plan)
+            delete = repo.commit_all("delete the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims",
+                              "alpha-beta.md")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("claim-fence-warning: unclaimed plans-root "
+                          "deletion: %s (commit %s)" % (plan, delete), out)
+            self.assertNotIn("claim-fence:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_no_claim_warns(self):
+        # given no matching claim (an unrelated claim is live), expects
+        # exit 0 with the unclaimed-deletion warning: the refusal fence
+        # stays the naming relation, not a general plans-root write lock,
+        # and the claim-free window is covered by the warning class
+        # instead of a silent pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            delete = repo.commit_all("delete the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims",
+                              "2026-10-04-unrelated-plan.md")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("claim-fence-warning: unclaimed plans-root "
+                          "deletion: %s (commit %s)" % (self.PLAN, delete),
+                          out)
+            self.assertNotIn("claim-fence:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_absent_claim_dir_warns(self):
+        # given no claim directories on the primary checkout, expects
+        # exit 0 with the unclaimed-deletion warning.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, delete = self._deletion_fixture(tmp)
+            self.assertFalse((repo.root / "docs" / "tmp").exists())
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn("claim-fence-warning: unclaimed plans-root "
+                          "deletion: %s (commit %s)" % (self.PLAN, delete),
+                          out)
+            self.assertNotIn("claim-fence:", out)
+            self.assertIn("OUTCOME: pass", out)
+
+    def test_claim_fence_unresolvable_diff_indeterminate(self):
+        # given an unresolvable base ref, expects exit 2 with
+        # OUTCOME: indeterminate (never a pass).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, delete = self._deletion_fixture(tmp)
+            proc = run_guard("check-claim-fence", "--base", "no-such-revision",
+                             "--head", delete, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("OUTCOME: indeterminate", proc.stdout.decode())
+
+    def test_claim_fence_tool_error_paths(self):
+        # given a corrupted scratch repo (an unreadable commit object in
+        # the range), expects exit 3 with OUTCOME: tool_error; given a
+        # non-repository --repo root, expects the same tool error.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            mid = repo.commit_all("delete the plan")
+            repo.write("tail.txt", "tail\n")
+            head = repo.commit_all("tail work")
+            obj = repo.root / ".git" / "objects" / mid[:2] / mid[2:]
+            obj.chmod(0o644)  # git writes loose objects read-only
+            obj.write_bytes(b"corrupted object bytes")
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", head, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+            self.assertIn("OUTCOME: tool_error", proc.stdout.decode())
+        with tempfile.TemporaryDirectory() as tmp:
+            nonrepo = Path(tmp) / "not-a-repo"
+            nonrepo.mkdir()
+            proc = run_guard("check-claim-fence", "--base", "HEAD",
+                             "--head", "HEAD", "--repo", str(nonrepo))
+            self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+            self.assertIn("OUTCOME: tool_error", proc.stdout.decode())
+
+    def test_claim_fence_facts_resolution_anchors_at_scanned_root(self):
+        # given this repo's fenced facts values (repo-relative plans_dir
+        # and tmp_dir) and a live-claim plans-root deletion, a guard run
+        # from a SUBDIRECTORY of the scratch repo with --repo <toplevel>
+        # must refuse naming the path and the claim: the facts-resolved
+        # homes anchor at the scanned root, never at the process CWD
+        # (review finding CF1; the CWD-anchored phantom in-repo prefix
+        # passed this deletion pre-fix). --repo carries the resolved
+        # toplevel, the form a git-based caller hands over (git
+        # rev-parse --show-toplevel prints the resolved path), which
+        # also keeps the fixture off the macOS /var symlink detour where
+        # a symlink-resolving CWD anchor spuriously escapes and lands in
+        # the fallback.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            repo.write(".ai-playbook/facts.md",
+                       "```toml\n"
+                       'plans_dir = "docs/history/plans/"\n'
+                       'tmp_dir = "docs/tmp/"\n'
+                       "```\n")
+            repo.write(self.PLAN, "plan body\n")
+            base = repo.commit_all("base")
+            git(repo.root, "rm", "-q", self.PLAN)
+            delete = repo.commit_all("delete the plan")
+            self._write_claim(repo, "docs/tmp/execution-claims", self.CLAIM)
+            proc = run_guard("check-claim-fence", "--base", base,
+                             "--head", delete,
+                             "--repo", str(repo.root.resolve()),
+                             cwd=str(repo.root / "docs"))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            out = proc.stdout.decode()
+            self.assertIn(self.PLAN, out)
+            self.assertIn("docs/tmp/execution-claims/" + self.CLAIM, out)
+            self.assertIn("OUTCOME: fail", out)
 
 
 class SingleCommitSweepTest(unittest.TestCase):

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Confluence mirror validation and ephemeral docs/tmp cleanup.
-# Used by the done pre-docs sweep gate run (confluence-hygiene gate) and docs-branch Step 2 (worktree pass).
+# Used by the done landing sweep (the confluence-hygiene gate) and docs-branch Step 2 (worktree pass).
 set -euo pipefail
 
 MANIFEST_DEFAULT="docs/maintenance/confluence-sync-manifest.json"

@@ -42,7 +42,7 @@ GLOB_BODIES=(
   'docs/facts.md.example'
   'docs/reviews/**'
   'docs/tmp/**'
-  'agents/skills/done/SKILL.md'
+  'agents/skills/done/**'
   'agents/skills/how-to-write-skills/**'
   'docs/AGENTS.md'
   'AGENTS.md'

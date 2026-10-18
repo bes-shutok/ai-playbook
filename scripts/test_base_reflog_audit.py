@@ -9,6 +9,14 @@ its own git init and per-repo identity; every git invocation (audit and
 fixture) is isolated from host state (the ambient GIT_* variable family
 dropped, GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM pinned at /dev/null), so
 scratch reflogs and fixture commits cannot inherit host config.
+
+r1-review fold (docs/reviews/2026-10-04-code-review-main-rewind-bypass-fences-r1.md,
+finding 2): test_reflog_window_missing_nul_separator_is_tool_error forges
+one reflog message to carry a carriage return; git renders the byte
+verbatim and does not rewrite the reflog file on read, so the
+value-plus-message parse meets a continuation line with no NUL separator
+and refuses the run as a tool error (exit 3, final `OUTCOME: tool_error`
+line), while the restored file audits clean.
 """
 
 import os
@@ -106,6 +114,11 @@ def outcome_lines(proc):
 def backward_rows(proc):
     return [line for line in proc.stdout.splitlines()
             if line.startswith("backward-move:")]
+
+
+def raw_ref_rows(proc):
+    return [line for line in proc.stdout.splitlines()
+            if line.startswith("raw-ref-write:")]
 
 
 def receipt_rows(proc):
@@ -218,6 +231,134 @@ class BaseReflogAuditTest(unittest.TestCase):
             self.assertEqual(outcome_lines(proc), ["OUTCOME: indeterminate"])
             self.assertTrue(
                 proc.stdout.rstrip().endswith("OUTCOME: indeterminate"))
+
+    def test_reflog_window_reports_raw_ref_write(self):
+        # Witness shape (the 2026-10-04 main rewind): a bare `git
+        # update-ref refs/heads/main <sibling-tip>` with no -m leaves an
+        # empty-description reflog entry whose new tip is not a descendant
+        # of the previous entry; the pair is one raw-ref-write row, not a
+        # message-bearing backward move.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            first = commit_all(root, "forward one")
+            sibling = commit_tree(root, "side tip", head_tree(root), base)
+            git(root, "update-ref", "refs/heads/main", sibling)
+            proc = run_audit("reflog-window", "--repo", str(root),
+                             "--base-branch", "main", "--since-sha", base)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertEqual(
+                raw_ref_rows(proc),
+                ["raw-ref-write: %s (empty reflog description; new tip is "
+                 "not a descendant of previous entry %s)" % (sibling, first)])
+            self.assertEqual(backward_rows(proc), [])
+            self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+            self.assertTrue(proc.stdout.rstrip().endswith("OUTCOME: fail"))
+            self.assertLess(proc.stdout.index("raw-ref-write:"),
+                            proc.stdout.index("OUTCOME:"))
+
+    def test_reflog_window_empty_description_fast_forward_prints_no_row(self):
+        # Declared non-row arm: a bare update-ref whose new tip IS a
+        # descendant of the previous entry (the adjacent fast-forward raw
+        # write) prints no row, and the clean window keeps the unchanged ok
+        # line and exit 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            first = commit_all(root, "forward one")
+            descendant = commit_tree(root, "side tip", head_tree(root), first)
+            git(root, "update-ref", "refs/heads/main", descendant)
+            proc = run_audit("reflog-window", "--repo", str(root),
+                             "--base-branch", "main", "--since-sha", base)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(raw_ref_rows(proc), [])
+            self.assertEqual(backward_rows(proc), [])
+            self.assertEqual(
+                proc.stdout.splitlines(),
+                ["ok: no backward move in the audited reflog window "
+                 "(2 pairs audited, anchor %s)" % base,
+                 "OUTCOME: pass"])
+
+    def test_reflog_window_raw_write_and_backward_move_in_one_run(self):
+        # Both row classes in one walk, walk order preserved: a bare
+        # update-ref onto a sibling tip (raw-ref-write) and a message-bearing
+        # reset backward (the backward-move bytes unchanged).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            first = commit_all(root, "forward one")
+            second = commit_all(root, "forward two")
+            sibling = commit_tree(root, "side tip", head_tree(root), base)
+            git(root, "reset", "-q", "--hard", first)
+            git(root, "update-ref", "refs/heads/main", sibling)
+            proc = run_audit("reflog-window", "--repo", str(root),
+                             "--base-branch", "main", "--since-sha", base)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertEqual(
+                raw_ref_rows(proc),
+                ["raw-ref-write: %s (empty reflog description; new tip is "
+                 "not a descendant of previous entry %s)" % (sibling, first)])
+            self.assertEqual(
+                backward_rows(proc),
+                ["backward-move: %s -> %s" % (second, first)])
+            self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+            self.assertLess(proc.stdout.index("raw-ref-write:"),
+                            proc.stdout.index("backward-move:"))
+
+    def test_reflog_window_non_ascii_reflog_message_classifies(self):
+        # A message-bearing entry whose reflog message is non-ASCII UTF-8
+        # classifies as its modeled row instead of regressing into a tool
+        # error (per-field decode: the sha field ASCII-guarded, the message
+        # field decoded UTF-8 with replacement).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            first = commit_all(root, "forward one")
+            second = commit_all(root, "forward two")
+            git(root, "update-ref", "-m", "rücksetzen: ünïcode nachrícht",
+                "refs/heads/main", first)
+            proc = run_audit("reflog-window", "--repo", str(root),
+                             "--base-branch", "main", "--since-sha", base)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertNotIn("tool error", proc.stdout + proc.stderr)
+            self.assertEqual(
+                backward_rows(proc),
+                ["backward-move: %s -> %s" % (second, first)])
+            self.assertEqual(raw_ref_rows(proc), [])
+            self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+
+    def test_reflog_window_missing_nul_separator_is_tool_error(self):
+        # A reflog message forged to carry a carriage return splits the real
+        # render (git does not rewrite the reflog file on read) into a
+        # NUL-less continuation line; the value-plus-message parse refuses
+        # it as a tool error naming the line, and the restored file audits
+        # clean, so the craft is the only cause.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            commit_all(root, "forward one")
+            log = root / ".git" / "logs" / "refs" / "heads" / "main"
+            original = log.read_bytes()
+            log.write_bytes(original.replace(
+                b"commit: forward one",
+                b"commit: forward one\rcruel continuation"))
+            proc = run_audit("reflog-window", "--repo", str(root),
+                             "--base-branch", "main", "--since-sha", base)
+            self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+            self.assertIn("unexpected git reflog output line (missing NUL "
+                          "separator)", proc.stderr)
+            self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
+            self.assertTrue(
+                proc.stdout.rstrip().endswith("OUTCOME: tool_error"))
+            self.assertEqual(backward_rows(proc), [])
+            self.assertEqual(raw_ref_rows(proc), [])
+            log.write_bytes(original)
+            restored = run_audit("reflog-window", "--repo", str(root),
+                                 "--base-branch", "main",
+                                 "--since-sha", base)
+            self.assertEqual(restored.returncode, 0,
+                             restored.stdout + restored.stderr)
+            self.assertEqual(outcome_lines(restored), ["OUTCOME: pass"])
 
     def test_landed_receipt_reports_empty_tip(self):
         # A landing-phrased commit whose tree is identical to its parent's

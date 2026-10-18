@@ -60,7 +60,7 @@ FACTS_BODY = (
     'plans_dir = "docs/history/plans/"\n'
     'plans_completed_dir = "docs/history/plans/completed/"\n'
     'backlog_dir = "docs/history/backlog/"\n'
-    'reviews_dir = "docs/reviews/"\n'
+    'reviews_dir = ".ai-playbook/reviews/"\n'
     'tmp_dir = "docs/tmp/"\n'
     "```\n"
 )

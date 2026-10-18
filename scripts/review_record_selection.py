@@ -7,18 +7,21 @@ launches. It enumerates the matching record pairs (Markdown plus
 (``<basename>.backup-<timestamp>.md/.stats.json`` are counted
 informationally only, never enumerated), and then:
 
-- ``select``: with an empty directory it emits the ``-r1`` pair paths
+- ``select``: plan reviews are allocated by repository-relative source-plan
+  identity and receive a path-token-qualified filename; other kinds keep
+  slug-wide allocation. With an empty directory it emits the ``-r1`` pair paths
   (decision ``new-record``); with an existing pair whose sidecar
   ``source_digest`` equals the caller-supplied digest of the bytes about
   to be reviewed it returns that pair (decision ``reuse``); with
   ``--explicit-new-round`` it allocates the next free ``-r<N>`` suffix
-  (decision ``new-round``). Anything else is refused: a differing digest
+  (decision ``new-round``), preserving the matched predecessor filename stem
+  when the caller slug is an alias. Anything else is refused: a differing digest
   without an explicit decision is the overwrite guard (exit 1, naming the
   existing record and exactly the two supported actions,
   ``--explicit-new-round`` or ``backup``); an orphan half (a sidecar
   without its Markdown twin or vice versa) is refused for both reuse and
-  allocation until repaired. The digest is the only comparison input; the
-  helper invents no second state store.
+  allocation until repaired. The digest remains the freshness comparison;
+  the source-plan path identifies the plan review series.
 - ``mark-superseded``: appends exactly one ``Superseded by: <successor>``
   Metadata line to the prior record with every other byte unchanged (the
   successor is recorded relative to the prior record's parent, bare name
@@ -31,6 +34,40 @@ informationally only, never enumerated), and then:
   (``<basename>.backup-<timestamp>.md`` and ``.stats.json``) under the
   record's directory and prints both paths; the Markdown path feeds the
   new record's ``Backup of prior record:`` Metadata line.
+- ``recover-orphan``: the auditable recovery for an orphan half (a
+  canonical Markdown whose sidecar twin is missing, left by an
+  interrupted synthesis; review round record lifecycle gaps plan,
+  Task 3). The orphan-state refusals fire before any mutation (a record
+  whose sidecar exists is not an orphan, an absent record refuses, and
+  a name already carrying the ``.orphan-`` infix is already preserved),
+  then the orphan is renamed (never copied) byte-identical to
+  ``<original stem>.orphan-<UTCtimestamp>.md`` (a name no canonical
+  discovery or validation glob matches), and the fresh canonical pair
+  for the explicitly passed slug and optional kind is allocated through
+  the same allocation logic ``select`` uses (the slug and kind are
+  never inverse-parsed from the preserved stem, whose alias analysis is
+  documented ambiguous). The receipt names the preserved path, the
+  allocated pair, and the exact ``Orphan recovery: <repo-relative
+  path>`` Metadata line to add to the fresh record; the preserved path
+  is spelled repo-relative so the printed line passes the staging
+  validator's orphan-recovery link gate verbatim. The selector refuses
+  outside a git repository: the evidence link is repo-relative by
+  contract, so a receipt cannot be printed there.
+- ``verify-digest``: the mechanical digest freshness check at a
+  record-reading boundary (a continuation resumption, a boundary after a
+  closeout or address commit, or terminal evaluation). Every input is an
+  explicit caller input, never derived: the record path, its reviews
+  directory, the recorded base commit, and the latest recorded verified
+  head. The recomputation uses the canonical derivation (the
+  ``git diff <base>...<head>`` bytes hashed with SHA-256, imported from
+  ``corrections_record.py`` so no second freshness notion exists),
+  compares against the sidecar's ``source_digest`` through the same read
+  helper the overwrite guard uses, and refuses stale with both digests
+  named. A HEAD move past the recorded verified head refuses even when
+  the reviewed-scope bytes are unchanged, unless the sidecar records a
+  corrections chain whose terminal binds the current bytes and HEAD (the
+  chain the staging validator grades), which yields the named
+  accepted-stale pass instead. The subcommand mutates nothing.
 
 Standard library only.
 """
@@ -38,6 +75,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime
 import json
 import os
@@ -47,7 +85,30 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from review_plan_identity import (
+    identity_token as _identity_token,
+    normalize_plan_path as _normalize_plan_path,
+    record_identity as _shared_record_identity,
+    repository_root as _repository_root,
+)
+
 BACKUP_INFIX = ".backup-"
+
+# The preserved-orphan infix (review round record lifecycle gaps plan,
+# Task 3): a name carrying it is a preserved orphan, never a canonical
+# record. Selection and validation refuse it structurally: the canonical
+# pair grammar requires the ``-r<N>`` suffix at the end of the base, so
+# ``<stem>.orphan-<timestamp>.md`` never matches the selector's
+# enumeration shapes. Discovery excludes it explicitly instead: the
+# staging-path predicate (``is_staging_review_path`` in
+# validate_review_staging.py, which mirrors this constant) refuses any
+# name carrying the infix, because the staging grammar's optional
+# ``-r<N>`` tail would otherwise match a preserved name on the
+# plan-review, branch-review, rfc-review, confluence-review, PR-N, and
+# bare-family shapes.
+ORPHAN_INFIX = ".orphan-"
+
+ORPHAN_RECOVERY_METADATA_LABEL = "Orphan recovery:"
 
 SUPERSEDED_LABEL = "Superseded by:"
 
@@ -86,6 +147,14 @@ DATE_SOURCE = datetime.date.today
 BACKUP_TIMESTAMP_SOURCE = lambda: datetime.datetime.now().strftime(
     "%Y%m%dT%H%M%S"
 )
+
+# Module-level timestamp source for preserved-orphan names; the plan pins
+# the UTC spelling, so this seam reads the timezone-aware UTC clock. The
+# test suite overrides it to freeze the preservation timestamp, mirroring
+# the BACKUP_TIMESTAMP_SOURCE seam above.
+ORPHAN_TIMESTAMP_SOURCE = lambda: datetime.datetime.now(
+    datetime.timezone.utc
+).strftime("%Y%m%dT%H%M%S")
 
 
 class SelectionRefused(Exception):
@@ -153,8 +222,9 @@ REVIEW_KIND_INFIXES = (
 REVIEW_KIND_BARE_INFIX = "review-"
 
 
-def _pair_pattern(slug: str) -> re.Pattern[str]:
-    """A record pair base is ``<date>[-<review-kind-infix>]<slug>-r<N>``.
+def _pair_pattern(slug: str, *, plan_identity: bool = False) -> re.Pattern[str]:
+    """A record pair base is ``<date>[-<review-kind-infix>]<slug>[-r<N>]``;
+    an unnumbered legacy singleton is round 1.
 
     The supported prefix is the emitted date stamp plus one optional
     review-kind infix drawn from the live corpus's literal kinds
@@ -202,8 +272,33 @@ def _pair_pattern(slug: str) -> re.Pattern[str]:
     return re.compile(
         r"^(?:\d{4}-\d{2}-\d{2}-(?:" + "|".join(infixes) + r")?)"
         + re.escape(slug)
-        + r"-r(\d+)$"
+        + (r"(?:-p[0-9a-f]{8})?" if plan_identity else "")
+        + r"(?:-r(\d+))?$"
     )
+
+
+def _plan_identity(source_plan: Path, reviews_dir: Path) -> str:
+    """Return a repository-relative plan path for stable series identity."""
+    if not source_plan.expanduser().exists():
+        raise SelectionUsageError(f"--source-plan does not exist: {source_plan}")
+    root = _repository_root(reviews_dir)
+    if root is None:
+        raise SelectionUsageError("--source-plan requires a path inside a git repository")
+    identity = _normalize_plan_path(source_plan, root)
+    if identity is None:
+        raise SelectionUsageError(
+            f"--source-plan must resolve inside repository {root}"
+        )
+    return identity
+
+
+def _record_plan_identity(markdown: Path, sidecar: Path) -> str | None:
+    """Read identity from the additive sidecar field or legacy artifact line."""
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    return _shared_record_identity(markdown, payload)
 
 
 def _sidecar_twin(markdown: Path) -> Path:
@@ -236,14 +331,15 @@ def _read_sidecar_digest(sidecar: Path) -> str:
 
 
 def _enumerate(
-    reviews_dir: Path, slug: str
+    reviews_dir: Path, slug: str, *, review_kind: str | None = None,
+    source_plan_identity: str | None = None
 ) -> tuple[list[RecordPair], list[Path], int]:
     """Enumerate matching record pairs, orphan halves, and backup pairs.
 
     Backup-shaped names (``.backup-<timestamp>`` infix) never inflate the
     enumeration; complete backup pairs are counted informationally only.
     """
-    pattern = _pair_pattern(slug)
+    pattern = _pair_pattern(slug, plan_identity=review_kind == "plan-review")
     pairs: list[RecordPair] = []
     orphans: list[Path] = []
     backups_ignored = 0
@@ -261,8 +357,21 @@ def _enumerate(
         seen_bases.add(base)
         sidecar = _sidecar_twin(markdown)
         if sidecar.is_file():
-            pairs.append(RecordPair(int(match.group(1)), base, markdown, sidecar))
+            if source_plan_identity is not None:
+                identity = _record_plan_identity(markdown, sidecar)
+                if identity is None:
+                    raise SelectionRefused(
+                        f"cannot identify legacy plan-review record {markdown.name}: "
+                        "missing extensions.plan_identity and URL or Artifact metadata"
+                    )
+                if identity != source_plan_identity:
+                    continue
+            pairs.append(RecordPair(int(match.group(1) or "1"), base, markdown, sidecar))
         else:
+            if source_plan_identity is not None:
+                legacy_identity = _shared_record_identity(markdown, {})
+                if legacy_identity is not None and legacy_identity != source_plan_identity:
+                    continue
             orphans.append(markdown)
     for sidecar in sorted(reviews_dir.glob("*.stats.json")):
         base = sidecar.name[: -len(".stats.json")]
@@ -271,20 +380,35 @@ def _enumerate(
         if pattern.match(base) is None:
             continue
         if base not in seen_bases:
+            if source_plan_identity is not None:
+                candidate_identity = _record_plan_identity(
+                    reviews_dir / f"{base}.md", sidecar
+                )
+                if (
+                    candidate_identity is not None
+                    and candidate_identity != source_plan_identity
+                ):
+                    continue
             orphans.append(sidecar)
-    pairs.sort(key=lambda pair: pair.round)
+    pairs.sort(key=lambda pair: (pair.round, pair.base))
+    rounds = [pair.round for pair in pairs]
+    if len(rounds) != len(set(rounds)):
+        duplicates = sorted(round_number for round_number, count in Counter(rounds).items() if count > 1)
+        raise SelectionRefused(
+            "matching records contain ambiguous duplicate round number(s) "
+            + ", ".join(f"r{number}" for number in duplicates)
+            + "; repair the duplicate pair before selecting"
+        )
     return pairs, orphans, backups_ignored
 
 
-def select_record(
-    reviews_dir: Path,
-    slug: str,
-    source_digest: str,
-    explicit_new_round: bool = False,
-    review_kind: str | None = None,
-) -> Selection:
-    """Decide reuse vs the next round, or refuse (the overwrite guard)."""
-    reviews_dir = Path(reviews_dir)
+def _validate_slug_and_kind(slug: str, review_kind: str | None) -> None:
+    """The shared slug and kind usage gates (invalid invocation, exit 2).
+
+    Decided before any record-corpus state is consulted, so the same
+    invalid input exits 2 with the same message on every subcommand
+    (the pinned usage-error-precedes-orphan-refusal precedence).
+    """
     if not SLUG_PATTERN.fullmatch(slug):
         raise SelectionUsageError(
             f"invalid --slug {slug!r}: a slug must match "
@@ -316,6 +440,19 @@ def select_record(
             "as a backup and counted informationally only, silently "
             "blinding the overwrite guard on a later select"
         )
+
+
+def select_record(
+    reviews_dir: Path,
+    slug: str,
+    source_digest: str,
+    explicit_new_round: bool = False,
+    review_kind: str | None = None,
+    source_plan: Path | None = None,
+) -> Selection:
+    """Decide reuse vs the next round, or refuse (the overwrite guard)."""
+    reviews_dir = Path(reviews_dir)
+    _validate_slug_and_kind(slug, review_kind)
     if not source_digest.strip():
         # A caller-supplied invocation error, not a record-corpus state:
         # an empty digest would silently disable the overwrite guard, so
@@ -336,7 +473,15 @@ def select_record(
             "SHA-256, the sidecar source_digest grammar); refusing the "
             "comparison input before any record is read"
         )
-    pairs, orphans, backups_ignored = _enumerate(reviews_dir, slug)
+    identity = None
+    if review_kind == "plan-review":
+        if source_plan is None:
+            raise SelectionUsageError("--kind plan-review requires --source-plan")
+        identity = _plan_identity(Path(source_plan), reviews_dir)
+    pairs, orphans, backups_ignored = _enumerate(
+        reviews_dir, slug, review_kind=review_kind,
+        source_plan_identity=identity
+    )
     if orphans:
         named = ", ".join(sorted(path.name for path in orphans))
         raise SelectionRefused(
@@ -346,9 +491,16 @@ def select_record(
             "repaired (restore the missing twin or remove the orphan)"
         )
 
-    def emit(round_number: int) -> tuple[Path, Path]:
-        kind_prefix = f"{review_kind}-" if review_kind else ""
-        base = f"{DATE_SOURCE().isoformat()}-{kind_prefix}{slug}-r{round_number}"
+    def emit(round_number: int, *, selected_stem: str | None = None) -> tuple[Path, Path]:
+        if selected_stem is None:
+            kind_prefix = f"{review_kind}-" if review_kind else ""
+            selected_stem = f"{kind_prefix}{slug}"
+            if identity is not None:
+                selected_stem += "-p" + _identity_token(identity)
+        elif identity is not None:
+            selected_stem = re.sub(r"-p[0-9a-f]{8}$", "", selected_stem)
+            selected_stem += "-p" + _identity_token(identity)
+        base = f"{DATE_SOURCE().isoformat()}-{selected_stem}-r{round_number}"
         return reviews_dir / f"{base}.md", reviews_dir / f"{base}.stats.json"
 
     if not pairs:
@@ -357,7 +509,9 @@ def select_record(
 
     latest = pairs[-1]
     if explicit_new_round:
-        markdown, sidecar = emit(latest.round + 1)
+        prior_stem = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", latest.base)
+        prior_stem = re.sub(r"-r\d+$", "", prior_stem)
+        markdown, sidecar = emit(latest.round + 1, selected_stem=prior_stem)
         supersedes = os.path.relpath(latest.markdown, markdown.parent)
         return Selection(
             "new-round",
@@ -413,6 +567,26 @@ except ImportError:  # direct-script invocation where scripts/ is not sys.path[0
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from validate_review_staging import (
         classify_fence_lines as _classify_fence_lines,
+    )
+
+# The canonical reviewed-scope digest derivation and the commit resolver,
+# imported (not copied) from the corrections machinery so verify-digest
+# grades against exactly the diff-bytes-plus-sha256 shape the seal
+# validator grades and the classifiers consume: one freshness notion.
+try:
+    from corrections_record import (
+        diff_bytes as _diff_bytes,
+        git_text as _git_text,
+        resolve_commit as _resolve_commit,
+        sha256_hex as _sha256_hex,
+    )
+except ImportError:  # direct-script invocation where scripts/ is not sys.path[0]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from corrections_record import (
+        diff_bytes as _diff_bytes,
+        git_text as _git_text,
+        resolve_commit as _resolve_commit,
+        sha256_hex as _sha256_hex,
     )
 
 
@@ -590,6 +764,149 @@ def create_backup(record_path: Path) -> tuple[Path, Path]:
     return markdown_backup, sidecar_backup
 
 
+# The orphan record's recorded digest line (the staging template's
+# ``- Source digest: <sha256>`` Metadata bullet): the fresh pair's
+# overwrite guard compares digests, so the recovery reads the digest from
+# the orphan record itself instead of inventing a second source.
+_ORPHAN_SOURCE_DIGEST_RE = re.compile(
+    r"^-[ \t]*Source digest[ \t]*:[ \t]*([0-9a-f]{64})[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def recover_orphan(
+    record_path: Path, slug: str, review_kind: str | None = None,
+    source_plan: Path | None = None
+) -> dict:
+    """Preserve an orphan half and allocate the fresh canonical pair.
+
+    The refusal arms (review round record lifecycle gaps plan, Task 3)
+    fire before any mutation, each a named one-line error leaving the
+    reviews directory byte-identical: a record whose sidecar twin exists
+    is not an orphan, an absent record refuses, and a name already
+    carrying the ``.orphan-`` infix is already preserved (so a second
+    recovery can never double-suffix). The slug and kind gates run first
+    (the shared usage-error precedence); the slug and kind are explicit
+    caller inputs and are never inverse-parsed from the preserved stem.
+    The orphan's own recorded ``Source digest`` feeds the existing
+    allocation logic (``select`` with ``--explicit-new-round``), which
+    runs after the rename so the preserved name is discovery-invisible
+    and the canonical path is vacated. Every mutation is the single
+    rename to ``<original stem>.orphan-<UTCtimestamp>.md``; the fresh
+    pair is emitted, never written. The receipt names the preserved
+    path, the allocated pair, and the exact ``Orphan recovery:``
+    Metadata line to add, the preserved path spelled repo-relative so
+    the printed line passes the validator's orphan-recovery link gate
+    verbatim; the repo root is resolved before the rename, so a
+    non-repository reviews directory refuses without any mutation.
+    """
+    _validate_slug_and_kind(slug, review_kind)
+    record = Path(record_path)
+    if ORPHAN_INFIX in record.name:
+        raise SelectionRefused(
+            f"cannot recover {record.name}: the name already carries the "
+            f"{ORPHAN_INFIX!r} infix (already preserved); a preserved "
+            "orphan is never recovered again"
+        )
+    if not record.is_file():
+        raise SelectionRefused(
+            f"cannot recover the absent record {record}: no record exists "
+            "at that path; recover-orphan preserves an existing canonical "
+            "Markdown only"
+        )
+    sidecar = _sidecar_twin(record)
+    if sidecar.is_file():
+        raise SelectionRefused(
+            f"cannot recover {record.name}: it is not an orphan (its "
+            f"sidecar twin {sidecar.name} exists); recover-orphan "
+            "preserves a canonical Markdown whose sidecar is missing"
+        )
+    try:
+        content = record.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SelectionRefused(
+            f"cannot read the orphan record {record.name} ({exc}); "
+            "repair the record before recovering it"
+        ) from exc
+    digest_match = _ORPHAN_SOURCE_DIGEST_RE.search(content)
+    if digest_match is None:
+        raise SelectionRefused(
+            f"the orphan record {record.name} carries no '- Source digest: "
+            "<64-char lowercase hex>' Metadata line; the fresh pair's "
+            "allocation compares digests, so repair the record's digest "
+            "line before recovering it"
+        )
+    toplevel = _git_text(record.parent, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        raise SelectionRefused(
+            f"cannot recover {record.name}: the reviews directory "
+            f"{record.parent} is not inside a git repository; the "
+            "evidence link is repo-relative by contract, so run the "
+            "recovery inside the repository"
+        )
+    repo_root = Path(toplevel.strip())
+    reviews_dir = record.parent
+    identity = (
+        _plan_identity(source_plan, reviews_dir)
+        if review_kind == "plan-review" and source_plan is not None
+        else None
+    )
+    if review_kind == "plan-review" and identity is None:
+        raise SelectionUsageError("--kind plan-review requires --source-plan")
+    pairs, orphans, _backups = _enumerate(
+        reviews_dir, slug, review_kind=review_kind,
+        source_plan_identity=identity
+    )
+    other_orphans = [
+        orphan for orphan in orphans if orphan.resolve() != record.resolve()
+    ]
+    if other_orphans:
+        named = ", ".join(sorted(path.name for path in other_orphans))
+        raise SelectionRefused(
+            f"cannot recover {record.name}: another orphaned record half "
+            f"blocks the fresh allocation in {reviews_dir}: {named}; "
+            "recover or repair the other orphan half first"
+        )
+    stem = record.name[: -len(".md")]
+    preserved = _unique_path(
+        reviews_dir,
+        stem,
+        ".md",
+        ORPHAN_TIMESTAMP_SOURCE(),
+        infix=ORPHAN_INFIX,
+        noun="preserved-orphan",
+    )
+    if os.path.lexists(preserved):
+        raise SelectionUsageError(
+            f"the preserved-orphan name {preserved.name} appeared while "
+            "the recovery was being placed; refusing to overwrite it"
+        )
+    rel_preserved = Path(
+        os.path.relpath(preserved.resolve(), repo_root.resolve())
+    ).as_posix()
+    os.rename(record, preserved)
+    selection = select_record(
+        reviews_dir,
+        slug,
+        digest_match.group(1),
+        explicit_new_round=True,
+        review_kind=review_kind,
+        source_plan=source_plan,
+    )
+    return {
+        "status": "recovered",
+        "orphan": str(record),
+        "preserved": str(preserved),
+        "markdown": str(selection.markdown),
+        "sidecar": str(selection.sidecar),
+        "decision": selection.decision,
+        "plan_identity": identity,
+        "metadata_line": (
+            f"{ORPHAN_RECOVERY_METADATA_LABEL} {rel_preserved}"
+        ),
+    }
+
+
 def _write_backup_exclusive(destination: Path, data: bytes) -> None:
     """Create ``destination`` exclusively and write ``data`` byte-identically.
 
@@ -617,27 +934,204 @@ def _write_backup_exclusive(destination: Path, data: bytes) -> None:
         raise
 
 
-def _unique_path(directory: Path, stem: str, extension: str, timestamp: str) -> Path:
-    """First non-existing backup candidate, with a bounded collision search.
+def _unique_path(
+    directory: Path,
+    stem: str,
+    extension: str,
+    timestamp: str,
+    infix: str = BACKUP_INFIX,
+    noun: str = "backup",
+) -> Path:
+    """First non-existing candidate name, with a bounded collision search.
 
     ``os.path.lexists`` (not a following ``Path.exists``) decides occupancy,
     so a planted dangling symlink at a candidate name counts as taken
     instead of being followed (r1 F12). The collision counter is bounded
     (r1 F11): exhausting it raises a usage error (exit 2) rather than
-    looping.
+    looping. The ``infix`` parameter carries the name family: ``.backup-``
+    for archival copies, ``.orphan-`` for preserved orphans.
     """
-    candidate = directory / f"{stem}{BACKUP_INFIX}{timestamp}{extension}"
+    candidate = directory / f"{stem}{infix}{timestamp}{extension}"
     counter = 1
     while os.path.lexists(candidate):
         if counter >= _UNIQUE_PATH_LIMIT:
             raise SelectionUsageError(
-                f"no free backup name for {stem}{BACKUP_INFIX}{timestamp}"
+                f"no free {noun} name for {stem}{infix}{timestamp}"
                 f"{extension} after {_UNIQUE_PATH_LIMIT} collision "
                 "suffixes; refusing to loop unbounded"
             )
-        candidate = directory / f"{stem}{BACKUP_INFIX}{timestamp}-{counter}{extension}"
+        candidate = directory / f"{stem}{infix}{timestamp}-{counter}{extension}"
         counter += 1
     return candidate
+
+
+def _corrections_chain_terminal(sidecar: Path) -> tuple[str | None, str | None]:
+    """The recorded corrections chain's terminal ``(after_digest, after_head)``.
+
+    The sidecar's ``extensions.corrections`` array is the receipt the
+    graded corrections flow records: the staging validator owns verifying
+    the chain (its graded stale arm runs the anchor, binding, linkage,
+    and terminal legs over the seal), and rows are written only through
+    that graded surface. verify-digest consults that recorded ownership
+    rather than re-grading it: the terminal row's ``after_digest`` and
+    ``after_head`` are what "terminates at the current bytes" means
+    mechanically here. Anything absent or malformed reads as no chain, so
+    the plain exact-match and refusal arms stand unchanged.
+    """
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    extensions = payload.get("extensions")
+    if not isinstance(extensions, dict):
+        return None, None
+    rows = extensions.get("corrections")
+    if not isinstance(rows, list) or not rows:
+        return None, None
+    terminal = rows[-1]
+    if not isinstance(terminal, dict):
+        return None, None
+    after_digest = terminal.get("after_digest")
+    after_head = terminal.get("after_head")
+    if not isinstance(after_digest, str) or not isinstance(after_head, str):
+        return None, None
+    return after_digest, after_head
+
+
+def verify_digest(
+    record_path: Path, reviews_dir: Path, base: str, expect_head: str
+) -> dict:
+    """Recompute the reviewed-scope digest and refuse a stale record.
+
+    Every operand is an explicit caller input and is never derived: the
+    record path (the latest round's staging Markdown), its reviews
+    directory (the record must resolve inside it, so a stray path can
+    never pass as the corpus's record), the recorded base commit, and the
+    latest recorded verified head (from the session manifest, or the
+    corrections chain's after-head when a chain carries the record). The
+    digest is recomputed over the invoking process's repository with the
+    canonical derivation (``git diff <base>...<head>`` bytes through
+    ``corrections_record.diff_bytes``, hashed with
+    ``corrections_record.sha256_hex``) and compared against the sidecar's
+    ``source_digest`` through the existing read helper.
+
+    Decision order: record-state refusals first (an absent record, a
+    backup-shaped name, a record outside --dir, an orphan half without
+    its sidecar twin, a sidecar without a readable ``source_digest``
+    string), then the git operands, then the comparison with the
+    corrections precedence pinned: a chain whose terminal binds the
+    current bytes and HEAD yields the named accepted-stale pass ahead of
+    any refusal, so corrections-carried records never verify permanently
+    stale; without such a chain a digest mismatch is the named stale
+    refusal (both digests and the record named) and a HEAD move past the
+    recorded verified head refuses even when the reviewed-scope bytes are
+    unchanged. The pass receipts name the verified HEAD beside the digest
+    comparison; the accepted-stale pass names both heads, the chain's
+    after-head being the movement. The subcommand mutates nothing: every
+    path here only reads.
+    """
+    record = Path(record_path)
+    if not record.is_file():
+        raise SelectionRefused(
+            f"cannot verify the absent record {record}: no record exists "
+            "at that path; verify-digest checks the explicit --record and "
+            "never derives one"
+        )
+    if BACKUP_INFIX in record.name:
+        raise SelectionRefused(
+            f"cannot verify the backup pair {record.name}: backup-shaped "
+            "names are archived copies, never the live record; pass the "
+            "live round record"
+        )
+    resolved_dir = Path(reviews_dir).resolve()
+    try:
+        record.resolve().relative_to(resolved_dir)
+    except ValueError:
+        raise SelectionUsageError(
+            f"invalid --record {record}: it resolves outside the reviews "
+            f"directory {resolved_dir} named by --dir; verify-digest "
+            "checks a record inside the corpus the caller names"
+        ) from None
+    sidecar = _sidecar_twin(record)
+    if not sidecar.is_file():
+        raise SelectionRefused(
+            f"cannot verify the orphaned record half {record.name}: its "
+            f"sidecar twin {sidecar.name} is missing; a record verifies "
+            "as a Markdown/sidecar pair only, so restore the missing twin "
+            "or remove the orphan"
+        )
+    recorded_digest = _read_sidecar_digest(sidecar)
+    repo = Path.cwd()
+    base_commit = _resolve_commit(repo, base)
+    if base_commit is None:
+        raise SelectionUsageError(
+            f"invalid --base {base!r}: git cannot resolve it to a commit "
+            "in the invoking repository; the base is an explicit caller "
+            "input and is never guessed"
+        )
+    expected_commit = _resolve_commit(repo, expect_head)
+    if expected_commit is None:
+        raise SelectionUsageError(
+            f"invalid --expect-head {expect_head!r}: git cannot resolve it "
+            "to a commit in the invoking repository; the recorded verified "
+            "head is an explicit caller input and is never guessed"
+        )
+    head_commit = _resolve_commit(repo, "HEAD")
+    if head_commit is None:
+        raise SelectionRefused(
+            "cannot resolve the invoking repository's HEAD; the freshness "
+            "comparison refuses rather than verify against an unknown HEAD"
+        )
+    diff = _diff_bytes(repo, base_commit, head_commit)
+    if diff is None:
+        raise SelectionRefused(
+            f"cannot recompute the reviewed-scope digest: the diff "
+            f"{base_commit}...{head_commit} is unresolvable in the "
+            "invoking repository; refusing the freshness comparison"
+        )
+    recomputed = _sha256_hex(diff)
+    chain_after_digest, chain_after_head = _corrections_chain_terminal(sidecar)
+    chain_binds_current = (
+        chain_after_digest == recomputed and chain_after_head == head_commit
+    )
+    if recomputed == recorded_digest and head_commit == expected_commit:
+        return {
+            "outcome": "fresh",
+            "record": str(record),
+            "reviewed_base": base_commit,
+            "recorded_digest": recorded_digest,
+            "recomputed_digest": recomputed,
+            "verified_head": head_commit,
+        }
+    if chain_binds_current:
+        return {
+            "outcome": "accepted-stale",
+            "record": str(record),
+            "reviewed_base": base_commit,
+            "recorded_digest": recorded_digest,
+            "recomputed_digest": recomputed,
+            "verified_head": head_commit,
+            "expected_head": expected_commit,
+            "corrections_after_head": chain_after_head,
+        }
+    if recomputed != recorded_digest:
+        raise SelectionRefused(
+            f"stale review record {record}: sidecar source_digest "
+            f"{recorded_digest} differs from the recomputed reviewed-scope "
+            f"digest {recomputed} over {base_commit}...{head_commit}; the "
+            "record is not current evidence; run a fresh round on the "
+            "recomputed digest or re-bind it through the staging "
+            "validator's corrections arm"
+        )
+    raise SelectionRefused(
+        f"refusing the moved HEAD for {record.name}: HEAD {head_commit} is "
+        f"past the recorded verified head {expected_commit} while the "
+        f"reviewed-scope digest {recomputed} is unchanged; a HEAD move "
+        "past the recorded verified head refuses without a verified "
+        "corrections chain terminating at the current bytes"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -645,8 +1139,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="review_record_selection",
         description=(
             "Select review record paths (reuse or next -r<N> round) with an "
-            "overwrite guard, mark supersession links, and write immutable "
-            "backups"
+            "overwrite guard, mark supersession links, write immutable "
+            "backups, and recover stranded orphan halves"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -657,6 +1151,9 @@ def build_parser() -> argparse.ArgumentParser:
     select_parser.add_argument("--dir", required=True, help="reviews directory")
     select_parser.add_argument(
         "--slug", required=True, help="artifact slug embedded in the record names"
+    )
+    select_parser.add_argument(
+        "--source-plan", help="source plan path; required for plan-review identity"
     )
     select_parser.add_argument(
         "--kind",
@@ -692,6 +1189,58 @@ def build_parser() -> argparse.ArgumentParser:
     backup_parser.add_argument(
         "--record", required=True, help="the prior record Markdown path"
     )
+
+    recover_parser = subparsers.add_parser(
+        "recover-orphan",
+        help="preserve an orphan half and allocate the fresh canonical pair",
+    )
+    recover_parser.add_argument(
+        "--record",
+        required=True,
+        help="the orphan canonical Markdown (no sidecar twin)",
+    )
+    recover_parser.add_argument(
+        "--source-plan", help="source plan path; required for plan-review identity"
+    )
+    recover_parser.add_argument(
+        "--slug",
+        required=True,
+        help="artifact slug embedded in the fresh record names (never "
+        "inverse-parsed from the preserved stem)",
+    )
+    recover_parser.add_argument(
+        "--kind",
+        choices=("plan-review", "branch-review", "code-review", "exec-review"),
+        help="optional review kind prefix in the emitted record name",
+    )
+
+    verify_parser = subparsers.add_parser(
+        "verify-digest",
+        help="recompute the reviewed-scope digest at a record-reading "
+        "boundary and refuse a stale record",
+    )
+    verify_parser.add_argument(
+        "--record",
+        required=True,
+        help="the record Markdown to verify (the latest round's record)",
+    )
+    verify_parser.add_argument(
+        "--dir",
+        required=True,
+        help="reviews directory the record belongs to",
+    )
+    verify_parser.add_argument(
+        "--base",
+        required=True,
+        help="the recorded base commit the reviewed-scope diff is "
+        "computed over",
+    )
+    verify_parser.add_argument(
+        "--expect-head",
+        required=True,
+        help="the latest recorded verified head (from the session "
+        "manifest, or the corrections chain's after-head)",
+    )
     return parser
 
 
@@ -706,6 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.source_digest,
                 explicit_new_round=args.explicit_new_round,
                 review_kind=args.kind,
+                source_plan=Path(args.source_plan) if args.source_plan else None,
             )
             print(
                 json.dumps(
@@ -718,6 +1268,11 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         "supersedes": selection.supersedes,
                         "backups_ignored": selection.backups_ignored,
+                        "plan_identity": (
+                            _plan_identity(Path(args.source_plan), Path(args.dir))
+                            if args.kind == "plan-review" and args.source_plan
+                            else None
+                        ),
                     }
                 )
             )
@@ -754,6 +1309,23 @@ def main(argv: list[str] | None = None) -> int:
                 f"{BACKUP_METADATA_LABEL} {markdown_backup}",
                 file=sys.stderr,
             )
+            return 0
+        if args.command == "recover-orphan":
+            receipt = recover_orphan(
+                Path(args.record), args.slug, review_kind=args.kind,
+                source_plan=Path(args.source_plan) if args.source_plan else None,
+            )
+            print(json.dumps(receipt))
+            print(
+                f"Metadata line for the fresh record: {receipt['metadata_line']}",
+                file=sys.stderr,
+            )
+            return 0
+        if args.command == "verify-digest":
+            outcome = verify_digest(
+                Path(args.record), Path(args.dir), args.base, args.expect_head
+            )
+            print(json.dumps(outcome))
             return 0
         parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     except SelectionRefused as exc:

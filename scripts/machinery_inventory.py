@@ -26,7 +26,9 @@ import sys
 from pathlib import Path
 
 REGISTRY_PATH = "scripts/machinery_registry.json"
-SKILL_PATH = "agents/skills/maintenance/SKILL.md"
+# re-pointed to the state-file module by the maintenance-skill-size-refactor
+# split (Task 3): the State file schema section lives there now
+SKILL_PATH = "agents/skills/maintenance/state-file.md"
 WITNESS_CLASSES = ("none", "origin-kept-set", "red-test", "incident",
                    "user-decision", "sibling-boundary")
 DISPOSITIONS = ("pending", "keep", "delete")

@@ -8,9 +8,9 @@
 # decisions, lock release, outcome report) stay in the done skill.
 #
 # Usage:
-#   done_sweep_gates.sh pre-docs     # done Steps 1.5, 2.65, 2.648, 2.645, 2.64, 2.63, 2.62 gates
-#   done_sweep_gates.sh pre-commit   # done Steps 2.7 (mechanical half), 2.76, 2.8 gates
-#   done_sweep_gates.sh list-gates   # print the sixteen absorbed gate ids, deduped at first phase
+#   done_sweep_gates.sh landing [--boundary-class per-task|final-closeout]
+#                  # the closeout's one landing sweep run (the retained roster; warning-posture gates report, never block); the boundary class defaults to final-closeout and per-task runs the roster minus the primary-checkout inspection
+#   done_sweep_gates.sh list-gates [phase]  # print the landing roster, one gate per line (warning-posture gates suffixed " (warning)")
 #   done_sweep_gates.sh write-manifest [flags...]   # done Step 0 manifest write (full flag vector forwarded)
 #
 # Run from the project git root (or set DONE_SWEEP_REPO_ROOT). Path resolution
@@ -27,17 +27,21 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: done_sweep_gates.sh <pre-docs|pre-commit|list-gates|write-manifest>
+Usage: done_sweep_gates.sh <landing|list-gates|write-manifest>
 
 Phases:
-  pre-docs     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
-               review-staging, vim-swap-sweep, docs-tmp-sweep, plans-archive-twin
-               (done Steps 1.5, 2.65, 2.648, 2.645, 2.64, 2.63, 2.62)
-  pre-commit   sensitive-data-scan, em-dash-scan, instruction-size,
-               description-length, foreign-staging, archive-ceremony,
-               plans-archive-twin
-               (done Steps 2.7 mechanical half, 2.76, 2.8)
-  list-gates   print the sixteen absorbed gate ids, deduped at first phase
+  landing      the closeout's one landing sweep run: the retained roster with
+               instruction-size and description-length in warning posture
+               (they report, never block); backlog-inbox and vim-swap-sweep
+               are not on the roster (receiving-review capture step and the
+               periodic survey advisory own their duties); accepts
+               --boundary-class per-task|final-closeout (default final-
+               closeout): per-task runs the roster minus the primary-
+               checkout inspection (post-landing-staging), which only the
+               final closeout, the landing owner, keeps
+  list-gates [phase]
+               print the landing roster one gate per line with warning-
+               posture gates suffixed " (warning)"
   write-manifest
                done Step 0 run manifest write; the FULL argument vector is
                forwarded to the lib (e.g. --adopt, --owned-review,
@@ -47,13 +51,22 @@ Environment:
   DONE_SWEEP_REPO_ROOT     repo anchor override (default: git toplevel of cwd)
   DONE_SWEEP_RUNTIME_HOME  runtime home override (default: ~/.ai-playbook)
   DONE_SWEEP_USER_FACTS    user facts document override (default: <runtime_home>/facts.md)
+  DONE_SWEEP_DECLARED_STAGE_PATHS
+                           newline-separated declared-stage paths unioned into
+                           the post-landing-staging gate's owned set behind the
+                           primary-checkout shape guard (a direct landing
+                           invocation inherits ambient values; the production
+                           writer is the done_run.sh cmd_commit composition,
+                           which sets this variable only for its own landing
+                           sweep subprocess and actively unsets it when the
+                           declared set is empty)
 EOF
 }
 
 main() {
   local phase_arg="${1:-}"
   case "$phase_arg" in
-    pre-docs|pre-commit|list-gates|write-manifest) ;;
+    landing|list-gates|write-manifest) ;;
     -h|--help) usage; return 0 ;;
     "")
       usage >&2
