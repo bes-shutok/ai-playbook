@@ -120,6 +120,8 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
+import review_plan_identity
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -406,6 +408,7 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
             if rel in baseline_files and _sha256(src) == baseline_files[rel]:
                 continue
             dst = target / rel
+            collision_dst_digest = None
             if dst.exists() or dst.is_symlink():
                 if _same_content(dst, src):
                     skipped.append(
@@ -417,6 +420,10 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
                         }
                     )
                     continue
+                try:
+                    collision_dst_digest = _sha256(dst)
+                except OSError:
+                    collision_dst_digest = "unreadable"
                 candidate = dst.with_name(dst.stem + f".wt-{args.suffix}" + dst.suffix)
                 bump = 2
                 while candidate.exists() or candidate.is_symlink():
@@ -436,6 +443,10 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
                 if dst.name != Path(rel).name:
                     entry["collision_renamed"] = True
                     renamed.append(entry)
+                    print(
+                        f"COLLISION: {rel} -> {dst.as_posix()} "
+                        f"(incoming {_sha256(src)[:12]} / existing {collision_dst_digest[:12]})"
+                    )
                 else:
                     migrated.append(entry)
             else:
@@ -500,8 +511,12 @@ def _reviews_home(target: Path) -> Path | None:
 
 
 # A path-like token: slash/word/dot characters ending in a review-record
-# suffix, taken from backtick spans and bare text alike.
-_PATH_TOKEN_RE = re.compile(r"[\w./~*-]+\.(?:md|json)")
+# suffix, taken from backtick spans and bare text alike. The bracket and
+# angle brackets are included so the plans template's citation form with
+# the optional-token segment left literal
+# (``...[-p<identity-token>]-r*.md``) is captured as one series token
+# instead of shredding into a bare ``-r*.md`` fragment.
+_PATH_TOKEN_RE = re.compile(r"[\w./~*\[\]<>-]+\.(?:md|json)")
 
 
 def _extract_citations(plan_bytes: str) -> tuple[list[str], list[str]]:
@@ -529,23 +544,90 @@ def _extract_citations(plan_bytes: str) -> tuple[list[str], list[str]]:
 # for any date-shaped prefix; a concrete date stays an exact literal.
 _SERIES_DATE_HEADS = ("YYYY-MM-DD", "*")
 _SERIES_DATE_FRAGMENT = r"\d{4}-\d{2}-\d{2}"
+_SERIES_PLACEHOLDER_FRAGMENT = r"[A-Za-z0-9._-]+"
 
 
 def _series_prefix_fragment(prefix: str) -> str:
     """Translate one series-token prefix (the text before ``-r*.md``) into
     its match fragment: a leading literal ``YYYY-MM-DD`` placeholder or a
-    leading ``*`` wildcard segment matches any date-shaped prefix, while
-    every other prefix is escaped verbatim, so a concrete-date citation
-    keeps matching only its own date and never a cross-date member."""
+    leading ``*`` wildcard segment matches any date-shaped prefix, a
+    template form's ``<placeholder>`` segment matches one slug-shaped run
+    and a bracketed ``[...]`` segment is optional, while every other
+    prefix is escaped verbatim, so a concrete-date citation keeps matching
+    only its own date and never a cross-date member."""
     for head in _SERIES_DATE_HEADS:
         if prefix.startswith(head):
             rest = prefix[len(head):]
-            return _SERIES_DATE_FRAGMENT + re.escape(rest)
-    return re.escape(prefix)
+            return _SERIES_DATE_FRAGMENT + _series_template_fragment(rest)
+    return _series_template_fragment(prefix)
+
+
+def _series_template_fragment(prefix: str) -> str:
+    if "[" not in prefix and "<" not in prefix:
+        return re.escape(prefix)
+    out: list[str] = []
+    i = 0
+    while i < len(prefix):
+        ch = prefix[i]
+        if ch == "<":
+            end = prefix.find(">", i)
+            if end == -1:
+                out.append(re.escape(ch))
+                i += 1
+                continue
+            out.append(_SERIES_PLACEHOLDER_FRAGMENT)
+            i = end + 1
+        elif ch == "[":
+            end = prefix.find("]", i)
+            if end == -1:
+                out.append(re.escape(ch))
+                i += 1
+                continue
+            out.append("(?:" + _series_template_fragment(prefix[i + 1:end]) + ")?")
+            i = end + 1
+        else:
+            out.append(re.escape(ch))
+            i += 1
+    return "".join(out)
+
+
+_CITATION_TOKEN_RE = re.compile(r"-p([0-9a-f]{8})$")
+
+
+def _plan_identity_for(plan_path: Path) -> str | None:
+    """The plan file's repository-relative identity, or None when it cannot
+    be derived (a gitless target never fails on identity grounds)."""
+    root = review_plan_identity.repository_root(plan_path.parent)
+    if root is None:
+        return None
+    return review_plan_identity.normalize_plan_path(plan_path, root)
+
+
+def _member_identity_diagnostic(member: Path, plan_identity: str) -> str | None:
+    """One read-only diagnostic line for a series member whose recorded
+    identity (stats-sidecar extensions.plan_identity, else the actual
+    Metadata section's URL or Artifact) does not resolve to the source
+    plan; None when the member names the source plan."""
+    sidecar = member.with_suffix(".stats.json")
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    identity = review_plan_identity.record_identity(member, payload)
+    if identity == plan_identity:
+        return None
+    return (
+        f"series-identity: {member.name} names "
+        f"{identity if identity else 'unresolved'}, expected {plan_identity}"
+    )
 
 
 def _series_members(
-    reviews_home: Path, token: str, resolved_only: bool = False
+    reviews_home: Path,
+    token: str,
+    resolved_only: bool = False,
+    plan_identity: str | None = None,
+    sink: Callable[[str], None] | None = None,
 ) -> list[Path]:
     """Expand one ``-r*.md`` series token to its present members under the
     reviews home, ordered by round number. The token's date prefix may be
@@ -556,11 +638,31 @@ def _series_members(
     gate-removal presence seam), a member counts only when its
     filesystem-resolved path is a regular file still under the home, so a
     record symlinked into the worktree the removal would destroy is never
-    a member; verify-records keeps its legacy link-following behavior."""
+    a member; verify-records keeps its legacy link-following behavior.
+    A citation prefix ending in ``-p<8 lowercase hex>`` is an explicit
+    canonical identity token: the member's infix must equal it exactly.
+    A tokenless citation matches members carrying the optional canonical
+    infix ``-p<8 hex>`` too (the tokened-recognition repair), never a
+    different or malformed token-like segment, which stays literal. When
+    ``plan_identity`` is set, each member whose recorded identity does not
+    resolve to that source-plan path emits one read-only ``series-identity``
+    warning line through ``sink`` (stderr by default, so verify-records
+    keeps its JSON stdout contract; gate-removal passes stdout); the
+    diagnostics never filter members or change a result."""
     base = token.rsplit("/", 1)[-1]
     prefix, suffix = base.split("-r*.md", 1)
+    citation_token = None
+    token_match = _CITATION_TOKEN_RE.search(prefix)
+    if token_match is not None:
+        citation_token = token_match.group(1)
+        prefix = prefix[: token_match.start()]
+    infix_fragment = (
+        re.escape(f"-p{citation_token}")
+        if citation_token is not None
+        else r"(?:-p[0-9a-f]{8})?"
+    )
     pattern = re.compile(
-        _series_prefix_fragment(prefix) + r"-r(\d+)\.md" + re.escape(suffix) + r"$"
+        _series_prefix_fragment(prefix) + infix_fragment + r"-r(\d+)\.md" + re.escape(suffix) + r"$"
     )
     members: list[tuple[int, Path]] = []
     parent = reviews_home
@@ -577,7 +679,18 @@ def _series_members(
         elif not entry.is_file():
             continue
         members.append((int(match.group(1)), entry))
-    return [path for _round, path in sorted(members)]
+    ordered = [path for _round, path in sorted(members)]
+    if plan_identity is not None:
+        if sink is None:
+            def emit(line: str) -> None:
+                print(line, file=sys.stderr)
+        else:
+            emit = sink
+        for member in ordered:
+            line = _member_identity_diagnostic(member, plan_identity)
+            if line is not None:
+                emit(line)
+    return ordered
 
 
 def _is_under(path: Path, home: Path) -> bool:
@@ -620,7 +733,15 @@ def cmd_verify_records(args: argparse.Namespace) -> int:
     series_witness: dict[str, str] = {}
 
     for token in series_tokens:
-        members = _series_members(home, token)
+        if not token.rsplit("/", 1)[-1].split("-r*.md", 1)[0]:
+            # A bare ``-r*.md`` fragment carries no slug: it can never
+            # name a series, so it is skipped with a named warning
+            # instead of surfacing as a zero-members refusal.
+            note = f"empty-prefix series token skipped (no slug in citation): {token}"
+            skipped.append(note)
+            print(f"verify-records: {note}", file=sys.stderr)
+            continue
+        members = _series_members(home, token, plan_identity=_plan_identity_for(plan_path))
         if not members:
             missing.append(f"series pattern (zero members): {token}")
             continue
@@ -797,6 +918,14 @@ def _add_gate_removal_arguments(parser: argparse.ArgumentParser) -> None:
         "--claims",
         default=None,
         help="Newline-delimited file of extra record paths the session owns.",
+    )
+    parser.add_argument(
+        "--plan-identity",
+        default=None,
+        help="Repository-relative source-plan identity overriding the "
+        "derivation from --plan (the completed-twin runner passes the "
+        "original plans-root path beside its temporary plan copy); "
+        "diagnostics stay read-only either way.",
     )
     parser.add_argument(
         "--migration-manifest",
@@ -1047,7 +1176,14 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         # raw token would leak an absolute path for an absolute citation.
         # The gate expands members with the resolved-only filter, so a
         # home record symlinked into the worktree is never a member.
-        if _series_members(home, token, resolved_only=True):
+        if _series_members(
+            home,
+            token,
+            resolved_only=True,
+            plan_identity=getattr(args, "plan_identity", None)
+            or _plan_identity_for(plan_path),
+            sink=print,
+        ):
             verified += 1
         else:
             missing.append(_gate_refusal_text(token, target / token, target))
@@ -1878,6 +2014,7 @@ def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str,
             [
                 sys.executable, str(Path(__file__).resolve()), "gate-removal",
                 "--plan", str(tmp_path),
+                "--plan-identity", f"{_PLANS_DIR}/{basename}",
                 "--target", str(target),
                 "--worktree", str(cand_path),
             ],

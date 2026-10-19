@@ -1,5 +1,7 @@
 # gate-removal --help prints a doubled subcommand token
 
+- **Cluster:** docs/history/backlog/2026-10-07-gate-removal-unremediable-refuse-deadlock.md; docs/history/backlog/2026-10-08-gate-removal-residual-fail-open-shapes.md; docs/history/plans/completed/2026-10-18-closeout-gate-series-token-infix.md; docs/history/backlog/2026-10-19-gate-removal-squash-accounting-requires-archive-twin.md; docs/history/backlog/2026-10-19-gate-removal-manifest-lookup-skips-branch-closeout.md
+
 Driving force: quality
 Date filed: 2026-10-08
 Origin: Task 2 intermediate review (worktree-removal-migration-gate) backlog capture
@@ -15,4 +17,3 @@ Fix the doubled token by deleting the redundant subparser dispatch layer rather 
 ## Evidence
 
 - Task 2 review pass, 2026-10-08, wt-wrmg-exec
-- **Cluster:** docs/history/backlog/2026-10-07-gate-removal-unremediable-refuse-deadlock.md; docs/history/backlog/2026-10-08-gate-removal-residual-fail-open-shapes.md; docs/history/backlog/2026-10-16-review-series-token-citation-gate-gap.md

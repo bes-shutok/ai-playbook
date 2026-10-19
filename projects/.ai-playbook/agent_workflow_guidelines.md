@@ -1129,6 +1129,8 @@ Each project's facts document carries that project's priority profile under a `#
 
 **Default profile.** An unspecified project falls back to the section 64 ordering with formal-hardening defer-by-default; the profile's `priority_order` defaults to the section 64 principle ordering (efficiency, token usage, simplicity, code quality).
 
+**Type recommendations.** When the interview confirms a `project_type`, bootstrap recommends the matching order for the existing `priority_order` field, subject to the operator's confirmation and override; the recommendation never defines a second ranked field. Company: `readability, security, efficiency, code quality`. Pet: `automation, simplicity, efficiency, token usage, code quality`. The type defaults populate `priority_order` only; `deferred_classes` stays type-independent with its existing default, and the company security/correctness consultation rule below is unchanged. An absent, invalid, or unconfirmed type selects no type-derived value: the section 64 ordering remains the fallback, and an existing confirmed `priority_order` is preserved.
+
 **Security rule.** `security-hardening` is a deferral class, not a severity lens: a security finding's severity calibrates normally per `review-agents/severity-calibration.md`, and the class governs deferral routing only.
 
 **Section 64 interaction.** A declared `priority_order` supersedes the section 64 ranking for that project only; the global ordering stays the fallback and is never rewritten by a profile. The section 64 code-quality proviso carries: a deferral whose cost is real code quality records that cost in the deferral line and is revived deliberately once the cost compounds.

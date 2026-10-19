@@ -6,7 +6,7 @@
 - **Priority:** medium
 - **Cluster:** docs/history/backlog/2026-10-08-done-closeout-placement-and-ceremony-overhead.md; docs/history/plans/completed/2026-10-08-done-closeout-ceremony-friction.md
 - **Cluster:** docs/history/backlog/2026-10-06-continuity-probe-baseline-recapture-loss.md (same surface: the closeout baseline's digest matching in worktree_closeout_migrate.py)
-- **Cluster:** docs/history/backlog/2026-10-17-post-implementation-review-summary-handoff.md (same surface: worktree run-artifact homes and the closeout migration; that row's parked run holds its gitignored state only inside its worktree)
+- **Cluster:** docs/history/backlog/2026-10-19-reviews-home-migration-collision-twins.md (same tool, closeout-migration family)
 - **Origin class:** observed recovery gap
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/execute-plan/SKILL.md`, worktree closeout; `scripts/worktree_closeout_migrate.py`

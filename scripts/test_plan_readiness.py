@@ -1060,7 +1060,11 @@ class PlanReviewSourceIdentityTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("source plan identity", reason)
 
-    def test_discovery_refuses_legacy_round_with_unknown_plan_identity(self):
+    def test_discovery_resolves_pure_legacy_round_lexically_with_advisory(self):
+        """Narrowed contract (must-flip pin): a series with zero
+        identity-bearing records resolves the highest rN lexically with the
+        advisory, and the consult never surfaces the old blanket identity
+        raise; the pair is then graded on its own merits."""
         import subprocess
         import plan_readiness
 
@@ -1080,16 +1084,22 @@ class PlanReviewSourceIdentityTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaises(plan_readiness.AmbiguousReviewSeries):
-                plan_readiness.latest_review_round(
-                    reviews,
-                    "same-feature",
-                    plan.relative_to(root).as_posix(),
-                )
+            advisories: list[str] = []
+            found = plan_readiness.latest_review_round(
+                reviews,
+                "same-feature",
+                plan.relative_to(root).as_posix(),
+                advisories,
+            )
+            self.assertEqual(found, (record, 1))
+            self.assertEqual(len(advisories), 1)
+            self.assertIn(record.name, advisories[0])
+            self.assertIn("lexical", advisories[0])
 
             ok, reason = plan_readiness.evaluate_readiness(plan, plans, reviews)
             self.assertFalse(ok)
-            self.assertIn("cannot resolve plan identity", reason)
+            self.assertIsNotNone(reason)
+            self.assertNotIn("cannot resolve plan identity", reason)
 
     def test_record_identity_unwraps_markdown_code_span_path(self):
         from review_plan_identity import markdown_identity
@@ -1115,6 +1125,1331 @@ class PlanReviewSourceIdentityTest(unittest.TestCase):
             self.assertEqual(len(warnings), 1)
             self.assertIn("2026-10-15-shared-feature.md", warnings[0])
             self.assertIn("source-plan identity keeps review series separate", warnings[0])
+
+
+class ReviewSeriesLegacyIdentityTest(unittest.TestCase):
+    """The narrowed series-identity disposition (review-record legacy
+    identity plan, Task 1).
+
+    Every witness builds an isolated temp git home. A legacy
+    identity-unresolvable record carries neither the sidecar
+    ``extensions.plan_identity`` field nor the Markdown ``URL or
+    Artifact:`` line (the pre-convention shape).
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="legacy-series-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        self.plan = self.plans / "2026-10-15-same-feature.md"
+        self.plan.write_text("same bytes", encoding="utf-8")
+        self.identity = self.plan.relative_to(self.root).as_posix()
+
+    def _write_pair(self, base, round_value, identity):
+        """One complete round pair; ``identity=None`` is the legacy
+        identity-unresolvable shape."""
+        record = self.reviews / f"{base}.md"
+        identity_line = (
+            f"- URL or Artifact: {identity}\n" if identity is not None else ""
+        )
+        record.write_text(
+            f"## Metadata\n{identity_line}- Type: Plan Review\n",
+            encoding="utf-8",
+        )
+        record.with_suffix(".stats.json").write_text(
+            json.dumps({"artifact_slug": "same-feature", "round": round_value}),
+            encoding="utf-8",
+        )
+        return record
+
+    def test_mixed_series_returns_owned_latest_and_names_excluded_legacy_records(self):
+        """legacy-exclusion: every identity-unresolvable record at or below
+        the resolved identity-bearing latest round is excluded from the
+        identity match and named in the advisory out-parameter; no raise."""
+        import plan_readiness
+
+        legacy_low = self._write_pair(
+            "2026-08-01-plan-review-same-feature-r1", 1, None
+        )
+        legacy_same = self._write_pair(
+            "2026-08-20-plan-review-same-feature-r2", 2, None
+        )
+        owned = self._write_pair(
+            "2026-09-01-plan-review-same-feature-r2", 2, self.identity
+        )
+        advisories: list[str] = []
+        found = plan_readiness.latest_review_round(
+            self.reviews, "same-feature", self.identity, advisories
+        )
+        self.assertEqual(found, (owned, 2))
+        self.assertEqual(len(advisories), 2)
+        self.assertIn(legacy_low.name, advisories[0])
+        self.assertIn(legacy_same.name, advisories[1])
+
+    def test_rank_guard_refuses_unresolvable_round_above_resolved_round(self):
+        """Safety witness: an identity-unresolvable record whose round
+        outranks the resolved identity-bearing latest round refuses with a
+        named reason identifying the outranking record."""
+        import plan_readiness
+
+        self._write_pair("2026-08-01-plan-review-same-feature-r1", 1, self.identity)
+        outranker = self._write_pair(
+            "2026-09-01-plan-review-same-feature-r2", 2, None
+        )
+        with self.assertRaises(plan_readiness.AmbiguousReviewSeries) as ctx:
+            plan_readiness.latest_review_round(
+                self.reviews, "same-feature", self.identity
+            )
+        self.assertIn(outranker.name, str(ctx.exception))
+        self.assertIn("outranks", str(ctx.exception))
+
+    def test_pure_legacy_series_resolves_lexically_with_advisory(self):
+        """pure-legacy lexical fallback: zero identity-bearing records of
+        any plan resolves the highest rN lexically (ties by filename,
+        duplicate rounds included) with the advisory naming the lexical
+        resolution; an identity-less invocation keeps the silent lexical
+        resolution."""
+        import plan_readiness
+
+        self._write_pair("2026-08-01-plan-review-same-feature-r1", 1, None)
+        self._write_pair("2026-08-15-plan-review-same-feature-r2", 2, None)
+        tie_high = self._write_pair(
+            "2026-09-01-plan-review-same-feature-r2", 2, None
+        )
+        advisories: list[str] = []
+        found = plan_readiness.latest_review_round(
+            self.reviews, "same-feature", self.identity, advisories
+        )
+        self.assertEqual(found, (tie_high, 2))
+        self.assertEqual(len(advisories), 1)
+        self.assertIn(tie_high.name, advisories[0])
+        self.assertIn("lexical", advisories[0])
+
+        silent_advisories: list[str] = []
+        self.assertEqual(
+            plan_readiness.latest_review_round(
+                self.reviews, "same-feature", None, silent_advisories
+            ),
+            (tie_high, 2),
+        )
+        self.assertEqual(silent_advisories, [])
+
+    def test_foreign_bearing_series_keeps_no_artifact_refusal(self):
+        """Safety witness: identity-bearing records for other plans plus
+        identity-unresolvable strays and a consulting plan owning none keep
+        the no-artifact refusal; the strays never lexical-resolve the
+        series."""
+        import plan_readiness
+
+        foreign = "docs/plans/2026-10-14-other-plan.md"
+        self._write_pair("2026-08-01-plan-review-same-feature-r1", 1, foreign)
+        self._write_pair("2026-09-01-plan-review-same-feature-r2", 2, foreign)
+        self._write_pair("2026-08-15-plan-review-same-feature-r1", 1, None)
+        advisories: list[str] = []
+        found = plan_readiness.latest_review_round(
+            self.reviews, "same-feature", self.identity, advisories
+        )
+        self.assertIsNone(found)
+        self.assertTrue(
+            all("lexical" not in entry for entry in advisories),
+            advisories,
+        )
+
+    def test_duplicate_round_raise_and_silent_mismatch_exclusion_stay(self):
+        """Safety witness: the duplicate-round raise stays for
+        identity-bearing records, and a record naming a different source
+        plan keeps the silent mismatch exclusion without an advisory."""
+        import plan_readiness
+
+        self._write_pair("2026-08-01-plan-review-same-feature-r1", 1, self.identity)
+        self._write_pair("2026-09-01-plan-review-same-feature-r1", 1, self.identity)
+        with self.assertRaises(plan_readiness.AmbiguousReviewSeries) as ctx:
+            plan_readiness.latest_review_round(
+                self.reviews, "same-feature", self.identity
+            )
+        self.assertIn("duplicate round(s): r1", str(ctx.exception))
+
+        _clean_reviews_dir(self.reviews)
+        self._write_pair(
+            "2026-08-15-plan-review-same-feature-r1", 1, "docs/plans/other.md"
+        )
+        owned = self._write_pair(
+            "2026-09-15-plan-review-same-feature-r2", 2, self.identity
+        )
+        advisories: list[str] = []
+        found = plan_readiness.latest_review_round(
+            self.reviews, "same-feature", self.identity, advisories
+        )
+        self.assertEqual(found, (owned, 2))
+        self.assertEqual(advisories, [])
+
+    def test_evaluate_readiness_threads_advisories_on_mixed_series(self):
+        """The advisory out-parameter threads through ``evaluate_readiness``
+        and the consult reaches its pass verdict on a mixed series."""
+        import plan_readiness
+
+        plan, _review = plan_readiness._write_clean_state(
+            self.plans, self.reviews
+        )
+        legacy = self._write_pair(
+            "2026-08-01-plan-review-fixture-feature-r1", 1, None
+        )
+        advisories: list[str] = []
+        ok, reason = plan_readiness.evaluate_readiness(
+            plan, self.plans, self.reviews, advisories
+        )
+        self.assertTrue(ok, reason)
+        self.assertEqual(len(advisories), 1)
+        self.assertIn(legacy.name, advisories[0])
+
+    def test_main_prints_one_advisory_line_on_pass_path(self):
+        """Advisory channel shape: ``main`` owns the list and prints one
+        non-blocking advisory line beside the coverage warnings on the
+        consult's pass path only."""
+        import plan_readiness
+
+        plan, _review = plan_readiness._write_clean_state(
+            self.plans, self.reviews
+        )
+        legacy = self._write_pair(
+            "2026-08-01-plan-review-fixture-feature-r1", 1, None
+        )
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main([str(plan)])
+        finally:
+            os.chdir(prev)
+        self.assertEqual(rc, 0, (out.getvalue(), err.getvalue()))
+        advisory_lines = [
+            line
+            for line in err.getvalue().splitlines()
+            if "review advisory" in line
+        ]
+        self.assertEqual(len(advisory_lines), 1)
+        self.assertIn(legacy.name, advisory_lines[0])
+
+
+class CanonicalStatsSkipWaiverTest(unittest.TestCase):
+    """The narrowed stats-skip waiver (review-record legacy identity plan,
+    Task 2).
+
+    Every witness starts from the clean-state fixture pair
+    (``_write_clean_state``, pre-fence date 2026-09-01 so no post-fence
+    Markdown obligation crowds the waiver surface), declares the waiver in
+    the record's Metadata, and validates the record through the staging
+    validator directly. The Metadata ``Record kind:`` twin line is the only
+    kind signal a sidecar-less record carries.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="stats-skip-waiver-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        plan, review = _write_clean_state(self.plans, self.reviews)
+        self.plan = plan
+        self.review = review
+        self.sidecar = review.with_suffix(".stats.json")
+
+    def _declare_waiver(self, record_kind=None):
+        """Rewrite the record's Metadata to declare the stats-skip waiver,
+        optionally preceded by the ``Record kind:`` twin line."""
+        lines = "- Stats sidecar: skipped\n"
+        if record_kind is not None:
+            lines = f"- Record kind: {record_kind}\n" + lines
+        text = self.review.read_text(encoding="utf-8")
+        self.review.write_text(
+            text.replace("## Metadata\n", "## Metadata\n" + lines, 1),
+            encoding="utf-8",
+        )
+
+    def test_canonical_twin_waiver_without_sidecar_refuses_with_missing_sidecar(self):
+        """Waiver narrowing: a record whose ``Record kind:`` twin declares
+        canonical and which declares the stats-skip waiver with zero staged
+        findings and no sidecar file is refused with the reason naming the
+        missing sidecar; before the narrowing this record passed staging
+        validation (the RED witness)."""
+        import validate_review_staging as vrs
+
+        self._declare_waiver(record_kind="canonical")
+        self.sidecar.unlink()
+        result = vrs.validate_staging_file(self.review)
+        self.assertFalse(
+            result.ok,
+            "canonical record declaring the stats-skip waiver passed "
+            f"staging validation: errors={result.errors}",
+        )
+        self.assertTrue(
+            any(
+                "missing required stats sidecar" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_canonical_record_with_sidecar_present_validates_unchanged(self):
+        """Safety witness: a canonical record with its sidecar present keeps
+        today's validation outcome; the narrowing adds no finding."""
+        import validate_review_staging as vrs
+
+        self._declare_waiver(record_kind="canonical")
+        result = vrs.validate_staging_file(self.review)
+        self.assertEqual(result.errors, [], result.errors)
+        self.assertTrue(result.ok, result.errors)
+
+    def test_noncanonical_kind_keeps_the_waiver(self):
+        """Scope guard: a record declaring a non-canonical kind
+        (worker-evidence) keeps the stats-skip waiver available unchanged."""
+        import validate_review_staging as vrs
+
+        self._declare_waiver(record_kind="worker-evidence")
+        self.sidecar.unlink()
+        result = vrs.validate_staging_file(self.review)
+        self.assertEqual(result.errors, [], result.errors)
+        self.assertTrue(result.ok, result.errors)
+
+    def test_undeclared_kind_waiver_refused_fail_closed(self):
+        """Boundary witness: a canonical-intent record declaring the waiver
+        with no readable ``Record kind:`` twin on a pre-fence-dated name or
+        an undated name is refused fail-closed with the missing-sidecar
+        reason, never silently honored."""
+        import validate_review_staging as vrs
+
+        self._declare_waiver(record_kind=None)
+        self.sidecar.unlink()
+        result = vrs.validate_staging_file(self.review)
+        self.assertFalse(
+            result.ok,
+            "waiver without a Record kind twin was silently honored: "
+            f"errors={result.errors}",
+        )
+        self.assertTrue(
+            any(
+                "missing required stats sidecar" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+        undated = self.reviews / "plan-review-fixture-feature-r1.md"
+        undated.write_text(
+            self.review.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        undated_result = vrs.validate_staging_file(undated)
+        self.assertFalse(
+            undated_result.ok,
+            "waiver on an undated name was silently honored: "
+            f"errors={undated_result.errors}",
+        )
+        self.assertTrue(
+            any(
+                "missing required stats sidecar" in error
+                for error in undated_result.errors
+            ),
+            undated_result.errors,
+        )
+
+    def test_readiness_consult_waiver_disabled_refusal_text_unchanged(self):
+        """Readiness parity: the consult's existing waiver-disabled path (it
+        passes the expected digest and never honored the waiver) keeps its
+        refusal text for a canonical record declaring the waiver without its
+        sidecar."""
+        self._declare_waiver(record_kind="canonical")
+        self.sidecar.unlink()
+        ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self.assertIn("missing stats sidecar", reason)
+
+
+class _SidecarRepairFixture:
+    """Shared temp-git-home fixture for the repair-tool witness classes.
+
+    Every witness builds an isolated temp git home holding one canonical
+    plan and the witnessed defective-pair shape: a post-fence re-bind round
+    whose own Markdown carries the full review metadata while its stats
+    sidecar is missing (the personal-project r4 shape; the live reviews
+    home is read as the record-shape reference only and is never written
+    by these witnesses). Hermeticity (review-record legacy identity plan,
+    Task 4): no witness ever touches a live home; the live-home operation
+    is the campaign run itself, verified by its census and receipt file.
+    """
+
+    PLAN_DATE = "2026-10-17"
+    SLUG = "personal-project-remote-boundary-enforcement"
+    RUN_ID = "de5777c115b2412e82d8ec7d6169110a"
+    # Per-round mint ids for the composed-chain witness (each review round
+    # mints its own pair, so a chain can carry a predecessor run id that
+    # differs from the record's own).
+    R2_RUN_ID = "2" * 32
+    R3_RUN_ID = "3" * 32
+    LAST_FIX = "e938c6cd5c76439f772141c53908b5fee4723438"
+    STARTED_AT = "1792204576342"
+    SELECTION_REASON = (
+        "re-bind round after the citation-only correction"
+    )
+
+    def setUp(self):
+        import subprocess
+
+        import validate_review_staging as vrs
+        from review_plan_identity import identity_token
+
+        self.root = Path(tempfile.mkdtemp(prefix="sidecar-repair-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        self.plan = self.plans / f"{self.PLAN_DATE}-{self.SLUG}.md"
+        self.plan.write_text(
+            "# Fixture plan\n\n"
+            "## Assumptions\n\n"
+            "Decision points requiring a grill: none remain.\n\n"
+            "Body.\n",
+            encoding="utf-8",
+        )
+        self.identity = self.plan.relative_to(self.root).as_posix()
+        self.digest = vrs.compute_source_digest("plan", self.plan.read_bytes())
+        self.token = identity_token(self.identity)
+
+    def _record_path(self, round_no=4, *, tokened=True):
+        token = f"-p{self.token}" if tokened else ""
+        return self.reviews / (
+            f"{self.PLAN_DATE}-plan-review-{self.SLUG}{token}"
+            f"-r{round_no}.md"
+        )
+
+    def _witnessed_markdown(
+        self,
+        round_no=4,
+        *,
+        with_kind_twin=True,
+        with_identity=True,
+        digest=None,
+        run_id=None,
+    ):
+        """The witnessed r4-class record: every transcribed field sits on
+        the record's own lines. ``run_id`` overrides the record's own mint
+        pair (the composed-chain witness mints one run id per round)."""
+        digest = digest or self.digest
+        run_id = run_id or self.RUN_ID
+        lines = [
+            f"# Plan review: {self.SLUG} (r{round_no})",
+            "",
+            "## Metadata",
+            "- Type: Plan Review",
+        ]
+        if with_kind_twin:
+            lines.append("- Record kind: canonical")
+        lines.append(f"- Date: {self.PLAN_DATE}")
+        if with_identity:
+            lines.append(f"- URL or Artifact: {self.identity}")
+        lines += [
+            "- Depth: focused",
+            "- Domains: shell, python, git",
+            f"- Round: r{round_no}",
+            f"- review-run-id: {run_id}",
+            f"- review-started-at-ms: {self.STARTED_AT}",
+            "- Review mode: fresh-adversarial",
+            "- Changed-risk signals: security-or-rollout-boundary",
+            "- Prior findings supplied as filter: no",
+            f"- Last fix commit: {self.LAST_FIX}",
+            "- Witness ledger: N/A (no public mutators)",
+            "- Coverage: clean",
+            "- Release-gate ledger: none",
+            "- Panel mode: focused",
+            f"- Selection reason: {self.SELECTION_REASON}",
+            f"- Source digest: {digest}",
+            "- Findings: 0",
+            "- Status: STAGED",
+            "",
+            "## Review Statistics",
+            "",
+            "### Panel",
+            "| Worker | Lenses | Status | Raw | Solo | Echo | Relaunch "
+            "| Parent worker |",
+            "|--------|--------|--------|-----|------|------|----------"
+            "|--------------|",
+            "| correctness-completeness | quality, implementation "
+            "| complete | 0 | 0 | 0 | no | none |",
+            "",
+            "### Counts",
+            "- Workers launched: 1",
+            "- Workers skipped: 0",
+            "- Raw findings (all workers): 0",
+            "- Staged findings: 0",
+            "- Discarded during synthesis: 0",
+            "- Solo staged (unique agent origin): 0",
+            "- Echo staged (multi-agent dedup): 0",
+            "",
+            "### Deduplication groups",
+            "None (each staged finding had a single agent origin).",
+            "",
+            "### Discarded findings",
+            "None.",
+            "",
+            "### Severity calibration",
+            "None (agent severities matched staged severities).",
+            "",
+            "### Triage outcomes",
+            "Re-bind round: zero findings; the certification re-binds.",
+            "",
+            "## Findings",
+            "",
+            "### Critical",
+            "",
+            "None.",
+            "",
+            "### High",
+            "",
+            "None.",
+            "",
+            "### Medium",
+            "",
+            "None.",
+            "",
+            "### Low",
+            "",
+            "None.",
+            "",
+            "### Overflow manifest",
+            "None.",
+            "",
+            "## Summary",
+            "",
+            "Re-bind verification: zero findings against the live bytes.",
+            "",
+            "Verdict: ready=yes",
+            "",
+        ]
+        return "\n".join(lines)
+
+    def _run_tool(self, *args):
+        import regenerate_review_sidecar as rrs
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = rrs.main(list(args))
+        return rc, out.getvalue(), err.getvalue()
+
+    def _repair_witnessed_pair(self, round_no=4):
+        record = self._record_path(round_no)
+        record.write_text(
+            self._witnessed_markdown(round_no), encoding="utf-8"
+        )
+        rc, out, err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, (out, err))
+        self.assertIn(f"repaired: {record}", out)
+        return record, record.with_suffix(".stats.json"), out
+
+
+class RegenerateReviewSidecarTest(
+    _SidecarRepairFixture, unittest.TestCase
+):
+    """The defective-pair repair tool (review-record legacy identity plan,
+    Task 3)."""
+
+    def test_taxonomy_partition_covers_the_required_field_set(self):
+        """Transcription taxonomy (rule-closed set): the three classes are
+        pairwise disjoint and jointly cover the complete version-1 required
+        top-level field set plus the extended freshness set and the fenced
+        members (coverage, record_kind); no required field is unassigned."""
+        import validate_review_staging as vrs
+        import regenerate_review_sidecar as rrs
+
+        required = (
+            set(vrs.V1_REQUIRED_TOP_LEVEL_FIELDS)
+            | set(vrs.V1_EXTENDED_REQUIRED_FIELDS)
+            | {"coverage", "record_kind"}
+        )
+        transcribed = set(rrs.TRANSCRIBED_FIELDS)
+        derived = set(rrs.DERIVED_FIELDS)
+        defaulted = set(rrs.DEFAULTED_FIELDS)
+        self.assertFalse(transcribed & derived, "transcribed vs derived")
+        self.assertFalse(transcribed & defaulted, "transcribed vs defaulted")
+        self.assertFalse(derived & defaulted, "derived vs defaulted")
+        self.assertEqual(
+            transcribed | derived | defaulted,
+            required | {"verdict"},
+            "the partition must assign every required field exactly once",
+        )
+
+    def test_transcribed_class_reads_the_record_lines_verbatim(self):
+        """Transcription taxonomy (transcribed class): every transcribed
+        field equals the witnessed record's own line value."""
+        import json
+
+        _record, sidecar, _out = self._repair_witnessed_pair()
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertEqual(payload["source_digest"], self.digest)
+        self.assertEqual(payload["verdict"], "yes")
+        self.assertEqual(payload["round"], "r4")
+        self.assertEqual(payload["date"], self.PLAN_DATE)
+        self.assertEqual(payload["review_type"], "Plan Review")
+        self.assertEqual(payload["panel_mode"], "focused")
+        self.assertEqual(payload["selection_reason"], self.SELECTION_REASON)
+        self.assertEqual(payload["review_mode"], "fresh-adversarial")
+        self.assertEqual(
+            payload["risk_signals"], ["security-or-rollout-boundary"]
+        )
+        self.assertIs(payload["prior_findings_filter"], False)
+        self.assertEqual(payload["last_fix_commit"], self.LAST_FIX)
+        self.assertEqual(
+            payload["counts"],
+            {
+                "workers_launched": 1,
+                "raw_findings": 0,
+                "staged_findings": 0,
+                "discarded": 0,
+                "solo_staged": 0,
+                "echo_staged": 0,
+            },
+        )
+        self.assertEqual(payload["findings"], [])
+        self.assertEqual(
+            payload["panel"],
+            [
+                {
+                    "worker": "correctness-completeness",
+                    "lenses": ["quality", "implementation"],
+                    "parent_worker": None,
+                    "status": "complete",
+                    "raw": 0,
+                    "solo": 0,
+                    "echo": 0,
+                    "relaunch": False,
+                    "descendant_launches": [],
+                }
+            ],
+        )
+        self.assertEqual(
+            payload["extensions"]["plan_identity"], self.identity
+        )
+        self.assertEqual(payload["depth"], "focused")
+        self.assertEqual(payload["domains"], ["shell", "python", "git"])
+
+    def test_derived_fields_follow_the_named_constants(self):
+        """Transcription taxonomy (derived fields): schema_version 1,
+        source_kind plan, record_kind canonical, artifact_slug from the
+        transcribed identity's plan path, and the coverage object built
+        only from the record's Coverage and panel lines."""
+        import json
+
+        _record, sidecar, _out = self._repair_witnessed_pair()
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["source_kind"], "plan")
+        self.assertEqual(payload["record_kind"], "canonical")
+        self.assertEqual(payload["artifact_slug"], self.SLUG)
+        self.assertEqual(
+            payload["coverage"],
+            {
+                "outcome": "clean",
+                "material_lens_set": ["implementation", "quality"],
+                "completed": ["implementation", "quality"],
+                "missing": [],
+            },
+        )
+        self.assertIs(
+            payload["extensions"]["regenerated_from_markdown"], True
+        )
+
+    def test_defaulted_fields_carry_the_empty_forms(self):
+        """Transcription taxonomy (defaulted fields): the defaulted-empty
+        fields carry the empty forms; no evidence-bearing field is ever
+        defaulted."""
+        import json
+
+        _record, sidecar, _out = self._repair_witnessed_pair()
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertIsNone(payload["escalation_reason"])
+        for name in (
+            "soften_watchlist",
+            "deduplication_groups",
+            "discarded",
+            "overflow",
+            "severity_calibration",
+            "triage_outcomes",
+        ):
+            self.assertEqual(payload[name], [], name)
+
+    def test_self_heal_member_follows_the_chain_rule(self):
+        """Transcription taxonomy (self-heal member): a repaired round of 1
+        derives the unused status bound to the record's own run id; a valid
+        post-fence canonical prior round carries the prior chain state
+        verbatim; unavailable prior evidence derives the unknown status
+        bound to the record's own run id."""
+        import json
+
+        def _state(path):
+            payload = json.loads(
+                path.with_suffix(".stats.json").read_text(encoding="utf-8")
+            )
+            return payload["extensions"]["convergence"]["self_heal_attempt"]
+
+        r1 = self._record_path(1)
+        r1.write_text(self._witnessed_markdown(1), encoding="utf-8")
+        rc, out, _err = self._run_tool(str(r1))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            _state(r1), {"status": "unused", "run_id": self.RUN_ID}
+        )
+
+        # r3 first: its prior r2 record exists but carries no sidecar, so
+        # the prior evidence is unavailable.
+        r2 = self._record_path(2)
+        r2.write_text(self._witnessed_markdown(2), encoding="utf-8")
+        r3 = self._record_path(3)
+        r3.write_text(self._witnessed_markdown(3), encoding="utf-8")
+        rc, out, _err = self._run_tool(str(r3))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            _state(r3), {"status": "unknown", "run_id": self.RUN_ID}
+        )
+
+        # Repairing r2 after r1: the valid post-fence canonical prior
+        # carries its chain state verbatim (same run id and status).
+        rc, out, _err = self._run_tool(str(r2))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            _state(r2), {"status": "unused", "run_id": self.RUN_ID}
+        )
+
+    def test_record_kind_twin_append_is_the_only_markdown_write(self):
+        """Record-kind twin append: a post-fence record whose Markdown
+        lacks the twin gains exactly the one appended line, and the
+        repaired pair passes the record-kind gate."""
+        import validate_review_staging as vrs
+
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, with_kind_twin=False),
+            encoding="utf-8",
+        )
+        before = record.read_text(encoding="utf-8")
+        rc, out, err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, (out, err))
+        after = record.read_text(encoding="utf-8")
+        self.assertEqual(
+            after,
+            before.replace(
+                "## Metadata\n",
+                "## Metadata\n- Record kind: canonical\n",
+                1,
+            ),
+        )
+        result = vrs.validate_staging_file(
+            record,
+            hard=True,
+            expected_digest=self.digest,
+            source_kind="plan",
+        )
+        self.assertEqual(result.errors, [], result.errors)
+
+    def test_record_already_carrying_the_twin_receives_no_second_line(self):
+        record, _sidecar, _out = self._repair_witnessed_pair()
+        self.assertEqual(
+            record.read_text(encoding="utf-8").count(
+                "- Record kind: canonical"
+            ),
+            1,
+        )
+
+    def test_dry_run_prints_both_sets_and_writes_nothing(self):
+        good = self._record_path(4)
+        good.write_text(self._witnessed_markdown(4), encoding="utf-8")
+        stray = self._record_path(5)
+        stray.write_text(
+            self._witnessed_markdown(5, with_identity=False),
+            encoding="utf-8",
+        )
+        before_good = good.read_text(encoding="utf-8")
+        receipt = self.root / "receipt.md"
+        rc, out, _err = self._run_tool(
+            "--dry-run", "--receipt", str(receipt), str(good), str(stray)
+        )
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"would-repair: {good}", out)
+        self.assertIn(f"would-refuse: {stray}", out)
+        self.assertFalse(receipt.exists(), "dry-run must write nothing")
+        self.assertFalse(good.with_suffix(".stats.json").exists())
+        self.assertFalse(stray.with_suffix(".stats.json").exists())
+        self.assertEqual(good.read_text(encoding="utf-8"), before_good)
+
+    def test_real_run_writes_a_receipt_beside_the_console_census(self):
+        good = self._record_path(4)
+        good.write_text(self._witnessed_markdown(4), encoding="utf-8")
+        bad = self._record_path(5)
+        bad.write_text(
+            self._witnessed_markdown(5, with_identity=False),
+            encoding="utf-8",
+        )
+        receipt = self.root / "receipt.md"
+        rc, out, _err = self._run_tool(
+            "--receipt", str(receipt), str(good), str(bad)
+        )
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"repaired: {good}", out)
+        self.assertIn(f"refused: {bad}", out)
+        text = receipt.read_text(encoding="utf-8")
+        self.assertIn(str(good), text)
+        self.assertIn(str(bad), text)
+
+    def test_stale_digest_refuses_at_repair_time_and_leaves_no_sidecar(self):
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, digest="ab" * 32), encoding="utf-8"
+        )
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("digest", out)
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+
+    def test_stale_digest_refusal_on_a_twinless_record_restores_the_markdown(self):
+        """Delete-on-refusal Markdown restoration: a stale-digest refusal
+        on a record whose Markdown lacks the ``Record kind:`` twin (the
+        tool appends the twin, then refuses the in-place validation)
+        restores the Markdown byte-identical to the original (no appended
+        twin remains), leaves no sidecar file, and names the refused pair
+        in the census."""
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, with_kind_twin=False, digest="ab" * 32),
+            encoding="utf-8",
+        )
+        before = record.read_text(encoding="utf-8")
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            record.read_text(encoding="utf-8"),
+            before,
+            "the Markdown must be restored byte-identical on refusal",
+        )
+        self.assertNotIn(
+            "- Record kind: canonical",
+            record.read_text(encoding="utf-8"),
+            "no appended twin line may remain after the refusal",
+        )
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("digest", out)
+
+    def test_moved_plan_refuses_with_no_sidecar(self):
+        record = self._record_path(4)
+        record.write_text(self._witnessed_markdown(4), encoding="utf-8")
+        self.plan.unlink()
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+
+    def test_incomplete_record_refuses_without_writing(self):
+        record = self._record_path(4)
+        text = self._witnessed_markdown(4)
+        record.write_text(
+            text.replace("- Source digest: ", "- Recorded digest: ", 1),
+            encoding="utf-8",
+        )
+        before = record.read_text(encoding="utf-8")
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("Source digest", out)
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+        self.assertEqual(record.read_text(encoding="utf-8"), before)
+
+    def test_foreign_sidecar_is_never_overwritten(self):
+        import json
+
+        record = self._record_path(4)
+        record.write_text(self._witnessed_markdown(4), encoding="utf-8")
+        sidecar = record.with_suffix(".stats.json")
+        foreign = {"schema_version": 1, "source_digest": "cd" * 32}
+        sidecar.write_text(json.dumps(foreign), encoding="utf-8")
+        before_md = record.read_text(encoding="utf-8")
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("overwrite", out)
+        self.assertEqual(
+            json.loads(sidecar.read_text(encoding="utf-8")), foreign
+        )
+        self.assertEqual(record.read_text(encoding="utf-8"), before_md)
+
+    def test_corrected_markdown_retry_rewrites_its_own_marker_sidecar(self):
+        import json
+
+        record, sidecar, _out = self._repair_witnessed_pair()
+        record.write_text(
+            record.read_text(encoding="utf-8").replace(
+                f"- Selection reason: {self.SELECTION_REASON}",
+                "- Selection reason: corrected re-bind reason",
+            ),
+            encoding="utf-8",
+        )
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"repaired: {record}", out)
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertEqual(
+            payload["selection_reason"], "corrected re-bind reason"
+        )
+        self.assertIs(
+            payload["extensions"]["regenerated_from_markdown"], True
+        )
+
+    def test_no_identity_guess_from_the_slug(self):
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, with_identity=False),
+            encoding="utf-8",
+        )
+        rc, out, _err = self._run_tool(str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("guess", out.lower())
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+
+    def test_repaired_pair_passes_validation_and_the_strict_consult(self):
+        """The repaired pair passes the shared staging validation and the
+        strict readiness consult reaches its pass verdict on the series."""
+        import plan_readiness
+        import validate_review_staging as vrs
+
+        record, _sidecar, _out = self._repair_witnessed_pair()
+        result = vrs.validate_staging_file(
+            record,
+            hard=True,
+            expected_digest=self.digest,
+            source_kind="plan",
+        )
+        self.assertEqual(result.errors, [], result.errors)
+        ok, reason = plan_readiness.evaluate_readiness(
+            self.plan, self.plans, self.reviews
+        )
+        self.assertTrue(ok, reason)
+
+
+class RegeneratedSidecarIntegrationTest(
+    _SidecarRepairFixture, unittest.TestCase
+):
+    """Task 4 integration witnesses (review-record legacy identity plan).
+
+    The regenerated sidecar inside the validators: the taxonomy partition
+    pinned against the tool's actual output, the write bounds of a real
+    run, the self-heal chain rule's remaining arms (unnumbered, malformed,
+    pre-fence, and non-canonical prior evidence), the composed-chain
+    run-id-continuity refusal with its bounded retry, the refusal paths
+    named in census and receipt, the marker tolerance asserted in both
+    directions, and the regeneration notice on the consult's advisory
+    channel. Every witness builds an isolated temp home; the live-home run
+    is the campaign operation whose verification is its printed census and
+    receipt file.
+    """
+
+    def _home_snapshot(self):
+        """Working-tree file inventory of the temp home (.git excluded)."""
+        return {
+            str(path.relative_to(self.root)): path.read_bytes()
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file() and ".git" not in path.parts
+        }
+
+    def test_regenerated_payload_top_level_keys_stay_partition_assigned(self):
+        """Taxonomy completeness: every top-level key of an actually
+        regenerated payload is assigned within the rule-closed partition;
+        ``extensions`` is its own taxonomy arm (identity, convergence chain
+        state, and the regeneration marker)."""
+        import json
+
+        import regenerate_review_sidecar as rrs
+
+        _record, sidecar, _out = self._repair_witnessed_pair()
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        assigned = (
+            set(rrs.TRANSCRIBED_FIELDS)
+            | set(rrs.DERIVED_FIELDS)
+            | set(rrs.DEFAULTED_FIELDS)
+            | set(rrs.OPTIONAL_TRANSCRIBED_FIELDS)
+        )
+        self.assertEqual(
+            set(payload) - assigned,
+            {"extensions"},
+            "every top-level payload key must be partition-assigned",
+        )
+        self.assertIs(
+            payload["extensions"]["regenerated_from_markdown"], True
+        )
+
+    def test_write_bounds_real_run_writes_sidecar_twin_line_and_receipt_only(self):
+        """Safety witness (write bounds): a real run's total writes are
+        exactly the sidecar, the appended twin line, and the receipt file;
+        the repaired Markdown differs from the original by exactly the
+        appended twin line, and the written sidecar carries the marker."""
+        import json
+
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, with_kind_twin=False),
+            encoding="utf-8",
+        )
+        before = self._home_snapshot()
+        receipt = self.root / "receipt.md"
+        rc, out, _err = self._run_tool("--receipt", str(receipt), str(record))
+        self.assertEqual(rc, 0, out)
+        after = self._home_snapshot()
+        record_key = str(record.relative_to(self.root))
+        sidecar_key = str(
+            record.with_suffix(".stats.json").relative_to(self.root)
+        )
+        receipt_key = str(receipt.relative_to(self.root))
+        self.assertEqual(
+            set(after) - set(before),
+            {sidecar_key, receipt_key},
+            "a real run adds exactly the sidecar and the receipt file",
+        )
+        self.assertEqual(
+            {
+                name
+                for name in set(before) & set(after)
+                if before[name] != after[name]
+            },
+            {record_key},
+            "a real run modifies exactly the record's Markdown",
+        )
+        original = before[record_key].decode("utf-8")
+        self.assertEqual(
+            after[record_key].decode("utf-8"),
+            original.replace(
+                "## Metadata\n", "## Metadata\n- Record kind: canonical\n", 1
+            ),
+            "the Markdown delta must be exactly the appended twin line",
+        )
+        payload = json.loads(after[sidecar_key].decode("utf-8"))
+        self.assertIs(
+            payload["extensions"]["regenerated_from_markdown"], True
+        )
+        self.assertIn(str(record), receipt.read_text(encoding="utf-8"))
+
+    def test_unnumbered_round_derives_unused_status_bound_to_own_run_id(self):
+        """Self-heal chain rule (unnumbered arm): a repaired record with no
+        ``-rN`` suffix derives the unused status bound to its own run
+        id."""
+        import json
+
+        unnumbered = self.reviews / (
+            f"{self.PLAN_DATE}-plan-review-{self.SLUG}-p{self.token}.md"
+        )
+        unnumbered.write_text(self._witnessed_markdown(1), encoding="utf-8")
+        rc, out, _err = self._run_tool(str(unnumbered))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"repaired: {unnumbered}", out)
+        payload = json.loads(
+            unnumbered.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            payload["extensions"]["convergence"]["self_heal_attempt"],
+            {"status": "unused", "run_id": self.RUN_ID},
+        )
+
+    def _repair_r2_over_prior_sidecar(self, prior_sidecar_text, prior_name):
+        """One r2 repair over a prior r1 whose sidecar carries
+        ``prior_sidecar_text``; returns the r2 self-heal state."""
+        import json
+
+        prior = self.reviews / prior_name
+        prior.write_text(self._witnessed_markdown(1), encoding="utf-8")
+        prior.with_suffix(".stats.json").write_text(
+            prior_sidecar_text, encoding="utf-8"
+        )
+        r2 = self._record_path(2)
+        r2.write_text(self._witnessed_markdown(2), encoding="utf-8")
+        rc, out, _err = self._run_tool(str(r2))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"repaired: {r2}", out)
+        payload = json.loads(
+            r2.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        return payload["extensions"]["convergence"]["self_heal_attempt"]
+
+    def test_malformed_prior_sidecar_derives_unknown_status_bound_to_own_run_id(self):
+        """Self-heal chain rule (malformed prior arm): a prior sidecar that
+        is unreadable JSON derives the unknown status bound to the
+        record's own run id."""
+        state = self._repair_r2_over_prior_sidecar(
+            "{broken",
+            f"{self.PLAN_DATE}-plan-review-{self.SLUG}-p{self.token}-r1.md",
+        )
+        self.assertEqual(
+            state, {"status": "unknown", "run_id": self.RUN_ID}
+        )
+
+    def test_pre_fence_prior_derives_unknown_status_bound_to_own_run_id(self):
+        """Self-heal chain rule (pre-fence prior arm): a prior round dated
+        before the self-heal fence derives the unknown status bound to the
+        record's own run id."""
+        import json
+
+        state = self._repair_r2_over_prior_sidecar(
+            json.dumps(
+                {"record_kind": "canonical", "date": "2026-08-01"}
+            ),
+            f"2026-08-01-plan-review-{self.SLUG}-p{self.token}-r1.md",
+        )
+        self.assertEqual(
+            state, {"status": "unknown", "run_id": self.RUN_ID}
+        )
+
+    def test_non_canonical_prior_derives_unknown_status_bound_to_own_run_id(self):
+        """Self-heal chain rule (non-canonical prior arm): a prior round
+        whose sidecar declares a non-canonical record kind derives the
+        unknown status bound to the record's own run id."""
+        state = self._repair_r2_over_prior_sidecar(
+            '{"record_kind": "worker-evidence", "date": "%s"}'
+            % self.PLAN_DATE,
+            f"{self.PLAN_DATE}-plan-review-{self.SLUG}-p{self.token}-r1.md",
+        )
+        self.assertEqual(
+            state, {"status": "unknown", "run_id": self.RUN_ID}
+        )
+
+    def test_composed_chain_run_id_continuity_refusal_and_bounded_retry(self):
+        """Composed-chain witness: defective r2 and r3 beside a valid r1;
+        repairing r3 then r2 leaves r3's full in-place validation refusing
+        with the run-id continuity reason (r3 derived its own run id while
+        r2 was unavailable), and a bounded-retry re-run of the tool on r3
+        (its own marker-bearing sidecar permits the rewrite) ends with the
+        full staging validation of r3 passing."""
+        import json
+
+        import validate_review_staging as vrs
+
+        r1 = self._record_path(1)
+        r1.write_text(self._witnessed_markdown(1), encoding="utf-8")
+        rc, out, _err = self._run_tool(str(r1))
+        self.assertIn(f"repaired: {r1}", out)
+        r2 = self._record_path(2)
+        r2.write_text(
+            self._witnessed_markdown(2, run_id=self.R2_RUN_ID),
+            encoding="utf-8",
+        )
+        r3 = self._record_path(3)
+        r3.write_text(
+            self._witnessed_markdown(3, run_id=self.R3_RUN_ID),
+            encoding="utf-8",
+        )
+
+        # r3 first: its prior r2 is still sidecar-less, so r3 derives the
+        # unknown status bound to its own run id and repairs.
+        rc, out, _err = self._run_tool(str(r3))
+        self.assertIn(f"repaired: {r3}", out)
+        state = json.loads(
+            r3.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )["extensions"]["convergence"]["self_heal_attempt"]
+        self.assertEqual(
+            state, {"status": "unknown", "run_id": self.R3_RUN_ID}
+        )
+
+        # r2 next: the valid post-fence canonical r1 carries its chain
+        # state verbatim.
+        rc, out, _err = self._run_tool(str(r2))
+        self.assertIn(f"repaired: {r2}", out)
+
+        # r3's full in-place validation now refuses with the run-id
+        # continuity reason.
+        result = vrs.validate_staging_file(
+            r3, hard=True, expected_digest=self.digest, source_kind="plan"
+        )
+        self.assertFalse(result.ok, result.errors)
+        self.assertTrue(
+            any(
+                "run_id cannot change after r1" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+        # Bounded retry: r3's own marker-bearing sidecar permits the
+        # rewrite, the chain rule now carries r2's state verbatim, and the
+        # full staging validation of r3 passes.
+        rc, out, _err = self._run_tool(str(r3))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"repaired: {r3}", out)
+        state = json.loads(
+            r3.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )["extensions"]["convergence"]["self_heal_attempt"]
+        self.assertEqual(state, {"status": "unused", "run_id": self.RUN_ID})
+        result = vrs.validate_staging_file(
+            r3, hard=True, expected_digest=self.digest, source_kind="plan"
+        )
+        self.assertEqual(result.errors, [], result.errors)
+
+    def test_stale_digest_refusal_names_the_pair_in_census_and_receipt(self):
+        """Refusal-path witness (stale digest): a complete record whose
+        recorded Source digest mismatches the live plan bytes is refused
+        with the digest reason, named in both census and receipt, and
+        leaves no sidecar file."""
+        record = self._record_path(4)
+        record.write_text(
+            self._witnessed_markdown(4, digest="ab" * 32), encoding="utf-8"
+        )
+        receipt = self.root / "receipt.md"
+        rc, out, _err = self._run_tool("--receipt", str(receipt), str(record))
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"refused: {record}", out)
+        self.assertIn("digest", out)
+        receipt_text = receipt.read_text(encoding="utf-8")
+        self.assertIn(str(record), receipt_text)
+        self.assertIn("digest", receipt_text)
+        self.assertFalse(record.with_suffix(".stats.json").exists())
+
+    def test_marker_tolerance_asserted_not_extended(self):
+        """Tolerance asserted, not extended: the validator's open-extensions
+        handling accepts the marker on a valid pair, and the negative
+        direction is pinned (a marker-bearing sidecar with a stale digest
+        or a failing gate still refuses, so no gate keys tolerance on the
+        marker)."""
+        import json
+
+        import validate_review_staging as vrs
+
+        record, sidecar, _out = self._repair_witnessed_pair()
+
+        def _mutate(mutator):
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+            mutator(payload)
+            sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+        def _validate():
+            return vrs.validate_staging_file(
+                record,
+                hard=True,
+                expected_digest=self.digest,
+                source_kind="plan",
+            )
+
+        # Positive: the marker-bearing regenerated pair passes.
+        self.assertEqual(_validate().errors, [])
+        # Descriptive-only: flipping the marker changes nothing.
+        _mutate(
+            lambda payload: payload["extensions"].__setitem__(
+                "regenerated_from_markdown", False
+            )
+        )
+        self.assertEqual(_validate().errors, [])
+        # Negative: a marker-bearing sidecar with a stale digest refuses.
+        _mutate(
+            lambda payload: (
+                payload["extensions"].__setitem__(
+                    "regenerated_from_markdown", True
+                ),
+                payload.__setitem__("source_digest", "ab" * 32),
+            )
+        )
+        result = _validate()
+        self.assertFalse(result.ok, result.errors)
+        self.assertTrue(
+            any("digest" in error.lower() for error in result.errors),
+            result.errors,
+        )
+        # Negative: a marker-bearing sidecar failing an unrelated gate
+        # (sidecar round vs staging filename) refuses too.
+        _mutate(
+            lambda payload: (
+                payload.__setitem__("source_digest", self.digest),
+                payload.__setitem__("round", "r5"),
+            )
+        )
+        result = _validate()
+        self.assertFalse(result.ok, result.errors)
+        self.assertTrue(
+            any("round" in error for error in result.errors), result.errors
+        )
+
+    def test_regeneration_notice_exactly_when_marker_present(self):
+        """Regeneration notice: the consult resolving a marker-bearing
+        sidecar appends exactly one report-only notice through the advisory
+        channel (main prints it on the pass path); a sidecar without the
+        marker produces no notice; the verdict never changes."""
+        import json
+
+        record, sidecar, _out = self._repair_witnessed_pair()
+
+        def _consult():
+            advisories: list[str] = []
+            ok, reason = evaluate_readiness(
+                self.plan, self.plans, self.reviews, advisories
+            )
+            return ok, reason, advisories
+
+        ok, reason, advisories = _consult()
+        self.assertTrue(ok, reason)
+        notices = [entry for entry in advisories if "regenerated" in entry]
+        self.assertEqual(len(notices), 1, advisories)
+        self.assertIn(record.with_suffix(".stats.json").name, notices[0])
+
+        # No marker, no notice, same verdict.
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        del payload["extensions"]["regenerated_from_markdown"]
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        ok, reason, advisories = _consult()
+        self.assertTrue(ok, reason)
+        self.assertEqual(
+            [entry for entry in advisories if "regenerated" in entry],
+            [],
+            advisories,
+        )
+
+        # The notice rides main's single pass-path advisory line.
+        payload["extensions"]["regenerated_from_markdown"] = True
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        import plan_readiness
+
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main([str(self.plan)])
+        finally:
+            os.chdir(prev)
+        self.assertEqual(rc, 0, (out.getvalue(), err.getvalue()))
+        advisory_lines = [
+            line
+            for line in err.getvalue().splitlines()
+            if "review advisory" in line
+        ]
+        self.assertEqual(len(advisory_lines), 1)
+        self.assertIn("regenerated", advisory_lines[0])
 
 
 class CapClosureContractTest(unittest.TestCase):

@@ -23,10 +23,13 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+
+import review_plan_identity
 from datetime import date
 from pathlib import Path
 
@@ -63,6 +66,37 @@ V1_FRESHNESS_META = (
     "- Prior findings supplied as filter: no",
     "- Last fix commit: none",
 )
+
+
+class MarkdownIdentityScopingTest(unittest.TestCase):
+    """Plan 2026-10-18-closeout-gate-series-token-infix: legacy Markdown
+    identity binds only from the actual ``## Metadata`` section; the same
+    URL or Artifact line in a later section or in fenced content never
+    becomes the record's identity."""
+
+    def test_metadata_section_line_resolves(self):
+        text = (
+            "# Plan Review\n\n## Metadata\n- Type: Plan Review\n"
+            "- URL or Artifact: docs/history/plans/2026-10-19-x.md\n"
+        )
+        self.assertEqual(
+            review_plan_identity.markdown_identity(text),
+            "docs/history/plans/2026-10-19-x.md",
+        )
+
+    def test_body_section_line_is_ignored(self):
+        text = (
+            "# Plan Review\n\n## Metadata\n- Type: Plan Review\n\n"
+            "## Findings\n- URL or Artifact: docs/history/plans/2026-10-01-other.md\n"
+        )
+        self.assertIsNone(review_plan_identity.markdown_identity(text))
+
+    def test_fenced_line_is_ignored(self):
+        text = (
+            "# Plan Review\n\n## Metadata\n- Type: Plan Review\n\n"
+            "```\n- URL or Artifact: docs/history/plans/2026-10-01-other.md\n```\n"
+        )
+        self.assertIsNone(review_plan_identity.markdown_identity(text))
 
 
 class SelectionHelperTest(unittest.TestCase):
@@ -266,6 +300,171 @@ class SelectionHelperTest(unittest.TestCase):
 
             self.assertEqual(orphans, [owned_orphan])
 
+    # -- narrowed series-identity disposition (review-record legacy
+    #    identity plan, Task 1) ---------------------------------------------
+
+    def plan_review_home(self) -> tuple[Path, Path, Path, str]:
+        """An isolated git-init temp home with one source plan; returns
+        ``(root, reviews, plan, identity)``."""
+        directory = tempfile.mkdtemp(prefix="plan-review-identity-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        root = Path(directory)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        plans = root / "docs" / "plans"
+        reviews = root / ".ai-playbook" / "reviews"
+        plans.mkdir(parents=True)
+        reviews.mkdir(parents=True)
+        plan = plans / "2026-10-14-same-feature.md"
+        plan.write_text("plan A", encoding="utf-8")
+        return root, reviews, plan, plan.relative_to(root).as_posix()
+
+    def write_identity_pair(
+        self,
+        directory: Path,
+        base: str,
+        digest: str,
+        identity: str | None,
+        round_value: int = 1,
+    ) -> tuple[Path, Path]:
+        """One complete round pair; ``identity=None`` is the legacy
+        identity-unresolvable shape (no sidecar extensions field, no
+        ``URL or Artifact:`` line)."""
+        md = directory / f"{base}.md"
+        identity_line = (
+            f"- URL or Artifact: {identity}\n" if identity is not None else ""
+        )
+        md.write_text(
+            f"# Plan Review: demo\n\n## Metadata\n{identity_line}"
+            f"- Source digest: {digest}\n",
+            encoding="utf-8",
+        )
+        sidecar = directory / f"{base}.stats.json"
+        sidecar.write_text(
+            json.dumps({"source_digest": digest, "round": round_value}),
+            encoding="utf-8",
+        )
+        return md, sidecar
+
+    def plan_review_select(
+        self, reviews: Path, plan: Path, digest: str, *extra: str
+    ) -> tuple[int, dict, str]:
+        code, out, err = self.run_cli(
+            "select",
+            "--dir",
+            str(reviews),
+            "--slug",
+            "same-feature",
+            "--kind",
+            "plan-review",
+            "--source-plan",
+            str(plan),
+            "--source-digest",
+            digest,
+            *extra,
+        )
+        payload = json.loads(out) if out.strip() else {}
+        return code, payload, err
+
+    def test_plan_review_mixed_series_reuses_owned_latest_with_advisories(self) -> None:
+        _root, reviews, plan, identity = self.plan_review_home()
+        legacy_md, _legacy_sidecar = self.write_identity_pair(
+            reviews, "2026-08-01-plan-review-same-feature-r1", DIGEST_A, None
+        )
+        owned_md, _owned_sidecar = self.write_identity_pair(
+            reviews, "2026-09-01-plan-review-same-feature-r2", DIGEST_A, identity, 2
+        )
+        code, payload, err = self.plan_review_select(reviews, plan, DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(owned_md))
+        self.assertEqual(len(payload["advisories"]), 1)
+        self.assertIn(legacy_md.name, payload["advisories"][0])
+
+    def test_plan_review_rank_guard_refuses_unresolvable_highest_round(self) -> None:
+        _root, reviews, plan, identity = self.plan_review_home()
+        self.write_identity_pair(
+            reviews, "2026-08-01-plan-review-same-feature-r1", DIGEST_A, identity
+        )
+        outranker_md, _sidecar = self.write_identity_pair(
+            reviews, "2026-09-01-plan-review-same-feature-r2", DIGEST_A, None, 2
+        )
+        for extra in ([], ["--explicit-new-round"]):
+            code, payload, err = self.plan_review_select(
+                reviews, plan, DIGEST_A, *extra
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(payload, {})
+            self.assertIn(outranker_md.name, err)
+            self.assertIn("outranks", err)
+
+    def test_plan_review_pure_legacy_series_resolves_lexically(self) -> None:
+        _root, reviews, plan, _identity = self.plan_review_home()
+        self.write_identity_pair(
+            reviews, "2026-08-01-plan-review-same-feature-r1", DIGEST_A, None
+        )
+        self.write_identity_pair(
+            reviews, "2026-08-15-plan-review-same-feature-r2", DIGEST_A, None, 2
+        )
+        # A duplicate round: the lexical resolution includes duplicates
+        # (ties by filename) and never trips the duplicate-round refusal.
+        self.write_identity_pair(
+            reviews, "2026-08-20-plan-review-same-feature-r2", DIGEST_A, None, 2
+        )
+        lexical_md, _sidecar = self.write_identity_pair(
+            reviews, "2026-09-01-plan-review-same-feature-r2", DIGEST_A, None, 2
+        )
+        code, payload, err = self.plan_review_select(reviews, plan, DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(lexical_md))
+        self.assertEqual(len(payload["advisories"]), 1)
+        self.assertIn(lexical_md.name, payload["advisories"][0])
+        self.assertIn("lexical", payload["advisories"][0])
+
+        # Allocation continues from the highest existing round, never
+        # minting a parallel r1 chain.
+        code, payload, err = self.plan_review_select(
+            reviews, plan, DIGEST_B, "--explicit-new-round"
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-round")
+        self.assertTrue(payload["markdown"].endswith("-r3.md"), payload)
+        self.assertNotIn("-r1.md", payload["markdown"])
+
+    def test_plan_review_unresolvable_half_keeps_orphan_refusal(self) -> None:
+        _root, reviews, plan, _identity = self.plan_review_home()
+        orphan_md = reviews / "2026-08-01-plan-review-same-feature-r1.md"
+        orphan_md.write_text(
+            "# Plan Review\n\n## Metadata\n- Type: Plan Review\n",
+            encoding="utf-8",
+        )
+        for extra in ([], ["--explicit-new-round"]):
+            code, payload, err = self.plan_review_select(
+                reviews, plan, DIGEST_A, *extra
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(payload, {})
+            self.assertIn(orphan_md.name, err)
+            self.assertIn("orphaned record half", err)
+
+    def test_plan_review_foreign_half_stays_silent_skip(self) -> None:
+        _root, reviews, plan, _identity = self.plan_review_home()
+        foreign_md = reviews / "2026-08-01-plan-review-same-feature-r1.md"
+        foreign_md.write_text(
+            "# Plan Review\n\n## Metadata\n"
+            "- URL or Artifact: docs/plans/2026-10-15-other-plan.md\n",
+            encoding="utf-8",
+        )
+        for extra in ([], ["--explicit-new-round"]):
+            code, payload, err = self.plan_review_select(
+                reviews, plan, DIGEST_A, *extra
+            )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(payload["decision"], "new-record")
+            self.assertNotIn(foreign_md.name, str(payload))
+            self.assertNotIn(foreign_md.name, err)
+            self.assertEqual(payload["advisories"], [])
+
     def test_select_preserves_case_for_non_plan_kind(self) -> None:
         # Case preservation is the documented behavior for non-plan review
         # kinds only: the plan-review kind requires the canonical
@@ -281,9 +480,63 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(payload["decision"], "new-record")
         self.assertTrue(
             payload["markdown"].endswith(
-                "-branch-review-PROJ-607-fact-reconcile-worker-r1.md"
+                "-PROJ-607-fact-reconcile-worker-branch-review-r1.md"
             )
         )
+
+    def test_kind_scopes_to_requested_suffix_family(self) -> None:
+        # Mixed families share one artifact slug; a bare slug with an
+        # explicit --kind enumerates only the requested family's
+        # suffix-shaped records and emits the documented suffix-form path
+        # (the 2026-10-10 family-scope acceptance), so no other family's
+        # rounds seed or supersede this allocation.
+        self.write_pair(self.reviews, f"{self.today}-plan-review-demo-r13", DIGEST_A)
+        self.write_pair(self.reviews, f"{self.today}-demo-plan-review-r2", DIGEST_A)
+        self.write_pair(self.reviews, f"{self.today}-branch-review-demo-r7", DIGEST_A)
+        self.write_pair(self.reviews, f"{self.today}-demo-branch-review-r4", DIGEST_A)
+        code, payload, err = self.select(DIGEST_A, "--kind", "code-review")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        self.assertEqual(
+            Path(payload["markdown"]).name,
+            f"{self.today}-demo-code-review-r1.md",
+        )
+        self.assertFalse(Path(payload["markdown"]).exists())
+
+    def test_kind_family_allocates_its_own_next_round(self) -> None:
+        # Each family sharing the artifact slug allocates its own next
+        # round: the code-review family's latest record is the
+        # predecessor, never another family's higher round.
+        self.write_pair(self.reviews, f"{self.today}-demo-plan-review-r9", DIGEST_A)
+        self.write_pair(self.reviews, f"{self.today}-demo-code-review-r1", DIGEST_A)
+        code, payload, err = self.select(
+            DIGEST_B, "--kind", "code-review", "--explicit-new-round"
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-round")
+        self.assertEqual(
+            Path(payload["markdown"]).name,
+            f"{self.today}-demo-code-review-r2.md",
+        )
+        self.assertTrue(
+            payload["supersedes"].endswith("demo-code-review-r1.md")
+        )
+
+    def test_select_missing_reviews_dir_refusal_names_directory(self) -> None:
+        # A reviews directory absent from disk refuses naming that
+        # directory and the transfer-in remedy, not a git-repository
+        # problem (the misattributed fresh-worktree refusal).
+        missing = self.reviews / "absent"
+        plan = self.reviews / "some-plan.md"
+        plan.write_text("# Plan\n", encoding="utf-8")
+        code, payload, err = self.select_in(
+            missing, DIGEST_A,
+            "--kind", "plan-review", "--source-plan", str(plan),
+        )
+        self.assertEqual(code, 2, err)
+        self.assertIn("does not exist", err)
+        self.assertIn("transfer it in", err)
+        self.assertNotIn("inside a git repository", err)
 
     def test_select_reuses_same_pass(self) -> None:
         base = f"{self.today}-demo-r1"
@@ -1615,7 +1868,7 @@ class SelectionHelperTest(unittest.TestCase):
         fresh_md = Path(payload["markdown"])
         fresh_sidecar = Path(payload["sidecar"])
         self.assertEqual(
-            fresh_md, reviews / f"{self.today}-code-review-demo-r1.md"
+            fresh_md, reviews / f"{self.today}-demo-code-review-r1.md"
         )
         self.assertEqual(fresh_sidecar, fresh_md.with_suffix(".stats.json"))
         # The allocation emits paths, it never writes the pair.
@@ -1637,7 +1890,8 @@ class SelectionHelperTest(unittest.TestCase):
 
         # A follow-up select --explicit-new-round for the same slug
         # succeeds post-recovery: the canonical orphan path is vacated
-        # (the same kind-prefixed path the orphan occupied is re-emitted).
+        # (the bare slug with --kind re-emits the documented suffix-form
+        # family path, the same family the recovery allocated into).
         code, payload2, err2 = self.select_in(
             reviews, DIGEST_B, "--explicit-new-round", "--kind", "code-review",
             slug="demo",
@@ -1646,7 +1900,7 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(payload2["decision"], "new-record")
         self.assertEqual(
             Path(payload2["markdown"]),
-            reviews / f"{self.today}-code-review-demo-r1.md",
+            reviews / f"{self.today}-demo-code-review-r1.md",
         )
 
     def test_recover_orphan_refusals(self) -> None:

@@ -9,6 +9,7 @@
 - **Skill/step:** docs/history/backlog/2026-10-06-staging-preflight-done-readiness-shared-payload-span.md (Cluster line)
 - **Driving force:** simplicity
 Cluster: docs/history/backlog/2026-10-06-staging-preflight-done-readiness-shared-payload-span.md (one of the two rows citing the retired slug this row repoints)
+Cluster: docs/history/backlog/2026-10-19-machinery-registry-witness-ref-rot.md (same defect class: a living record citing a backlog path that moved)
 
 ## Problem
 

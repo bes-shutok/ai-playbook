@@ -30,6 +30,13 @@ die() {
   exit 1
 }
 
+# The recovery refusal sentinel: every recovery precondition refusal carries
+# this prefix, so a usage error can never satisfy a recovery refusal check.
+rec_fail() {
+  printf 'release-rewrite: RECOVERY REFUSED: %s\n' "$*" >&2
+  exit 1
+}
+
 regroup() {
   printf 'REGROUP REQUIRED: %s\n' "$*" >&2
   exit 2
@@ -71,7 +78,22 @@ trap cleanup EXIT
 #                                scripts/scan-public-hygiene.sh), resolved
 #                                against the PRIMARY checkout
 
-[ "$#" -eq 1 ] || die "usage: release-rewrite.sh <groups-file>"
+# Argument parsing: the ordinary one-positional contract is unchanged; the
+# recovery mode is selected by the two flags appearing TOGETHER, each at most
+# once, each followed by its value. Anything else is a usage FATAL naming
+# both recovery flags.
+recovery_base=""
+expect_remote_oid=""
+recovery_mode=0
+if [ "$#" -eq 1 ]; then
+  :
+elif [ "$#" -eq 5 ] && [ "$2" = "--recovery-base" ] && [ "$4" = "--expect-remote-oid" ]; then
+  recovery_base="$3"
+  expect_remote_oid="$5"
+  recovery_mode=1
+else
+  die "usage: release-rewrite.sh <groups-file> [--recovery-base <oid> --expect-remote-oid <oid>]; the two recovery flags are accepted together, each exactly once, each followed by its value (got $# arguments)"
+fi
 groups_in="$1"
 groups_dir="$(dirname "$groups_in")"
 groups_file="$(cd "$groups_dir" 2>/dev/null && pwd)/$(basename "$groups_in")"
@@ -104,12 +126,37 @@ esac
 head_ref="$(git symbolic-ref HEAD 2>/dev/null)" || head_ref=""
 [ "$head_ref" = "refs/heads/main" ] || die "refusing to rewrite: HEAD is ${head_ref:-detached}, not refs/heads/main"
 
-# 3. Fetch and refuse a diverged remote: local main must be a descendant of
-#    <remote>/main.
+# 3. Fetch; then split by mode: ordinary mode refuses a diverged remote
+#    (local main must be a descendant of <remote>/main, bytes unchanged);
+#    recovery mode routes to its own precondition gate (selected base, the
+#    expected remote OID, and the recovery-only delta admission).
 git fetch --quiet "$remote" || die "git fetch $remote failed"
 git rev-parse --verify --quiet "$upstream" >/dev/null 2>&1 || die "$upstream not found after fetch"
-if ! git merge-base --is-ancestor "$upstream" refs/heads/main; then
-  die "main is not a descendant of $remote/main; reconcile with the remote before releasing"
+if [ "$recovery_mode" -eq 1 ]; then
+  sel_base="$(git rev-parse --verify --quiet "${recovery_base}^{commit}" 2>/dev/null)" || sel_base=""
+  [ -n "$sel_base" ] || rec_fail "the selected base ${recovery_base} does not resolve to a commit"
+  recovery_main_tip="$(git rev-parse refs/heads/main)"
+  [ "$sel_base" != "$recovery_main_tip" ] || rec_fail "the selected base equals the current main tip; nothing to recover"
+  git merge-base --is-ancestor "$sel_base" refs/heads/main \
+    || rec_fail "the selected base ${sel_base} is not an ancestor of main"
+  # Capture-then-match, never `grep -q` in a pipeline: grep's early exit on a
+  # match SIGPIPEs rev-list, and pipefail would read that as a miss.
+  first_parent_line="$(git rev-list --first-parent refs/heads/main)"
+  case "$first_parent_line" in
+    *"$sel_base"*) : ;;
+    *) rec_fail "the selected base ${sel_base} is not on main's first-parent line; the recovery tiling would not be exhaustive" ;;
+  esac
+  upstream_oid="$(git rev-parse --verify "$upstream")"
+  [ "$upstream_oid" = "$expect_remote_oid" ] \
+    || rec_fail "the fetched ${remote}/main (${upstream_oid}) does not equal the expected remote OID observed at authorization (${expect_remote_oid}); re-observe the remote tip and re-authorize the recovery"
+  recovery_merge_shas="$(git rev-list --min-parents=2 "${upstream}..refs/heads/main")"
+  if [ -z "$recovery_merge_shas" ] && git merge-base --is-ancestor "$upstream" refs/heads/main; then
+    rec_fail "the publish delta is releasable by the ordinary release flow (no merge inside the delta and no divergence); use the ordinary release instead"
+  fi
+else
+  if ! git merge-base --is-ancestor "$upstream" refs/heads/main; then
+    die "main is not a descendant of $remote/main; reconcile with the remote before releasing"
+  fi
 fi
 
 # 4. Report-only inventory (backup refs are never cleanup candidates; the
@@ -195,29 +242,45 @@ if [ -z "$resolved_base" ] || [ "$resolved_base" != "$main_tip" ]; then
   regroup "the groups base ${base_sha} is not the current main tip ${main_tip}; regroup from the new tip"
 fi
 
-# A merge commit anywhere fails the tiling, naming the offending commit; the
-# range is then not linear and consecutive-count groups cannot tile it.
-merge_shas="$(git rev-list --min-parents=2 "$upstream..refs/heads/main")"
-if [ -n "$merge_shas" ]; then
-  for m in $merge_shas; do
-    printf 'release-rewrite: FATAL: merge commit %s sits inside the publish delta %s; a release needs a linear range\n' \
-      "$m" "$upstream..refs/heads/main" >&2
-  done
-  exit 1
+# A merge commit anywhere fails the ordinary tiling, naming the offending
+# commit; the range is then not linear and consecutive-count groups cannot
+# tile it. Ordinary mode only: a recovery invocation skips this scan and
+# reaches its own first-parent enumeration below.
+if [ "$recovery_mode" -eq 0 ]; then
+  merge_shas="$(git rev-list --min-parents=2 "$upstream..refs/heads/main")"
+  if [ -n "$merge_shas" ]; then
+    for m in $merge_shas; do
+      printf 'release-rewrite: FATAL: merge commit %s sits inside the publish delta %s; a release needs a linear range\n' \
+        "$m" "$upstream..refs/heads/main" >&2
+    done
+    exit 1
+  fi
 fi
 
-range_count="$(git rev-list --count "$upstream..refs/heads/main")"
+commits=()
+if [ "$recovery_mode" -eq 1 ]; then
+  # The first-parent segment AFTER the selected base: git's first-parent
+  # range walk keeps the range's own base commit in the listing, so the
+  # selected base is filtered out explicitly and the count derives from
+  # the filtered enumeration.
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    if [ "$sha" = "$sel_base" ]; then continue; fi
+    commits+=("$sha")
+  done < <(git rev-list --reverse --first-parent "${sel_base}..refs/heads/main")
+  range_count="${#commits[@]}"
+else
+  range_count="$(git rev-list --count "$upstream..refs/heads/main")"
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    commits+=("$sha")
+  done < <(git rev-list --reverse "$upstream..refs/heads/main")
+fi
 total=0
 for c in "${counts[@]}"; do
   total=$((total + c))
 done
 [ "$total" -eq "$range_count" ] || die "groups tile $total of $range_count publish-delta commits; counts must sum to the range size"
-
-commits=()
-while IFS= read -r sha; do
-  [ -n "$sha" ] || continue
-  commits+=("$sha")
-done < <(git rev-list --reverse "$upstream..refs/heads/main")
 [ "${#commits[@]}" -eq "$range_count" ] || die "publish-delta enumeration disagrees with the range count"
 
 # 7. Scratch roots: an ad-hoc rewrite worktree OUTSIDE the repo tree on a temp
@@ -283,9 +346,10 @@ invoke_scanner() {
   if [ "$scan_rc" -ne 0 ]; then
     printf 'PRIVACY GATE FAILED (scanner exit %s): offending paths: %s\n' \
       "$scan_rc" "${scan_call_paths[*]}" >&2
-    if [ "$scan_rc" -eq 3 ]; then
-      # The scanner's own-error class (tool error under the outcome
-      # contract, exit 3) aborts the release on the scanner's own code.
+    if [ "$scan_rc" -eq 2 ] || [ "$scan_rc" -eq 3 ]; then
+      # The scanner's own-error classes (environment error, exit 2, and tool
+      # error under the outcome contract, exit 3) abort the release on the
+      # tool-error exit 3, never as a REGROUP-class exit 2 of this script.
       exit 3
     fi
     exit "$scan_rc"
@@ -309,10 +373,15 @@ invoke_scanner() {
 rewritten_tip="$(
   cd "$worktree_path" || exit 1
   cursor=0
-  # The rewritten chain is rooted at the publish-delta base (the remote tip),
-  # so the squashed history replaces the unpushed pile; the groups-file base
-  # tip stays the compare-and-swap expected-old value below.
-  prev_tip="$(git rev-parse "$upstream")"
+  # The rewritten chain is rooted at the publish-delta base: the remote tip
+  # in ordinary mode, the operator-selected first-parent base in recovery
+  # mode. The groups-file base tip stays the compare-and-swap expected-old
+  # value below.
+  if [ "$recovery_mode" -eq 1 ]; then
+    prev_tip="$sel_base"
+  else
+    prev_tip="$(git rev-parse "$upstream")"
+  fi
   [ -n "$prev_tip" ] || exit 1
   gi=0
   while [ "$gi" -lt "${#counts[@]}" ]; do
@@ -396,19 +465,106 @@ fi
 snapshot="$(git status --porcelain --untracked-files=no | shasum -a 256 | cut -d' ' -f1)"
 push_script="$(mktemp "${TMPDIR:-/tmp}/release-push-${base_short}.XXXXXXXX")"
 chmod 700 "$push_script"
-{
-  printf '#!/usr/bin/env bash\n'
-  printf '# Generated by release-rewrite.sh: publish the verified release exactly once.\n'
-  printf '# Every pre-push re-assertion runs first; any mismatch aborts BEFORE the\n'
-  printf '# publish step, and the script removes itself on every exit.\n'
-  printf 'set -euo pipefail\n'
-  printf "trap 'rm -f -- \"\$0\"' EXIT\n"
-  printf 'EXPECTED_TIP=%q\n' "$rewritten_tip"
-  printf 'BACKUP_REF=%q\n' "$backup_ref"
-  printf 'SNAPSHOT_SHA=%q\n' "$snapshot"
-  printf 'REMOTE=%q\n' "$remote"
-  printf 'REPO_ROOT=%q\n' "$top"
-  cat <<'PUSH_BODY'
+if [ "$recovery_mode" -eq 1 ]; then
+  # The recovery variant carries the recovery constants and its own 0700
+  # asset directory: an immutable groups-file copy and an immutable copy of
+  # the privacy scanner (plus the resolved patterns copy when the override
+  # is set), so the push-time re-scan uses the same immutable scheme after
+  # the rewrite's EXIT trap has removed the originals.
+  final_tree="$(git rev-parse "${rewritten_tip}^{tree}")"
+  push_asset="$(mktemp -d "${TMPDIR:-/tmp}/release-hygiene-push-${base_short}.XXXXXXXX")"
+  cp "$scanner_src" "$push_asset/scan-public-hygiene.sh"
+  chmod 755 "$push_asset/scan-public-hygiene.sh"
+  push_patterns_copy=""
+  if [ -n "$patterns_copy" ]; then
+    cp "$patterns_copy" "$push_asset/hygiene.patterns"
+    push_patterns_copy="$push_asset/hygiene.patterns"
+  fi
+  cp "$groups_file" "$push_asset/release-groups.txt"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '# Generated by release-rewrite.sh (recovery mode): publish the verified\n'
+    printf '# recovery exactly once, lease-bound to the observed remote state. Every\n'
+    printf '# pre-push re-assertion runs first; any mismatch aborts BEFORE the publish\n'
+    printf '# step, and the script removes itself and its asset directory on every exit.\n'
+    printf 'set -euo pipefail\n'
+    printf "cleanup_push() { rm -f -- \"\$0\" 2>/dev/null || true; if [ -n \"\${scan_mat:-}\" ]; then rm -rf -- \"\$scan_mat\" || true; fi; if [ -n \"\${ASSET_DIR:-}\" ]; then rm -rf -- \"\$ASSET_DIR\" || true; fi; }\n"
+    printf 'trap cleanup_push EXIT\n'
+    printf 'EXPECTED_TIP=%q\n' "$rewritten_tip"
+    printf 'BACKUP_REF=%q\n' "$backup_ref"
+    printf 'SNAPSHOT_SHA=%q\n' "$snapshot"
+    printf 'REMOTE=%q\n' "$remote"
+    printf 'REPO_ROOT=%q\n' "$top"
+    printf 'EXPECTED_REMOTE_OID=%q\n' "$expect_remote_oid"
+    printf 'FINAL_TREE=%q\n' "$final_tree"
+    printf 'ASSET_DIR=%q\n' "$push_asset"
+    printf 'PATTERNS_COPY=%q\n' "$push_patterns_copy"
+    cat <<'PUSH_BODY'
+
+cd "$REPO_ROOT" || exit 1
+
+push_abort() {
+  echo "release push: RECOVERY ABORT: $1" >&2
+  echo "release push: nothing was published. Restore path: reset main to the backup ref with 'git reset --hard \"$BACKUP_REF\"' (or 'git update-ref refs/heads/main \"$BACKUP_REF\" \"$EXPECTED_TIP\"'), then re-run from Step 1 so the new tree is re-proven and re-scanned." >&2
+  exit 1
+}
+
+current_tip="$(git rev-parse refs/heads/main)"
+[ "$current_tip" = "$EXPECTED_TIP" ] || push_abort "main (${current_tip}) no longer equals the rewritten tip (${EXPECTED_TIP}); re-run from Step 1 so the new tree is re-proven and re-scanned"
+current_snapshot="$(git status --porcelain --untracked-files=no | shasum -a 256 | cut -d' ' -f1)"
+[ "$current_snapshot" = "$SNAPSHOT_SHA" ] || push_abort "the working tree changed after the swap (post-swap status snapshot mismatch); re-run from Step 1 so the new tree is re-proven and re-scanned"
+git fetch --quiet "$REMOTE" || push_abort "git fetch $REMOTE failed"
+remote_oid="$(git rev-parse "refs/remotes/$REMOTE/main")"
+[ "$remote_oid" = "$EXPECTED_REMOTE_OID" ] || push_abort "$REMOTE/main (${remote_oid}) no longer equals the expected remote OID observed at authorization (${EXPECTED_REMOTE_OID}); re-observe the remote tip and re-authorize the recovery, then re-run from Step 1 so the new tree is re-proven and re-scanned"
+current_tree="$(git rev-parse "refs/heads/main^{tree}")"
+[ "$current_tree" = "$FINAL_TREE" ] || push_abort "main's tree no longer equals the captured final tree; re-run from Step 1 so the new tree is re-proven and re-scanned"
+
+# Publish-boundary verification: the tree proof ran above against the
+# captured final tree; the privacy re-scan runs over the materialized
+# current tree plus the immutable groups-file copy, on every legitimate
+# publish, before anything is published.
+scan_mat="$(mktemp -d "${TMPDIR:-/tmp}/release-scan-XXXXXXXX")"
+git archive "refs/heads/main" | tar -x -C "$scan_mat" || push_abort "materializing the tree for the privacy re-scan failed"
+cp "$ASSET_DIR/release-groups.txt" "$scan_mat/release-groups.txt"
+scan_paths=()
+while IFS= read -r -d '' entry; do
+  meta="${entry%%$'\t'*}"; p="${entry#*$'\t'}"
+  case "$meta" in
+    100644*|100755*) ;;
+    *) continue ;;
+  esac
+  [ -n "$p" ] || continue
+  scan_paths+=("$p")
+done < <(git ls-tree -r -z "refs/heads/main")
+scan_paths+=("release-groups.txt")
+if [ -n "$PATTERNS_COPY" ]; then
+  PUBLIC_HYGIENE_REPO_ROOT="$scan_mat" PUBLIC_HYGIENE_PATTERNS_FILE="$PATTERNS_COPY" \
+    bash "$ASSET_DIR/scan-public-hygiene.sh" --files "${scan_paths[@]}" >/dev/null 2>&1 \
+    || push_abort "the privacy re-scan hit on the publish boundary; re-run from Step 1 so the new tree is re-proven and re-scanned"
+else
+  PUBLIC_HYGIENE_REPO_ROOT="$scan_mat" \
+    bash "$ASSET_DIR/scan-public-hygiene.sh" --files "${scan_paths[@]}" >/dev/null 2>&1 \
+    || push_abort "the privacy re-scan hit on the publish boundary; re-run from Step 1 so the new tree is re-proven and re-scanned"
+fi
+echo "release push: re-assertions hold; publishing the recovery as a lease-bound force bound to the observed remote state"
+PUSH_BODY
+    printf 'git push --force-with-lease=refs/heads/main:%q %q %q:refs/heads/main\n' "$expect_remote_oid" "$remote" "$rewritten_tip"
+    printf 'echo "release push: done; %s/main now carries the recovered release at %s"\n' "$remote" "$rewritten_tip"
+  } > "$push_script"
+else
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '# Generated by release-rewrite.sh: publish the verified release exactly once.\n'
+    printf '# Every pre-push re-assertion runs first; any mismatch aborts BEFORE the\n'
+    printf '# publish step, and the script removes itself on every exit.\n'
+    printf 'set -euo pipefail\n'
+    printf "trap 'rm -f -- \"\$0\"' EXIT\n"
+    printf 'EXPECTED_TIP=%q\n' "$rewritten_tip"
+    printf 'BACKUP_REF=%q\n' "$backup_ref"
+    printf 'SNAPSHOT_SHA=%q\n' "$snapshot"
+    printf 'REMOTE=%q\n' "$remote"
+    printf 'REPO_ROOT=%q\n' "$top"
+    cat <<'PUSH_BODY'
 
 cd "$REPO_ROOT" || exit 1
 
@@ -427,9 +583,10 @@ git merge-base --is-ancestor "refs/remotes/$REMOTE/main" "$EXPECTED_TIP" \
   || push_abort "$REMOTE/main advanced past the rewritten tip; reconcile and re-run the release"
 echo "release push: re-assertions hold; publishing the verified commit as a plain fast-forward (forced updates are never used)"
 PUSH_BODY
-  printf 'git push %q %q:refs/heads/main\n' "$remote" "$rewritten_tip"
-  printf 'echo "release push: done; %s/main now carries the squashed release at %s"\n' "$remote" "$rewritten_tip"
-} > "$push_script"
+    printf 'git push %q %q:refs/heads/main\n' "$remote" "$rewritten_tip"
+    printf 'echo "release push: done; %s/main now carries the squashed release at %s"\n' "$remote" "$rewritten_tip"
+  } > "$push_script"
+fi
 
 printf 'release-rewrite: swap complete; main is at the rewritten tip %s\n' "$rewritten_tip" >&2
 printf 'release-rewrite: post-swap status snapshot sha256: %s\n' "$snapshot" >&2

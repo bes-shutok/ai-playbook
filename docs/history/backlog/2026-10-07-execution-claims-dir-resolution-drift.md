@@ -18,4 +18,4 @@ Derive the claims directory in execution_claim.sh from the same facts resolution
 
 - Task 1 review pass, contract-docs worker overflow candidate (2026-10-07)
 - scripts/execution_claim.sh CLAIMS_REL vs scripts/reverse_squash_guard.py facts-based tmp_dir resolution
-- **Cluster:** docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/2026-10-17-stranded-execution-claims-masquerade-as-live-peers.md; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md
+- **Cluster:** docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/landing 5865a50a5, carried into current history by rewrite commit f3894756d; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md

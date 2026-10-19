@@ -2,7 +2,7 @@
 
 - **Filed:** 2026-10-06, from the plan's Task 1 intermediate review
 - **Status:** open
-- **Cluster:** docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md, docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-10-done-lock-live-owner-blocks-plan-closeout.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-12-done-interrupted-manifest-state-classification-certification-residuals.md
+- **Cluster:** docs/history/plans/completed/2026-10-16-worktree-done-boundary-gate-roster-split.md, docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-12-done-interrupted-manifest-state-classification-certification-residuals.md
 - **Workflow:** backlog
 - **Priority:** low
 

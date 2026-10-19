@@ -40,7 +40,10 @@ rewritten. Every abort path stops before the publish step and releases the done 
 
 Preconditions (the scripts also enforce them): HEAD is `refs/heads/main`; `CHANGELOG.md`
 carries no uncommitted changes; the publish delta is linear (a merge commit inside it
-aborts the run); local `main` is a descendant of `<remote>/main`.
+aborts the run); local `main` is a descendant of `<remote>/main`. Recovery exception: a
+merge-containing or diverged publish delta is not releasable by the ordinary flow, but it
+is recoverable through the recovery mode (the `## Recovery mode` section below) with the
+operator's explicit authorization.
 
 ## Core Concepts
 
@@ -320,11 +323,48 @@ The per-worktree done lock serializes a release run exactly as it serializes a d
   its size at this plan's landing; the deliberate-decision rule is the operative
   control, not a count threshold.
 
+## Recovery mode
+
+When it applies: the publish delta is not releasable by the ordinary flow because it
+contains a merge commit or has diverged from `<remote>/main`, and the operator authorizes
+a guarded exceptional release. The recovery mode rebuilds `main` onto an operator-selected
+base on `main`'s first-parent line and publishes the rebuilt history with a lease-bound
+force; the ordinary flow stays fast-forward-only and unchanged.
+
+Authorization dialog (required before any recovery run): the agent proposes the selected
+base (a commit on `main`'s first-parent line, an ancestor of `main`, strictly behind the
+tip), the expected remote OID (the exact commit the operator observes on `<remote>/main`
+at authorization time), and the feature grouping; the operator's explicit confirmation
+precedes the run, and the two invocation flags record it.
+
+Invocation: the rewrite step carries the authorization as
+`--recovery-base <oid> --expect-remote-oid <oid>` (both flags together). Every recovery
+precondition refusal prints the `RECOVERY REFUSED:` sentinel naming the reason: a base
+that does not resolve, is not an ancestor of `main`, sits off the first-parent line, or
+equals the tip; a fetched `<remote>/main` that differs from the expected remote OID; or a
+delta the ordinary flow could release (no merge and no divergence, so the ordinary release
+is the correct tool). A recovery attempt aborting on the operator's side leaves `main`
+untouched and no backup ref created.
+
+Push step: the persisted push script re-asserts `main` equals the rewritten tip, the
+working-tree snapshot matches, a fresh fetch shows `<remote>/main` exactly equal to the
+expected remote OID, and `main`'s tree equals the captured final tree; it then re-runs the
+tree proof and the privacy scan over the materialized current tree before publishing with
+a lease bound to the expected remote OID. Any mismatch aborts before anything is
+published, names the re-run remedy (re-run from Step 1 so the new tree is re-proven and
+re-scanned), and the script removes itself.
+
+Summary additions for a recovery run: the expected remote OID, the selected base, and the
+backup ref holding the accidental (merge-containing or diverged) state.
+
 ## Rules
 
-- The publish is a plain fast-forward of the verified rewritten tip; forced pushes are
-  never used, and the persisted push script names the recorded tip value rather than the
-  bare branch name.
+- The ordinary publish is a plain fast-forward of the verified rewritten tip; forced
+  pushes are never used in an ordinary release, and the persisted push script names the
+  recorded tip value rather than the bare branch name. Recovery carve-out: only the
+  recovery mode's push script publishes a forced update, exclusively as the lease-bound
+  push (`--force-with-lease` bound to the expected remote OID) after explicit operator
+  authorization; every other force form stays prohibited in both modes.
 - One release at a time per checkout: the done lock serializes runs. Never release a
   lock this run did not acquire.
 - Every exit path releases the done lock: the authoring-and-rewrite call releases on its

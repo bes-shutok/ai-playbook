@@ -8,7 +8,7 @@
 - **Class:** worktree lifecycle ownership gap
 - **Driving force:** reliability + operator time
 - **Cluster:** none standing (the 2026-10-09 plans authoring primary placement cluster head completed as docs/history/plans/completed/2026-10-16-placement-closing-doctrine-enforcement.md; the small-change row completed under its own plan)
-- **Skill/step:** `agents/skills/execute-plan/SKILL.md`, Step 0.1 and Phase 5; `agents/skills/done/SKILL.md`, worktree transfer-out and removal
+- **Skill/step:** `agents/skills/plans/SKILL.md`, Final Step authoring closeout; `agents/skills/execute-plan/SKILL.md`, Step 0.1 and Phase 5; `agents/skills/done/SKILL.md`, worktree transfer-out and removal
 
 ## Problem
 
@@ -20,6 +20,7 @@ Two temporary worktrees remained registered until the operator asked for cleanup
 - `agents/skills/done/SKILL.md` requires transfer before removal and a gated removal check. The automatic residue sweep in `scripts/worktree_closeout_migrate.py` recognizes a narrower sibling-worktree shape, so it is not a catch-all for a worktree under an agent-managed worktree home or an arbitrary scratch path.
 - `docs/tmp/execute-plan/plan-origins-coverage-parse/retired-worktree-cleanup.md` records the transferred runtime-state update, preserved intermediate patch, and the scratch checkout's already-landed base.
 - The plan-execution artifact-loss incident is separately recorded in `docs/history/plans/completed/2026-10-11-execute-plan-boundary-reliability.md`; this item concerns delayed ownership reconciliation and cleanup, not reconstruction of the missing worker log.
+- Re-witnessed 2026-10-19: after an authoring plan had landed and its worktree artifacts were migrated and verified, the closeout gate passed and authorized both removals. The operator requested worktree removal first, then separately requested branch deletion; the branch was removed only after the worktree registration was gone. This confirms the post-landing cleanup still needed operator follow-up, while the preservation gate itself worked as designed. Priority remains medium: the repeat cost is rediscovery and cleanup delay, with no lost implementation or evidence.
 
 ## Expected
 

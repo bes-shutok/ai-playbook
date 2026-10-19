@@ -1,7 +1,7 @@
 # Backlog: review-staging sidecar scaffold or schema reference for the hand-filled sections
 
 - **Filed:** 2026-10-15, learn closeout (skill-usage issue capture, done Step 1)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-19-review-staging-schema-scaffold-and-validation-reuse.md)
 - **Workflow:** review-staging skill-text and validator tooling
 - **Priority:** high
 - **Origin class:** skill-usage issue (validator discoverability; project lesson 30, second witness)

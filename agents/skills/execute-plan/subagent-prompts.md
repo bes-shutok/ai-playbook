@@ -20,8 +20,10 @@ or log path alone does not establish success.
 
 The worker implements only the supplied task. It does not select another task
 or continue execute-plan orchestration. Parent-owned checklist actions, including
-the exact planned `Commit:` obligation, remain with the parent. The done
-workflow owns the commit operation.
+the exact planned `Commit:` obligation, remain with the parent. The parent-owned
+light boundary owns the commit operation (plain commit, then learn, then the
+record mirror, then the manifest row); the done skill runs only once per run at
+the final closeout.
 
 **Run briefing (cited by every worker prompt):** every implement, review, and
 fix worker prompt cites the run's briefing file `<BRIEFING_PATH>`
@@ -32,7 +34,7 @@ conventions, and the current base tip. Read it whole; it is short. If the cited
 briefing file is absent, proceed from the plan alone, say so in the return, and
 never block on the briefing: it is advisory context, not a required read. The
 briefing never substitutes for the plan text, the task body, or the per-task
-logs, and citing it to a `done` worker does not widen the preceding-step-only
+logs, and citing it to the boundary's learn does not widen the preceding-step-only
 log handoff: the briefing is run context, not a step log. Workers never edit
 the briefing.
 
@@ -47,7 +49,7 @@ commands, acceptance criteria, and worker-log destination. Do not select another
 task or broaden scope.
 
 **Orchestrator:** after implement → verify → Step 1.2b intermediate review →
-mark checkboxes → `done` for a task, launch the next task immediately and
+mark checkboxes → the light boundary for a task, launch the next task immediately and
 sequentially. Do not ask the user for permission between tasks, review rounds,
 or before Phase 3. See SKILL.md “Continuous execution” and Step 1.5.
 
@@ -68,20 +70,18 @@ Placeholders:
 | `<BASE_BRANCH>` | Branch plan work started from (e.g. `main`) |
 | `<PLAN_SLUG>` | Kebab-case slug for log directory |
 | `<IMPLEMENT_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
-| `<TASK_REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-review.log.md`; intermediate review log for Task N (Step 1.2b; parent-owned) |
 | `<INTER_REVIEW_WORKER>` | Lens id of one Step 1.2b intermediate review worker (e.g. `correctness-completeness`); maps to its Required lenses in review-panel-selection.md |
 | `<TASK_FILES>` | The task's canonical `Files:` list; also the path restriction of the Step 1.2b changed-context diff |
 | `<TASK_VALIDATION_OUTPUT>` | Fresh output of the task's validation commands, passed from the Step 1.2 implement result |
 | `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
-| `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | `<BRIEFING_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/briefing.md`; the orchestrator-maintained run briefing (SKILL.md Step 0.4) every worker prompt cites as run context beside the plan |
 | `<SCOPE_SUMMARY>` | The per-round scope summary the parent assembles from the plan's scope declarations, recorded user decisions, and cited backlog origins, records in `manifest.md` beside the round entry, and states once per round (SKILL.md Step 3.1): the must-fix versus out-of-scope list with the owning backlog reference per deferred capability; a round with no deferred content carries an empty summary rather than omitting the block; the worker reports a finding whose subject it marks out of scope as out-of-scope-adjudicated (owning backlog reference plus residual risk), never as blocking for this execution |
 | `<PRE_RESTART_RECORD>` | The pre-restart state lines the parent recorded in `manifest.md`'s free-text lines before this relaunch; a restart prompt after a recorded dispatch failure names the pre-restart state and the failure history so the restart verifies the orphaned state and the failure history from disk; empty on a first launch |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
 | `<REVIEW_MODE_NOTES>` | Fresh-review framing + premortem-required note for Step 3.1 (see SKILL.md Verify-fix vs fresh review) |
 
-Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end; **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)**; not full session history.
+Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end; **never overwrite** prior passes. Each boundary's learn reads **only logs from the immediately preceding worker step(s)**; not full session history.
 
 ---
 
@@ -115,7 +115,7 @@ The prompt's command set includes the task's bound scope-intersecting plan valid
 3. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
 4. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
 5. Fix ALL test failures before returning; including failures that seem unrelated.
-6. Do NOT commit; the orchestrator runs the done boundary after verification.
+6. Do NOT commit; the orchestrator runs the boundary after verification.
 7. Do NOT edit the plan file; the orchestrator marks checkboxes.
 8. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
 9. **No silent gate-satisfying rewrites of human-authored prose:** when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.
@@ -213,50 +213,9 @@ One self-contained entry per finding:
 
 ---
 
-## Done (per review iteration)
+## Light boundary (parent-executed; no prompt template)
 
-```
-You are finalizing one review/fix iteration from execute-plan.
-
-Read and follow: ~/.agents/skills/done/SKILL.md
-
-Context:
-- Plan: <PLAN_PATH>
-- Review round: <REVIEW_ROUND>
-- Review doc: <REVIEW_DOC_PATH>
-- Address-review ran: yes | no (no = Step 3.3 skipped; still run learn + commit if anything is uncommitted)
-- Manifest: <MANIFEST_PATH>
-- Run briefing: <BRIEFING_PATH> (read whole for run conventions and decisions context; it is run context, not a preceding-step log, and does not widen the preceding-step handoff below)
-
-The execute-plan invocation authorizes only the repository-scoped review-fix
-commit for this iteration. Do not ask conversational permission for that
-commit. Push, deploy, merge, external communication, and access changes remain
-gated. This is a mid-run per-task boundary: pass `--boundary-class per-task` to the
-commit run (the done runner's usage header is the canonical roster split).
-
-## Preceding-step logs: read before learn (required)
-
-Step 3.4 follows Step 3.1 review and optionally Step 3.3 address. Read in full before invoking `learn`:
-
-- <REVIEW_LOG_PATH> (from Step 3.1; required)
-- <ADDRESS_LOG_PATH> (from Step 3.3; only if address-review ran; omit otherwise)
-
-Do **not** read implement logs or logs from prior review rounds. If a required preceding-step log is missing or empty, stop and return `blocked: missing <path>`; do not commit.
-
-## Scope
-
-Commit changes from this iteration only: address-review code fixes, review doc edits on disk, and any other uncommitted work from this round. Do not stage unrelated pre-existing local changes.
-
-Suggested commit subject: fix: address plan review r<REVIEW_ROUND> findings
-(or chore: plan review r<REVIEW_ROUND> clean; when address-review did not run but learn/docs sync is needed)
-
-Run the full done workflow: read preceding-step logs → learn → docs-branch → sensitive-data scan → commit.
-
-Return (orchestrator blocks the next review round without these):
-- Commit SHA (or explicit justified "nothing to commit")
-- Commit message used
-- Any files left unstaged intentionally
-```
+The Step 1.4 and Step 3.4 boundaries have no worker prompt template: the orchestrator runs the light boundary itself, per the Light boundary section of SKILL.md (plain commit, then learn, then the record mirror, then the `task_boundary:` manifest row). The preceding-step log paths each boundary reads are pinned in [agent-logs.md](agent-logs.md); the review-round handoff is unchanged. Workers never commit; the orchestrator owns every boundary commit.
 
 ---
 
@@ -446,7 +405,7 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 
 7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`. For every valid finding you are not fixing in this run (deferred, scope-dropped, or excluded by user instruction), create a durable backlog item per `receiving-review` **Backlog capture** and record its path on the finding or in the execution log.
 8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
-9. Do NOT commit; the orchestrator launches Done, then either exits on a fresh blocking-clean digest or starts the targeted follow-up.
+9. Do NOT commit; the orchestrator runs the light boundary after verification, then either exits on a fresh blocking-clean digest or starts the targeted follow-up.
 
 ## Return format
 

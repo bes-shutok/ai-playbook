@@ -332,3 +332,11 @@ or correct the claim, and because the consumer is intentionally deferred this qu
 record a durable backlog item with an explicit owner and handoff instead of leaving
 the deferral in review notes.
 ```
+
+## 26. Bound Scarce-Resource Concurrency Separately from Virtual Threads
+
+Keep virtual-thread executors thread-per-task. When a downstream service or other shared resource
+has a concurrency limit, enforce that limit with a semaphore (or a resource-specific bulkhead)
+shared at the scope of that resource. Acquire before using the resource and release in `finally`;
+make the permit wait interruptible or time-bounded when the caller has a deadline. Do not use a
+small virtual-thread pool as a resource limit. See [JEP 444](https://openjdk.org/jeps/444).

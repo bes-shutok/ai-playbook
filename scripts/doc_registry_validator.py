@@ -93,6 +93,9 @@ letter.
   FIRST Markdown table in the registry file is parsed; prose and any
   later tables after a non-table line are ignored. Escaped pipes
   (``\\|``) inside cells are unescaped, per Markdown table convention.
+  When a check fails for a path whose row text sits in the file but
+  outside that parsed region, an additional diagnostic note names the
+  row as present but unparsed (the note never changes an exit code).
 
 Fail-closed CLI: an unknown flag exits 2 with a usage error, never a
 silent pass. The validator never auto-reclassifies anything; it only
@@ -400,6 +403,49 @@ def parse_registry(path: Path) -> Optional[list[dict]]:
             row[col] = value
         rows.append(row)
     return rows
+
+
+def unparsed_row_lines(path: Path) -> list[str]:
+    """Table-looking lines OUTSIDE the parsed first table (the rows
+    ``parse_registry`` ignores once the table ends at a non-table
+    line). Diagnostic-only input for the present-but-unparsed note;
+    never gate semantics: a parse error here degrades to no note."""
+    if not path.is_file():
+        return []
+    unparsed: list[str] = []
+    seen_table = False
+    table_ended = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if seen_table:
+                table_ended = True
+            continue
+        if table_ended:
+            unparsed.append(stripped)
+        else:
+            seen_table = True
+    return unparsed
+
+
+def unparsed_row_note(reg_path: Path, rel: str) -> Optional[str]:
+    """One diagnostic line when the failing path's row text sits in the
+    registry file outside the parsed first table (development_lessons
+    #80: the stray row previously surfaced only as a row-count delta
+    that did not name the parse boundary). The note never changes an
+    exit code or an existing refusal; None when no unparsed row names
+    the path."""
+    for line in unparsed_row_lines(reg_path):
+        if rel in line:
+            return ("note: registry row text naming %s is present in the"
+                    " registry file but outside the parsed first table"
+                    " (rows after the first non-table line are ignored);"
+                    " move the row into the first table" % rel)
+    return None
 
 
 def registered_src_paths(rows: list[dict]) -> set[str]:
@@ -803,6 +849,9 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
             print("warn: unregistered completed-history file: %s" % rel,
                   file=out)
             warns += 1
+            note = unparsed_row_note(reg_path, rel)
+            if note:
+                print(note, file=out)
 
     print("validate: %d hard finding(s), %d warn(s), %d registry row(s)"
           % (hard, warns, len(rows)), file=out)
@@ -985,6 +1034,9 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
                   " edits and deletions need an audit-note override)"
                   % (rel, change_type.strip()), file=out)
             hard += 1
+            note = unparsed_row_note(reg_path, rel)
+            if note:
+                print(note, file=out)
             continue
         if (change_type is not None and "?" in change_type
                 and (root / rel).is_dir()):
@@ -1032,6 +1084,9 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
         print("HARD immutable path written without override: %s" % rel,
               file=out)
         hard += 1
+        note = unparsed_row_note(reg_path, rel)
+        if note:
+            print(note, file=out)
     print("check-writes: %d unprotected immutable write(s) of %d path(s),"
           " %d registry audit-note defect(s)" % (hard, len(entries),
                                                   note_hard), file=out)
@@ -1485,6 +1540,46 @@ def _run_selftest_checks(st: Selftest) -> None:
                        "R  docs/live/a.md -> docs/history/plans/completed/a.md\n")
     st.expect("test_check_writes_move_without_successor_row_fails", code,
               output, 1, want_substr="immutable path written without override")
+
+    # Present-but-unparsed diagnostic (development_lessons #80 shape):
+    # a registry row stranded after a bullet list does not parse, so
+    # the unregistered-file warn (validate) and the HARD refusal
+    # (check-writes) each gain one note line naming the stray row; a
+    # row inside the first table never emits the note.
+    stray = "docs/history/plans/completed/stray.md"
+    root = make_fixture("stray-row", registry_header() +
+                        "| doc-a | no | living |  |  | docs/other.md |  |  |  |\n"
+                        "Notes:\n"
+                        "- a bullet list ends the first table\n"
+                        "| x | no | completed | 2026-10-17 | stray row | "
+                        + stray + " |  |  |  |\n",
+                        extra_files=[stray])
+    code, output = run(["--root", str(root), "validate"])
+    st.expect("test_stray_row_validate_warns_unregistered", code, output, 0,
+              want_substr="unregistered completed-history file: " + stray)
+    st.check("test_stray_row_validate_names_unparsed_row",
+             "outside the parsed first table" in output
+             and stray in output, repr(output))
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="A  " + stray + "\n")
+    st.expect("test_stray_row_check_writes_hard", code, output, 1,
+              want_substr="HARD immutable path written without override")
+    st.check("test_stray_row_check_writes_names_unparsed_row",
+             "outside the parsed first table" in output
+             and stray in output, repr(output))
+    # Control: the same row inside the first table parses, so the add
+    # is the licensed lifecycle transition and no note fires.
+    root = make_fixture("stray-row-control", registry_header() +
+                        "| doc-a | no | living |  |  | docs/other.md |  |  |  |\n"
+                        "| x | no | completed | 2026-10-17 | control | "
+                        + stray + " |  |  |  |\n",
+                        extra_files=[stray])
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="A  " + stray + "\n")
+    st.expect("test_parsed_row_licenses_add_without_note", code, output, 0,
+              want_substr="licensed lifecycle add")
+    st.check("test_parsed_row_emits_no_unparsed_note",
+             "outside the parsed first table" not in output, repr(output))
 
     # Hard finding: enum typos (sot/state) rejected.
     root = make_fixture("enum-sot", registry_header() +

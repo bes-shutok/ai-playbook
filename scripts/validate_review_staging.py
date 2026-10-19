@@ -2630,6 +2630,21 @@ def metadata_allows_stats_skip(content: str) -> bool:
     )
 
 
+def _twin_permits_stats_skip(content: str) -> bool:
+    """The stats-skip waiver's kind scope (review-record legacy identity
+    plan, Task 2): the waiver survives only where a readable Metadata
+    ``Record kind:`` twin declares a non-canonical kind -- the only kind
+    signal a sidecar-less record carries. A canonical twin, an
+    enum-unknown value, or an unreadable twin (absent line, duplicate
+    label) refuses fail-closed; the kind is read from this line only,
+    never from the filename or the sidecar.
+    """
+    present, md_value, kind_lines = _metadata_record_kind(content)
+    if not present or kind_lines != 1:
+        return False
+    return _declared_noncanonical_kind(md_value)
+
+
 def validate_discarded_findings(content: str, result: ValidationResult) -> None:
     section_match = re.search(
         r"^### Discarded findings\s*$",
@@ -4777,10 +4792,16 @@ def _validate_stats_sidecar_gates(
     # Also never waive when the caller explicitly asked for a digest check
     # (--source-plan): a waived sidecar would silently skip the stale-digest
     # comparison, which matters most on the clear round that gates execution.
+    # Waiver kind scope (review-record legacy identity plan, Task 2): the
+    # waiver is honored only where a readable Metadata ``Record kind:``
+    # twin declares a non-canonical kind; a canonical twin or an unreadable
+    # twin falls through and the missing sidecar reports through its own
+    # gate below.
     if (
         metadata_allows_stats_skip(content)
         and staged_count == 0
         and expected_digest is None
+        and _twin_permits_stats_skip(content)
     ):
         return None, None
     if metadata_allows_stats_skip(content) and staged_count > 0:
@@ -10459,6 +10480,63 @@ def _selftest_self_heal_attempt_state(root: Path, check) -> None:
     r3_result = ValidationResult(r3)
     validate_self_heal_attempt_state(r3, f"## Metadata\n- review-run-id: {initial_id}\n- review-started-at-ms: 1791476234267\n", r3_result, sidecar_payload={"record_kind": "canonical", "date": "2026-10-09", "round": 3, "source_digest": current_digest, "extensions": {"convergence": {"self_heal_attempt": {"status": "unused", "run_id": initial_id}}}})
     check("self-heal resume: broken earlier chain rejects unused", any("consumed or unknown self-heal state must carry forward unchanged" in error for error in r3_result.errors))
+
+
+def _selftest_regenerated_marker_tolerance(root: Path, check) -> None:
+    """Family: the sidecar regeneration marker (review-record legacy
+    identity plan, Task 4). The validator's existing open-extensions
+    handling accepts the repair tool's ``extensions.regenerated_from_markdown``
+    member (descriptive-only), and the negative direction is pinned: no gate
+    keys tolerance on the marker, so a marker-bearing sidecar with a stale
+    digest or a failing gate still refuses."""
+    base_md = _version1_markdown()
+
+    def stage(name: str, payload: dict) -> Path:
+        # The staged name date matches the fixture payload's date era
+        # (2026-08-28, pre-fence for every date-fenced gate): a mixed
+        # fence state would refuse on the date disagreement, not on the
+        # marker surface this family pins.
+        return _write_staging(
+            root, f"2026-08-28-branch-review-marker-{name}-r1.md", base_md, payload
+        )
+
+    # selftest#regenerated_marker/open_extensions_accepts: a v1 sidecar
+    # carrying the marker passes hard.
+    marked = _version1_payload()
+    marked["extensions"] = {"regenerated_from_markdown": True}
+    check(
+        "regenerated marker: marker-bearing v1 sidecar passes hard (open extensions)",
+        validate_staging_file(stage("marked", marked), hard=True).ok,
+    )
+
+    # selftest#regenerated_marker/stale_digest_still_refuses: the marker
+    # keys no digest tolerance.
+    stale = _version1_payload()
+    stale["extensions"] = {"regenerated_from_markdown": True}
+    stale["source_kind"] = "plan"
+    stale_result = validate_staging_file(
+        stage("stale", stale),
+        hard=True,
+        expected_digest="1" * 64,
+        source_kind="plan",
+    )
+    check(
+        "regenerated marker: marker-bearing stale digest still refuses",
+        (not stale_result.ok)
+        and any("source_digest" in error for error in stale_result.errors),
+    )
+
+    # selftest#regenerated_marker/failing_gate_still_refuses: the marker
+    # keys no enum tolerance either.
+    gated = _version1_payload()
+    gated["extensions"] = {"regenerated_from_markdown": True}
+    gated["source_kind"] = "wiki"
+    gated_result = validate_staging_file(stage("gated", gated), hard=True)
+    check(
+        "regenerated marker: marker-bearing invalid source_kind still refuses",
+        (not gated_result.ok)
+        and any("source_kind" in error for error in gated_result.errors),
+    )
 
 
 def _selftest_extended_sidecar_freshness(root: Path, check) -> None:
@@ -17707,6 +17785,10 @@ def _run_selftest_body() -> int:
             ("versioned_schema_and_patterns", _selftest_versioned_schema_and_patterns),
             ("usage_optional", _selftest_usage_optional),
             ("self_heal_attempt_state", _selftest_self_heal_attempt_state),
+            (
+                "regenerated_marker_tolerance",
+                _selftest_regenerated_marker_tolerance,
+            ),
             (
                 "extended_sidecar_freshness",
                 _selftest_extended_sidecar_freshness,

@@ -1,6 +1,6 @@
 # Backlog: tighten the local-artifact-paths lens bullet's second trigger arm
 
-- **Filed:** 2026-10-15, execute-plan Phase 3 review of docs/history/plans/2026-10-15-configurable-artifact-paths-in-docs.md (correctness-completeness worker finding)
+- **Filed:** 2026-10-15, execute-plan Phase 3 review of docs/history/plans/completed/2026-10-15-configurable-artifact-paths-in-docs.md (correctness-completeness worker finding)
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low

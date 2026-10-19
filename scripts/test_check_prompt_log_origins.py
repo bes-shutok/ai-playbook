@@ -1087,6 +1087,193 @@ class TestPromptLogPruneAudit:
             " prune per the log's prune rule\n"
         )
 
+    def test_orphan_receipt_warns_without_failing(self, tmp_path):
+        # The witnessed 2026-10-18 intermediate shape: a commit adds a
+        # receipt line to a rolling log while removing no entry from that
+        # same log. Warning-only: exit 0 with OUTCOME: pass unchanged.
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("live-entry", ["2026-10-01-live-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: ghost-entry -> 0f39e725c"],
+            ),
+        )
+        self.commit(repo, "add the receipt with no removal")
+        short = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"RECEIPT-WITHOUT-REMOVAL: {short} {LOG_REL}" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_warning_count_appended_to_summary_line(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("live-entry", ["2026-10-01-live-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: ghost-entry -> 0f39e725c"],
+            ),
+        )
+        self.commit(repo, "add the receipt with no removal")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        summary = next(
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("prune-audit summary:")
+        )
+        # Every existing summary substring stays contiguous; the count is
+        # an append at line end only.
+        assert (
+            "prune-audit summary: 0 removals (0 by log ledger)"
+            " across 1 log-touching commit(s)" in summary
+        )
+        assert summary.endswith("1 warning(s)")
+
+    def test_normal_shape_receipt_with_removal_never_warns(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("solo-prune", ["2026-10-01-solo-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The normal shape: one commit removes the entry and adds its own
+        # ledger receipt line to the same log's post-image.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger([], [f"PLAN-PROMPTS-PRUNE: solo-prune -> {base}"]),
+        )
+        self.commit(repo, "prune the entry with its receipt")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: solo-prune -> {base} (log ledger receipt)" in proc.stdout
+        )
+        assert "RECEIPT-WITHOUT-REMOVAL" not in proc.stdout
+        summary = next(
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("prune-audit summary:")
+        )
+        assert summary.endswith(", 0 warning(s)")
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_re_apply_repair_receipt_commits_warn_once(self, tmp_path):
+        # The priced shape: the receipt commit warns once; the later
+        # removal commit completing the receipt classifies PRUNE-OK via
+        # the ledger lookup with no warning of its own.
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("solo-prune", ["2026-10-01-solo-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("solo-prune", ["2026-10-01-solo-origin.md"])],
+                [f"PLAN-PROMPTS-PRUNE: solo-prune -> {base}"],
+            ),
+        )
+        self.commit(repo, "add the receipt first (the orphan shape)")
+        short_receipt = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        # The ledger receipt line stays (append-only ledger); only the
+        # entry section is removed, completing the earlier receipt.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [], [f"PLAN-PROMPTS-PRUNE: solo-prune -> {base}"]
+            ),
+        )
+        self.commit(repo, "complete the removal")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.count("RECEIPT-WITHOUT-REMOVAL") == 1
+        assert (
+            f"RECEIPT-WITHOUT-REMOVAL: {short_receipt} {LOG_REL}" in proc.stdout
+        )
+        assert "PRUNE-OK: solo-prune" in proc.stdout
+        assert "(log ledger receipt)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_removal_without_witness_fail_class_preserved(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("solo-entry", ["2026-10-01-solo-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "remove the entry with no witness")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: solo-entry" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_per_log_scoping_one_warning_names_receipt_log(self, tmp_path):
+        # A receipt added to one rolling log while the same commit removes
+        # a sibling-log entry witnessed by that sibling's own ledger
+        # receipt: exit 0, one warning naming the receipt's log only.
+        repo = tmp_path
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        self.write(repo, LOG_REL, log_text([entry("plan-live", ["2026-10-01-p.md"])]))
+        # The exec log seeds with its ledger receipt for exec-entry
+        # already in place (beside a completed sacrificial prune's
+        # line), so the audited commit's removal of exec-entry is
+        # witnessed by that surviving ledger line while the plan-log
+        # receipt addition is the window's only orphan shape.
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text_with_ledger(
+                [entry("exec-entry", ["2026-10-01-e.md"])],
+                [
+                    "EXEC-PROMPTS-PRUNE: sacrificial -> 0f39e725c",
+                    "EXEC-PROMPTS-PRUNE: exec-entry -> 0f39e725c",
+                ],
+            ),
+        )
+        self.commit(repo, "seed both logs")
+        seed = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text_with_ledger(
+                [],
+                [
+                    f"EXEC-PROMPTS-PRUNE: sacrificial -> {seed}",
+                    f"EXEC-PROMPTS-PRUNE: exec-entry -> {seed}",
+                ],
+            ),
+        )
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("plan-live", ["2026-10-01-p.md"])],
+                ["PLAN-PROMPTS-PRUNE: ghost-entry -> 0f39e725c"],
+            ),
+        )
+        self.commit(repo, "remove the exec entry, orphan-receipt the plan log")
+        proc = self.audit(repo / LOG_REL, seed)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.count("RECEIPT-WITHOUT-REMOVAL") == 1
+        assert f"RECEIPT-WITHOUT-REMOVAL" in proc.stdout
+        assert f"{LOG_REL}" in proc.stdout.split("RECEIPT-WITHOUT-REMOVAL")[1].splitlines()[0]
+        assert "PRUNE-OK: exec-entry" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
 
 class TestCollateralServedDiscovery:
     """The ``--collateral-served --base <ref>`` read-only discovery mode:

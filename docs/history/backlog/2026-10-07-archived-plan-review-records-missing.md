@@ -4,6 +4,7 @@ Driving force: correctness
 Date filed: 2026-10-07
 Origin: Task 2 done boundary Step 3 item 0d reconstruction duty (execution-claim-write-enforcement run), report-only
 Cluster: docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md
+Cluster: docs/history/backlog/2026-10-19-fold-commit-staged-record-gap.md (same root area from the other side of the landing boundary: that row's records never surface mid-certification, these went missing after it)
 
 ## Finding
 

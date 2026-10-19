@@ -182,7 +182,7 @@ LANDING_WARNING_GATES = frozenset(
 # worktree runs exactly this list while the final closeout keeps the full
 # LANDING_GATES set. Machinery admission for the narrowed
 # gate_post_landing_staging reach: incident, the 2026-10-16 witnessed
-# per-task stall (docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md);
+# per-task stall (docs/history/plans/completed/2026-10-16-worktree-done-boundary-gate-roster-split.md);
 # catch frequency unchanged at the final closeout, where the gate still runs;
 # false-positive cost, a per-task boundary forfeits early warning of primary
 # residue; sunset, review at first misuse or beside the placement-awareness

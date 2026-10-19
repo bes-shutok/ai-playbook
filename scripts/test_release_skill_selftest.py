@@ -608,13 +608,279 @@ class ReleaseSkillSelftest(unittest.TestCase):
         )
         return exports, groups_path
 
-    def _rewrite_step(self, groups_path, exports, shim: str = "pass"):
+    def _rewrite_step(self, groups_path, exports, shim: str = "pass",
+                      recovery_base: str = None, expect_remote_oid: str = None):
         self._write_shim(shim)
+        args = ["bash", str(REWRITE_SCRIPT), str(groups_path)]
+        if recovery_base is not None or expect_remote_oid is not None:
+            self.assertTrue(
+                recovery_base is not None and expect_remote_oid is not None,
+                "recovery flags are paired or absent",
+            )
+            args += ["--recovery-base", recovery_base, "--expect-remote-oid", expect_remote_oid]
         return subprocess.run(
-            ["bash", str(REWRITE_SCRIPT), str(groups_path)],
+            args,
             cwd=str(self.clone), env=self._run_env(lock_exports=exports),
             capture_output=True, text=True,
         )
+
+    def _acquire_lock_exports(self) -> dict:
+        """A direct lock-stub acquisition for recovery runs that hand-write
+        the groups file (the recovery tiling is not the authoring tiling)."""
+        proc = subprocess.run(
+            ["bash", str(self.lock_stub), "acquire", "--label", "recovery"],
+            cwd=str(self.clone), env=self._run_env(),
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        exports = {}
+        for line in proc.stdout.splitlines():
+            if line.startswith("export DONE_LOCK_DIR="):
+                exports["DONE_LOCK_DIR"] = _unquote(line.split("=", 1)[1])
+            elif line.startswith("export DONE_LOCK_TOKEN="):
+                exports["DONE_LOCK_TOKEN"] = _unquote(line.split("=", 1)[1])
+        self.assertTrue(exports.get("DONE_LOCK_DIR") and exports.get("DONE_LOCK_TOKEN"))
+        return exports
+
+    def _hand_groups(self, base_tip: str, counts, msgs) -> Path:
+        groups = self.base / "recovery-groups.txt"
+        lines = ["base %s" % base_tip]
+        for count, msg in zip(counts, msgs):
+            lines.append("group %d" % count)
+            lines.append("msg %s" % msg)
+        groups.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return groups
+
+    def _recovery_fixture(self):
+        """Merge fixture plus a direct lock acquisition: main carries the
+        merge above the six source commits; main~5 (the fixture has no notes commit)
+        is the pre-merge first-parent commit usable as the selected base."""
+        self._build_fixture("merge")
+        self._install_scanner("noop")
+        return self._acquire_lock_exports()
+
+    # Recovery-mode witnesses (plan 2026-10-18-release-merge-history-recovery,
+    # Task 1): the selected base is main~4 (source commit three; the
+    # fixture carries no notes commit, and the merge is main~1), the first-parent segment base..main
+    # carries four commits (four, five, six, the merge), and the counts
+    # tile it as [2, 2].
+
+    RECOVERY_COUNTS = [2, 2]
+    RECOVERY_MSGS = ["recovered feature tail", "merge and notes work"]
+
+    def test_recovery_rewrite_happy_path(self):
+        exports = self._recovery_fixture()
+        origin_tip = self._rev_parse("origin/main")
+        base = self._rev_parse("main~4")
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=origin_tip,
+        )
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(rewrite.returncode, 0, "recovery rewrite must pass:\n%s" % combined)
+        rebuilt = self._rev_parse("main")
+        self.assertNotEqual(rebuilt, main_tip, "main must sit at the rebuilt tip")
+        # The rebuilt subjects equal the groups-file msg lines in order, over
+        # the first-parent segment only (the merged side branch stays below
+        # the selected base's reach through the first-parent walk).
+        subjects = self._gitx(
+            "log", "--reverse", "--first-parent", "--format=%s",
+            "%s..main" % base,
+        ).stdout.splitlines()
+        self.assertEqual(subjects, self.RECOVERY_MSGS)
+        # Tree and backup witness: the rebuilt tip is byte-identical to the
+        # original main tip; the backup ref holds the merge-containing state.
+        backup_refs = self._backup_refs()
+        self.assertEqual(len(backup_refs), 1, "exactly one backup ref")
+        backup_ref = sorted(backup_refs)[0]
+        self.assertEqual(backup_refs[backup_ref], main_tip)
+        self._assert_tree_identical_to(backup_ref)
+        # Publish witness: the remote is untouched until the push script runs.
+        self.assertEqual(self._rev_parse("origin/main"), origin_tip)
+        push_script = self._find_push_script()
+        executed = self._execute_push_script(push_script)
+        self.assertEqual(
+            executed.returncode, 0,
+            "recovery push script must publish:\n%s\n%s" % (executed.stdout, executed.stderr),
+        )
+        self.assertEqual(self._rev_parse("origin/main"), rebuilt)
+
+    def test_recovery_diverged_delta_admitted(self):
+        exports = self._recovery_fixture()
+        base = self._rev_parse("main~4")
+        main_tip = self._rev_parse("main")
+        self._advance_origin()
+        self._gitx("fetch", "-q", "origin")
+        expect_oid = self._rev_parse("origin/main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=expect_oid,
+        )
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "recovery must admit a diverged delta:\n%s" % combined,
+        )
+        self.assertNotIn("not a descendant", combined, "the ordinary divergence refusal must not fire")
+        push_script = self._find_push_script()
+        executed = self._execute_push_script(push_script)
+        self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
+        self.assertEqual(self._rev_parse("origin/main"), self._rev_parse("main"))
+
+    def test_recovery_usage_refusals(self):
+        exports = self._recovery_fixture()
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        # Unpaired: only --recovery-base.
+        unpaired = subprocess.run(
+            ["bash", str(REWRITE_SCRIPT), str(groups),
+             "--recovery-base", self._rev_parse("main~4")],
+            cwd=str(self.clone), env=self._run_env(lock_exports=exports),
+            capture_output=True, text=True,
+        )
+        combined = unpaired.stdout + unpaired.stderr
+        self.assertNotEqual(unpaired.returncode, 0)
+        self.assertIn("FATAL", combined, "a usage refusal is a FATAL:\n%s" % combined)
+        self.assertIn("--expect-remote-oid", combined, "usage refusal names the paired flag")
+        # Unknown flag.
+        unknown = subprocess.run(
+            ["bash", str(REWRITE_SCRIPT), str(groups),
+             "--recovery-base", self._rev_parse("main~4"),
+             "--expect-remote-oid", "x", "--unknown-flag"],
+            cwd=str(self.clone), env=self._run_env(lock_exports=exports),
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn("FATAL", unknown.stdout + unknown.stderr)
+        self.assertEqual(self._rev_parse("main"), main_tip, "main unchanged on usage refusal")
+        self.assertEqual(self._backup_refs(), {}, "no backup ref on usage refusal")
+
+    def test_recovery_base_refusals(self):
+        exports = self._recovery_fixture()
+        main_tip = self._rev_parse("main")
+        origin_tip = self._rev_parse("origin/main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        absent = "0000000000000000000000000000000000000009"
+        off_line = self._rev_parse("main^2")  # the merged side commit: ancestor, off the first-parent line
+        cases = [
+            ("does not resolve", absent),
+            ("first-parent", off_line),
+            ("equals the current main tip", main_tip),
+        ]
+        for label, bad_base in cases:
+            rewrite = self._rewrite_step(
+                groups, exports, recovery_base=bad_base, expect_remote_oid=origin_tip,
+            )
+            combined = rewrite.stdout + rewrite.stderr
+            self.assertNotEqual(rewrite.returncode, 0, "%s base must be refused:\n%s" % (label, combined))
+            self.assertIn("RECOVERY REFUSED:", combined, "the sentinel names the reason: %s" % combined)
+            self.assertIn(label, combined)
+            self.assertEqual(self._rev_parse("main"), main_tip, "main unchanged")
+            self.assertEqual(self._backup_refs(), {}, "no backup ref on a base refusal")
+
+    def test_recovery_delta_refusal_names_ordinary_flow(self):
+        # A recovery invocation whose delta carries no merge and no divergence
+        # is refused naming the ordinary flow.
+        self._build_fixture()
+        self._install_scanner("noop")
+        exports = self._acquire_lock_exports()
+        main_tip = self._rev_parse("main")
+        origin_tip = self._rev_parse("origin/main")
+        groups = self._hand_groups(main_tip, [2, 2, 3], DEFAULT_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=self._rev_parse("main~3"),
+            expect_remote_oid=origin_tip,
+        )
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertNotEqual(rewrite.returncode, 0)
+        self.assertIn("RECOVERY REFUSED:", combined)
+        self.assertIn("ordinary", combined, "the refusal names the ordinary flow")
+        self.assertEqual(self._backup_refs(), {})
+
+    def test_recovery_remote_oid_mismatch_refused_before_backup(self):
+        # An expected remote OID differing from the fetched remote tip is
+        # refused before the backup ref.
+        self._build_fixture("merge")
+        self._install_scanner("noop")
+        exports = self._acquire_lock_exports()
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=self._rev_parse("main~4"),
+            expect_remote_oid="0000000000000000000000000000000000000001",
+        )
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertNotEqual(rewrite.returncode, 0)
+        self.assertIn("RECOVERY REFUSED:", combined)
+        self.assertEqual(self._backup_refs(), {}, "refusal precedes the backup ref")
+
+    def test_recovery_push_remote_rail(self):
+        exports = self._recovery_fixture()
+        origin_tip = self._rev_parse("origin/main")
+        base = self._rev_parse("main~4")
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=origin_tip,
+        )
+        self.assertEqual(rewrite.returncode, 0, rewrite.stdout + rewrite.stderr)
+        push_script = self._find_push_script()
+        # The remote moves after the swap: the expected OID no longer holds.
+        self._advance_origin()
+        self._gitx("fetch", "-q", "origin")
+        moved_tip = self._rev_parse("origin/main")
+        executed = self._execute_push_script(push_script)
+        combined = executed.stdout + executed.stderr
+        self.assertNotEqual(executed.returncode, 0, "a moved remote must abort:\n%s" % combined)
+        self.assertIn("re-observ", combined, "the abort names re-observation and re-authorization")
+        self.assertIn("Restore path", combined, "the abort carries the recovery restore path")
+        self.assertEqual(self._rev_parse("origin/main"), moved_tip, "nothing published")
+        self.assertFalse(push_script.exists(), "the push script removes itself on abort")
+
+    def test_recovery_push_correction_rail(self):
+        exports = self._recovery_fixture()
+        origin_tip = self._rev_parse("origin/main")
+        base = self._rev_parse("main~4")
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=origin_tip,
+        )
+        self.assertEqual(rewrite.returncode, 0, rewrite.stdout + rewrite.stderr)
+        push_script = self._find_push_script()
+        # The witnessed CHANGELOG correction shape: a tracked-file correction
+        # committed after the swap, before the push script executes.
+        (self.clone / "CHANGELOG.md").write_text(
+            self._today_section("post-swap correction marker"), encoding="utf-8"
+        )
+        self._gitx("add", "--", "CHANGELOG.md")
+        self._gitx("commit", "-q", "-m", "chore: post-swap correction")
+        executed = self._execute_push_script(push_script)
+        combined = executed.stdout + executed.stderr
+        self.assertNotEqual(executed.returncode, 0, "a correction after the swap must abort:\n%s" % combined)
+        self.assertIn("no longer equals the rewritten tip", combined, "the first failing re-assertion is tip equality")
+        self.assertIn("re-run", combined, "the abort names the re-run remedy")
+        self.assertEqual(self._rev_parse("origin/main"), origin_tip, "nothing published")
+        self.assertFalse(push_script.exists(), "the push script removes itself on abort")
+
+    def test_recovery_push_script_shape(self):
+        exports = self._recovery_fixture()
+        origin_tip = self._rev_parse("origin/main")
+        base = self._rev_parse("main~4")
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, self.RECOVERY_COUNTS, self.RECOVERY_MSGS)
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=origin_tip,
+        )
+        self.assertEqual(rewrite.returncode, 0, rewrite.stdout + rewrite.stderr)
+        push_script = self._find_push_script()
+        text = push_script.read_text(encoding="utf-8")
+        lease_lines = [line for line in text.splitlines() if "--force-with-lease=refs/heads/main:" in line]
+        self.assertEqual(len(lease_lines), 1, "exactly one lease-bound push line:\n%s" % text)
+        self.assertIn(origin_tip, lease_lines[0], "the lease binds the expected remote OID")
+        self.assertIn("FINAL_TREE", text, "the script carries the final-tree re-verification")
+        self.assertIn("scan-public-hygiene", text, "the script carries the privacy re-scan invocation")
 
     def _run_release(self, variant: str = "clean", scanner: str = "noop",
                      counts=None, msgs=None, marker: str = "selftest section marker",

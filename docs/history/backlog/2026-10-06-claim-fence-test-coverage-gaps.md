@@ -41,4 +41,4 @@ Review r1 backlog-routed Lows (staging doc docs/reviews/2026-10-05-live-claim-pl
 - testing#guard-multiblock-emission-unpinned: remedy: fixture pinning the guard's multi-block emission (two protected deletions in one range, both refusal blocks printed).
 
 Note: risk#stem-grammar-cross-date-collision was staged informational (deliberate tradeoff with a recorded basis), not backlog-routed.
-- **Cluster:** docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md; docs/history/backlog/2026-10-17-stranded-execution-claims-masquerade-as-live-peers.md
+- **Cluster:** docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md; docs/history/backlog/landing 5865a50a5, carried into current history by rewrite commit f3894756d

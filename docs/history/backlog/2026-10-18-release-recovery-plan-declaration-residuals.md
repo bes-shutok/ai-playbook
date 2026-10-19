@@ -6,7 +6,7 @@
 - **Priority:** low
 - **Origin class:** review residual (certification round, non-blocking, durable capture)
 - **Class:** docs consistency
-- **Skill/step:** `docs/history/plans/2026-10-18-release-merge-history-recovery.md` (Gate delta line; Task 1 RED checkpoint item)
+- **Skill/step:** `docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md` (Gate delta line; Task 1 RED checkpoint item)
 
 ## Problem
 

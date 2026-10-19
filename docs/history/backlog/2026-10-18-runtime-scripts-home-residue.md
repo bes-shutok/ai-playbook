@@ -1,0 +1,41 @@
+# Deployed runtime scripts home carries 25 real files beside the repo-symlinked majority
+
+- **Filed:** 2026-10-18, Task 5 inventory from the done-final-only-learn-intermediate plan run; source reference `docs/history/plans/2026-10-18-done-final-only-learn-intermediate.md` Task 5 (capture hygiene: scan-public-hygiene pass on this draft, 2026-10-18)
+- **Status:** open
+- **Workflow:** backlog
+- **Priority:** medium
+- **Origin class:** self-serving
+- **Class:** fix-class
+- **Skill/step:** `scripts/sync_runtime_scripts.sh` (deployment roster); `~/.ai-playbook/scripts/` (the deployed home the user facts' script paths resolve to)
+- **Driving force:** maintainability
+- **Dedup probe:** keyword search "scripts home", "runtime scripts", "scripts residue" over the open backlog filenames and problem bodies; nearest hits are `docs/history/backlog/2026-10-18-review-runtime-sibling-module-deployment.md` (deployment completeness for consumer repositories, not this home's local file population) and `docs/history/plans/completed/2026-10-14-post-landing-reconciliation-enforcement.md` (mentions reconcile_post_landing.py for an index-reversal cause, unrelated); no open row covers the deployed home itself, no merge.
+
+## Observed versus expected
+
+Observed: the deployed runtime scripts home holds 152 visible top-level entries: 126 symlinks, 25 real files, and the `__pycache__` directory; the hidden `.stale-backup-2026-08-16` directory sits beside them. Sixty-six of the symlinks resolve into the skills repository's scripts directory; the other 60 dangle, in two classes: 53 `.bak-20261007` backup symlinks resolving into a removed authoring worktree (directory name ending `-wt-dccs3` beside the primary checkout), and 7 live-named symlinks whose primary-checkout targets were retired from the repository's scripts directory. The 25 real files shadow or sit beside the symlinked majority: 18 dated backup copies, four live files diverged from their repository twins, two byte-identical duplicates, and one live helper with no repository twin. The done runner (`done_run.sh`) has no home entry at all: it exists only in the repository's scripts directory, and done skill text named it by bare name until the 2026-10-18 resolution sentence routed runner invocations through the facts-resolved skills-repository path, so home-relative invocations missed it.
+
+Expected: the deployed home hosts no real files beside the repository symlinks and no dangling links; every script resolves either through a repository symlink or through the facts-resolved skills-repository path, so no stale shadow copy can execute and no divergence hunt is needed.
+
+## Inventory (measured on disk 2026-10-18; real-file classes per-file diffed against repository twins, symlink partition re-derived per link by target resolution)
+
+- Real files, 25 total (`find -maxdepth 1 -type f` over `~/.ai-playbook/scripts/`), split below.
+- Dated backup real files, 18: `docs_branch_backlog_dedupe.py.bak-20261002`, `docs_branch_plan_guard.py.bak-20261002`, `done_sweep_gates.sh.bak-2026-09-28`, `done_sweep_gates.sh.bak-20261002`, `done_sweep_gates.sh.bak-task11-20260930T061712Z`, `done_sweep_gates_lib.py.bak-2026-09-28`, `done_sweep_gates_lib.py.bak-2026-09-30`, `done_sweep_gates_lib.py.bak-2026-09-30-2`, `done_sweep_gates_lib.py.bak-2026-09-30-3`, `done_sweep_gates_lib.py.bak-20260922`, `done_sweep_gates_lib.py.bak-20261002`, `done_sweep_gates_lib.py.bak-task11-20260930T061712Z`, `lessons.py.bak-20261002`, `rearm_on_touch.py.bak-20261002`, `reverse_squash_guard.py.bak-20261003`, `scan-public-hygiene.sh.bak-20260819`, `skill_text_budget.py.bak-20261010`, `worktree_closeout_migrate.py.bak-20261002`.
+- Live real files diverged from their repository twins, 4, each carrying a home-only delta (diffed against the repository scripts directory): `reconcile_post_landing.py` (19 home-only lines, 155 repo-only), `review_record_selection.py` (42 home-only, 622 repo-only), `skill_text_budget_caps.json` (3 home-only cap rows for skill text the repository twin no longer keys, 14 repo-only), `gate_liveness_ledger.json` (9 home-only lines holding 2026-10-06 liveness rows with evidence strings the repository twin lacks, 610 repo-only).
+- Identical duplicates, 2: `quota_governor.py` and `quota_pressure_stats.py` (byte-identical to their repository twins).
+- Live helper with no repository twin, 1: `sync-mcp-credentials.sh`.
+- Backup symlinks, 53: all `.bak-20261007`, all targeting the removed worktree, all dangling.
+- Live-named dangling symlinks, 7: `docs_branch_sync_noworktree.sh`, `sweep-tmp.sh`, `test_base_branch_amend_guard.py`, `docs_branch_plan_guard.py`, `base_branch_amend_guard.py`, `test_docs_branch_sync_noworktree.py`, `docs_branch_backlog_dedupe.py`, each targeting the primary checkout's scripts directory where that file no longer exists; five retirements witnessed at `f3894756d` (four guard/dedupe files) and `10480a1a5` (`sweep-tmp.sh`), while the two sync-noworktree files were never tracked on the primary checkout's main and carry no deletion witness.
+- Directories: `.stale-backup-2026-08-16` (three real files inside), `__pycache__` (bytecode).
+- Runner entry: `done_run.sh` absent from the home while present in the repository's scripts directory; skill text once invoked it by bare name (pre-2026-10-18 done skill text, no path resolution).
+
+## Disposition
+
+1. Recover, then reconcile: for each of the four diverged files, first recover the named home-only delta (each recovered delta files its own backlog row), then reconcile the home copy against its repository twin with the repository side authoritative.
+2. Retire the home copies in favor of skills-repo-path resolution: after reconciliation, delete the real-file shadows, the 18 dated backups, the two byte-identical duplicates, and every dangling link (the 53 backup symlinks and the 7 live-named symlinks with retired targets); the home keeps only what repository symlinks and the facts-resolved skills-repository path do not already cover (the no-twin helper either gains a repository twin or is retired by decision).
+3. Tracked retirement surface: the done runner's callerless per-task boundary class in `scripts/done_run.sh` (the light-boundary plan removed its last skill-text callers; the runner-side removal of that class is tracked here). Witness extension (the run's Phase 3 r1 review): the original callerless claim came from sweeps covering only the plan's five skills; two stale caller spans under `agents/skills/maintenance/template-execution.md` (the TASK-BOUNDARY CHECKPOINT duty and the execute blueprint's per-task cadence line) were missed by those sweeps and are reworded to the plain boundary commit plus the `task_boundary:` manifest row in the run's review-address pass, while one further caller span in `agents/skills/receiving-review/SKILL.md` (the Step 1.2b consumer row's ride target) stays tracked in the run's review follow-ups row.
+4. Tracked sync surface: the vendored skill-text twins of the five skills the light-boundary plan edits (execute-plan, learn, review-loop, done, investigate) and their three execute-plan sibling files (agent-logs.md, subagent-prompts.md, runtime-contract.md). On-disk finding, recorded as a delta from the plan's naming: the deployed agent homes resolve skill text through symlinks into the primary checkout, and no real-file vendored copies of the five skills were found in the deployed homes, so the twins' sync surface is the run's squash landing itself; this surface stays tracked until that landing is confirmed.
+5. Acceptance: the block that disappears is manual divergence hunting in the home and the risk of executing a stale shadow copy; this row closes only when the home holds no real files beside the repository symlinks and no dangling links.
+
+## Why not fixed now
+
+The owning run is prose-only by charter and the repository's scripts directory is out of its scope; the cleanup needs an operator-owned maintenance pass over a runtime home outside any repository, and the four recovery-before-reconcile decisions (which home-only deltas are worth keeping) are per-file adjudications this inventory turn does not own.

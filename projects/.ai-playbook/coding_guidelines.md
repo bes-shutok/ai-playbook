@@ -344,6 +344,11 @@ implementations drifted (the snippet did not type-check `source_kind`; the valid
 `--source-rfc`). Fix: add `--source-rfc` to the validator and collapse the skill gate to one call on it.
 The canonical check is the only implementation; the skill points at it rather than restating it.
 
+**Example (test fixture SQL):** Several integration tests inserted the same row shape with only values
+changed. A schema change then required editing every copy. Put repeated fixture SQL in one
+domain-named test helper with the differing values as arguments; keep assertions in the tests and
+scenario-specific SQL local.
+
 **Exception:** A genuinely independent second copy that is never consumed as authoritative (a cache that
 is always validated against the source, a display snapshot) does not drift dangerously. The family bites
 when both copies are read as the answer.

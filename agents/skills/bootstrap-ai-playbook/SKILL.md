@@ -108,7 +108,7 @@ base_branch = "main"
 
 Profile persisted by the bootstrap project-profile interview (date here).
 
-- priority_order: default (efficiency, token usage, simplicity, code quality)
+- priority_order: default (the section 64 fallback ordering; see guidelines section 68 for the exact order and the confirmed-type recommendations)
 - deferred_classes: [formal-hardening]
 ````
 
@@ -181,7 +181,7 @@ A bootstrap run sets up the project profile surfaces `.ai-playbook/facts.md` is 
 - **Type ask:** ask the operator to confirm `pet` or `company`. When the repository root resolves under the user facts' `company_projects_root` key, offer `company` as the suggested answer; when it does not, present both values without a suggested answer. Persist the confirmed value into `project_type`; never persist a value the operator did not confirm.
 - **Visibility ask:** asked only when the confirmed `project_type` is `pet`; present `public` and `private`, accept both, and persist the confirmed value into `artifact_visibility`; re-ask only when this pet-specific key is missing. A confirmed `company` type follows company guidance and skips this ask.
 - **Base-branch ask:** suggest the branch named by `origin/HEAD` for confirmation or change; when that ref is unavailable, ask for the branch directly. Persist the confirmed branch into `base_branch`; never derive or default it from the project type or any project root.
-- **Priority profile ask:** present the default profile, which defers formal-hardening only, and persist the block on confirm.
+- **Priority profile ask:** present the default profile, which defers formal-hardening only, and persist the block on confirm. When the confirmed `project_type` is `pet` or `company`, the proposed `priority_order` value is that type's recommended order from canonical guideline section 68, offered in the same batch-confirm pass; the recommendation changes only the proposed value, never an existing confirmed order without an explicit operator replacement, and a declined or unanswered ask leaves an existing priority profile unchanged, or persists no block when none exists (the section 64 fallback stays effective).
 
 **Batch-confirm pass:** after the individual asks, render every surface's effective value, confirmed or deliberately absent, overridable in one pass. A correction here replaces the value before persist.
 

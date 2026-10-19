@@ -1619,12 +1619,12 @@
       "disposition": "keep",
       "id": "duty:primary-freshness-sweep",
       "kind": "protocol",
-      "note": "plan 2026-10-14-post-landing-reconciliation-enforcement Task 3: the warning-only read-only primary freshness sweep probe (agents/skills/maintenance/survey-arms.md, the Primary-freshness sweep probe bullet; the --check-primary mode of scripts/reconcile_post_landing.py and its fixtures are the probe's implementation, named here only, their registry ownership staying with the standing reconciler surfaces). Admission record: concrete incident = docs/history/backlog/2026-10-13-landing-staged-reversal-in-primary-index.md, witnesses 4 through 6, plus the silent variant (witness 5's roughly three-hour stale-primary window caught only by manual audit); expected catch frequency = every worktree-landed landing whose session skips the prose recipe, four deterministic firings across 2026-10-13/14 plus the silent variant, one sweep pass per survey turn; false-positive cost = one warning line per stale witness, never blocking, never restoring; landing posture = warning-only, promotion to blocking only through the guard liveness ledger's first true catch with this removals row's criteria.",
+      "note": "plan 2026-10-14-post-landing-reconciliation-enforcement Task 3: the warning-only read-only primary freshness sweep probe (agents/skills/maintenance/survey-arms.md, the Primary-freshness sweep probe bullet; the --check-primary mode of scripts/reconcile_post_landing.py and its fixtures are the probe's implementation, named here only, their registry ownership staying with the standing reconciler surfaces). Admission record: concrete incident = docs/history/plans/completed/2026-10-14-post-landing-reconciliation-enforcement.md, witnesses 4 through 6, plus the silent variant (witness 5's roughly three-hour stale-primary window caught only by manual audit); expected catch frequency = every worktree-landed landing whose session skips the prose recipe, four deterministic firings across 2026-10-13/14 plus the silent variant, one sweep pass per survey turn; false-positive cost = one warning line per stale witness, never blocking, never restoring; landing posture = warning-only, promotion to blocking only through the guard liveness ledger's first true catch with this removals row's criteria.",
       "paths": [],
       "tests": [],
       "witness": {
         "class": "incident",
-        "ref": "docs/history/backlog/2026-10-13-landing-staged-reversal-in-primary-index.md"
+        "ref": "docs/history/plans/completed/2026-10-14-post-landing-reconciliation-enforcement.md"
       }
     },
     {
@@ -1649,6 +1649,18 @@
       "witness": {
         "class": "incident",
         "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:clocked-order-verify-successor",
+      "kind": "protocol",
+      "note": "plan 2026-10-18-clocked-order-successor-verification Task 4: the warning-shaped read-only discharged-without-successor consult leg (the clocked-order-verify-successor operation in scripts/execute_plan_resume_watcher.py; the survey consult arm in agents/skills/maintenance/survey-arms.md citing the overlay stall classification in agents/skills/maintenance/zcode.md Re-arm hygiene). Admission record: concrete incident = docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md with its covered first witness docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the completed-integrity-failure witness for this detection class); expected catch = every launchd-carried turn whose payload session does not record itself, one consult pass per survey turn; false-positive cost = bounded by the successor-clearing predicate (an order stops flagging once both successor pointers move off it or an attributable children[] entry records itself), the flag never blocks a lane; residual masking cost = a recovery that re-points the successor pointers without recording an attributable entry suppresses that order's flag, and the re-point is itself the repair; landing posture = warning-only, promotion rides the launchd promotion review named by docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md, in any case by 2027-01-18, with the removals row's criteria applied at that review.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md"
       }
     }
   ],
@@ -1873,6 +1885,42 @@
       "witness": {
         "class": "incident",
         "ref": "docs/history/backlog/2026-10-14-framework-callback-readability-guidance.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:clocked-order-verify-successor",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/2026-10-18-clocked-order-successor-verification.md Task 4; second witnessed incident in the note: docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md): co-removal set is the survey consult arm (agents/skills/maintenance/survey-arms.md, the Clocked-order consult bullet's verify-successor leg), the clocked-order-verify-successor operation and its read_strict ledger variant in scripts/execute_plan_resume_watcher.py, the wrapper tuple entry in scripts/execute_plan_runtime.py, the two pins-suite span needles, the overlay stall sentence (agents/skills/maintenance/zcode.md Re-arm hygiene), and both registry rows (this removals row and the admission entry); sunset = promotion at the launchd promotion review named by docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md, in any case by 2027-01-18; promotion criteria = the arm promoted from warning-only only after a true catch, per the Machinery admission protocol.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-18-clocked-order-successor-verification.md"
+      }
+    },
+    {
+      "id": "script:check-prompt-log-origins-receipt-without-removal-warning",
+      "kind": "script",
+      "disposition": "delete",
+      "paths": [],
+      "tests": [],
+      "note": "Pre-registered removals row for the prune audit's warning-only RECEIPT-WITHOUT-REMOVAL finding class (landing-conflict-intent-union plan, 2026-10-19). Incidents: the 2026-10-18 escape (landing aca98a237, repair c3a283738) and the 2026-10-09 near-miss (docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md). Review by 2027-01-18; promotion criteria: a true catch, then blocking promotion only with the operator's net-growth approval per the repository guidelines' Machinery admission protocol. The warned class stays live under warning-only shaping while this row stands.",
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md"
+      }
+    },
+    {
+      "id": "release-recovery-push-rails",
+      "kind": "script",
+      "disposition": "delete",
+      "paths": [],
+      "tests": [],
+      "note": "Pre-registered review row for the recovery push-time rails (release-merge-history-recovery plan, 2026-10-19): the lease-bound publish bound to the expected remote OID, the remote re-assertion, and the final-tree plus privacy re-runs inside the persisted push script. Review by 2026-11-18; promotion criteria: a true catch by the push-time rails, or a second witnessed recovery. Incident link: docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md.",
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md"
       }
     }
   ],

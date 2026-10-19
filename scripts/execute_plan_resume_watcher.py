@@ -2244,6 +2244,10 @@ def next_local_occurrence_epoch(hour: int, minute: int, now_epoch: float) -> int
     return int(candidate.timestamp())
 
 
+class ClockedOrderLedgerReadError(Exception):
+    """The strict ledger read failed (unreadable, malformed, or non-object)."""
+
+
 class ClockedOrderLedger:
     """The order ledger: a standalone store over ``clocked-orders.json``.
 
@@ -2308,6 +2312,28 @@ class ClockedOrderLedger:
         temporary = self._ledger_path.with_name(self._ledger_path.name + ".tmp")
         temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, self._ledger_path)
+
+    def read_strict(self) -> dict[str, Any]:
+        """Lock-held fail-closed read of the whole ledger.
+
+        Mirrors the fail-open ``_read_unlocked`` shape but raises
+        :class:`ClockedOrderLedgerReadError` instead of substituting an
+        empty state, for operations that must never report findings over a
+        silently-unreadable ledger (the verify-successor leg).
+        """
+
+        with authoring_state_lock(self._ledger_path):
+            try:
+                state = json.loads(self._ledger_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ClockedOrderLedgerReadError(
+                    f"clocked-order ledger {self._ledger_path} is unreadable or malformed: {error}"
+                ) from error
+            if not isinstance(state, dict):
+                raise ClockedOrderLedgerReadError(
+                    f"clocked-order ledger {self._ledger_path} holds non-object JSON"
+                )
+            return state
 
     def read(self) -> dict[str, Any]:
         """Lock-held read of the whole ledger."""
@@ -2461,6 +2487,176 @@ def _consume_order_sentinel(order: Mapping[str, Any]) -> dict[str, Any]:
         str(carrier["sentinel_path"]),
         fired_path=str(fired_marker) if isinstance(fired_marker, str) and fired_marker.strip() else None,
     )
+
+
+def _parse_naive_as_utc(value: Any) -> datetime | None:
+    """ISO-8601 parse mirroring ``parse_iso`` in scripts/rearm_on_touch.py.
+
+    Naive values read as UTC; a ``Z`` suffix reads as ``+00:00``; a
+    non-string or unparseable value returns None. Mirrored locally rather
+    than imported across modules.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _order_attributed_entry_names(order: Mapping[str, Any]) -> list[str]:
+    """The names a children[] entry can carry to evidence the order's turn."""
+
+    carrier = order.get("carrier") if isinstance(order.get("carrier"), Mapping) else {}
+    names = [str(order.get("order_id"))]
+    label = carrier.get("label")
+    if isinstance(label, str) and label:
+        names.append(label)
+    return names
+
+
+def _run_clocked_order_verify_successor(
+    ledger: ClockedOrderLedger,
+    payload: Mapping[str, Any],
+    *,
+    repo_root: str,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    """The read-only discharged-without-successor verification leg.
+
+    Warning-shaped by contract: no ledger mutation, no state write, no
+    refusal that blocks a lane. A discharged order past its grace window
+    flags when both successor pointers still name it and no ``children[]``
+    entry attributable to the order exists (any outcome counts, ``failed``
+    included, because it evidences the turn ran).
+    """
+
+    now = float(clock())
+    if "grace_minutes" in payload:
+        grace_raw = payload.get("grace_minutes")
+    else:
+        grace_raw = 30
+    try:
+        grace_minutes = float(grace_raw)
+    except (TypeError, ValueError):
+        grace_minutes = 0.0
+    if not grace_minutes > 0:
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "blocked",
+            "reason_code": "verify-successor-grace-invalid",
+            "evidence": [f"grace_minutes must be a positive number, got {grace_raw!r}"],
+        }
+    state_path_raw = payload.get("scheduler_state_path")
+    if state_path_raw is not None and not isinstance(state_path_raw, str):
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "blocked",
+            "reason_code": "verify-successor-state-path-invalid",
+            "evidence": [f"scheduler_state_path must be a string path, got {state_path_raw!r}"],
+        }
+    state_path = pathlib.Path(
+        os.path.expanduser(str(state_path_raw))
+        if state_path_raw
+        else str(pathlib.Path(repo_root) / ".ai-playbook" / "scheduler-state.json")
+    )
+    try:
+        ledger_state = ledger.read_strict()
+    except ClockedOrderLedgerReadError as error:
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "blocked",
+            "reason_code": "verify-successor-ledger-unreadable",
+            "evidence": [str(error)],
+        }
+    if not state_path.exists():
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "success",
+            "flagged": [],
+            "note": "no-scheduler-state-file",
+        }
+    try:
+        scheduler_state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "blocked",
+            "reason_code": "verify-successor-state-malformed",
+            "evidence": [f"scheduler state {state_path} is unreadable or malformed: {error}"],
+        }
+    if not isinstance(scheduler_state, dict):
+        return {
+            "operation": "clocked-order-verify-successor",
+            "status": "blocked",
+            "reason_code": "verify-successor-state-malformed",
+            "evidence": [f"scheduler state {state_path} holds non-object JSON"],
+        }
+
+    children = scheduler_state.get("children")
+    children = children if isinstance(children, list) else []
+    next_turn_raw = scheduler_state.get("next_turn_at")
+    next_turn = _parse_naive_as_utc(next_turn_raw)
+    parent_raw = scheduler_state.get("parent_automation_id")
+    parent_moved: bool | None
+    if isinstance(parent_raw, str) and parent_raw:
+        parent_moved = None  # decided per order against its names
+    else:
+        parent_moved = False  # absent or non-string counts as unmoved
+
+    grace_seconds = grace_minutes * 60.0
+    flagged: list[dict[str, Any]] = []
+    orders_state = ledger_state.get("orders")
+    orders_state = orders_state if isinstance(orders_state, dict) else {}
+    for order in orders_state.values():
+        if not isinstance(order, Mapping):
+            continue
+        if order.get("state") != "discharged":
+            continue
+        requested_epoch = int(order.get("requested_epoch", 0))
+        if now <= requested_epoch + grace_seconds:
+            continue
+        names = _order_attributed_entry_names(order)
+        attributable = any(
+            any(name in str(entry.get(field, "")) for name in names for field in ("automation_id", "cycle", "target", "note"))
+            for entry in children
+            if isinstance(entry, Mapping)
+        )
+        if attributable:
+            continue
+        next_turn_moved = next_turn is not None and int(next_turn.timestamp()) != requested_epoch
+        if isinstance(parent_moved, bool):
+            parent_left = parent_moved
+        else:
+            parent_left = parent_raw not in names
+        if next_turn_moved and parent_left:
+            continue
+        evidence = [
+            f"next_turn_at={next_turn_raw!r}",
+            f"parent_automation_id={parent_raw!r}",
+            f"children_entries={len(children)} (none attributable)",
+        ]
+        flagged.append(
+            {
+                "order_id": str(order.get("order_id")),
+                "requested_at_iso": order.get("requested_at_iso"),
+                "requested_epoch": requested_epoch,
+                "evidence": evidence,
+            }
+        )
+    return {
+        "operation": "clocked-order-verify-successor",
+        "status": "success",
+        "now_epoch": int(now),
+        "flagged": flagged,
+    }
 
 
 def _rearm_order_carrier(ledger: ClockedOrderLedger, order: Mapping[str, Any]) -> dict[str, Any]:
@@ -2816,6 +3012,11 @@ def run_clocked_order_operation(
             "carrier_teardown": teardown,
             "order": outcome.get("order"),
         }
+
+    if kind in ("clocked-order-verify-successor", "verify-successor"):
+        return _run_clocked_order_verify_successor(
+            resolved_ledger(), payload, repo_root=str(payload.get("repo_root") or repo_root), clock=clock
+        )
 
     if kind == "due":
         target = resolved_ledger()

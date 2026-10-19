@@ -36,7 +36,16 @@ def identity_token(identity: str) -> str:
 
 
 def markdown_identity(text: str) -> str | None:
-    match = re.search(r"^- URL or Artifact: (.+?)\s*$", text, re.MULTILINE)
+    # Section-scoped: only the actual ``## Metadata`` section binds
+    # identity; the same line in body or fenced content never does.
+    for section in re.split(r"^## ", text, flags=re.MULTILINE):
+        if not section.startswith("Metadata"):
+            continue
+        section = re.sub(r"```.*?```", "", section, flags=re.DOTALL)
+        match = re.search(r"^- URL or Artifact: (.+?)\s*$", section, re.MULTILINE)
+        break
+    else:
+        return None
     if match is None:
         return None
     value = match.group(1).strip()

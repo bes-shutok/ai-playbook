@@ -7,7 +7,7 @@
 - **Origin class:** certification residual
 - **Class:** fix-class
 - **Driving force:** simplicity (four Low polish residuals priced out of the certified bytes)
-- **Cluster:** docs/history/backlog/2026-10-16-review-series-token-citation-gate-gap.md (same class: certification residuals routed to a durable row)
+- **Cluster:** docs/history/plans/completed/2026-10-18-closeout-gate-series-token-infix.md (same class: certification residuals routed to a durable row)
 
 ## Residuals
 

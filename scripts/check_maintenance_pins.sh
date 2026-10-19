@@ -1748,6 +1748,12 @@ pin "repo AGENTS.md scheduling verb contract anchored" grep -qF 'Scheduling asks
 # literal, and the bound clause's owner-naming literal.
 [ "$(grep -oF 'the FIRST automation primitive of the decided re-arm is the delete of that record by the state-recorded id' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "re-arm delete-first count" "PIN FAIL: re-arm delete-first count" || fail=1; }
 pin "schedule ask bullet 1 opening requirement" grep -qF 'list existing automations first' "$A"
+# Added 2026-10-19, plan 2026-10-18-clocked-order-successor-verification Task 3: the
+# consult leg's distinctive span (same-edit pin convention).
+pin "clocked-order consult verify-successor leg" grep -qF 'runs the read-only operation once per consult' "$SA"
+# Added 2026-10-19, plan 2026-10-18-clocked-order-successor-verification Task 4: the stall
+# sentence's distinctive span (same-edit pin convention).
+pin "rearm hygiene verify-successor stall classification" grep -qF 'is a stall, never healthy idle' "$Z"
 pin "schedule ask never-executes-inline" grep -qF 'it never executes the payload in the same turn' "$A"
 pin "schedule ask bound clause owner naming" grep -qF 'the operator-ordered schedule surface paragraph in agents/skills/maintenance/zcode.md' "$A"
 pin "zcode.md interactive dispatch template anchored" grep -qF 'Interactive dispatch template' "$Z"
@@ -2466,7 +2472,7 @@ expect_absent "retired one-execution-child guard wording must be absent from the
 # named in the plan's Task 1 files list.
 EPSP="$repo/agents/skills/execute-plan/subagent-prompts.md"
 pin "execute-plan wip checkpoint marker convention" grep -qF 'checkpoint commit-marker convention (a `wip:` subject prefix on the worktree branch)' "$E"
-pin "execute-plan wip checkpoint pause signals" grep -qF 'at every task boundary and every pause signal (quota pause, budget pause, stand-down, carrier expiry)' "$E"
+pin "execute-plan wip checkpoint pause signals" grep -qF 'at every task boundary and every pause signal (quota pause, budget pause, stand-down, carrier expiry, input stop, lane hold; input stop being the stop-for-operator class of the Only-stop-between-tasks list)' "$E"
 pin "execute-plan wip no-new-ledger supersession" grep -qF 'no new ledger lands (the prompt arm' "$E"
 pin "execute-plan resume restart from last checkpoint" grep -qF 'restarts from the last checkpoint' "$E"
 # Removed 2026-10-14, arm remove-beside-provenance: the subagent-prompts wip

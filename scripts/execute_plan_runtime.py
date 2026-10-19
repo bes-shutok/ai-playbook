@@ -322,6 +322,7 @@ _PLANS_WATCHER_OPERATIONS = (
 )
 _CLOCKED_ORDER_OPERATIONS = (
     "clocked-order-schedule", "clocked-order-cancel", "clocked-order-due", "clocked-order-discharge-on-fire",
+    "clocked-order-verify-successor",
 )
 
 

@@ -17,6 +17,8 @@ import time
 import unittest
 from pathlib import Path
 
+import review_plan_identity
+
 SCRIPT_PATH = Path(__file__).resolve().parent / "worktree_closeout_migrate.py"
 DONE_LOCK_SCRIPT_PATH = SCRIPT_PATH.parent / "done-lock.sh"
 
@@ -316,6 +318,69 @@ class WorktreeCloseoutTest(unittest.TestCase):
                 if entry["source"] == ".ai-playbook/reviews/collide.md"
             )
             self.assertTrue(renamed_entry["destination"].endswith("collide.wt-9-2.md"))
+
+    def test_migrate_collision_rename_prints_pair_loudness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            baseline = root / "baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / ".ai-playbook/reviews/collide.md", b"incoming content\n")
+            _write(target / ".ai-playbook/reviews/collide.md", b"existing different\n")
+            _write(source / ".ai-playbook/reviews/same.md", b"shared bytes\n")
+            _write(target / ".ai-playbook/reviews/same.md", b"shared bytes\n")
+            manifest = root / "manifest.json"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = _migrate(source, target, baseline, manifest, suffix="9")
+            self.assertEqual(code, 0)
+            out = buf.getvalue()
+            src_short = hashlib.sha256(b"incoming content\n").hexdigest()[:12]
+            dst_short = hashlib.sha256(b"existing different\n").hexdigest()[:12]
+            collision_lines = [
+                line for line in out.splitlines() if line.startswith("COLLISION:")
+            ]
+            self.assertEqual(len(collision_lines), 1, out)
+            line = collision_lines[0]
+            self.assertIn(".ai-playbook/reviews/collide.md", line)
+            self.assertIn("collide.wt-9.md", line)
+            self.assertIn(src_short, line)
+            self.assertIn(dst_short, line)
+            self.assertLess(line.index("incoming"), line.index("existing"))
+            self.assertLess(line.index(src_short), line.index(dst_short))
+            renamed = json.loads(manifest.read_text(encoding="utf-8")).get("renamed", [])
+            self.assertEqual(
+                [entry["source"] for entry in renamed],
+                [".ai-playbook/reviews/collide.md"],
+            )
+
+    def test_migrate_collision_dangling_destination_symlink_renames_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            baseline = root / "baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / ".ai-playbook/reviews/dangle.md", b"incoming content\n")
+            reviews = target / ".ai-playbook/reviews"
+            reviews.mkdir(parents=True)
+            (reviews / "dangle.md").symlink_to(root / "missing-target.md")
+            manifest = root / "manifest.json"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = _migrate(source, target, baseline, manifest, suffix="9")
+            self.assertEqual(code, 0)
+            self.assertTrue((reviews / "dangle.wt-9.md").is_file())
+            collision_lines = [
+                line
+                for line in buf.getvalue().splitlines()
+                if line.startswith("COLLISION:")
+            ]
+            self.assertEqual(len(collision_lines), 1)
+            self.assertIn("unreadable", collision_lines[0])
 
     def test_migrate_preserves_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2274,6 +2339,366 @@ class SeriesCitationFormsTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
                 self.assertIn(f"missing: {series}", out)
+
+
+class TemplateCitationFormTests(SeriesCitationFormsTest):
+    """Regression fixtures for the plans template's citation form with the
+    bracketed optional-token segment left literal (the witnessed
+    empty-stem closeout refusal, row
+    2026-10-19-closeout-citation-template-form-empty-stem): the tokenizer
+    captures the template citation as one series token, the bracketed
+    segment translates to an optional fragment, a placeholder segment
+    matches a slug-shaped run, and a bare ``-r*.md`` fragment with no slug
+    warns and skips instead of surfacing a zero-member refusal."""
+
+    TEMPLATE_TOKEN_SERIES = (
+        ".ai-playbook/reviews/2026-10-19-pcdd5309a[-p<identity-token>]-r*.md"
+    )
+    TEMPLATE_PLACEHOLDER_SERIES = (
+        ".ai-playbook/reviews/YYYY-MM-DD-<artifact-slug>[-p<identity-token>]-r*.md"
+    )
+    def test_template_form_with_tokened_members_resolves(self):
+        # The witnessed shape: the citation leaves the bracketed segment
+        # literal while the home's members carry the -p infix; verify
+        # resolves the series and the gate passes.
+        home = self.primary / ".ai-playbook/reviews"
+        _write(home / "2026-10-19-pcdd5309a-ptok-r1.md", b"r1\n")
+        _write(home / "2026-10-19-pcdd5309a-ptok-r2.md", b"r2\n")
+        plan = self._plan(self.TEMPLATE_TOKEN_SERIES)
+        vcode, vout, _verr = self._run_verify(plan)
+        self.assertEqual(vcode, 0)
+        data = json.loads(vout)
+        self.assertEqual(
+            data["series_witness"],
+            {self.TEMPLATE_TOKEN_SERIES: "2026-10-19-pcdd5309a-ptok-r2.md"},
+        )
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+
+    def test_template_form_with_omitted_infix_resolves(self):
+        # The actually-witnessed members: the home holds the series without
+        # the optional -p infix at all; the bracketed segment is optional,
+        # so the citation still resolves.
+        home = self.primary / ".ai-playbook/reviews"
+        _write(home / "2026-10-19-pcdd5309a-r1.md", b"r1\n")
+        _write(home / "2026-10-19-pcdd5309a-r5.md", b"r5\n")
+        plan = self._plan(self.TEMPLATE_TOKEN_SERIES)
+        vcode, vout, _verr = self._run_verify(plan)
+        self.assertEqual(vcode, 0)
+        data = json.loads(vout)
+        self.assertEqual(
+            data["series_witness"],
+            {self.TEMPLATE_TOKEN_SERIES: "2026-10-19-pcdd5309a-r5.md"},
+        )
+
+    def test_template_form_with_placeholder_slug_resolves(self):
+        # The fully un-instantiated template form: the date and the slug
+        # both stay placeholders and still resolve against the dated,
+        # concretely named members.
+        home = self.primary / ".ai-playbook/reviews"
+        _write(home / "2026-10-19-pcdd5309a-r1.md", b"r1\n")
+        plan = self._plan(self.TEMPLATE_PLACEHOLDER_SERIES)
+        vcode, vout, _verr = self._run_verify(plan)
+        self.assertEqual(vcode, 0)
+        data = json.loads(vout)
+        self.assertEqual(
+            data["series_witness"],
+            {self.TEMPLATE_PLACEHOLDER_SERIES: "2026-10-19-pcdd5309a-r1.md"},
+        )
+
+    def test_template_form_absent_series_still_refuses_zero_members(self):
+        # The fail-closed control: a template-form citation over a home
+        # with no matching members keeps the zero-members refusal.
+        plan = self._plan(self.TEMPLATE_TOKEN_SERIES)
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {self.TEMPLATE_TOKEN_SERIES}", out)
+
+    def test_bare_empty_prefix_fragment_warns_and_skips(self):
+        # The warn-and-skip control: a bare -r*.md fragment with no slug
+        # never surfaces as a zero-members refusal; it is skipped with a
+        # named note on stderr and in the skipped list, and the run exits 0.
+        (self.primary / ".ai-playbook/reviews").mkdir(parents=True, exist_ok=True)
+        _write(self.primary / ".ai-playbook/reviews/2026-10-19-x-r1.md", b"r1\n")
+        plan = self._plan("-r*.md")
+        vcode, vout, verr = self._run_verify(plan)
+        self.assertEqual(vcode, 0)
+        data = json.loads(vout)
+        self.assertEqual(data["missing"], [])
+        self.assertEqual(len(data["skipped"]), 1)
+        self.assertIn("empty-prefix series token skipped", data["skipped"][0])
+        self.assertTrue(data["skipped"][0].endswith(": -r*.md"))
+        self.assertIn("empty-prefix series token skipped", verr)
+
+    def test_concrete_citation_keeps_exact_behavior(self):
+        # The exactness control: a fully concrete citation over a home
+        # holding only a cross-date member still refuses; the template
+        # translation never widens a concrete citation.
+        _write(self.primary / ".ai-playbook/reviews/2026-10-14-plan-review-x-r1.md", b"r1\n")
+        plan = self._plan(self.CONCRETE_SERIES)
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {self.CONCRETE_SERIES}", out)
+
+
+class SeriesTokenIdentityTest(unittest.TestCase):
+    """Plan 2026-10-18-closeout-gate-series-token-infix: the closeout matcher
+    recognizes canonical tokened series members for a tokenless citation (the
+    zero-member false refusal repaired), and a read-only source-identity
+    diagnostic reports foreign or unresolved records without filtering
+    members or changing any selection, exit status, or consumer result."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wrmg-series-token-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.worktree = self._member(self.root / "wt-session")
+        self.primary = self._member(self.root / "primary")
+        subprocess.run(["git", "init", "-q", str(self.worktree)], check=True)
+        self.plan_rel = "docs/history/plans/2026-10-19-x.md"
+        self.plan = self.worktree / self.plan_rel
+        self._write_plan(".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-r*.md")
+        self.token = review_plan_identity.identity_token(self.plan_rel)
+        self.home = self.primary / ".ai-playbook/reviews"
+
+    def _member(self, path: Path) -> Path:
+        path.mkdir(parents=True)
+        _write(
+            path / ".ai-playbook/facts.md",
+            b'```toml\nreviews_dir = ".ai-playbook/reviews/"\ntmp_dir = "docs/tmp/"\nmetrics_dir = ".ai-playbook/metrics/"\n',
+        )
+        return path
+
+    def _write_plan(self, series: str) -> None:
+        self.plan.parent.mkdir(parents=True, exist_ok=True)
+        _write(self.plan, f"# Plan\n\nPlan review record: {series}\n".encode("utf-8"))
+
+    def _record_name(self, tok: str | None, r: int = 1) -> str:
+        infix = f"-p{tok}" if tok else ""
+        return f"2026-10-13-plan-review-x{infix}-r{r}.md"
+
+    def _write_record(
+        self,
+        name: str,
+        *,
+        sidecar_identity: str | None = None,
+        metadata: bytes = b"",
+        body: bytes = b"",
+    ) -> None:
+        self.home.mkdir(parents=True, exist_ok=True)
+        text = b"# Plan Review\n\n## Metadata\n- Type: Plan Review\n" + metadata + b"\n" + body
+        _write(self.home / name, text)
+        if sidecar_identity is not None:
+            _write(
+                self.home / (name[: -len(".md")] + ".stats.json"),
+                json.dumps({"extensions": {"plan_identity": sidecar_identity}}).encode("utf-8"),
+            )
+
+    def _run_gate(self) -> tuple[int, str, str]:
+        return _run_cli(
+            "gate-removal",
+            "--plan", str(self.plan),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            cwd=self.worktree,
+        )
+
+    def _run_verify(self) -> tuple[int, str, str]:
+        return _run_cli(
+            "verify-records",
+            "--plan", str(self.plan),
+            "--target", str(self.primary),
+            cwd=self.worktree,
+        )
+
+    def test_tokenless_citation_accepts_canonical_tokened_member(self):
+        # The zero-member false refusal repaired: a tokenless citation
+        # recognizes the canonical tokened record and the witness is that
+        # tokened member; no identity warning fires for the plan's own record.
+        name = self._record_name(self.token)
+        self._write_record(name, sidecar_identity=self.plan_rel)
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertNotIn("series-identity", out)
+        vcode, vout, verr = self._run_verify()
+        self.assertEqual(vcode, 0, verr)
+        data = json.loads(vout)
+        self.assertEqual(data["missing"], [])
+        self.assertEqual(
+            data["series_witness"],
+            {".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-r*.md": name},
+        )
+        self.assertNotIn("series-identity", vout)
+
+    def test_foreign_identity_warns_without_filtering(self):
+        name = self._record_name(self.token)
+        self._write_record(
+            name, sidecar_identity="docs/history/plans/2026-10-01-other.md"
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("series-identity", out)
+        self.assertIn(name, out)
+        self.assertIn("docs/history/plans/2026-10-01-other.md", out)
+        vcode, vout, verr = self._run_verify()
+        self.assertEqual(vcode, 0, verr)
+        data = json.loads(vout)
+        self.assertEqual(data["missing"], [])
+        self.assertEqual(
+            data["series_witness"],
+            {".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-r*.md": name},
+        )
+
+    def test_unresolved_identity_warns(self):
+        name = self._record_name(self.token)
+        self._write_record(name)
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("series-identity", out)
+        self.assertIn("unresolved", out)
+        vcode, vout, verr = self._run_verify()
+        self.assertEqual(vcode, 0, verr)
+        self.assertIn("series-identity", verr)
+        json.loads(vout)
+
+    def test_body_or_fenced_identity_text_is_ignored(self):
+        # Identity binds from the Metadata section or the stats sidecar
+        # only: the same URL or Artifact line in body content never
+        # becomes the record's identity, so the member reports unresolved.
+        name = self._record_name(self.token)
+        self._write_record(
+            name,
+            body=b"## Findings\n\n- URL or Artifact: docs/history/plans/2026-10-01-other.md\n",
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, err)
+        self.assertIn("series-identity", out)
+        self.assertIn("unresolved", out)
+        self.assertNotIn("2026-10-01-other.md", out.split("series-identity", 1)[1].splitlines()[0])
+
+    def test_higher_round_foreign_record_warns_without_changing_selection(self):
+        own = self._record_name(self.token, r=1)
+        foreign = self._record_name(self.token, r=2)
+        self._write_record(own, sidecar_identity=self.plan_rel)
+        self._write_record(
+            foreign, sidecar_identity="docs/history/plans/2026-10-01-other.md"
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, err)
+        identity_lines = [line for line in out.splitlines() if line.startswith("series-identity")]
+        self.assertEqual(len(identity_lines), 1)
+        self.assertIn(foreign, identity_lines[0])
+        vcode, vout, verr = self._run_verify()
+        self.assertEqual(vcode, 0, verr)
+        data = json.loads(vout)
+        self.assertEqual(data["missing"], [])
+        witness = next(iter(data["series_witness"].values()))
+        self.assertEqual(witness, foreign, "highest round stays the witness")
+
+    def test_explicit_token_citation_stays_exact(self):
+        tokened = self._record_name(self.token)
+        self._write_record(tokened, sidecar_identity=self.plan_rel)
+        self._write_plan(
+            f".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-p{self.token}-r*.md"
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0)
+        self.assertNotIn("series-identity", out)
+        # A different valid token does not match the citation's token: the
+        # zero-member refusal is preserved for the mismatched series (the
+        # home holds only the citation token's member here).
+        self._write_plan(
+            ".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-pffffffff-r*.md"
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertIn("missing:", out)
+        vcode, vout, verr = self._run_verify()
+        self.assertEqual(vcode, 1)
+        self.assertIn("zero members", vout + verr)
+        data = json.loads(vout)
+        self.assertTrue(any("zero members" in m for m in data["missing"]))
+        # Malformed token-like text stays literal: a p-prefixed but
+        # non-hex citation segment never accepts a canonical member.
+        self._write_plan(
+            ".ai-playbook/reviews/YYYY-MM-DD-plan-review-x-pzzzzzzzz-r*.md"
+        )
+        code, _out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+
+    def test_gate_plan_identity_flag_drives_diagnostics(self):
+        # The completed-twin runner passes the original repository-relative
+        # plan path beside the temporary --plan copy; the flag alone must
+        # drive the same diagnostic (and its absence in a gitless target
+        # must never fail the gate).
+        name = self._record_name(self.token)
+        self._write_record(
+            name, sidecar_identity="docs/history/plans/2026-10-01-other.md"
+        )
+        code, out, err = _run_cli(
+            "gate-removal",
+            "--plan", str(self.plan),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            "--plan-identity", self.plan_rel,
+            cwd=self.worktree,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("series-identity", out)
+
+    def test_twin_runner_passes_original_plan_identity(self):
+        # _run_gate_on_twin seeds the gate child with the original
+        # repository-relative plan path beside its temporary --plan file.
+        observed: dict[str, object] = {}
+
+        class _FakeProc:
+            returncode = 0
+            stdout = "OUTCOME: pass\n"
+            stderr = ""
+
+        real_run = MODULE.subprocess.run
+
+        def fake_run(argv, **kwargs):
+            if argv[:2] == [sys.executable, str(MODULE.__file__)]:
+                observed["argv"] = argv
+                return _FakeProc()
+            return real_run(argv, **kwargs)
+
+        plan_dir = Path(self.worktree)  # unused; the twin reads HEAD bytes
+        completed = MODULE._COMPLETED_DIR + "/2026-10-19-x.md"
+
+        class _SweepStub:
+            def __call__(self, target, *args, **kwargs):
+                if args[:2] == ("cat-file", "blob"):
+                    return subprocess.CompletedProcess(
+                        args, 0,
+                        stdout="# Plan\n\nPlan review record: series\n",
+                        stderr="",
+                    )
+                return MODULE._sweep_git_orig(target, *args, **kwargs)
+
+        MODULE._sweep_git_orig = MODULE._sweep_git
+        MODULE.subprocess_run_orig = MODULE.subprocess.run
+        MODULE._sweep_git = _SweepStub()
+        MODULE.subprocess.run = fake_run
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                gate_class, _evidence = MODULE._run_gate_on_twin(
+                    Path(self.worktree), "2026-10-19-x.md", str(plan_dir)
+                )
+        finally:
+            MODULE._sweep_git = MODULE._sweep_git_orig
+            MODULE.subprocess.run = MODULE.subprocess_run_orig
+            del MODULE._sweep_git_orig, MODULE.subprocess_run_orig
+        self.assertEqual(gate_class, "pass", buf.getvalue())
+        argv = observed["argv"]
+        self.assertIn("--plan-identity", argv)
+        self.assertEqual(argv[argv.index("--plan-identity") + 1], self.plan_rel)
 
 
 class SweepTest(unittest.TestCase):

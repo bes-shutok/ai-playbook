@@ -2043,5 +2043,299 @@ class DirectoryPlanPassthroughTest(unittest.TestCase):
         self.assertEqual(raw_receipt["plan_digest"], hashlib.sha256(raw_bytes).hexdigest())
 
 
+
+
+class ClockedOrderSuccessorVerificationTest(unittest.TestCase):
+    """The read-only discharged-without-successor verification operation.
+
+    RED contract (plan 2026-10-18-clocked-order-successor-verification Task
+    1): the ``clocked-order-verify-successor`` kind and its handler do not
+    exist yet, so every arm pins one named path of the predicate: the
+    witnessed flag shape, the healthy and recovered silences, the grace
+    window, the parent-leg positive, the absent-parent and masking arms,
+    the four attribution routes plus the late-recorded windowless clearing,
+    the blocked-input family, the read-only restraint witness, and the
+    CLI-level dispatch through the wrapper.
+    """
+
+    def setUp(self) -> None:
+        self.clock = FakeClock(2_000_000_000.0)
+        self.fixture = ClockedOrderFixture(self.clock)
+        self.addCleanup(self.fixture.cleanup)
+        self.state_path = self.fixture.root / ".ai-playbook" / "scheduler-state.json"
+
+    def record_discharged_order(self, order_id: str, *, seconds_ago: int = 3600, carrier_label: str | None = None) -> dict:
+        requested_epoch = int(self.clock.now - seconds_ago)
+        ledger = self.fixture.ledger()
+        ledger.record_order(
+            order_id=order_id,
+            requested_at_iso="2020-01-01T11:00:00",
+            requested_epoch=requested_epoch,
+            payload_text="# clocked order payload\n",
+            payload_slug="fixture-order",
+        )
+        carrier = {"label": carrier_label or f"ai-playbook.clocked-order.{order_id}"}
+        discharged = ledger.mutate(
+            order_id,
+            event="order-armed",
+            from_states={"pending"},
+            to_state="armed",
+            carrier=carrier,
+        )
+        self.assertEqual(discharged["status"], "success", discharged)
+        discharged = ledger.mutate(
+            order_id,
+            event="order-discharged",
+            from_states={"armed"},
+            to_state="discharged",
+        )
+        self.assertEqual(discharged["status"], "success", discharged)
+        return {"order_id": order_id, "requested_epoch": requested_epoch, "carrier_label": carrier["label"]}
+
+    def write_state(self, state: dict) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    def verify(self, payload: dict | None = None) -> dict:
+        return watcher.run_clocked_order_operation(
+            "clocked-order-verify-successor",
+            {} if payload is None else payload,
+            repo_root=str(self.fixture.root),
+            ledger=self.fixture.ledger(),
+            clock=self.clock,
+        )
+
+    def witnessed_state(self, order: dict, *, parent: str | None = "keep", next_turn: str | None = "keep") -> dict:
+        """A scheduler state whose successor pointers still name the order.
+
+        ``parent``/``next_turn`` of "keep" leave the pointers naming the
+        order (the witnessed strand shape); any other value re-points them.
+        """
+        state = {
+            "next_turn_at": datetime.fromtimestamp(order["requested_epoch"], timezone.utc).isoformat(),
+            "parent_automation_id": order["carrier_label"],
+            "children": [],
+        }
+        if next_turn != "keep":
+            state["next_turn_at"] = next_turn
+        if parent != "keep":
+            state["parent_automation_id"] = parent
+        return state
+
+    # -- flag-shape arms ---------------------------------------------------
+
+    def test_witnessed_strand_shape_flags(self) -> None:
+        order = self.record_discharged_order("co-flag")
+        self.write_state(self.witnessed_state(order))
+        result = self.verify()
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual([item["order_id"] for item in result["flagged"]], ["co-flag"], result)
+        self.assertEqual(result["flagged"][0]["requested_epoch"], order["requested_epoch"], result)
+
+    def test_healthy_shape_stays_empty(self) -> None:
+        order = self.record_discharged_order("co-healthy")
+        self.write_state(self.witnessed_state(order, parent="other-label", next_turn="2021-01-01T00:00:00+00:00"))
+        result = self.verify()
+        self.assertEqual(result["flagged"], [], result)
+
+    def test_recovered_shape_stays_empty(self) -> None:
+        order = self.record_discharged_order("co-recovered")
+        self.write_state(self.witnessed_state(order, parent="ai-playbook.clocked-order.co-newer", next_turn="2021-01-01T00:00:00+00:00"))
+        result = self.verify()
+        self.assertEqual(result["flagged"], [], result)
+
+    def test_discharge_inside_grace_window_stays_empty(self) -> None:
+        order = self.record_discharged_order("co-young", seconds_ago=600)
+        self.write_state(self.witnessed_state(order))
+        result = self.verify()
+        self.assertEqual(result["flagged"], [], result)
+
+    # -- pointer arms ------------------------------------------------------
+
+    def test_parent_leg_positive_flags(self) -> None:
+        order = self.record_discharged_order("co-parent-leg")
+        self.write_state(self.witnessed_state(order, next_turn="2021-01-01T00:00:00+00:00"))
+        result = self.verify()
+        self.assertEqual([item["order_id"] for item in result["flagged"]], ["co-parent-leg"], result)
+
+    def test_absent_parent_counts_unmoved(self) -> None:
+        order = self.record_discharged_order("co-absent-parent")
+        state = self.witnessed_state(order)
+        state.pop("parent_automation_id")
+        self.write_state(state)
+        result = self.verify()
+        self.assertEqual([item["order_id"] for item in result["flagged"]], ["co-absent-parent"], result)
+
+    def test_masking_unattributed_entry_flags(self) -> None:
+        order = self.record_discharged_order("co-masked")
+        state = self.witnessed_state(order)
+        state["children"] = [
+            {"target": "an unrelated plan", "created_at": datetime.fromtimestamp(self.clock.now, timezone.utc).isoformat()}
+        ]
+        self.write_state(state)
+        result = self.verify()
+        self.assertEqual([item["order_id"] for item in result["flagged"]], ["co-masked"], result)
+
+    # -- attribution arms --------------------------------------------------
+
+    def test_attributable_entry_clears_across_all_four_routes(self) -> None:
+        routes = {
+            "automation_id": lambda oid: {"automation_id": f"automation-x ({oid})"},
+            "cycle": lambda oid: {"cycle": f"fired by {oid} at noon"},
+            "target": lambda oid: {"target": f"plan for {oid}"},
+            "note": lambda oid: {"note": f"discharged {oid}; outcome landed"},
+        }
+        for route, make_entry in routes.items():
+            with self.subTest(route=route):
+                order_id = f"co-route-{route}"
+                order = self.record_discharged_order(order_id)
+                state = self.witnessed_state(order)
+                entry = make_entry(order_id)
+                entry["created_at"] = datetime.fromtimestamp(self.clock.now, timezone.utc).isoformat()
+                state["children"] = [entry]
+                self.write_state(state)
+                result = self.verify()
+                self.assertEqual(result["flagged"], [], result)
+                cancelled = self.fixture.ledger().mutate(
+                    order_id, event="order-cancelled", from_states={"discharged"}, to_state="cancelled"
+                )
+                self.assertEqual(cancelled["status"], "success", cancelled)
+
+    def test_failed_outcome_attributable_entry_still_clears(self) -> None:
+        order = self.record_discharged_order("co-failed")
+        state = self.witnessed_state(order)
+        state["children"] = [
+            {
+                "automation_id": "automation-co-failed",
+                "outcome": "failed",
+                "created_at": datetime.fromtimestamp(self.clock.now, timezone.utc).isoformat(),
+            }
+        ]
+        self.write_state(state)
+        result = self.verify()
+        self.assertEqual(result["flagged"], [], result)
+
+    def test_late_recorded_entry_still_clears_windowless(self) -> None:
+        order = self.record_discharged_order("co-late")
+        state = self.witnessed_state(order)
+        state["children"] = [
+            {"note": "recorded by co-late's turn", "created_at": "2021-06-01T00:00:00+00:00"}
+        ]
+        self.write_state(state)
+        result = self.verify()
+        self.assertEqual(result["flagged"], [], result)
+
+    # -- blocked-input arms ------------------------------------------------
+
+    def test_malformed_state_file_returns_blocked(self) -> None:
+        self.record_discharged_order("co-malformed")
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text("{not json", encoding="utf-8")
+        result = self.verify()
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "verify-successor-state-malformed", result)
+
+    def test_missing_state_file_is_named_empty_not_error(self) -> None:
+        self.record_discharged_order("co-missing")
+        result = self.verify()
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["flagged"], [], result)
+        self.assertEqual(result["note"], "no-scheduler-state-file", result)
+
+    def test_unreadable_ledger_returns_blocked(self) -> None:
+        order = self.record_discharged_order("co-ledger")
+        self.write_state(self.witnessed_state(order))
+        self.fixture.ledger_path.write_bytes(b"\xff\xfe not json")
+        result = self.verify()
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "verify-successor-ledger-unreadable", result)
+
+    def test_nonpositive_or_malformed_grace_returns_blocked(self) -> None:
+        order = self.record_discharged_order("co-grace")
+        self.write_state(self.witnessed_state(order))
+        for bad in (0, -5, "soon", None):
+            with self.subTest(grace=bad):
+                result = self.verify({"grace_minutes": bad})
+                self.assertEqual(result["status"], "blocked", result)
+                self.assertEqual(result["reason_code"], "verify-successor-grace-invalid", result)
+
+    def test_malformed_state_path_returns_blocked(self) -> None:
+        order = self.record_discharged_order("co-path")
+        self.write_state(self.witnessed_state(order))
+        result = self.verify({"scheduler_state_path": 12345})
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "verify-successor-state-path-invalid", result)
+
+    # -- read-only restraint arm ------------------------------------------
+
+    def test_read_only_restraint(self) -> None:
+        order = self.record_discharged_order("co-readonly")
+        self.write_state(self.witnessed_state(order))
+        ledger_before = self.fixture.ledger_path.read_bytes()
+        state_before = self.state_path.read_bytes()
+        residue = self.fixture.ledger_path.parent / "verify-successor.tmp"
+        result = self.verify()
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(self.fixture.ledger_path.read_bytes(), ledger_before)
+        self.assertEqual(self.state_path.read_bytes(), state_before)
+        self.assertFalse(residue.exists())
+
+    # -- CLI-level dispatch arm -------------------------------------------
+
+    def test_cli_dispatch_reaches_the_new_kind(self) -> None:
+        # The wrapper dispatch runs on the ambient real clock, so the
+        # fixture order's requested_epoch is written relative to the real
+        # clock (one grace window plus a fixed five-minute margin in the
+        # past), making reachability past the argparse gate witnessed with
+        # the ambient clock as the pinned input by construction.
+        order = self.record_discharged_order("co-cli", seconds_ago=0)
+        order["requested_epoch"] = int(time.time()) - 2100
+        ledger = self.fixture.ledger()
+        # Re-record with the real-clock-relative epoch by rewriting the
+        # order in place through a fresh ledger file edit is not offered;
+        # instead record a second order whose epoch is real-clock-relative.
+        ledger.record_order(
+            order_id="co-cli-real",
+            requested_at_iso="2020-01-01T11:00:00",
+            requested_epoch=int(time.time()) - 2100,
+            payload_text="# clocked order payload\n",
+            payload_slug="fixture-order",
+        )
+        armed = ledger.mutate(
+            "co-cli-real",
+            event="order-armed",
+            from_states={"pending"},
+            to_state="armed",
+            carrier={"label": "ai-playbook.clocked-order.co-cli-real"},
+        )
+        self.assertEqual(armed["status"], "success", armed)
+        discharged = ledger.mutate(
+            "co-cli-real",
+            event="order-discharged",
+            from_states={"armed"},
+            to_state="discharged",
+        )
+        self.assertEqual(discharged["status"], "success", discharged)
+        order = {"requested_epoch": int(time.time()) - 2100, "carrier_label": "ai-playbook.clocked-order.co-cli-real"}
+        self.write_state(self.witnessed_state(order))
+        payload = {
+            "repo_root": str(self.fixture.root),
+            "ledger_path": str(self.fixture.ledger_path),
+            "payload_home": str(self.fixture.payload_home),
+            "scheduler_state_path": str(self.state_path),
+            "requested_at_iso": "2020-01-01T11:00:00",
+        }
+        command = (
+            f"'{sys.executable}' '{self.fixture.root / 'scripts' / 'execute_plan_runtime.py'}'"
+            f" --operation clocked-order-verify-successor"
+            f" --input '{json.dumps(payload)}'"
+        )
+        completed = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        emitted = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(emitted["status"], "success", emitted)
+        self.assertEqual([item["order_id"] for item in emitted["flagged"]], ["co-cli-real"], emitted)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -778,6 +778,18 @@
           "note": " first manifest write refused the unclaimed staging corpus (2731 candidates) until the emitted candidate list was passed via --foreign-review-from"
         }
       ]
+    },
+    "cached-diff": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "incident",
+          "date": "2026-10-19",
+          "evidence": "docker-compose.yml",
+          "time_lost_minutes": null,
+          "note": "authorized-restoration-workaround"
+        }
+      ]
     }
   }
 }

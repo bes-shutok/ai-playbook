@@ -1,7 +1,7 @@
 # Backlog: reuse local validation results during predecessor walks
 
 - **Filed:** 2026-10-08, execute-plan Phase 3 code review
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-19-review-staging-schema-scaffold-and-validation-reuse.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** review finding (code-review r6 design-simplicity, Low, deferred)

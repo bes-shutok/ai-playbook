@@ -547,15 +547,16 @@ def ledger_token_resolves(repo_root: Path, commit: str, token: str) -> bool:
 
 def walk_audit_commits(
     repo_root: Path, commits: list[str], log_rels: list[str], out: TextIO
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """Print one classification line per removal, oldest commit first,
-    and return (removals, ledger_receipts, flagged). Raises
+    and return (removals, ledger_receipts, flagged, warnings). Raises
     AuditToolError on a git plumbing failure. ``log_rels`` is the
     enumerated rolling logs (the audited log plus its sibling when it
     names one)."""
     removals = 0
     ledger_receipts = 0
     flagged = 0
+    warnings = 0
     for sha in commits:
         meta = run_git(repo_root, "show", "-s", "--format=%h%x00%s%x00%B", sha)
         if meta.returncode != 0:
@@ -563,7 +564,7 @@ def walk_audit_commits(
         short, _, rest = meta.stdout.strip().partition("\x00")
         subject, _, body = rest.partition("\x00")
         receipts = RECEIPT_LINE_RE.findall(body)
-        per_log: list[tuple[list[str], list[str], str]] = []
+        per_log: list[tuple[list[str], list[str], str, str]] = []
         for log_rel in log_rels:
             patch = run_git(
                 repo_root,
@@ -596,11 +597,28 @@ def walk_audit_commits(
             # The post-image stays materialized per touched log: a
             # removal is witnessed only by a ledger line in its own
             # log's post-image, never the sibling's.
-            per_log.append((removed, added, new_text))
-        if not any(removed for removed, _, _ in per_log):
+            per_log.append((removed, added, new_text, old_text))
+        # The receipt-without-removal warning class (warning-only, added
+        # by the landing-conflict-intent-union plan): the same ledger
+        # receipt regex applied to the per-log pre- and post-images, so
+        # a commit adding a receipt line while removing no entry from
+        # that same log becomes visible without changing any exit code.
+        for log_rel, (removed, _, post_text, old_text) in zip(log_rels, per_log):
+            pre_receipts = {
+                slug for slug, _ in LEDGER_RECEIPT_LINE_RE.findall(old_text)
+            }
+            added_receipts = [
+                slug
+                for slug, _ in LEDGER_RECEIPT_LINE_RE.findall(post_text)
+                if slug not in pre_receipts
+            ]
+            if added_receipts and not removed:
+                warnings += 1
+                out.write(f"RECEIPT-WITHOUT-REMOVAL: {short} {log_rel}\n")
+        if not any(removed for removed, _, _, _ in per_log):
             continue
         candidates = witness_candidates(repo_root, sha)
-        for removed, added, post_text in per_log:
+        for removed, added, post_text, _old_text in per_log:
             for slug in removed:
                 removals += 1
                 if added:
@@ -656,7 +674,7 @@ def walk_audit_commits(
                 out.write(
                     f"REMOVED-WITHOUT-WITNESS: {slug} (commit {short} {subject})\n"
                 )
-    return removals, ledger_receipts, flagged
+    return removals, ledger_receipts, flagged, warnings
 
 
 def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> int:
@@ -693,7 +711,7 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
         return write_tool_error(out, f"git rev-list failed: {listing.stderr.strip()}")
     commits = listing.stdout.split()
     try:
-        removals, ledger_receipts, flagged = walk_audit_commits(
+        removals, ledger_receipts, flagged, warnings = walk_audit_commits(
             repo_root, commits, log_rels, out
         )
     except AuditToolError as exc:
@@ -703,7 +721,8 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
     out.write(
         f"prune-audit summary: {removals} removals "
         f"({ledger_receipts} by log ledger) across {len(commits)} "
-        f"log-touching commit(s) in {base_ref}..HEAD\n"
+        f"log-touching commit(s) in {base_ref}..HEAD, "
+        f"{warnings} warning(s)\n"
     )
     if flagged:
         out.write("OUTCOME: fail\n")

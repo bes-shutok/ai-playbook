@@ -1,9 +1,11 @@
 ---
 name: review-loop
 description: >
-  Orchestrate repeat review-fix-done cycles on the current branch until a fresh code review
-  reports zero unresolved blocking findings before any fixes. Use when the user asks to run a review loop,
-  keep reviewing until clean, or repeat doing-code-review + receiving-review + done.
+  Orchestrate repeat review-fix-boundary cycles on the current branch until a fresh code review
+  reports zero unresolved blocking findings before any fixes: fresh review, fix if needed, then the
+  light boundary (plain commit, then learn, then the record mirror), repeat; done runs once at the
+  exit closeout. Use when the user asks to run a review loop, keep reviewing until clean, or repeat
+  doing-code-review + receiving-review rounds.
   Trigger phrases: "review loop", "review-loop", "until clean", "keep reviewing until clean",
   "review fix done loop". Not for execute-plan Phase 3 (use execute-plan) or one-shot review
   (use doing-code-review only).
@@ -11,7 +13,7 @@ description: >
 
 # Review loop
 
-Run **fresh review → fix (if needed) → done → repeat** on the **current branch** until exit criteria are met.
+Run **fresh review → fix (if needed) → light boundary → repeat** on the **current branch** until exit criteria are met; done runs once at the exit closeout.
 
 ## Boundary
 
@@ -42,7 +44,7 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 
 **Diff scope (every review round):** `git diff ${BASE_BRANCH}...HEAD` on **committed** `HEAD` only. Do not review uncommitted fixes as proof the round is clean; commit first, then start the next round.
 
-**Re-resolve the file set every round (required):** at the start of Step 1 in *each* round, re-run `git diff --name-only ${BASE_BRANCH}...HEAD` (committed mode) or `git status --short` (working-tree mode) and confirm the file list matches what this round intends to review. Do not cache the file set from round 1. A loop mutates the tree between rounds (fixes applied, files added by `learn`/`done`, partner edits), so a round-1 snapshot goes stale and silently drops new/changed files from later rounds, which produces a false "clean" exit on a partial review. If the file count changed since the prior round, the new files are in scope for the fresh review even if they bundle a different concern than the original change; do not dismiss them as out-of-scope without recording why.
+**Re-resolve the file set every round (required):** at the start of Step 1 in *each* round, re-run `git diff --name-only ${BASE_BRANCH}...HEAD` (committed mode) or `git status --short` (working-tree mode) and confirm the file list matches what this round intends to review. Do not cache the file set from round 1. A loop mutates the tree between rounds (fixes applied, files added by `learn` and `investigate` at the boundary, partner edits), so a round-1 snapshot goes stale and silently drops new/changed files from later rounds, which produces a false "clean" exit on a partial review. If the file count changed since the prior round, the new files are in scope for the fresh review even if they bundle a different concern than the original change; do not dismiss them as out-of-scope without recording why.
 
 **Verdict-shape drift check (every round, before launching the review):** run `python3 scripts/plan_readiness.py --sweep`, resolving the script via the env-override, repo-local, then deployed-runtime fallback documented in `agents/hooks/plan-readiness/README.md`. A non-zero exit means the sweep failed: verdict-parse anomalies in the corpus, a missing or misconfigured reviews_dir, or a sibling compatibility failure (see agents/hooks/plan-readiness/README.md); read the stderr reason and resolve it before launching this round's workers. The sweep's coverage line is informational: it tracks how much of the corpus still predates the sidecar verdict field.
 
@@ -53,7 +55,9 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 | 1 | `doing-code-review` | Branch review mode; staging doc **before** reporting to user |
 | 2 | Triage | Count findings still `pending` with `blocking: true`; classify each finding real vs formal per receiving-review (**Triage class (real vs formal)**) before severity ranking |
 | 3 | `receiving-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-review`; capture valid findings not fixed in this run as durable backlog items per `receiving-review` **Backlog capture** |
-| 4 | `done` | learn → docs-branch → commit (authorized per iteration) |
+| 4 | Light boundary | light boundary (plain commit, then learn, then the record mirror; the procedure is execute-plan's Light boundary section, referenced not restated) |
+
+Fold-time staged-record duty (steps 2 and 3 own the fix and fold batches): a fold folds findings from the round's staged record per review-staging's record schema, so the round's record is staged before its findings fold; worker task outputs are panel evidence, never the record sink.
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.
 
@@ -86,7 +90,7 @@ Each doc **must** include (full `review-staging` hierarchy; **no stub or verdict
 7. **Verdict for this round (before fixes):** `N blocking findings accepted for fix` OR `0 unresolved blocking findings; clear round`
 8. **Loop exit criterion** (see below); never write "0 remaining after fixes" as the round verdict
 
-Sync gitignored staging to `docs` branch via `done` → `docs-branch` (same as other reviews).
+New staging docs, their `.stats.json` sidecars, and new session logs reach the primary checkout homes through the boundary's record mirror (a plain copy, never blocking); the docs-branch sync is deferred to the loop's exit closeout.
 
 **Mechanical gate (before reporting round verdict):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. The invocation passes the doing-code-review gate's code-source context form (`--source-code-repo` with the repository root, `--source-code-plan` with the round's sidecar path), which is what lets the validator read the certification seal from disk, compare the sidecar's certified range, regenerate the reviewed diff, and grade a declared corrections chain; the sidecar must declare `source_kind: "code"` for that context, and a sidecar without it hard-fails the gate as a tool error. A clean exit additionally requires the round's record to be `record_kind: canonical`; a reconciliation or worker-evidence record can never certify the round (validator-enforced; the record-kind enum and the `RECORD_KIND_SIDECAR_MIN_DATE` fence live in `review-staging`). The written sidecar is a version-1 record; one dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`: the validation classes split per review-staging's record-validation-levels subsection, so intermediate rounds run the lint-level `--preflight` pass over the staging pair with the same source context and resolve its findings before the round's triage and counter decisions are consumed, while the certification round keeps the full `--hard` source-context gate before its verdict is recorded.
 
@@ -164,15 +168,16 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 
 ## Orchestration rules
 
-1. **Continuous iterations:** after `done` succeeds, increment `review_round`, reflect at each configured interval, and return to step 1 unless exit criteria or an independent stop condition applies.
+1. **Continuous iterations:** after the boundary succeeds, increment `review_round`, reflect at each configured interval, and return to step 1 unless exit criteria or an independent stop condition applies.
 2. **Sub-agents:** launch `doing-code-review` with the panel from `review-panel-selection.md`; do not replace with inline grep.
 3. **Targeted revisions:** after fixes, launch blind `correctness-completeness` plus every distinct worker that owned a finding or whose domain the fixes affected. If all five are selected, count a full-panel round only when the round's scope is the whole plan (plan-scoped loops); delta (focused) rounds never increment the full-panel counter regardless of roster, and standalone loops keep the roster-keyed counting unchanged. When the soften watchlist has `open` items, also launch the worker that owns each open pattern (see `review-panel-selection.md` tiered ownership). A targeted post-fix round records its findings but never carries the certifying clean verdict: when it returns zero unresolved blocking findings, the certification is a following `fresh-adversarial` round (a focused panel satisfies it; the round's `Review mode` label must read `fresh-adversarial`), because the staging mechanical gate refuses a clean verdict beside a non-null `Last fix commit` under any other mode label; plan the composition in one pass instead of discovering the refusal at the gate. Code-family rounds carry no series sweep: the sweep duty is scoped to plan-review series closes per review-staging's record-validation-levels subsection.
 4. **Fix-risk triage before more folding:** when consecutive rounds' fixes keep regenerating new findings, apply the `receiving-review` **Fix-risk triage when fixes regenerate findings** section before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Targeted follow-ups; orchestration rule 3 selects the set). A fix-risk stop for user direction follows the closing stop-for-direction clause of `receiving-review` **Fix-risk triage when fixes regenerate findings**. A returned-for-ask presentation outstanding takes the discharge/stop split defined by execute-plan Step 3.3 verification gate item 6 and receiving-review's Fix-risk section: an interactive run relays the ask and gets the answer before the next fold or iteration; a non-interactive run discharges a non-blocking ask by recording per review-staging's receiving-review consumer row and stops for direction on a must-stay-blocking ask (the fix-risk stop above; execute-plan Step 3.5 Fix-risk stop row when running under execute-plan); the loop never increments its round with the ask outstanding.
 5. **Reconciliation before continued churn:** when the same root issue recurs, fixes regenerate findings across consecutive rounds, review artifacts or digests disagree, invoke `review-reconciliation` before another review or fix pass. A `max_full_panel_rounds` interval alone triggers reflection, not reconciliation. Pass the chronological staging artifacts, triage and fix history, current digest, counter, and mutation scope. Where fix-risk stop conditions also hold (rule 4), take the Fix-risk stop for user direction after the reconciliation runs; the reconciliation, if triggered, still runs first. Fixes regenerate findings means the measured churn trigger fired: the latest round's recorded classification shows fold-defect plus wording findings that exceed half of staged findings, or total staged findings did not decrease across the two most recent rounds, or the open-blocking count did not decrease across two consecutive rounds; standalone loop rounds record the same per-round root classification (new-root, fold-defect, test-witness-gap, wording) in their round record so the signal stays evaluable, and a loop whose records carry no classification falls back to the open-ended trigger phrasing; a fired trigger mandates review-reconciliation before any further review or fix pass, even when the blocking count converges.
 6. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
-7. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
+7. **Commits:** the light boundary commits: one iteration -> one commit when fixes ran, with learn's skills-repo commits and the investigate entry commit as sanctioned rider commits recorded on the boundary row.
 8. **Push:** requires explicit user instruction.
 9. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
+10. **Exit closeout (standalone loops):** when the loop runs standalone (not under execute-plan), reaching the exit criteria includes running the `done` skill's full sequence one time before the exit report, exactly as the Consumes `done` entry prescribes (the landing sweep, the docs-branch sync that publishes this loop's gitignored staging docs, the side-repo walk, and finalize), with learn reading the run's review and address records; under execute-plan the Phase 5 final closeout owns this and the loop takes no separate action.
 
 Review findings are evidence to assess, not authorization to broaden the loop's scope; findings outside the accepted scope become backlog items (per receiving-review Backlog capture) unless the user explicitly expands scope.
 
@@ -209,10 +214,13 @@ Step 3 when blocking findings remain: triage and fix; update staging statuses. V
 When invoked under execute-plan, Step 3 receiving-review work proceeds one worker at a time under execute-plan Step 3.3; the parent merges each result before launching the next review-fix worker. Independent review-panel workers may still run in parallel. The standalone default stays the single Step 3 pass.
 
 ### Consumes `done` skill
-Step 4 each iteration: learn → docs-branch → commit (authorized per iteration). Syncs gitignored staging via docs-branch.
+Consumed at the exit closeout only: once the exit criteria are met, the run's final closeout invokes the done skill's full sequence one time (the landing sweep, the docs-branch sync that publishes this loop's gitignored staging docs, the side-repo walk, and finalize); the per-round boundaries never invoke it.
+
+### Consumes `learn` skill (via the boundary procedure)
+Step 4's light boundary invokes learn after the boundary's plain commit, over the round's review and fix records; learn's capture contract (placement, scope, dedupe, and its Step 1.9 project-backlog arm with the investigate routing) applies unchanged, and its commit receipts are recorded on the boundary row (the boundary manifest row in an execute-plan lane; a standalone loop records the whole boundary record, the boundary commit and the record-mirror outcome included, in its round's staging doc, the loop's per-round disk artifact). The boundary procedure is owned by execute-plan's Light boundary section; this entry references it and never restates it.
 
 ### Consumes `review-staging` skill
-Every round writes a full staging doc (Metadata, Review Statistics, Findings with Comment/Analysis). Clear rounds still require statistics. Run the review-staging validator before reporting the round verdict.
+Every round writes a full staging doc (Metadata, Review Statistics, Findings with Comment/Analysis). Clear rounds still require statistics. Run the review-staging validator before reporting the round verdict. The fold-time staged-record duty above is the consuming side of the same contract: folding reads the round's staged record, so a round whose record was not staged gets it staged before its findings fold.
 
 ### Consumes `review-reconciliation` skill
 Use it at orchestration rule 5's trigger. `review-loop` remains the original orchestrator: after any reconciliation refactor, it launches the next normal fresh review of the current digest (the graded exit's corrections re-bind is the only round-free path, and a reconciliation refactor is never one) and does not treat the reconciliation result as a clear round.

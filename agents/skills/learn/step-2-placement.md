@@ -119,7 +119,7 @@ Required outcomes:
 Topic-sibling update rule:
 - When placing new content in any document, **scan all other docs in the repo** (`docs/`, instruction files, READMEs) for documents that already cover the same topic or a parent/sibling concept.
 - If a sibling document exists (e.g., `docs/shell-functions.md` covers agent selection and you are adding a new agent-selection feature to `AGENTS.md`), update **both** documents in the same pass.
-- Do not rely on cross-reference checks in later steps to catch this; the content must be placed in all relevant documents during the initial placement pass: cross-reference wiring for session-created guidance happens at placement time, before the done boundary.
+- Do not rely on cross-reference checks in later steps to catch this; the content must be placed in all relevant documents during the initial placement pass: cross-reference wiring for session-created guidance happens at placement time, within the owning boundary's capture run (learn runs at every intermediate boundary and at the final closeout).
 - Practical technique: after identifying the placement target, run `grep -rl "<topic keyword>"` across the repo to find sibling documents before writing.
 
 Intra-document requirements:

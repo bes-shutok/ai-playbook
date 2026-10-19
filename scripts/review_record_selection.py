@@ -8,8 +8,9 @@ launches. It enumerates the matching record pairs (Markdown plus
 informationally only, never enumerated), and then:
 
 - ``select``: plan reviews are allocated by repository-relative source-plan
-  identity and receive a path-token-qualified filename; other kinds keep
-  slug-wide allocation. With an empty directory it emits the ``-r1`` pair paths
+  identity and receive a path-token-qualified filename; a bare slug with an
+  explicit other kind enumerates only that family's suffix-shaped records and
+  emits the suffix-form name. With an empty directory it emits the ``-r1`` pair paths
   (decision ``new-record``); with an existing pair whose sidecar
   ``source_digest`` equals the caller-supplied digest of the bytes about
   to be reviewed it returns that pair (decision ``reuse``); with
@@ -277,12 +278,56 @@ def _pair_pattern(slug: str, *, plan_identity: bool = False) -> re.Pattern[str]:
     )
 
 
+def _family_scope(slug: str, review_kind: str | None) -> str | None:
+    """The family suffix scope for a bare slug with an explicit kind.
+
+    A bare slug with an explicit non-plan-review kind selects that
+    family's suffix-shaped records only (the documented caller shape); a
+    slug already carrying the kind infix keeps the legacy spelling, and
+    plan-review keeps its identity-filtered legacy behavior.
+    """
+    if (
+        review_kind not in (None, "plan-review")
+        and not slug.startswith(review_kind + "-")
+    ):
+        return review_kind
+    return None
+
+
+def _suffix_family_pattern(slug: str, kind: str) -> re.Pattern[str]:
+    """A record pair base for a bare artifact slug scoped to one review
+    family: ``<date>[-<kind>-]<slug>-<kind>[-r<N>]``.
+
+    When a caller passes a bare slug with an explicit ``--kind`` (the
+    documented execute-plan branch-review invocation), the candidate set
+    is the requested family's suffix-shaped records only: the optional
+    same-kind prefix is the legacy spelling of the same family, and no
+    other kind's infix may appear on either side of the slug. This keeps
+    mixed families sharing an artifact slug from advancing or superseding
+    one another's rounds (the 2026-10-10 family-scope row's acceptance).
+    """
+    prefix = kind + "-"
+    suffix = "-" + kind
+    return re.compile(
+        r"^\d{4}-\d{2}-\d{2}-(?:" + re.escape(prefix) + r")?"
+        + re.escape(slug)
+        + re.escape(suffix)
+        + r"(?:-r(\d+))?$"
+    )
+
+
 def _plan_identity(source_plan: Path, reviews_dir: Path) -> str:
     """Return a repository-relative plan path for stable series identity."""
     if not source_plan.expanduser().exists():
         raise SelectionUsageError(f"--source-plan does not exist: {source_plan}")
     root = _repository_root(reviews_dir)
     if root is None:
+        if not reviews_dir.expanduser().exists():
+            raise SelectionUsageError(
+                f"reviews directory {reviews_dir} does not exist; create "
+                "or transfer it in before selection (the worktree "
+                "standard's transfer-in step provisions the reviews home)"
+            )
         raise SelectionUsageError("--source-plan requires a path inside a git repository")
     identity = _normalize_plan_path(source_plan, root)
     if identity is None:
@@ -332,15 +377,40 @@ def _read_sidecar_digest(sidecar: Path) -> str:
 
 def _enumerate(
     reviews_dir: Path, slug: str, *, review_kind: str | None = None,
-    source_plan_identity: str | None = None
+    source_plan_identity: str | None = None,
+    family_kind: str | None = None,
+    advisories: list[str] | None = None
 ) -> tuple[list[RecordPair], list[Path], int]:
     """Enumerate matching record pairs, orphan halves, and backup pairs.
 
     Backup-shaped names (``.backup-<timestamp>`` infix) never inflate the
     enumeration; complete backup pairs are counted informationally only.
+
+    With ``source_plan_identity`` set, a complete pair whose record resolves
+    no plan identity no longer refuses the whole enumeration: at or below
+    the resolved identity-bearing latest round it is excluded from the pair
+    set and named in the ``advisories`` out-parameter (the caller owns the
+    list and any printing), while an unresolvable pair OUTRANKING the
+    resolved round still refuses with the outranking record named, before
+    any allocation or reuse decision. A series with zero identity-bearing
+    pairs of any plan resolves the latest round lexically (highest ``r<N>``,
+    ties by filename, duplicate rounds included) with the advisory naming
+    the lexical resolution, so allocation continues from the highest
+    existing round instead of minting a parallel chain; a series whose only
+    identity-bearing pairs belong to other plans never lexical-resolves.
+    Mismatched identity-bearing pairs keep the silent skip without an
+    advisory, identity-bearing duplicates keep the duplicate-round refusal,
+    and the orphan boundary is unchanged: an identity-unresolvable half
+    keeps the orphan-completeness refusal and a half carrying a foreign
+    plan identity keeps the silent skip.
     """
-    pattern = _pair_pattern(slug, plan_identity=review_kind == "plan-review")
+    if family_kind is not None:
+        pattern = _suffix_family_pattern(slug, family_kind)
+    else:
+        pattern = _pair_pattern(slug, plan_identity=review_kind == "plan-review")
     pairs: list[RecordPair] = []
+    unresolvable: list[RecordPair] = []
+    identity_bearing = False
     orphans: list[Path] = []
     backups_ignored = 0
     markdown_files = sorted(reviews_dir.glob("*.md")) if reviews_dir.is_dir() else []
@@ -360,10 +430,11 @@ def _enumerate(
             if source_plan_identity is not None:
                 identity = _record_plan_identity(markdown, sidecar)
                 if identity is None:
-                    raise SelectionRefused(
-                        f"cannot identify legacy plan-review record {markdown.name}: "
-                        "missing extensions.plan_identity and URL or Artifact metadata"
+                    unresolvable.append(
+                        RecordPair(int(match.group(1) or "1"), base, markdown, sidecar)
                     )
+                    continue
+                identity_bearing = True
                 if identity != source_plan_identity:
                     continue
             pairs.append(RecordPair(int(match.group(1) or "1"), base, markdown, sidecar))
@@ -390,6 +461,46 @@ def _enumerate(
                 ):
                     continue
             orphans.append(sidecar)
+    if source_plan_identity is not None and unresolvable:
+        unresolvable.sort(key=lambda pair: (pair.round, pair.base))
+        if pairs:
+            resolved_round = max(pair.round for pair in pairs)
+            for pair in unresolvable:
+                if pair.round > resolved_round:
+                    raise SelectionRefused(
+                        f"cannot identify legacy plan-review record "
+                        f"{pair.markdown.name}: this identity-unresolvable "
+                        f"round r{pair.round} outranks the resolved "
+                        f"identity-bearing latest round r{resolved_round}; "
+                        "repair the record's identity before selecting"
+                    )
+                if advisories is not None:
+                    advisories.append(
+                        "excluded identity-unresolvable review record "
+                        f"{pair.markdown.name} (round r{pair.round} at or "
+                        f"below the resolved round r{resolved_round})"
+                    )
+        elif identity_bearing:
+            # Foreign-bearing series: the consulting plan owns nothing, so
+            # the strays never lexical-resolve the series; the empty pair
+            # set below stands.
+            if advisories is not None:
+                for pair in unresolvable:
+                    advisories.append(
+                        "excluded identity-unresolvable review record "
+                        f"{pair.markdown.name} (no identity-bearing record "
+                        "of this plan in the series)"
+                    )
+        else:
+            # Pure-legacy series: the pre-convention lexical selection
+            # (highest rN, ties by filename, duplicate rounds included).
+            resolved = max(unresolvable, key=lambda pair: (pair.round, pair.base))
+            if advisories is not None:
+                advisories.append(
+                    "no identity-bearing record in the series; resolved the "
+                    f"latest round lexically: {resolved.markdown.name}"
+                )
+            pairs = [resolved]
     pairs.sort(key=lambda pair: (pair.round, pair.base))
     rounds = [pair.round for pair in pairs]
     if len(rounds) != len(set(rounds)):
@@ -449,8 +560,14 @@ def select_record(
     explicit_new_round: bool = False,
     review_kind: str | None = None,
     source_plan: Path | None = None,
+    advisories: list[str] | None = None,
 ) -> Selection:
-    """Decide reuse vs the next round, or refuse (the overwrite guard)."""
+    """Decide reuse vs the next round, or refuse (the overwrite guard).
+
+    ``advisories`` is the optional out-parameter threaded down to
+    ``_enumerate``: the caller owns the list and any printing (this function
+    neither prints nor keeps module state).
+    """
     reviews_dir = Path(reviews_dir)
     _validate_slug_and_kind(slug, review_kind)
     if not source_digest.strip():
@@ -478,9 +595,14 @@ def select_record(
         if source_plan is None:
             raise SelectionUsageError("--kind plan-review requires --source-plan")
         identity = _plan_identity(Path(source_plan), reviews_dir)
+    # A bare slug with an explicit non-plan-review kind selects that
+    # family's suffix-shaped records only (the documented caller shape);
+    # a slug already carrying the kind infix keeps the legacy spelling.
+    family_kind = _family_scope(slug, review_kind)
     pairs, orphans, backups_ignored = _enumerate(
         reviews_dir, slug, review_kind=review_kind,
-        source_plan_identity=identity
+        source_plan_identity=identity,
+        family_kind=family_kind, advisories=advisories
     )
     if orphans:
         named = ", ".join(sorted(path.name for path in orphans))
@@ -493,8 +615,11 @@ def select_record(
 
     def emit(round_number: int, *, selected_stem: str | None = None) -> tuple[Path, Path]:
         if selected_stem is None:
-            kind_prefix = f"{review_kind}-" if review_kind else ""
-            selected_stem = f"{kind_prefix}{slug}"
+            if family_kind is not None:
+                selected_stem = f"{slug}-{family_kind}"
+            else:
+                kind_prefix = f"{review_kind}-" if review_kind else ""
+                selected_stem = f"{kind_prefix}{slug}"
             if identity is not None:
                 selected_stem += "-p" + _identity_token(identity)
         elif identity is not None:
@@ -853,9 +978,14 @@ def recover_orphan(
     )
     if review_kind == "plan-review" and identity is None:
         raise SelectionUsageError("--kind plan-review requires --source-plan")
+    # The other-orphan pre-check enumerates the same family pattern the
+    # post-rename select_record allocation will use, so a blocking orphan
+    # half is always refused before the record is renamed, never after.
+    family_kind = _family_scope(slug, review_kind)
     pairs, orphans, _backups = _enumerate(
         reviews_dir, slug, review_kind=review_kind,
-        source_plan_identity=identity
+        source_plan_identity=identity,
+        family_kind=family_kind
     )
     other_orphans = [
         orphan for orphan in orphans if orphan.resolve() != record.resolve()
@@ -1158,7 +1288,8 @@ def build_parser() -> argparse.ArgumentParser:
     select_parser.add_argument(
         "--kind",
         choices=("plan-review", "branch-review", "code-review", "exec-review"),
-        help="optional review kind prefix in the emitted record name",
+        help="review family scoping: plan-review prefixes the emitted name, "
+        "other kinds scope a bare slug to that family's suffix-form records",
     )
     select_parser.add_argument(
         "--source-digest",
@@ -1211,7 +1342,8 @@ def build_parser() -> argparse.ArgumentParser:
     recover_parser.add_argument(
         "--kind",
         choices=("plan-review", "branch-review", "code-review", "exec-review"),
-        help="optional review kind prefix in the emitted record name",
+        help="review family scoping: plan-review prefixes the emitted name, "
+        "other kinds scope a bare slug to that family's suffix-form records",
     )
 
     verify_parser = subparsers.add_parser(
@@ -1249,6 +1381,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "select":
+            # Advisory out-parameter (review-record legacy identity plan,
+            # Task 1): main owns the list; select_record threads it down to
+            # the enumeration, and the advisories ride the JSON envelope as
+            # a non-blocking array. The advisories never change the decision.
+            advisories: list[str] = []
             selection = select_record(
                 Path(args.dir),
                 args.slug,
@@ -1256,6 +1393,7 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_new_round=args.explicit_new_round,
                 review_kind=args.kind,
                 source_plan=Path(args.source_plan) if args.source_plan else None,
+                advisories=advisories,
             )
             print(
                 json.dumps(
@@ -1273,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
                             if args.kind == "plan-review" and args.source_plan
                             else None
                         ),
+                        "advisories": advisories,
                     }
                 )
             )

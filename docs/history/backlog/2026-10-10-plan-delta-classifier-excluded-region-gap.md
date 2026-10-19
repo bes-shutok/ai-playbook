@@ -3,7 +3,7 @@
 Origin class: consumer-pet
 Driving force: automation
 Cluster: docs/history/backlog/2026-10-16-corrections-chain-unclassified-mechanical-hops.md (same surface: the plan-delta classifier's class taxonomy refusing legitimate hop shapes)
-Status: open
+Status: covered (docs/history/plans/2026-10-18-corrections-chain-operator-ack-end-to-end.md)
 Priority: low
 
 The plan-delta classifier (`scripts/plan_delta_classifier.py`) only script-verifies

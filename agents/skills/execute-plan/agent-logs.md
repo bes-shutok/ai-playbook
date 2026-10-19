@@ -1,6 +1,6 @@
 # Execute Plan: Sub-Agent Execution Logs
 
-Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase 0 (see `using-skills` Step 0; invoke `bootstrap-ai-playbook` only when Terms triggers fire). Implement and address-review workers write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)**; not the orchestrator's chat summary, and not the full session history. The Phase 3 review log path exists for parent (default) or recovery-orchestrator ownership; lens workers do not write it.
+Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase 0 (see `using-skills` Step 0; invoke `bootstrap-ai-playbook` only when Terms triggers fire). Implement and address-review workers write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each boundary's learn can read context from the **immediately preceding worker step(s)**; not the orchestrator's chat summary, and not the full session history. The Phase 3 review log path exists for parent (default) or recovery-orchestrator ownership; lens workers do not write it.
 
 ## Path convention
 
@@ -15,11 +15,11 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Mechanism design review (Step 1.4b, parent-owned) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/design-review-<anchor-task>.log.md` |
 | Review diff snapshots (optional) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/diff-r<R>.patch`, `src-diff-r<R>.patch` |
 
-A `done_fast_path:` manifest row is the parent's record that the task's done boundary completed (Step 1.4 is parent-executed for every task per the closeout-gate demotion program change 9 - the per-task done sub-agent spawn is removed), naming the scripted verification conditions' results and the commit sha; the per-task log handoff contract is unchanged and the implement log remains the learn input.
+A `task_boundary:` manifest row is the parent's record that the boundary completed (the Step 1.4 light boundary for every task, and the same boundary per review iteration at Step 3.4), naming the commit sha, the verification results, the created backlog paths, the learn and investigate commit receipts, and any changed paths outside the task's Files list (report-only); the per-task log handoff contract is unchanged and the implement log remains the per-task learn input.
 
-The run briefing is not a log: the orchestrator owns and rewrites it (workers read it and never edit it), it carries run-level context (digest, decisions and folds, conventions, base tip) for worker prompts, and citing it to any worker, `done` included, never widens the preceding-step-only log handoff defined below. The create-versus-append discipline of this file does not apply to the briefing.
+The run briefing is not a log: the orchestrator owns and rewrites it (workers read it and never edit it), it carries run-level context (digest, decisions and folds, conventions, base tip) for worker prompts, and citing it to any worker, the boundary's learn included, never widens the preceding-step-only log handoff defined below. The create-versus-append discipline of this file does not apply to the briefing.
 
-The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent-executed Step 1.4 done boundary reads the path itself (formerly passed into the per-task `done` prompt as `<TASK_REVIEW_LOG_PATH>`), required only when Step 1.2b ran for the task.
+The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent-executed Step 1.4 light boundary reads the path itself, required only when Step 1.2b ran for the task.
 
 Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
@@ -87,7 +87,7 @@ Panel launched; waiting on lens workers.
 (pending)
 ```
 
-When the owning step ends (workers returned, staging doc synthesized) and before the Step 3.1 verification gate evaluates item 2, the owner appends the terminal pass to the same log (or update via append block) with `Status: success | blocked` and the full return payload, so the log is closed by a terminal pass (Status `success` or `blocked`) and a round never ends with `in_progress` as the file's last Pass status; an `in_progress` heartbeat that is still the last pass at done-launch time is the defect shape the Step 3.4 launch validation refuses. A review round that runs for many minutes with **no** log file on disk is a skill violation (resume and timeout gates need the heartbeat).
+When the owning step ends (workers returned, staging doc synthesized) and before the Step 3.1 verification gate evaluates item 2, the owner appends the terminal pass to the same log (or update via append block) with `Status: success | blocked` and the full return payload, so the log is closed by a terminal pass (Status `success` or `blocked`) and a round never ends with `in_progress` as the file's last Pass status; an `in_progress` heartbeat that is still the last pass at boundary-launch time is the defect shape the Step 3.4 launch validation refuses. A review round that runs for many minutes with **no** log file on disk is a skill violation (resume and timeout gates need the heartbeat).
 
 ## Log file format (required)
 
@@ -144,27 +144,27 @@ updated: <ISO8601 timestamp>
 | Step | Log path | Status |
 |------|----------|--------|
 | Task 1 implement | {tmp_dir}/execute-plan/.../task-1-implement.log.md | success |
-| Task 1 done | (none) | commit abc1234 |
+| Task 1 light boundary | (none) | commit abc1234 |
 | Review r1 doing-code-review | {tmp_dir}/execute-plan/.../review-r1-doing-code-review.log.md | success |
 | full_panel_rounds | (none) | 1 |
 | escalation_count | (none) | 0 |
 | source_digest | (none) | `<sha256>` |
 ```
 
-The orchestrator passes the manifest path plus only the preceding-step log paths into the Step 3.4 `done` prompt (the parent-executed Step 1.4 boundary reads its log set itself per demotion program change 9). Update the review counters and digest after each Step 3.4. Refresh the `updated:` timestamp on EVERY manifest update (Step 1.4 / Step 3.4 verification-gate updates and Step 3.5 counter refreshes alike); it is the freshness witness the `done` Step 1.5 staleness rule reads. On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent.
+The parent reads only the preceding-step log paths at each boundary's learn leg (the run briefing and `manifest.md` stay run context and traceability, never required reads); the Step 1.4 and Step 3.4 light boundaries resolve their log sets the same way. Update the review counters and digest after each Step 3.4. Refresh the `updated:` timestamp on EVERY manifest update (Step 1.4 / Step 3.4 boundary-verification-gate updates and Step 3.5 counter refreshes alike); it is the freshness witness a resumed session and the final closeout read before acting on the run's state. On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent.
 
-## Done boundary: required reads before learn
+## Light boundary: required reads before learn
 
-Read logs from the worker step(s) that **directly preceded this done boundary** (the parent-executed Step 1.4 boundary or the Step 3.4 `done` sub-agent); not earlier tasks or review rounds.
+Read logs from the worker step(s) that **directly preceded this boundary** (the Step 1.4 light boundary after a task, or the Step 3.4 light boundary after a review iteration); not earlier tasks or review rounds.
 
-| `done` invocation | Preceding step(s) | Log(s) to read |
+| Boundary | Preceding step(s) | Log(s) to read |
 |-------------------|-------------------|----------------|
 | Per task (Step 1.4) | Step 1.2 implement; Step 1.2b intermediate review when it ran | `task-<N>-implement.log.md` for that task only; plus `task-<N>-review.log.md`, required only when Step 1.2b ran for the task |
 | Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-review.log.md` only when Step 3.3 ran; read the single parent-owned address log when Step 3.3 ran |
 
-Do **not** pass implement logs into review-iteration `done`, or prior rounds' review/address logs into a later iteration.
+Do **not** read implement logs at a review-iteration boundary, or prior rounds' review/address logs at a later iteration.
 
-If a required preceding-step log is missing, the done boundary must not commit; the parent finalizes the log from durable records where possible (the launch-validation rule) or re-runs the owning worker step.
+If a required preceding-step log is missing, the light boundary must not commit; the parent finalizes the log from durable records where possible (the launch-validation rule) or re-runs the owning worker step.
 
 ## Cleanup after successful completion (Phase 5)
 
@@ -176,9 +176,9 @@ rm -rf {tmp_dir}/execute-plan/<PLAN_SLUG>
 
 | Outcome | Tmp directory |
 |---------|----------------|
-| Full success (Phase 5) | **Removed**; logs already consumed by per-step `done` / `learn` |
+| Full success (Phase 5) | **Removed**; logs already consumed by the per-boundary `learn` runs |
 | User interrupt, blocked sub-agent, safety cap, validation failure, or no fresh blocking-clean result | **Preserved**; needed for resume and debugging |
 
 **Scope:** delete only `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for this plan (includes optional `diff-r*.patch` / `src-diff-r*.patch` snapshots). Do not delete sibling slugs, the parent `execute-plan/` folder, or `{reviews_dir}/` staging docs.
 
-**Timing:** write and re-read the terminal `workflow_state: complete` receipt in `manifest.md` first, then run cleanup **after** the last Step 3.4 `done` and Phase 4 archive; never before final `learn` has read the preceding-step logs, and never before the terminal receipt is verified.
+**Timing:** write and re-read the terminal `workflow_state: complete` receipt in `manifest.md` first, then run cleanup **after** the last Step 3.4 light boundary, the final done closeout, and Phase 4 archive; never before the closeout's `learn` has read the preceding-step logs, and never before the terminal receipt is verified.

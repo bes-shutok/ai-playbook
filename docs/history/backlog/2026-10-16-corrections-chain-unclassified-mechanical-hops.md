@@ -1,7 +1,7 @@
 # Backlog: the corrections chain cannot deliver a zero-round re-bind for unclassified mechanical hops
 
 - **Filed:** 2026-10-16, placement-closing-doctrine-enforcement execution, Task 3 intermediate review round 2 (operator-directed honest-reword disposition)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-18-corrections-chain-operator-ack-end-to-end.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** witnessed machinery/doctrine mismatch (executed probe)

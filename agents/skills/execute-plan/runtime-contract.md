@@ -4,7 +4,7 @@
 
 The execute-plan workflow is host-native and sequential. The parent selects one
 plan task, launches one native worker for it, waits for its result, verifies the
-result and task checkpoint, completes the task's landing boundary, and only
+result and task checkpoint, completes the task's light boundary, and only
 then selects the next task.
 
 Parallelism remains available for independent review-panel workers. The review
@@ -64,11 +64,14 @@ policy selects it, including branch verification and serialization. Recovery
 of work already performed in the primary checkout remains in that checkout.
 Do not move existing work between placements as part of execution.
 
-Each task's `done` boundary remains parent-owned and follows successful
-implementation, validation, and the required intermediate review. The normal
-commit, completion, Phase 2 validation, Phase 3 review, archive, and closeout
-gates remain in force. A worker result or review completion never substitutes
-for them.
+Each task's boundary is the parent-owned light boundary and follows successful
+implementation, validation, and the required intermediate review: the parent
+commits plainly by explicit pathspec, runs learn, mirrors new review and
+session records to the primary checkout homes, and records one `task_boundary:`
+manifest row; the done skill runs only once per run at the final closeout. The
+normal commit, completion, Phase 2 validation, Phase 3 review, archive, and
+closeout gates remain in force. A worker result or review completion never
+substitutes for them.
 
 ## Plans-authoring watchers
 

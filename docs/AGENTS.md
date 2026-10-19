@@ -113,7 +113,7 @@ Verify `git check-ignore` before staging. Never `git stash clear` when docs-bran
 | `coding_guidelines.md` | Universal coding patterns; #17 lesson tag-format spec + #17-#25 root-cause principle catalog (families A-H) |
 | `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging, #12 prefer imports over FQNs, #14 selected Failsafe after install, #15 optional empty JSON columns, #16 no nested Awaitility await inside `untilAsserted`, #17 retarget migration-resource tests when DDL moves across versions, #21 PostgreSQL data-modifying CTE statement snapshot, #22 capacity IT discriminating witnesses, #25 fail-closed Tomcat Micrometer gauges need usable values, #26 bind standard temporal config types directly) |
 | `kotlin_guidelines.md` | Kotlin-specific (e.g. #16 `CancellationException`, #22 prefer imports → jvm #12) |
-| `java_guidelines.md` | Java-specific (e.g. #15 prefer imports → jvm #12) |
+| `java_guidelines.md` | Java-specific (e.g. #15 prefer imports → jvm #12, #26 bound scarce-resource concurrency with semaphores for virtual-thread tasks) |
 | `python_guidelines.md` | Python-specific |
 
 **Agent workflow lessons:** do not restate §1–§49 here; consult the matching section when the trigger matches (false-positive review, scope discipline, merge verification, telemetry, GitOps, PR template, plain language, facts vs skills §50, etc.).

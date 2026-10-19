@@ -319,14 +319,33 @@ def latest_review_round(
     reviews_dir: Path,
     slug: str,
     plan_identity: str | None = None,
+    advisories: list[str] | None = None,
 ) -> tuple[Path, int] | None:
     """Latest review artifact for ``slug``: highest ``r<N>``, ties by filename.
 
     Never resolves latest by mtime. The candidate glob is instantiated by
     the shared ``review_round_shape``: one encoding of the discovery shape,
     consumed here and by the ``--check-review-name`` probe's fullmatch.
+
+    With ``plan_identity`` set, an identity-unresolvable record (neither
+    the sidecar ``extensions.plan_identity`` field nor the Markdown
+    ``URL or Artifact:`` line resolves) no longer refuses the whole series:
+    at or below the resolved identity-bearing latest round it is excluded
+    from the identity match and named in the ``advisories`` out-parameter
+    (the caller owns printing; this function never prints and keeps no
+    module state), while an unresolvable record OUTRANKING the resolved
+    round still refuses fail-closed with the outranking record named. A
+    series with zero identity-bearing records of any plan resolves
+    lexically (highest ``r<N>``, ties by filename, duplicates included)
+    with the advisory naming the lexical resolution; a series whose only
+    identity-bearing records belong to other plans never lexical-resolves
+    (the no-artifact refusal stands). Mismatched identity-bearing records
+    keep the silent exclusion without an advisory, and identity-bearing
+    duplicates keep the duplicate-round raise.
     """
     candidates: list[tuple[int, str, Path]] = []
+    unresolvable: list[tuple[int, str, Path]] = []
+    identity_bearing = False
     glob_pattern, name_re = review_round_shape(slug)
     for path in reviews_dir.glob(glob_pattern):
         match = name_re.fullmatch(path.name)
@@ -342,13 +361,53 @@ def latest_review_round(
                     payload = None
                 candidate_identity = record_identity(path, payload)
                 if candidate_identity is None:
-                    raise AmbiguousReviewSeries(
-                        f"cannot resolve plan identity for {path.name}: "
-                        "missing or unreadable identity metadata"
-                    )
+                    unresolvable.append((int(match.group(1)), path.name, path))
+                    continue
+                identity_bearing = True
                 if candidate_identity != plan_identity:
                     continue
             candidates.append((int(match.group(1)), path.name, path))
+    if plan_identity is not None and unresolvable:
+        unresolvable.sort(key=lambda entry: (entry[0], entry[1]))
+        if candidates:
+            resolved_round = max(candidate[0] for candidate in candidates)
+            for round_no, name, path in unresolvable:
+                if round_no > resolved_round:
+                    raise AmbiguousReviewSeries(
+                        f"cannot resolve plan identity for {name}: this "
+                        "identity-unresolvable round "
+                        f"r{round_no} outranks the resolved identity-bearing "
+                        f"latest round r{resolved_round}; repair the record's "
+                        "identity (or rename the round) before consulting "
+                        "the series"
+                    )
+                if advisories is not None:
+                    advisories.append(
+                        f"excluded identity-unresolvable review record {name} "
+                        f"(round r{round_no} at or below the resolved round "
+                        f"r{resolved_round})"
+                    )
+        elif identity_bearing:
+            # Foreign-bearing series: the consulting plan owns nothing, so
+            # the strays never lexical-resolve the series; the no-artifact
+            # refusal below stands.
+            if advisories is not None:
+                for round_no, name, path in unresolvable:
+                    advisories.append(
+                        "excluded identity-unresolvable review record "
+                        f"{name} (no identity-bearing record of this plan "
+                        "in the series)"
+                    )
+        else:
+            # Pure-legacy series: the pre-convention lexical selection
+            # (highest rN, ties by filename, duplicates included).
+            resolved = max(unresolvable)
+            if advisories is not None:
+                advisories.append(
+                    "no identity-bearing record in the series; resolved the "
+                    f"latest round lexically: {resolved[1]}"
+                )
+            return resolved[2], resolved[0]
     if not candidates:
         return None
     rounds = [candidate[0] for candidate in candidates]
@@ -1555,13 +1614,26 @@ def _first_gate_error_reason(
     )
 
 
+# The repair tool's sidecar marker (scripts/regenerate_review_sidecar.py
+# owns the value as REGENERATED_MARKER_KEY; the literal is duplicated here
+# so the consult never imports the repair tool). Report-only: the key feeds
+# the advisory channel's regeneration notice, and no gate keys tolerance on
+# it (review-record legacy identity plan, Task 4).
+REGENERATED_FROM_MARKDOWN_KEY = "regenerated_from_markdown"
+
+
 def evaluate_readiness(
-    plan_path: Path, plans_dir: Path, reviews_dir: Path
+    plan_path: Path,
+    plans_dir: Path,
+    reviews_dir: Path,
+    advisories: list[str] | None = None,
 ) -> tuple[bool, str | None]:
     """Evaluate the readiness conditions in order.
 
     Returns ``(ok, reason)``; ``reason`` names the FIRST failed condition only
-    and is ``None`` on success.
+    and is ``None`` on success. ``advisories`` is the optional out-parameter
+    threaded down to ``latest_review_round``: the caller owns the list and any
+    printing (this function neither prints nor keeps module state).
     """
     plans_dir = plans_dir.expanduser().resolve()
     reviews_dir = reviews_dir.expanduser().resolve()
@@ -1616,7 +1688,7 @@ def evaluate_readiness(
     plan_root = repository_root(resolved.parent)
     plan_identity = normalize_plan_path(resolved, plan_root) if plan_root else None
     try:
-        latest = latest_review_round(reviews_dir, slug, plan_identity)
+        latest = latest_review_round(reviews_dir, slug, plan_identity, advisories)
     except AmbiguousReviewSeries as exc:
         return False, str(exc)
 
@@ -1739,6 +1811,22 @@ def evaluate_readiness(
         return False, (
             f"sidecar source_kind is {declared_kind!r}, expected 'plan' "
             f"(round r{round_no})"
+        )
+    # Regeneration notice (review-record legacy identity plan, Task 4): the
+    # resolved sidecar carrying the repair tool's marker adds ONE
+    # report-only notice through the advisory out-parameter; the caller owns
+    # the list and any printing (the pass-path printer emits it beside the
+    # coverage warnings), no gate keys tolerance on the marker, and an
+    # advisory-less invocation stays silent.
+    resolved_extensions = payload.get("extensions")
+    if (
+        isinstance(resolved_extensions, dict)
+        and resolved_extensions.get(REGENERATED_FROM_MARKDOWN_KEY) is True
+        and advisories is not None
+    ):
+        advisories.append(
+            f"resolved sidecar {sidecar.name} was regenerated from its "
+            "Markdown record (extensions.regenerated_from_markdown)"
         )
     try:
         content = latest_path.read_text(encoding="utf-8")
@@ -2909,7 +2997,12 @@ def _main(argv: list[str] | None = None) -> int:
     # from a subdirectory or outside the repo must not false-reject a valid
     # relative plan path).
     plan_operand = anchor_at_root(args.plan_path)
-    ok, reason = evaluate_readiness(plan_operand, plans_dir, reviews_dir)
+    # Advisory out-parameter (review-record legacy identity plan, Task 1):
+    # main owns the list; evaluate_readiness threads it down to the series
+    # resolver, and the pass path prints ONE non-blocking advisory line
+    # beside the coverage warnings. The advisory never changes the outcome.
+    advisories: list[str] = []
+    ok, reason = evaluate_readiness(plan_operand, plans_dir, reviews_dir, advisories)
     if ok:
         # Warning-only Files:-coverage arm (machinery row
         # script:plan-files-coverage-arm): human-readable stderr evidence
@@ -2926,6 +3019,8 @@ def _main(argv: list[str] | None = None) -> int:
         if coverage_plan_text is not None:
             for warning in plan_files_coverage_warnings(coverage_plan_text):
                 print(warning, file=sys.stderr)
+        if advisories:
+            print("review advisory: " + "; ".join(advisories), file=sys.stderr)
         print("readiness OK: latest review of these plan bytes is ready")
         print("OUTCOME: %s" % OUTCOME_LABELS[0])
         return 0
