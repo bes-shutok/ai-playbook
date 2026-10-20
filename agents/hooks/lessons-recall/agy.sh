@@ -18,9 +18,11 @@
 #
 # Session model (r10-B1): SID is derived VERBATIM as
 #   SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
-# At v9 the helper returns empty for agy (no verified per-session env var), so
-# the adapter OMITS `--session-id` -> core keys `no-session` + FULL window (the
-# DOCUMENTED STEADY STATE for agy, NOT a degraded fallback).
+# (shared helper contract, owned by agents/hooks/lessons-recall/README.md,
+# "Session channel precedence"). agy sets none of the supported sources, so
+# every source is unset or empty, the helper prints empty, and the adapter
+# OMITS `--session-id` -> core keys `no-session` + FULL window (the DOCUMENTED
+# STEADY STATE for agy, NOT a degraded fallback).
 #
 # Exit 0 ALWAYS (a non-zero exit on agy means the HOOK itself failed, not a
 # decision). Core stderr is DISCARDED.

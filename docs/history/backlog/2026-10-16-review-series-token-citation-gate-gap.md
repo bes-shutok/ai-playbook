@@ -7,7 +7,7 @@
 - **Origin class:** witnessed defect (machinery contract disagreement)
 - **Class:** fix-class
 - **Skill/step:** `scripts/worktree_closeout_migrate.py` gate-removal (`_extract_citations`/`_series_prefix_fragment`) beside `scripts/review_record_selection.py`'s emitted naming contract
-- **Cluster:** docs/history/backlog/2026-10-07-gate-removal-unremediable-refuse-deadlock.md; docs/history/backlog/2026-10-08-gate-removal-residual-fail-open-shapes.md; docs/history/backlog/2026-10-08-gate-removal-usage-doubled-token.md; docs/history/backlog/2026-10-19-closeout-citation-template-form-empty-stem.md
+- **Cluster:** docs/history/backlog/completed/2026-10-07-gate-removal-unremediable-refuse-deadlock.md; docs/history/backlog/completed/2026-10-08-gate-removal-residual-fail-open-shapes.md; docs/history/backlog/completed/2026-10-08-gate-removal-usage-doubled-token.md; docs/history/backlog/2026-10-19-closeout-citation-template-form-empty-stem.md
 
 ## Observed vs expected
 

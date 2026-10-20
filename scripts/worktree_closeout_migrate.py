@@ -32,9 +32,11 @@ Subcommands:
   gate-removal  Fail-closed pre-removal gate: verify that every review
            record the executing plan's header cites (Plan review record:/
            Plan review: label lines in the header region only, the block
-           before the first markdown heading after the title line, or end
-           of file when the plan carries no post-title heading; the plan
-           body and its fences are never scanned)
+           before the first post-title line whose first character is
+           "#", or end of file when no post-title line starts with "#";
+           the boundary is a first-character rule, not a Markdown
+           heading parse, and the plan body and its fences are never
+           scanned)
            plus any --claims paths exists under the target's
            facts-resolved primary reviews home. Exit 0 pass (printing the
            sanctioned git worktree remove command for --worktree), 1 fail
@@ -54,7 +56,13 @@ Subcommands:
            staging the records the removal would destroy), are refused
            on their own lines with the operand remedy, never the migrate
            remedy, which the missing-record and outside-home refusals
-           carry), 3 tool error. The gate also refuses teardown while a
+           carry), 3 tool error. The reverse shape (a --worktree
+           resolving inside the absolute external reviews home) is
+           warning-only read-only visibility: it cannot refuse or block
+           the removal, and the warning records the machinery-admission
+           fields (expected catch frequency low, false-positive cost
+           relocation noise, review date 2027-01-19). The gate also
+           refuses teardown while a
            claimed record's `.stats.json` sibling exists in the worktree
            staging home (the facts-resolved reviews home under the worktree
            being removed) and is absent from the primary home, naming the
@@ -64,6 +72,23 @@ Subcommands:
            and a `.stats.json` claims entry verifies as itself and derives
            nothing. Born-conformant to OUTCOME_CONTRACT.md;
            the other subcommands keep their legacy plain-exit semantics.
+           Branch accounting rides the pass (plan
+           2026-10-19-gate-removal-closeout-accounting): the gate captures
+           one proven branch OID from the migration manifest's branch
+           record, accounts content by ancestry or exact full-tree match
+           (a tip whose complete tree equals any destination-history
+           commit's tree is landed without ancestry or an archive twin,
+           while the non-ancestor branch stays retained), reports the
+           legacy changed-path scope as evidence only, guards live linked
+           worktrees and migrated artifacts, and re-compares the ref
+           after the checks, so a moved or unreadable ref refuses with
+           the branch and any on-disk worktree retained. One
+           branch-disposition: line carries the branch, the disposition,
+           the proven OID, and the retention reasons. Branch-only mode
+           (--branch with an explicit --migration-manifest, no
+           --worktree) adjudicates a ref with no linked worktree under
+           the same guard chain; deletion in either mode is operator
+           work only.
   sweep    Mechanical ad-hoc worktree residue sweep beside a --target
            primary checkout. Report-only by default: every enumerated
            ad-hoc-shaped candidate (same parent directory as the primary,
@@ -74,19 +99,25 @@ Subcommands:
            membership, live-session evidence, branch resolution plus
            post-landing activity), then the
            gate-removal verification runs over the completed twin's
-           bytes read from the target HEAD tree, and the run prints one
-           verdict line per candidate (remove <path> or
-           report <path>: <reason>) ending with one final OUTCOME: line.
+           bytes read from the target HEAD tree (the candidate's
+           slug-resolved migration manifest passed beside
+           --plan-identity), and the run prints one
+           verdict line per candidate plus the branch-disposition
+           lines (content accounting, proven OID, retention reasons)
+           ending with one final OUTCOME: line.
            --apply additionally requires the invoking run's authentic
            hold of the target's done lock (verified before any
            enumeration and again before the first release), holds the
            repository merge lock across its releases through one
-           try-once merge-acquire, releases on-disk candidates through
-           git worktree remove --force plus git branch -D, and drains
-           stale registrations only through the scoped
+           try-once merge-acquire, and removes ONLY stale registrations
+           with no on-disk directory through the scoped
            administrative-dir removal gated by the enumeration-excluded
            non-destructive git worktree prune --dry-run -v filter and
            verified by the worktree-list deregistration postcondition.
+           On-disk worktrees, their artifacts, and every branch ref stay
+           operator-controlled in both modes and are never inferred from
+           the gate's OUTCOME: pass (plan
+           2026-10-19-gate-removal-closeout-accounting).
            Born-conformant to OUTCOME_CONTRACT.md (exit 0 pass, 1 fail
            on any removal command failure, 3 tool error; --help stays a
            metadata exit).
@@ -846,21 +877,42 @@ _GATE_OPERAND_REMEDY_LINE = (
     "the primary checkout, then re-run gate-removal"
 )
 
+# The never-verifiable citations' remedy line (plan
+# 2026-10-19-gate-removal-closeout-accounting Task 1): a citation outside
+# the primary reviews home (an absolute citation always, a relative one
+# whose resolved home join escapes the home) is never satisfiable by
+# migrating staging records, so the attainable repair is correcting the
+# cited path in the plan header, never the migrate loop.
+_GATE_CITATION_REMEDY_LINE = (
+    "remedy: no migrate run can satisfy a citation outside the primary "
+    "reviews home; correct the cited path where it lives (the plan header "
+    "for header citations, re-pointed reviews-home-relative; the claims "
+    "file for claims entries; absolute citations are never verifiable), "
+    "then re-run gate-removal"
+)
+
 
 def _review_label_rest(plan_text: str) -> str:
     """The gate's own extraction: the joined post-label text of every
     Plan review record:/Plan review: label line in the plan's header
-    region, the block bounded below by the first markdown heading after
-    the title line, or extending to end of file when the plan carries no
-    post-title heading. Feeding only this text through the citation
-    classifier keeps the plan body and its fenced blocks unscanned: a
-    body or fenced label-shaped line never seeds the owned set."""
+    region, the block bounded below by the first post-title line whose
+    first character is ``#`` (the exact implemented boundary: a plain
+    first-character rule, not a general Markdown heading parse, so a
+    setext underline, an indented ATX line, or any other heading-shaped
+    line not starting with ``#`` stays inside the region while a bare
+    ``#hashtag`` line ends it), or extending to end of file when no
+    post-title line starts with ``#``. Feeding only this text through the
+    citation classifier keeps the plan body and its fenced blocks
+    unscanned: a body or fenced label-shaped line never seeds the owned
+    set."""
     rest: list[str] = []
     for index, line in enumerate(plan_text.splitlines()):
         if index and line.startswith("#"):
-            # The header region ends at the first markdown heading after
-            # the title line (the title itself is index 0 and cannot be a
-            # label line: the label regex requires the label at the start).
+            # The header region ends at the first post-title line whose
+            # first character is "#": index 0 is the title itself and
+            # cannot be a label line (the label regex requires the label
+            # at the start), and the boundary is a first-character rule,
+            # not a Markdown heading parse.
             break
         match = _REVIEW_LABEL_RE.match(line.strip())
         if match:
@@ -892,6 +944,35 @@ def _gate_refusal_text(token: str, candidate: Path, target: Path) -> str:
     return _gate_repo_rel(candidate, target, fallback)
 
 
+# The canonical <PLAN_SLUG> date prefix (the execute-plan session-slug rule,
+# agents/skills/execute-plan/SKILL.md Step 0.4): a leading YYYY-MM-DD- is
+# stripped from a dated plan file's stem, or from a dated charter
+# directory's name, so every producer and consumer keys the session
+# directory by the same slug.
+_PLAN_SLUG_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+_PLAN_CHARTER_BASENAME = "PLAN.md"
+
+
+def _plan_session_slug(plan_path: Path) -> str:
+    """The execute-plan session directory name (<PLAN_SLUG>, the canonical
+    rule in agents/skills/execute-plan/SKILL.md Step 0.4): a date-prefixed
+    plan file contributes the filename after removing the leading date and
+    the extension; the charter operand of a dated plan directory (PLAN.md
+    inside YYYY-MM-DD-<slug>/) contributes the directory name after
+    removing the leading date; undated forms keep the stem or directory
+    name. A bare PLAN stem is never the slug: the dated-directory charter
+    resolves to the date-stripped directory, the directory the execute-plan
+    transfer-out writes closeout-migration.json under."""
+    if plan_path.name == _PLAN_CHARTER_BASENAME:
+        parent = plan_path.parent.name
+        match = _PLAN_SLUG_DATE_PREFIX_RE.match(parent)
+        return parent[match.end():] if match else parent
+    stem = plan_path.stem
+    match = _PLAN_SLUG_DATE_PREFIX_RE.match(stem)
+    return stem[match.end():] if match else stem
+
+
 class _GateRemovalUsageParser(argparse.ArgumentParser):
     """Usage-error override scoped to the gate-removal subcommand: a usage
     violation is a tool error (exit 3) with the contract's final OUTCOME
@@ -920,8 +1001,18 @@ def _add_gate_removal_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--worktree",
-        required=True,
-        help="The worktree the sanctioned removal command removes.",
+        default=None,
+        help="The worktree the sanctioned removal command removes; "
+        "omit in branch-only mode (an explicit --branch with "
+        "--migration-manifest adjudicates a ref with no linked worktree).",
+    )
+    parser.add_argument(
+        "--branch",
+        default=None,
+        help="Branch-only mode: the ref to account for, with an explicit "
+        "--migration-manifest and no --worktree; binds the manifest "
+        "identity, checks artifacts, ancestry/exact-tree proof and no "
+        "linked worktree, and captures and rechecks one proven OID.",
     )
     parser.add_argument(
         "--claims",
@@ -1053,7 +1144,11 @@ def build_owned_files_clean_parser() -> argparse.ArgumentParser:
 def build_gate_removal_parser() -> argparse.ArgumentParser:
     """The gate-removal parser, built standalone so the legacy parser
     (build_parser) stays byte-unchanged and the usage-override class
-    applies to gate-removal runs only."""
+    applies to gate-removal runs only. Flat by construction (plan
+    2026-10-19-gate-removal-closeout-accounting Task 4): main consumes the
+    dispatch token before parsing, the parser carries only the gate's own
+    options, and the standalone help presents gate-removal exactly once
+    (the earlier nested shape printed the token twice in the usage line)."""
     parser = _GateRemovalUsageParser(
         prog="worktree_closeout_migrate.py gate-removal",
         description=(
@@ -1061,9 +1156,7 @@ def build_gate_removal_parser() -> argparse.ArgumentParser:
             "being present under the primary reviews home."
         ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    gate = subparsers.add_parser("gate-removal", help=parser.description)
-    _add_gate_removal_arguments(gate)
+    _add_gate_removal_arguments(parser)
     return parser
 
 
@@ -1071,8 +1164,39 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     """Fail-closed pre-removal gate: the records the executing plan's
     header cites (label lines only) plus any --claims paths must exist
     under the target's facts-resolved primary reviews home before the
-    worktree removal may run. OUTCOME_CONTRACT vocabulary: 0 pass, 1
-    fail, 3 tool error, one final OUTCOME: line per classified run."""
+    worktree removal may run. Branch accounting rides the pass: the gate
+    captures one proven branch OID, accounts content by ancestry or exact
+    tree, and reports the branch disposition beside the worktree cleanup
+    status. Branch-only mode (--branch with an explicit --migration-manifest,
+    no --worktree) adjudicates a ref with no linked worktree. OUTCOME_CONTRACT
+    vocabulary: 0 pass, 1 fail, 3 tool error, one final OUTCOME: line per
+    classified run."""
+    branch_only = bool(getattr(args, "branch", None))
+    explicit_manifest = getattr(args, "migration_manifest", None)
+    if branch_only and args.worktree:
+        print(
+            "gate-removal: --branch and --worktree are mutually exclusive: "
+            "branch-only accounting adjudicates a ref with no linked "
+            "worktree",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+    if branch_only and not explicit_manifest:
+        print(
+            "gate-removal: branch-only accounting requires an explicit "
+            "--migration-manifest holding the branch record",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+    if not branch_only and not args.worktree:
+        print(
+            "gate-removal: one of --worktree or --branch is required",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
     plan_path = Path(args.plan)
     if not plan_path.is_file():
         print(f"gate-removal: plan file not found: {plan_path}", file=sys.stderr)
@@ -1107,9 +1231,10 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     # leaves the only copy of every record inside the removed subtree; in
     # both shapes the gate would pass while the removal destroys the
     # records it just verified. Both refuse with the operand remedy,
-    # never the migrate remedy.
-    worktree_resolved = Path(args.worktree).resolve()
-    if (
+    # never the migrate remedy. Branch-only mode has no --worktree
+    # operand, so the worktree-shaped guards do not apply.
+    worktree_resolved = Path(args.worktree).resolve() if args.worktree else None
+    if worktree_resolved is not None and (
         worktree_resolved == target
         or _is_under(worktree_resolved, target)
         or _is_under(target, worktree_resolved)
@@ -1122,7 +1247,9 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         print(_GATE_OPERAND_REMEDY_LINE)
         print("OUTCOME: fail")
         return 1
-    if home == worktree_resolved or _is_under(home, worktree_resolved):
+    if worktree_resolved is not None and (
+        home == worktree_resolved or _is_under(home, worktree_resolved)
+    ):
         try:
             home_shape = home.relative_to(worktree_resolved).as_posix()
         except ValueError:
@@ -1136,6 +1263,30 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         print(_GATE_OPERAND_REMEDY_LINE)
         print("OUTCOME: fail")
         return 1
+    # Reverse containment (plan 2026-10-19-gate-removal-closeout-accounting
+    # Task 3): the worktree being removed resolves INSIDE the absolute
+    # external reviews home (with the two guards above passed, a worktree
+    # under the home cannot also sit under the target, so the home here is
+    # genuinely external). No harmful occurrence of this shape was ever
+    # witnessed, so the admission is warning-only: the lines below are
+    # read-only visibility and cannot refuse, change the outcome, or block
+    # the removal in any arm below; only the blocking guard above (the home
+    # anchoring inside the worktree, which would destroy the records' only
+    # copy) stays a refusal. Machinery-admission fields recorded in the
+    # output: expected catch frequency low (no witnessed catch),
+    # false-positive cost is relocation noise, review date 2027-01-19.
+    if worktree_resolved is not None and _is_under(worktree_resolved, home):
+        warn_shape = _gate_refusal_text(args.worktree, worktree_resolved, target)
+        print(
+            "warning: reverse containment: the --worktree resolves inside "
+            f"the reviews home: {warn_shape}"
+        )
+        print(
+            "warning: advisory only, removal proceeds: expected catch "
+            "frequency low (no witnessed harmful occurrence), "
+            "false-positive cost is relocation noise, review date "
+            "2027-01-19"
+        )
 
     claims_entries: list[str] = []
     if args.claims:
@@ -1285,7 +1436,7 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     # resolvable staging home takes no worktree-side probe, and a
     # .stats.json-suffixed entry verifies as itself and derives nothing.
     destroyed_siblings: list[str] = []
-    staging_home = _reviews_home(worktree_resolved)
+    staging_home = _reviews_home(worktree_resolved) if worktree_resolved else None
     if staging_home is not None:
         staging_home = staging_home.resolve()
         for verified_path, record_token in verified_records:
@@ -1318,22 +1469,84 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
                 "refused: claimed record's required stats sibling exists only "
                 f"in the worktree staging home: {entry}"
             )
-        print(_GATE_REMEDY_LINE)
+        # The remedy follows its class: missing records and destroyed
+        # siblings are closed by a migrate re-run (the migrate remedy);
+        # refused citations are never-verifiable and carry only the
+        # citation-correction remedy.
+        if missing or destroyed_siblings:
+            print(_GATE_REMEDY_LINE)
+        if refused_citations or refused_claims:
+            print(_GATE_CITATION_REMEDY_LINE)
         print("OUTCOME: fail")
         return 1
 
     print(f"verified {verified} owned record(s) present under the primary reviews home")
-    refusal, branch_lines = _gate_branch_closeout(
-        target, worktree_resolved, plan_path, getattr(args, "migration_manifest", None)
+    # The accounting basename: the completed-twin runner's --plan-identity
+    # names the original plans-root path, so the legacy changed-path scope
+    # probes the real plan basename instead of the temporary twin's.
+    identity = getattr(args, "plan_identity", None)
+    accounting_basename = Path(identity).name if identity else plan_path.name
+    refusal, branch_lines, disposition = _gate_branch_closeout(
+        target,
+        worktree_resolved,
+        plan_path,
+        explicit_manifest,
+        branch_only=branch_only,
+        expected_branch=getattr(args, "branch", None),
+        plan_basename=accounting_basename,
     )
+    if disposition is not None:
+        print(_branch_disposition_line(disposition))
     if refusal is not None:
-        print(f"refused: exact-branch identity mismatch: {refusal}")
+        print(f"refused: {refusal}")
         print(_GATE_REMEDY_LINE)
         print("OUTCOME: fail")
         return 1
     for line in branch_lines:
         print(line)
-    print(f"removal: git worktree remove --force {shlex.quote(args.worktree)}")
+    if branch_only:
+        # Nothing is removed in branch-only mode: a pass authorizes the
+        # operator closeout the branch lines above spell out, and a
+        # retained disposition (missing proof or any failed guard) fails
+        # the run so the ref stays retained for operator resolution. A
+        # skip shape (no manifest at the explicit path, no manifest at
+        # all, a manifest without a branch record, an unresolved recorded
+        # branch, a non-git target) returns no disposition at all: the
+        # branch went unadjudicated, so branch-only mode fails instead of
+        # passing without branch accounting (plan
+        # 2026-10-19-gate-removal-closeout-accounting Task 2: a pass
+        # requires an actual disposition binding the manifest identity
+        # and carrying the proof); the skip line above names the shape.
+        if disposition is None:
+            print(
+                "refused: branch-only closeout produced no branch "
+                "disposition; the skip line above names the legacy shape "
+                "and the branch ref stays retained for operator resolution"
+            )
+            print("OUTCOME: fail")
+            return 1
+        if disposition.get("status") == "retained":
+            print("OUTCOME: fail")
+            return 1
+        print("OUTCOME: pass")
+        return 0
+    if disposition is not None and disposition.get("removal_blocked"):
+        print(
+            "held: the branch disposition above names a failed guard; the "
+            "on-disk worktree stays retained with the ref for operator "
+            "resolution (cleanup is authorized only when the accounting and "
+            "identity/artifact checks pass)"
+        )
+        print("OUTCOME: fail")
+        return 1
+    if Path(args.worktree).exists():
+        print(f"removal: git worktree remove --force {shlex.quote(args.worktree)}")
+    else:
+        print(
+            f"removal: no on-disk worktree at {args.worktree} (stale "
+            "registration; only the sweep's scoped administrative drain "
+            "applies)"
+        )
     print("OUTCOME: pass")
     return 0
 
@@ -1341,17 +1554,20 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
 def _branch_landing_content_scope(
     target: Path, branch: str, plan_basename: str
 ) -> tuple[str, str]:
-    """The transfer-suitable destination-accounting proof for a branch whose
-    commits are not merge-reachable from HEAD (the squash-landing shape): the
-    landing's introduction commit is the archive twin's earliest add under
+    """The legacy changed-path content-scope proof for a branch whose
+    commits are not merge-reachable from HEAD (the squash-landing shape):
+    the landing's introduction commit is the archive twin's earliest add under
     the completed directory, every branch commit must predate it (no
     post-landing activity), and every changed path since the merge base must
     sit inside that introduction commit's touched set (a squash landing
     touches every file its branch touched; --no-renames keeps an archival
-    move's plans-root vintage in the set). Returns (verdict, evidence):
-    verdict "accounted" clears the branch; anything else is a preserve
-    reason, never a gate failure - an unaccounted branch is retained and
-    reported, exactly like Arm 6's pairing in the sweep chain."""
+    move's plans-root vintage in the set). ``branch`` may be the captured
+    proven OID, so the proof judges one immutable commit. Returns (verdict,
+    evidence): verdict "accounted" reports landed content as ACCOUNTING
+    EVIDENCE only (plan 2026-10-19-gate-removal-closeout-accounting Task 2:
+    it never permits deleting a non-ancestor branch); anything else is a
+    preserve reason, never a gate failure - an unaccounted branch is retained
+    and reported, exactly like Arm 6's pairing in the sweep chain."""
     adds: list[tuple[int, str]] = []
     intro = subprocess.run(
         [
@@ -1414,36 +1630,110 @@ def _branch_landing_content_scope(
     return "accounted", ""
 
 
+def _destination_history_trees(target: Path) -> tuple[set[str] | None, str]:
+    """The complete tree OID of every destination-history commit (reachable
+    from HEAD). Returns (trees, error): trees is None when the history walk
+    fails, carrying the git diagnostic."""
+    walk = subprocess.run(
+        ["git", "-C", str(target), "log", "--format=%T", "HEAD"],
+        capture_output=True, text=True,
+    )
+    if walk.returncode != 0:
+        return None, walk.stderr.strip()
+    return {line.strip() for line in walk.stdout.splitlines() if line.strip()}, ""
+
+
+def _capture_branch_oid(target: Path, branch: str) -> tuple[str | None, str]:
+    """One proven-tip capture: resolve the branch ref to its commit OID once.
+    Returns (oid, error); oid is None when the ref does not resolve."""
+    proc = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--verify", branch],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return None, proc.stderr.strip()
+    return proc.stdout.strip(), ""
+
+
+def _branch_disposition_line(disposition: dict) -> str:
+    """The machine-parseable branch-disposition line: one per adjudicated
+    branch, carrying the branch name, the content-accounting status, the
+    proven OID when captured, and the retention reasons. The sweep's twin
+    gate run parses this line to carry disposition and proven OID into its
+    own verdicts."""
+    oid = disposition.get("oid") or "unknown"
+    line = (
+        f"branch-disposition: branch={disposition['branch']} "
+        f"disposition={disposition['status']} oid={oid}"
+    )
+    reasons = disposition.get("reasons") or []
+    if reasons:
+        line += " reasons=" + "; ".join(reasons)
+    return line
+
+
 def _gate_branch_closeout(
     target: Path,
-    worktree_resolved: Path,
+    worktree_resolved: Path | None,
     plan_path: Path,
     explicit_manifest: str | None,
-) -> tuple[str | None, list[str]]:
-    """The exact-branch closeout adjudication behind the gate-removal pass:
-    the migrate manifest's ``branch`` record binds the worktree to its exact
-    source branch at transfer time, and the removal verifies the identity at
-    removal time (the worktree being removed is the one bound to that
-    branch, reusing ``_parse_worktree_entries``), then adjudicates the
-    branch itself: removable only when no other live worktree uses it, the
-    migrated artifacts verify under the target, and the intended work is
-    accounted for (landed, or inside the landing's file set); a branch with
-    unlanded or unclear ownership is preserved and reported, never silently
-    deleted.
+    branch_only: bool = False,
+    expected_branch: str | None = None,
+    plan_basename: str | None = None,
+) -> tuple[str | None, list[str], dict | None]:
+    """The exact-branch closeout adjudication behind the gate-removal pass
+    (plan 2026-10-19-gate-removal-closeout-accounting Task 2). The migrate
+    manifest's ``branch`` record binds the worktree to its exact source
+    branch at transfer time (worktree mode) or the ``--branch`` operand
+    (branch-only mode), then the branch itself is adjudicated: capture ONE
+    proven tip OID, judge content against that OID (ancestry, then
+    exact-tree, then the legacy changed-path scope as evidence only), run
+    the guard checks (live linked worktrees, migrated artifacts), and
+    re-compare the ref afterward: a ref that moved or turned unreadable
+    mid-check voids the accounting and refuses, so the branch and any
+    on-disk worktree stay for operator resolution.
 
-    Returns ``(refusal, report_lines)``: a non-empty refusal is an exact
-    identity mismatch (OUTCOME: fail, the removal must not run); report
-    lines are informational closeout verdicts that never block the records
-    gate's pass. Legacy shapes (no manifest, no branch record, a non-git
+    Content accounting: an ancestry-accounted tip (an ancestor of
+    destination history) is landed; a tip whose complete tree equals any
+    destination-history commit's tree is landed WITHOUT ancestry or an
+    archive twin, while the non-ancestor branch itself stays retained; the
+    legacy changed-path scope reports evidence only and never permits
+    deleting a non-ancestor branch.
+
+    Returns ``(refusal, report_lines, disposition)``: a non-empty refusal is
+    an identity mismatch or a ref anomaly (OUTCOME: fail, the removal must
+    not run); report lines are informational closeout verdicts that never
+    block the records gate's pass; the disposition dict carries
+    ``branch``, ``oid`` (or None), ``status`` (ancestry-accounted,
+    exact-tree-accounted, retained, unknown-ref, ref-changed, unbound) and
+    ``reasons``. Legacy shapes (no manifest, no branch record, a non-git
     target) skip with one named line: the sweep arm owns them."""
+    basename = plan_basename or plan_path.name
     if explicit_manifest:
+        # The explicit operand is authoritative: when it names an absent
+        # file the gate reports the distinct explicit-path skip and never
+        # falls back to the derived slug directory behind the caller's
+        # back (plan 2026-10-19-gate-removal-closeout-accounting Task 1).
         manifest_path = Path(explicit_manifest)
+        if not manifest_path.is_file():
+            return None, [
+                "branch-closeout: skipped (no migration manifest at the "
+                f"explicit --migration-manifest path {explicit_manifest}; "
+                "no fallback to the derived plan-slug directory)"
+            ], None
     else:
         # The canonical Phase 5 manifest name is closeout-migration.json
         # (the execute-plan transfer-out invocation's --manifest value);
         # migration-manifest.json is the legacy twin probed second so an
-        # older closeout's record still binds.
-        manifest_dir = _facts_tmp_root(target) / "execute-plan" / plan_path.stem
+        # older closeout's record still binds. The session directory is
+        # keyed by the canonical <PLAN_SLUG> (the execute-plan bootstrap
+        # rule): a dated plan file's leading date and extension are
+        # stripped, and a dated plan directory's PLAN.md charter operand
+        # resolves to the date-stripped directory name, so a dated plan's
+        # real manifest is found without an explicit override.
+        manifest_dir = (
+            _facts_tmp_root(target) / "execute-plan" / _plan_session_slug(plan_path)
+        )
         manifest_path = manifest_dir / "closeout-migration.json"
         if not manifest_path.is_file():
             manifest_path = manifest_dir / "migration-manifest.json"
@@ -1451,7 +1741,7 @@ def _gate_branch_closeout(
         return None, [
             "branch-closeout: skipped (no migration manifest found; the "
             "sweep arm owns legacy shapes)"
-        ]
+        ], None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -1461,13 +1751,14 @@ def _gate_branch_closeout(
             "repair or re-run the closeout migration to regenerate the "
             "manifest, then re-run gate-removal",
             [],
+            None,
         )
     records = manifest.get("branch") or []
     if not records or not isinstance(records, list):
         return None, [
             "branch-closeout: skipped (migration manifest carries no branch "
             "record; legacy shape)"
-        ]
+        ], None
     # Append semantics: repeated migrate runs extend the branch list, so the
     # LATEST transfer record is the authoritative binding.
     record = records[-1] if isinstance(records[-1], dict) else {}
@@ -1476,7 +1767,7 @@ def _gate_branch_closeout(
         return None, [
             "branch-closeout: skipped (recorded branch unresolved at "
             "transfer; legacy shape)"
-        ]
+        ], None
     probe = subprocess.run(
         ["git", "-C", str(target), "rev-parse", "--git-dir"],
         capture_output=True, text=True,
@@ -1485,43 +1776,77 @@ def _gate_branch_closeout(
         return None, [
             "branch-closeout: skipped (target is not a git checkout; the "
             "branch record cannot be verified here)"
-        ]
-    mine = None
-    for entry in _parse_worktree_entries(target):
-        try:
-            if Path(entry["path"]).resolve() == worktree_resolved:
-                mine = entry
-                break
-        except OSError:
-            continue
-    if mine is None:
-        return (
-            "the exact-branch record names this worktree but it is not a "
-            f"registered worktree of the target (recorded source: "
-            f"{record.get('source')})",
-            [],
-        )
-    actual = mine.get("branch")
-    if actual != recorded:
-        return (
-            f"the worktree being removed is bound to branch '{actual}', not "
-            f"the recorded source branch '{recorded}'",
-            [],
-        )
+        ], None
+
+    def _disposition(status: str, oid: str | None, reasons: list[str]) -> dict:
+        return {
+            "branch": recorded,
+            "oid": oid,
+            "status": status,
+            "reasons": list(reasons),
+        }
+
+    # Identity binding. Worktree mode: the worktree being removed must be a
+    # registered worktree of the target bound to the recorded branch.
+    # Branch-only mode: the explicit --branch operand must equal the
+    # recorded branch.
+    if branch_only:
+        if recorded != expected_branch:
+            refusal = (
+                f"exact-branch identity mismatch: the migration manifest "
+                f"binds branch '{recorded}', not the --branch operand "
+                f"'{expected_branch}'"
+            )
+            return refusal, [], _disposition("unbound", None, [refusal])
+    else:
+        mine = None
+        for entry in _parse_worktree_entries(target):
+            try:
+                if Path(entry["path"]).resolve() == worktree_resolved:
+                    mine = entry
+                    break
+            except OSError:
+                continue
+        if mine is None:
+            refusal = (
+                "exact-branch identity mismatch: the exact-branch record "
+                "names this worktree but it is not a registered worktree of "
+                f"the target (recorded source: {record.get('source')})"
+            )
+            return refusal, [], _disposition("unbound", None, [refusal])
+        actual = mine.get("branch")
+        if actual != recorded:
+            refusal = (
+                f"exact-branch identity mismatch: the worktree being "
+                f"removed is bound to branch '{actual}', not the recorded "
+                f"source branch '{recorded}'"
+            )
+            return refusal, [], _disposition("unbound", None, [refusal])
+
+    # Guard checks: live worktrees linked to the branch, and migrated
+    # artifacts verified under the target. A failed guard retains the branch
+    # and reports the reason; the records-verified removal decision stays
+    # separate from the branch disposition. A failed guard also blocks the
+    # worktree-mode removal authorization: cleanup is permitted only when
+    # the identity/artifact checks pass, so the on-disk worktree stays
+    # retained with the ref (plan 2026-10-19-gate-removal-closeout-
+    # accounting: missing proof, failed guard, or uncertainty retains both).
     reasons: list[str] = []
-    others: list[dict] = []
+    guard_failed = False
+    linked: list[str] = []
     for entry in _parse_worktree_entries(target):
         if entry.get("branch") != recorded:
             continue
         try:
-            if Path(entry["path"]).resolve() != worktree_resolved:
-                others.append(entry)
+            if branch_only or Path(entry["path"]).resolve() != worktree_resolved:
+                linked.append(entry["path"])
         except OSError:
             continue
-    if others:
+    if linked:
+        guard_failed = True
         reasons.append(
-            f"branch shared with {len(others)} live worktree(s): "
-            + ", ".join(entry["path"] for entry in others)
+            f"branch shared with {len(linked)} live worktree(s): "
+            + ", ".join(linked)
         )
     missing_dest = [
         entry.get("destination")
@@ -1533,53 +1858,145 @@ def _gate_branch_closeout(
         and not (target / entry["destination"]).exists()
     ]
     if missing_dest:
+        guard_failed = True
         reasons.append(
             "migrated artifact(s) missing under the target: "
             + ", ".join(missing_dest[:5])
         )
-    rev = subprocess.run(
-        ["git", "-C", str(target), "rev-list", recorded, "--not", "HEAD"],
+
+    # Capture ONE proven tip OID for the ancestry/tree checks.
+    proven_oid, capture_err = _capture_branch_oid(target, recorded)
+    if proven_oid is None:
+        refusal = (
+            f"branch ref unreadable: {recorded} does not resolve in the "
+            f"target repository ({capture_err}); the content accounting is "
+            "unknown: resolve the ref, then re-run gate-removal"
+        )
+        return refusal, [], _disposition(
+            "unknown-ref", None, reasons + ["branch ref unreadable at capture"]
+        )
+
+    # Content accounting against the CAPTURED OID only.
+    accounted: str | None = None
+    legacy_evidence: str | None = None
+    ancestry = subprocess.run(
+        ["git", "-C", str(target), "merge-base", "--is-ancestor", proven_oid, "HEAD"],
         capture_output=True, text=True,
     )
-    squash_accounted = False
-    if rev.returncode != 0:
-        reasons.append(
-            f"branch unresolvable in the target repository ({rev.stderr.strip()})"
-        )
-    elif rev.stdout.strip():
-        verdict, evidence = _branch_landing_content_scope(
-            target, recorded, plan_path.name
-        )
-        if verdict != "accounted":
-            reasons.append(evidence)
-        else:
-            squash_accounted = True
-    if reasons:
-        return None, [
-            "branch-closeout: preserve branch " + recorded
-            + " (" + "; ".join(reasons) + ")",
-            "branch: preserve " + recorded
-            + " and report it in the closeout record; delete only the worktree",
-        ]
-    if squash_accounted:
-        delete_line = (
-            "branch: after the worktree removal delete branch " + recorded
-            + " with git branch -D (the content-scope proof above verified "
-            "every branch commit sits inside the landing's file set; the "
-            "proof-checked force delete is the sweep Arm 6 shape, and plain "
-            "-d refuses a squash-landed branch)"
-        )
+    if ancestry.returncode == 0:
+        accounted = "ancestry-accounted"
     else:
-        delete_line = (
-            "branch: after the worktree removal delete branch " + recorded
-            + " with git branch -d (it must print deletable; never force)"
+        tree_run = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", f"{proven_oid}^{{tree}}"],
+            capture_output=True, text=True,
         )
+        if tree_run.returncode != 0:
+            guard_failed = True
+            reasons.append(
+                f"branch tip tree unresolvable ({tree_run.stderr.strip()})"
+            )
+        else:
+            tip_tree = tree_run.stdout.strip()
+            trees, walk_err = _destination_history_trees(target)
+            if trees is None:
+                guard_failed = True
+                reasons.append(
+                    f"destination-history tree probe failed ({walk_err})"
+                )
+            elif tip_tree in trees:
+                accounted = "exact-tree-accounted"
+        if accounted is None:
+            # Legacy changed-path scope: accounting evidence only. It can
+            # report landed content but never permits deleting a
+            # non-ancestor branch.
+            verdict, evidence = _branch_landing_content_scope(
+                target, proven_oid, basename
+            )
+            if verdict == "accounted":
+                legacy_evidence = (
+                    "changed-path scope: content landed inside the "
+                    "landing's file set (legacy evidence only)"
+                )
+            else:
+                reasons.append(
+                    "no ancestry or exact-tree proof; " + evidence
+                )
+    if legacy_evidence is not None:
+        reasons.insert(
+            0,
+            "no ancestry or exact-tree proof; the legacy changed-path scope "
+            "is accounting evidence only and never permits deleting a "
+            "non-ancestor branch",
+        )
+
+    # Re-compare the ref after the content and worktree checks: the proven
+    # OID must still be the ref's OID. A mismatch or an unreadable ref
+    # voids the accounting and retains the branch and any on-disk worktree
+    # for operator resolution.
+    recheck_oid, recheck_err = _capture_branch_oid(target, recorded)
+    if recheck_oid is None:
+        refusal = (
+            f"branch ref unreadable at the closeout recheck: {recorded} no "
+            f"longer resolves (proven OID {proven_oid}; {recheck_err}); the "
+            "accounting is void: resolve the ref state, then re-run "
+            "gate-removal"
+        )
+        return refusal, [], _disposition(
+            "unknown-ref",
+            proven_oid,
+            reasons + ["branch ref unreadable at recheck"],
+        )
+    if recheck_oid != proven_oid:
+        refusal = (
+            f"branch ref changed during the closeout checks: {recorded} "
+            f"moved from the proven OID {proven_oid} to {recheck_oid}; the "
+            "accounting is void: quiesce writers, resolve the ref, then "
+            "re-run gate-removal"
+        )
+        return refusal, [], _disposition(
+            "ref-changed",
+            proven_oid,
+            reasons + [f"ref moved to {recheck_oid} during checks"],
+        )
+
+    if reasons:
+        at = f" at {proven_oid}" if proven_oid else ""
+        lines = [
+            "branch-closeout: preserve branch " + recorded + at
+            + " (" + "; ".join(reasons) + ")",
+        ]
+        if legacy_evidence is not None:
+            lines.append(
+                "branch-closeout: " + recorded + ": " + legacy_evidence
+            )
+        lines.append(
+            "branch: preserve " + recorded
+            + " and report it in the closeout record; delete only the worktree"
+        )
+        disposition = _disposition("retained", proven_oid, reasons)
+        disposition["removal_blocked"] = guard_failed
+        return None, lines, disposition
+    if accounted == "exact-tree-accounted":
+        return None, [
+            f"branch-closeout: branch {recorded} exact-tree-accounted at "
+            f"{proven_oid} (the tip tree equals a destination-history "
+            "commit's tree; the non-ancestor branch is retained)",
+            f"branch: {recorded} content is landed by exact tree match; the "
+            "branch stays retained for automated paths, and the operator "
+            f"closeout may delete it at expected OID {proven_oid} only "
+            "after the documented quiesce-and-reconcile sequence while "
+            "writers stay stopped",
+        ], _disposition("exact-tree-accounted", proven_oid, [])
     return None, [
-        "branch-closeout: branch " + recorded + " removable (single live "
-        "worktree binds it; migrated artifacts verified under the target; "
-        "branch commits land-accounted)",
-        delete_line,
-    ]
+        f"branch-closeout: branch {recorded} ancestry-accounted at "
+        f"{proven_oid} (single live worktree binds it; migrated artifacts "
+        "verified under the target; the branch tip is an ancestor of "
+        "destination history)",
+        f"branch: operator closeout may delete branch {recorded} at "
+        f"expected OID {proven_oid} after the documented quiesce-and-"
+        "reconcile sequence (plain git branch -d must print deletable; "
+        "never force while a linked worktree remains)",
+    ], _disposition("ancestry-accounted", proven_oid, [])
 
 
 # ---------------------------------------------------------------------------
@@ -1998,15 +2415,76 @@ def _evaluate_candidate(target: Path, toplevel: str, cand: dict) -> tuple[str | 
     return None, {"basename": basename, "branch": cand["branch"], "stale": stale}
 
 
-def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str, list[str]]:
+def _candidate_migration_manifest(target: Path, basename: str) -> str | None:
+    """The candidate's slug-resolved migration manifest path (plan
+    2026-10-19-gate-removal-closeout-accounting Task 2): the completed
+    twin's temporary filename differs from the candidate's plan slug, so
+    the twin gate run cannot rely on the derived lookup; the sweep passes
+    the explicit --migration-manifest instead, resolving the candidate's
+    own <PLAN_SLUG> session directory and probing the canonical
+    closeout-migration.json name first, the legacy migration-manifest.json
+    name second. None when neither supported filename exists (the twin run
+    then reports the named legacy skip)."""
+    slug = _plan_session_slug(Path(basename))
+    manifest_dir = _facts_tmp_root(target) / "execute-plan" / slug
+    canonical = manifest_dir / "closeout-migration.json"
+    if canonical.is_file():
+        return str(canonical)
+    legacy = manifest_dir / "migration-manifest.json"
+    if legacy.is_file():
+        return str(legacy)
+    return None
+
+
+def _parse_branch_disposition(lines: list[str]) -> dict | None:
+    """Parse the gate child's branch-disposition line into the disposition
+    dict the sweep verdicts carry; None when the gate adjudicated no
+    branch (the legacy skip shapes)."""
+    for line in lines:
+        if not line.startswith("branch-disposition: "):
+            continue
+        body = line[len("branch-disposition: "):]
+        fields: dict[str, str] = {}
+        reasons: str | None = None
+        for chunk in body.split(" "):
+            key, sep, value = chunk.partition("=")
+            if sep:
+                fields[key] = value
+        reasons_part = body.split(" reasons=", 1)
+        if len(reasons_part) == 2:
+            reasons = reasons_part[1]
+        branch = fields.get("branch")
+        status = fields.get("disposition")
+        if not branch or not status:
+            return None
+        return {
+            "branch": branch,
+            "oid": None if fields.get("oid") in (None, "unknown") else fields["oid"],
+            "status": status,
+            "reasons": (
+                [part for part in reasons.split("; ") if part]
+                if reasons is not None
+                else []
+            ),
+        }
+    return None
+
+
+def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str, list[str], dict | None]:
     """Run the existing gate-removal verification over the completed twin's
-    bytes and return (class, evidence lines). The twin is read from the
-    target HEAD tree into a temp file under the target's facts-resolved tmp
-    directory, removed on every exit path, so membership and the gate key
-    the same landed bytes while the candidate's own copy stays outside the
-    trust boundary. The class is `pass`, `empty-owned-set`, or the gate's
-    own outcome otherwise (a run with no final OUTCOME line is tool_error
-    per the contract's no-line rule)."""
+    bytes and return (class, evidence lines, branch disposition). The twin
+    is read from the target HEAD tree into a temp file under the target's
+    facts-resolved tmp directory, removed on every exit path, so membership
+    and the gate key the same landed bytes while the candidate's own copy
+    stays outside the trust boundary. The candidate's slug-resolved
+    migration manifest rides beside --plan-identity (the temp twin's
+    filename differs from the candidate's plan slug, so the derived lookup
+    would miss the real manifest), and the gate's branch-disposition line
+    is parsed out so the sweep verdicts carry the content disposition and
+    the proven OID (plan 2026-10-19-gate-removal-closeout-accounting
+    Task 2). The class is `pass`, `empty-owned-set`, or the gate's own
+    outcome otherwise (a run with no final OUTCOME line is tool_error per
+    the contract's no-line rule)."""
     tmp_root = _facts_tmp_root(target)
     tmp_root.mkdir(parents=True, exist_ok=True)
     blob = _sweep_git(target, "cat-file", "blob", f"HEAD:{_COMPLETED_DIR}/{basename}")
@@ -2016,6 +2494,7 @@ def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str,
         )
     fd, tmp_name = tempfile.mkstemp(dir=tmp_root, prefix="sweep-twin-", suffix=".md")
     tmp_path = Path(tmp_name)
+    manifest = _candidate_migration_manifest(target, basename)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(blob.stdout.encode("utf-8"))
@@ -2026,6 +2505,7 @@ def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str,
                 "--plan-identity", f"{_PLANS_DIR}/{basename}",
                 "--target", str(target),
                 "--worktree", str(cand_path),
+                *(["--migration-manifest", manifest] if manifest else []),
             ],
             capture_output=True,
             text=True,
@@ -2047,11 +2527,12 @@ def _run_gate_on_twin(target: Path, basename: str, cand_path: str) -> tuple[str,
         outcome = lines[-1][len("OUTCOME: "):].strip()
     evidence = lines[:-1] if outcome is not None else lines
     evidence = evidence + err_lines
+    disposition = _parse_branch_disposition(evidence)
     if outcome == "pass":
-        return "pass", evidence
+        return "pass", evidence, disposition
     if outcome == "fail" and "empty owned set" in proc.stdout:
-        return "empty-owned-set", evidence
-    return (outcome if outcome in ("fail", "tool_error") else "tool_error"), evidence
+        return "empty-owned-set", evidence, disposition
+    return (outcome if outcome in ("fail", "tool_error") else "tool_error"), evidence, disposition
 
 
 def _admin_dir_for(common_dir: Path, cand_path: str) -> Path | None:
@@ -2141,33 +2622,25 @@ def _release_stale_registration(
 def _remove_candidate(
     target: Path, common_dir: Path, cand: dict, info: dict, enumerated_paths: list[str]
 ) -> str | None:
-    """Perform one candidate's release under --apply. Returns a deferral
-    reason (a stale release deferred on a foreign prunable registration) or
-    None on success; raises _RemovalFailure on any removal command failure.
-    An on-disk candidate releases through `git worktree remove --force`; a
-    stale registration releases through the scoped administrative-dir
-    removal; the branch deletes last in both kinds."""
+    """Perform one candidate's release under --apply (plan
+    2026-10-19-gate-removal-closeout-accounting Task 2): a STALE
+    registration releases through the scoped administrative-dir removal,
+    and that is all the sweep ever removes. An on-disk worktree, its
+    artifacts, and every branch ref stay operator-controlled: existing
+    locks do not exclude ordinary writers, so no release infers a worktree
+    or branch deletion from the gate's OUTCOME: pass. Returns a deferral
+    reason (a stale release deferred on a foreign prunable registration)
+    or None on success; raises _RemovalFailure on any release command
+    failure."""
     path = cand["path"]
-    branch = info["branch"]
-    if info["stale"]:
-        deferred = _release_stale_registration(target, common_dir, cand, enumerated_paths)
-        if deferred is not None:
-            return deferred
-    else:
-        proc = _sweep_git(target, "worktree", "remove", "--force", path)
-        if proc.returncode != 0:
-            detail = " ".join((proc.stderr.strip() or proc.stdout.strip()).split())
-            raise _RemovalFailure(f"removal failed: git worktree remove --force {path}: {detail}")
-        for entry in _parse_worktree_entries(target):
-            if Path(entry["path"]) == Path(path):
-                raise _RemovalFailure(
-                    "removal failed: the deregistration postcondition failed: "
-                    "the candidate is still registered"
-                )
-    proc = _sweep_git(target, "branch", "-D", branch)
-    if proc.returncode != 0:
-        detail = " ".join((proc.stderr.strip() or proc.stdout.strip()).split())
-        raise _RemovalFailure(f"removal failed: git branch -D {branch}: {detail}")
+    if not info["stale"]:
+        raise _RemovalFailure(
+            f"removal refused: {path} holds an on-disk worktree; the sweep "
+            "removes stale registrations only"
+        )
+    deferred = _release_stale_registration(target, common_dir, cand, enumerated_paths)
+    if deferred is not None:
+        return deferred
     return None
 
 
@@ -2341,12 +2814,34 @@ def _merge_lock_release(target: Path, exports: dict[str, str]) -> None:
         )
 
 
+def _sweep_branch_report_line(disposition: dict | None) -> str | None:
+    """The sweep's branch-disposition verdict line: names the branch, its
+    content-accounting disposition, the proven OID, and the retention
+    reasons; None when the gate adjudicated no branch (the legacy skip
+    shapes)."""
+    if disposition is None:
+        return None
+    oid = disposition.get("oid") or "unknown"
+    line = (
+        f"branch-report: branch {disposition['branch']}: disposition "
+        f"{disposition['status']} at {oid}"
+    )
+    reasons = disposition.get("reasons") or []
+    if reasons:
+        line += "; reasons: " + "; ".join(reasons)
+    return line
+
+
 def cmd_sweep(args: argparse.Namespace) -> int:
     """Mechanical ad-hoc worktree residue sweep. Report-only by default;
     --apply requires the invoking run's authentic hold of the target's done
-    lock before any enumeration and again before the first release. One
-    verdict line per candidate and one final OUTCOME: line: 0 pass, 1 fail
-    on any removal command failure, 3 tool error."""
+    lock before any enumeration and again before the first release. The
+    apply mode removes ONLY stale registrations with no on-disk directory:
+    on-disk worktrees, their artifacts, and every branch ref stay
+    operator-controlled (existing locks do not exclude ordinary writers),
+    never inferred from the gate's OUTCOME: pass. One verdict line per
+    candidate plus the branch-disposition lines, and one final OUTCOME:
+    line: 0 pass, 1 fail on any removal command failure, 3 tool error."""
     target = Path(args.target)
     if not target.is_dir():
         print(f"sweep: target directory not found: {target}", file=sys.stderr)
@@ -2371,7 +2866,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         for entry in entries
         if Path(entry["path"]) != Path(toplevel) and _is_adhoc_shape(entry["path"], toplevel)
     ]
-    removals: list[tuple[dict, dict]] = []
+    removals: list[tuple[dict, dict, dict | None]] = []
     removal_failed = False
     for cand in candidates:
         path = cand["path"]
@@ -2379,8 +2874,9 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             skip, info = _evaluate_candidate(target, toplevel, cand)
             gate_class: str | None = None
             evidence: list[str] = []
+            disposition: dict | None = None
             if skip is None:
-                gate_class, evidence = _run_gate_on_twin(target, info["basename"], path)
+                gate_class, evidence, disposition = _run_gate_on_twin(target, info["basename"], path)
         except _SweepToolError as exc:
             # Fold r1 F3: a poison candidate (a stale registration whose
             # branch ref no longer resolves, a plumbing failure under one
@@ -2397,11 +2893,42 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         if skip is not None:
             print(f"report {path}: {skip}")
             continue
-        if gate_class == "pass":
-            if args.apply:
-                removals.append((cand, info))
+        # A gate fail whose branch disposition is retained is the held
+        # removal shape in the gate's own worktree mode: for an on-disk
+        # candidate the sweep never removes anything in any mode, so the
+        # verdict stays the conservative operator-controlled retained
+        # report, with the gate's guard evidence prefixed for visibility.
+        retained_fail = (
+            gate_class == "fail"
+            and disposition is not None
+            and disposition.get("status") == "retained"
+        )
+        if gate_class == "pass" or (retained_fail and not info["stale"]):
+            branch_line = _sweep_branch_report_line(disposition)
+            if info["stale"]:
+                if args.apply:
+                    removals.append((cand, info, disposition))
+                else:
+                    print(
+                        f"report {path}: stale registration drain eligible "
+                        "(report-only mode; re-run with --apply)"
+                    )
             else:
-                print(f"report {path}: removal eligible (report-only mode; re-run with --apply)")
+                # On-disk candidates are never removed, in either mode:
+                # the worktree, its artifacts, and the branch ref stay
+                # operator-controlled (existing locks do not exclude
+                # ordinary writers), and the branch disposition above
+                # carries the content accounting.
+                print(
+                    f"report {path}: operator-controlled worktree retained "
+                    "(on-disk worktree and artifacts preserved; branch refs "
+                    "are never removed by the sweep)"
+                )
+            if retained_fail:
+                for line in evidence:
+                    print(f"gate: {line}")
+            if branch_line:
+                print(branch_line)
         elif gate_class == "empty-owned-set":
             print(f"report {path}: no owned review citations")
         else:
@@ -2424,7 +2951,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             print("OUTCOME: tool_error")
             return 3
         try:
-            for cand, info in removals:
+            for cand, info, disposition in removals:
                 path = cand["path"]
                 try:
                     deferred = _remove_candidate(target, common_dir, cand, info, enumerated_paths)
@@ -2436,6 +2963,18 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                     print(f"report {path}: {deferred}")
                     continue
                 print(f"remove {path}")
+                if disposition is not None:
+                    oid = disposition.get("oid") or "unknown"
+                    print(
+                        f"registration: drained {path} (stale registration "
+                        f"only; branch {disposition['branch']} ref preserved, "
+                        f"disposition {disposition['status']} at {oid})"
+                    )
+                else:
+                    print(
+                        f"registration: drained {path} (stale registration "
+                        "only; branch refs are never removed by the sweep)"
+                    )
         finally:
             _merge_lock_release(target, exports)
     print("OUTCOME: fail" if removal_failed else "OUTCOME: pass")
@@ -2534,12 +3073,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     tokens = sys.argv[1:] if argv is None else list(argv)
     if tokens and tokens[0] == "gate-removal":
-        # Routed before the legacy parser: gate-removal parses through the
+        # Routed before the legacy parser, which consumes the dispatch
+        # token itself (plan 2026-10-19-gate-removal-closeout-accounting
+        # Task 4): the remaining tokens parse through the flat
         # usage-override parser (usage violations exit 3 with the final
         # OUTCOME line), and an unexpected failure is caught to the same
         # class so every classified run ends with exactly one final
         # OUTCOME: line; the legacy subcommands keep their argparse exits.
-        args = build_gate_removal_parser().parse_args(tokens)
+        args = build_gate_removal_parser().parse_args(tokens[1:])
         try:
             return args.func(args)
         except Exception as exc:  # unexpected failure: the tool-error class

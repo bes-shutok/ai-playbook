@@ -666,6 +666,120 @@ class PlanFilesCoverageTest(unittest.TestCase):
             )
         )
 
+    def test_declared_script_quoted_as_command_silent(self):
+        # The regression arm: the matcher reads the span as a command line
+        # and compares its leading path token. The witnessed shape (the
+        # interpreter word plus a redirection suffix over a declared
+        # script) is silent; every pinned vocabulary word strips in the
+        # bare prefixed shape; the unprefixed suffixed shape goes silent
+        # by the same leading-token match.
+        for item in (
+            "Run `bash scripts/foo.sh > /tmp/capture.txt 2>&1`",
+            "Run `bash scripts/foo.sh`",
+            "Run `sh scripts/foo.sh`",
+            "Run `zsh scripts/foo.sh`",
+            "Run `python3 scripts/foo.sh`",
+            "Run `python scripts/foo.sh`",
+            "Run `scripts/foo.sh > /tmp/capture.txt 2>&1`",
+        ):
+            with self.subTest(item=item):
+                self._assert_silent_both_entries(
+                    _coverage_plan_text(
+                        _coverage_task(
+                            "Task 1: Do the thing",
+                            ["scripts/foo.sh"],
+                            [item],
+                        )
+                    )
+                )
+
+    def test_undeclared_leading_path_warns_in_all_shapes(self):
+        # The preserved-warning arm: a genuinely undeclared leading path
+        # still warns through the existing loud template, the warning
+        # naming the stripped leading token, in the bare, prefixed, and
+        # suffixed shapes; the exit contract is unchanged.
+        for item in (
+            "Update `src/other.py` now",
+            "Run `bash src/other.py` now",
+            "Run `bash src/other.py > /tmp/x 2>&1` now",
+        ):
+            with self.subTest(item=item):
+                plan = self._write_fixture(
+                    _coverage_plan_text(
+                        _coverage_task(
+                            "Task 1: Do the thing",
+                            ["src/module.py"],
+                            [item],
+                        )
+                    )
+                )
+                for argv in (["--pre-round", str(plan)], [str(plan)]):
+                    rc, out, err = self._run_main(argv)
+                    self.assertEqual(rc, 0, (out, err))
+                    lines = self._coverage_lines(err)
+                    self.assertEqual(len(lines), 1, err)
+                    self.assertIn("`src/other.py`", lines[0])
+                    self.assertIn(item, lines[0])
+                    self.assertIn("no task's Files: list declares it", lines[0])
+                    self.assertNotIn("FILES-COVERAGE", out)
+
+    def test_boundary_shapes_keep_whole_span_warning(self):
+        # Boundary arms that keep today's whole-span warning: words
+        # outside the pinned vocabulary (`timeout`, `env`) are never
+        # stripped; the `bash -c` flag shape has a non-path-shaped leading
+        # token and falls through to the whole span; an interior
+        # interpreter word is never stripped.
+        plan = self._write_fixture(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["scripts/foo.sh"],
+                    [
+                        "Run `timeout scripts/foo.sh`",
+                        "Run `env scripts/foo.sh`",
+                        "Run `bash -c scripts/foo.sh`",
+                        "Run `cat scripts/foo.sh | bash`",
+                        # Pinned first word plus an interior pinned word:
+                        # only the first word is stripped, so this keeps
+                        # the whole-span warning (kills a strip-anywhere
+                        # mutation).
+                        "Run `bash sh scripts/foo.sh`",
+                    ],
+                )
+            )
+        )
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            lines = self._coverage_lines(err)
+            self.assertEqual(len(lines), 5, err)
+            for token in (
+                "`timeout scripts/foo.sh`",
+                "`env scripts/foo.sh`",
+                "`bash -c scripts/foo.sh`",
+                "`cat scripts/foo.sh | bash`",
+                "`bash sh scripts/foo.sh`",
+            ):
+                self.assertTrue(
+                    any(token in line for line in lines),
+                    (token, lines),
+                )
+            self.assertNotIn("FILES-COVERAGE", out)
+
+    def test_scheme_bearing_token_behind_interpreter_word_silent(self):
+        # The scheme exclusion also ends the read behind a pinned
+        # interpreter word: a remote script quoted as a command stays
+        # silent, with no fall-through to the whole span.
+        self._assert_silent_both_entries(
+            _coverage_plan_text(
+                _coverage_task(
+                    "Task 1: Do the thing",
+                    ["scripts/foo.sh"],
+                    ["Run `bash https://host/x.sh`"],
+                )
+            )
+        )
+
     def test_pre_round_failure_path_no_coverage_warnings(self):
         plan_text = (
             "# P\n\n"
@@ -3467,15 +3581,29 @@ def _graded_markdown(last_fix: str | None = None) -> str:
 
 
 class PlanReadinessGradedTest(unittest.TestCase):
-    """The five graded full-gate fixtures over scratch repos: the
-    typography re-bind passes, the honest clean shape passes with no
-    record, the same edit without the record keeps the stale reason, a row
-    claiming exempt over a word change takes the corrections classification
-    family, a bare digest rewrite refuses as an unwitnessed mutation, a
-    vacuous hop refuses naming its leg, and a moved seal anchor passes
-    undetected since the history-witness retirement; the
-    routing-order pin holds the caller dispatch, and the graded
-    indeterminate class maps to exit 2."""
+    """The graded full-gate fixtures over scratch repos: the typography
+    re-bind passes, the honest clean shape passes with no record, the same
+    edit without the record keeps the stale reason, a row claiming exempt
+    over a word change takes the corrections classification family, a bare
+    digest rewrite refuses as an unwitnessed mutation, a vacuous hop
+    refuses naming its leg, and a moved seal anchor passes undetected
+    since the history-witness retirement; the routing-order pin holds the
+    caller dispatch, and the graded indeterminate class maps to exit 2.
+    The squash-orphaned-anchor and verification-head twins
+    (certification-seal-landing-survival plan, Task 1) run beside them:
+    parentless seal anchors pass the gate on byte identity and refuse
+    without it, an explicit --verification-head pins the checks while the
+    plan and seal stay source-worktree reads, omission keeps the
+    repository HEAD, invalid values are tool errors before verification,
+    the runner clears inherited GIT_* overrides around every call, and
+    the producer grammar example loads."""
+
+    # The inherited Git repository overrides the controlled runner clears
+    # for the duration of each gate call and restores afterwards.
+    GIT_OVERRIDE_NAMES = (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+    )
 
     def _graded_fixture(
         self,
@@ -3578,20 +3706,34 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self.assertEqual(len(rows), 1, proc.stdout)
         return json.loads(rows[0])
 
-    def _run_gate(self, fx: GradedFixture):
+    def _run_gate(self, fx: GradedFixture, extra_args: list[str] | None = None):
         """The full readiness gate pointed at the fixture through its
         resolved repository root (the facts block resolves against the
-        scratch repo the process cwd lands in)."""
+        scratch repo the process cwd lands in). The controlled Git
+        environment: inherited GIT_* repository overrides are cleared for
+        the duration of the call and the prior environment is restored
+        after it, so an inherited override cannot redirect the fixture
+        away from its scratch repository."""
         out, err = io.StringIO(), io.StringIO()
         prev = os.getcwd()
-        os.chdir(fx.repo.root)
+        saved = {name: os.environ.get(name)
+                 for name in self.GIT_OVERRIDE_NAMES}
+        for name in self.GIT_OVERRIDE_NAMES:
+            os.environ.pop(name, None)
         try:
+            os.chdir(fx.repo.root)
             with contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(err):
                 rc = plan_readiness.main(
                     [str(fx.plans_dir / _GRADED_PLAN_NAME)]
+                    + list(extra_args or [])
                 )
         finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
             os.chdir(prev)
         return rc, out.getvalue(), err.getvalue()
 
@@ -3768,6 +3910,577 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self.assertIn("sidecar source_digest is stale", stale)
         self.assertIn("r3", stale)
         self.assertNotIn(cr.MARKER_PREFIX, stale)
+
+    # ------------------------------------------------------------------
+    # Squash-orphaned anchors and the explicit verification head
+    # (certification-seal-landing-survival plan, Task 1).
+    # ------------------------------------------------------------------
+
+    def _rewrite_seal_orphan_anchors(self, fx: GradedFixture,
+                                     start_digest: str):
+        """Rewrite the fixture's round-1 seal entry with both anchor
+        fields as distinct parentless commits minted from HEAD's tree
+        (the squash-landing orphan shape); the seal is a working-tree
+        write over the committed one."""
+        head_tree = fx.repo.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        orphan_a = fx.repo.git("commit-tree", head_tree, "-m",
+                               "orphan a").stdout.strip()
+        orphan_b = fx.repo.git("commit-tree", head_tree, "-m",
+                               "orphan b").stdout.strip()
+        self.assertNotEqual(orphan_a, orphan_b)
+        fx.repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % orphan_a,
+                "round_start_digest: %s" % start_digest,
+                "round_close_commit: %s" % orphan_b,
+            ]) + "\n")
+        return orphan_a, orphan_b
+
+    def test_squash_orphaned_seal_anchors_pass_the_gate(self):
+        fx = self._graded_fixture()
+        row = self._mint_row(fx)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1))
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(),
+        )
+        self._rewrite_seal_orphan_anchors(fx, cr.sha256_hex(_GRADED_D1))
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+
+    def test_squash_orphaned_seal_without_byte_identity_refuses(self):
+        fx = self._graded_fixture()
+        row = self._mint_row(fx)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1))
+            | {"extensions": {"corrections": [row]}},
+            _graded_markdown(),
+        )
+        self._rewrite_seal_orphan_anchors(
+            fx, cr.sha256_hex(b"no first-parent commit carries these "
+                              b"plan bytes\n"))
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("OUTCOME: fail", out)
+        self.assertIn("anchor leg refused", err)
+        self.assertIn("no first-parent ancestor", err)
+
+    def test_readiness_fixture_clears_git_overrides(self):
+        fx = self._graded_fixture(hop_bytes=None)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1)),
+            _graded_markdown(),
+        )
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        # An inherited repository override cannot redirect the fixture
+        # away from its scratch repository: the controlled runner clears
+        # the override for the call and restores the environment after it.
+        foreign = cr.build_scratch_repo(self, name="foreign-override-repo")
+        os.environ["GIT_DIR"] = str(foreign.root / ".git")
+        try:
+            rc, out, err = self._run_gate(fx)
+            self.assertEqual(rc, 0, (out, err))
+            self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        finally:
+            os.environ.pop("GIT_DIR", None)
+        # The injection is real: an uncleared override redirects the gate
+        # away from the scratch repository (its facts block never
+        # resolves there).
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.environ["GIT_DIR"] = str(foreign.root / ".git")
+        os.chdir(fx.repo.root)
+        try:
+            with contextlib.redirect_stdout(out_buf), \
+                    contextlib.redirect_stderr(err_buf):
+                rc_raw = plan_readiness.main(
+                    [str(fx.plans_dir / _GRADED_PLAN_NAME)])
+        finally:
+            os.environ.pop("GIT_DIR", None)
+            os.chdir(prev)
+        self.assertNotEqual(rc_raw, 0)
+
+    def test_explicit_verification_head_differs_from_worktree_head(self):
+        repo = cr.build_scratch_repo(self)
+        plans_dir = repo.root / "docs" / "history" / "plans"
+        reviews_dir = repo.root / ".ai-playbook" / "reviews"
+        plans_dir.mkdir(parents=True)
+        reviews_dir.mkdir(parents=True)
+        (repo.root / ".ai-playbook").mkdir(exist_ok=True)
+        (repo.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8")
+        start = repo.commit_file(_GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = repo.commit_allow_empty("round 1 close")
+        hop = repo.commit_file(_GRADED_PLAN_REL, _GRADED_D2,
+                               "apply the correction")
+        # The repository HEAD moves to a parentless commit whose tree no
+        # longer carries the sealed bytes; the untracked seal below lives
+        # only in the source worktree (the hop commit already happened,
+        # so the seal is never staged).
+        floating_tree = repo.git(
+            "rev-parse", "%s^{tree}" % hop).stdout.strip()
+        floating = repo.git(
+            "commit-tree", floating_tree, "-m",
+            "floating worktree head").stdout.strip()
+        repo.git("update-ref", "HEAD", floating)
+        repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % start,
+                "round_start_digest: %s" % cr.sha256_hex(_GRADED_D1),
+                "round_close_commit: %s" % close,
+            ]) + "\n")
+        repo.write_file(_GRADED_PLAN_REL, _GRADED_D1)
+        landing_tree = repo.git(
+            "rev-parse", "%s^{tree}" % start).stdout.strip()
+        landing = repo.git(
+            "commit-tree", landing_tree, "-m",
+            "squash landing").stdout.strip()
+        fx = GradedFixture(repo=repo, plans_dir=plans_dir,
+                           reviews_dir=reviews_dir, start=start,
+                           close=close, hop=hop)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1)),
+            _graded_markdown(),
+        )
+        # The pinned landing OID carries the sealed plan bytes, so every
+        # HEAD-dependent corrections check passes against it while the
+        # plan and the untracked seal stay source-worktree reads.
+        rc, out, err = self._run_gate(
+            fx, ["--verification-head", landing])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        # The repository's own HEAD cannot verify the same seal: the
+        # orphaned anchors are unreachable there and no first-parent
+        # ancestor carries the sealed bytes.
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("anchor leg refused", err)
+        self.assertIn("no first-parent ancestor", err)
+
+    def test_omitting_verification_head_keeps_worktree_head_behavior(self):
+        fx = self._graded_fixture()
+        row = self._mint_row(fx)
+        payload = (_graded_payload(cr.sha256_hex(_GRADED_D1))
+                   | {"extensions": {"corrections": [row]}})
+        self._write_round(fx, payload, _graded_markdown())
+        rc, out, err = self._run_gate(fx)
+        self.assertEqual(rc, 0, (out, err))
+        rc_explicit, out_explicit, err_explicit = self._run_gate(
+            fx, ["--verification-head", fx.repo.head()])
+        self.assertEqual(rc_explicit, 0, (out_explicit, err_explicit))
+        self.assertEqual(out_explicit, out)
+
+    def test_verification_head_rejects_invalid_values(self):
+        fx = self._graded_fixture(hop_bytes=None)
+        self._write_round(
+            fx,
+            _graded_payload(cr.sha256_hex(_GRADED_D1)),
+            _graded_markdown(),
+        )
+        for bad in (fx.start[:10], "not-a-commit", "b" * 40):
+            rc, out, err = self._run_gate(
+                fx, ["--verification-head", bad])
+            self.assertEqual(rc, 3, (out, err, bad))
+            self.assertIn("OUTCOME: tool_error", out)
+            self.assertIn("--verification-head", err)
+
+    def test_seal_example_loads(self):
+        skill_path = (
+            Path(plan_readiness.__file__).resolve().parent.parent
+            / "agents" / "skills" / "review-plan" / "SKILL.md"
+        )
+        try:
+            text = skill_path.read_text(encoding="utf-8")
+        except OSError:
+            self.skipTest(
+                "review-plan/SKILL.md is not readable beside this checkout")
+        blocks = re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL)
+        examples = [
+            block for block in blocks
+            if block.splitlines() and block.splitlines()[0] == "## round 1"
+        ]
+        if not examples:
+            # Task 3 lands the plan-family example; until then the suite
+            # stays green with the pending-state skip.
+            self.skipTest(
+                "the plan-family seal grammar example is not in "
+                "review-plan/SKILL.md yet (plan Task 3 owns it)")
+        entries = cr.parse_seal(examples[0])
+        self.assertEqual(len(entries), 1)
+        artifact = entries[0].fields["artifact"]
+        repo = cr.build_scratch_repo(self)
+        rel = cr.seal_relpath(artifact)
+        repo.write_file(rel, examples[0])
+        entry = cr.load_seal_entry(repo.root, rel, 1, cr.FAMILY_PLAN)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.fields["artifact"], artifact)
+
+
+# --------------------------------------------------------------------------- #
+# Operator-acked readiness (corrections-chain-operator-ack plan, Task 2):
+# the primary-state authorization witness threads through direct plan
+# readiness, the same object staging validation resolves.
+# --------------------------------------------------------------------------- #
+
+_ACK_AUTHOR = "sess-author-readiness"
+_ACK_WRITER = "sess-writer-operator"
+_ACK_DIRECTIVE = "accept the unclassified readiness re-bind"
+_ACK_GAP_REL = "docs/history/backlog/2026-10-18-readiness-ack-gap.md"
+_ACK_STATE_RELPATH = ".ai-playbook/scheduler-state.json"
+_ACK_STATE_SELECTOR = "%s#correction_authorizations" % _ACK_STATE_RELPATH
+
+
+def _acked_row(hop: str, before_digest: str, after_digest: str) -> dict:
+    """A hand-composed operator-acked plan-family row: the receipt names
+    the fixed state selector and the row carries the authoring session's
+    identity (Task 3 owns deriving it in the producer CLI; the readiness
+    fixtures compose the row directly, as the smuggled-row arm does)."""
+    return {
+        "kind": cr.KIND_OPERATOR_ACKED,
+        "before_digest": before_digest,
+        "after_digest": after_digest,
+        "evidence_commit": hop,
+        "hunks": [{"header": "@@ -7 +7 @@",
+                   "digest": cr.sha256_hex(b"ack-hunk-bytes")}],
+        "recorded_at": "2026-10-18T00:00:00Z",
+        "recorded_by": "plan_delta_classifier",
+        "receipt": {
+            "directive": _ACK_DIRECTIVE,
+            "authorization_witness": _ACK_STATE_SELECTOR,
+            "classifier_gap_row": _ACK_GAP_REL,
+        },
+        "author_session_id": _ACK_AUTHOR,
+    }
+
+
+def _ack_entry(row: dict, **overrides) -> dict:
+    """The correction_authorizations entry binding the row digest and the
+    exact row subject, written by a distinct operator-ack session."""
+    entry = {
+        "row_digest": cr.correction_row_digest(row),
+        "writer_session_id": _ACK_WRITER,
+        "operator_direction": row["receipt"]["directive"],
+        "recorded_at": row["recorded_at"],
+        "author_session_id": row["author_session_id"],
+        "artifact_path": _GRADED_PLAN_REL,
+        "before_digest": row["before_digest"],
+        "after_digest": row["after_digest"],
+        "evidence_commit": row["evidence_commit"],
+        "hunk_digests": [h["digest"] for h in row["hunks"]],
+    }
+    entry.update(overrides)
+    return entry
+
+
+class PlanReadinessOperatorAckTest(unittest.TestCase):
+    """Task 2 readiness arms over hermetic scratch repos: a valid
+    distinct-session authorization rides direct readiness to the same
+    terminal digest the staging validator accepts; missing, duplicate,
+    mismatched, same-session-writer, empty-writer, and malformed state
+    refuse through the named receipt legs; the scheduled shape (no state
+    file, no writer invocation) refuses through the missing-witness leg;
+    from a secondary worktree the primary checkout's entry wins over a
+    local decoy in both directions; and an unclassified change without a
+    valid ack keeps the fresh-review path."""
+
+    def _fixture(self):
+        """D1 seed, round-close commit, seal entry, then the unclassified
+        D3 hop plus the committed classifier-gap row; returns (repo, row)
+        with the operator-acked row bound to the real hop bytes."""
+        repo = cr.build_scratch_repo(self)
+        plans_dir = repo.root / "docs" / "history" / "plans"
+        reviews_dir = repo.root / ".ai-playbook" / "reviews"
+        plans_dir.mkdir(parents=True)
+        reviews_dir.mkdir(parents=True)
+        (repo.root / ".ai-playbook").mkdir(exist_ok=True)
+        (repo.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8"
+        )
+        start = repo.commit_file(_GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = repo.commit_allow_empty("round 1 close")
+        repo.append_seal_entry(
+            _GRADED_SLUG, 1, _GRADED_PLAN_REL, start,
+            cr.sha256_hex(_GRADED_D1), close,
+        )
+        hop = repo.commit_file(
+            _GRADED_PLAN_REL, _GRADED_D3, "unclassified fix"
+        )
+        row = _acked_row(
+            hop, cr.sha256_hex(_GRADED_D1), cr.sha256_hex(_GRADED_D3)
+        )
+        repo.write_file(
+            _ACK_GAP_REL,
+            "# classifier gap\n\nhunk digest %s\n"
+            % row["hunks"][0]["digest"],
+        )
+        repo.commit_all("file the ack gap row")
+        return repo, row
+
+    def _write_state(self, repo_root: Path, entries, raw: str | None = None):
+        state_dir = repo_root / ".ai-playbook"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / "scheduler-state.json"
+        if raw is not None:
+            path.write_text(raw, encoding="utf-8")
+        else:
+            path.write_text(
+                json.dumps({"correction_authorizations": entries}),
+                encoding="utf-8",
+            )
+        return path
+
+    def _write_round(self, repo_root: Path, row: dict):
+        reviews_dir = repo_root / ".ai-playbook" / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        review = reviews_dir / (
+            "%s-plan-review-%s-r1.md" % (_GRADED_DATE, _GRADED_SLUG)
+        )
+        markdown = _graded_markdown()
+        if "- URL or Artifact:" not in markdown:
+            markdown = markdown.replace(
+                "## Metadata\n",
+                "## Metadata\n- URL or Artifact: %s\n" % _GRADED_PLAN_REL,
+                1,
+            )
+        review.write_text(markdown, encoding="utf-8")
+        review.with_suffix(".stats.json").write_text(
+            json.dumps(
+                _graded_payload(cr.sha256_hex(_GRADED_D1))
+                | {"extensions": {"corrections": [row]}}
+            ),
+            encoding="utf-8",
+        )
+
+    def _run_gate(self, cwd: Path, plan_path: Path):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(cwd)
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = plan_readiness.main([str(plan_path)])
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _armed(self, entries=None, raw: str | None = None,
+               repo_root: Path | None = None):
+        repo, row = self._fixture()
+        root = repo.root if repo_root is None else repo_root
+        self._write_state(root, entries or [], raw=raw)
+        self._write_round(root, row)
+        return repo, row
+
+    def test_valid_authorization_passes_readiness(self):
+        # The unique matching entry from a distinct operator-ack session
+        # rides direct readiness to the same terminal digest: the
+        # unclassified hop passes only through the verified authorization.
+        repo, row = self._armed()
+        self._write_state(repo.root, [_ack_entry(row)])
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+
+    def test_missing_authorization_refuses(self):
+        # The two no-entry file shapes: an empty array and an absent
+        # member both read as no authorization ever recorded.
+        for payload in ({"correction_authorizations": []}, {"other": 1}):
+            repo, _row = self._armed()
+            (repo.root / _ACK_STATE_RELPATH).write_text(json.dumps(payload))
+            rc, out, err = self._run_gate(
+                repo.root, repo.root / _GRADED_PLAN_REL)
+            self.assertEqual(rc, 1, (out, err))
+            self.assertIn(cr.MARKER_PREFIX, err)
+            self.assertIn("no correction_authorizations entry", err)
+
+    def test_scheduled_shape_refuses_through_the_missing_witness_leg(self):
+        # Scheduled maintenance never invokes the writer and records no
+        # authorization: with no scheduler state file at all, readiness
+        # refuses naming the unresolvable witness.
+        repo, _row = self._armed(entries=[])
+        (repo.root / _ACK_STATE_RELPATH).unlink()
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("unresolvable witness", err)
+
+    def test_duplicate_authorization_refuses(self):
+        repo, row = self._armed()
+        self._write_state(repo.root, [_ack_entry(row), _ack_entry(row)])
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("non-unique", err)
+
+    def test_same_session_writer_refuses(self):
+        repo, row = self._armed()
+        self._write_state(repo.root, [_ack_entry(
+            row, writer_session_id=_ACK_AUTHOR)])
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("written by the recording session", err)
+
+    def test_empty_writer_identity_refuses(self):
+        repo, row = self._armed()
+        self._write_state(repo.root, [_ack_entry(
+            row, writer_session_id="   ")])
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("malformed correction_authorizations entry", err)
+
+    def test_mismatched_authorization_refuses(self):
+        repo, row = self._armed()
+        self._write_state(repo.root, [_ack_entry(
+            row, after_digest="f" * 64)])
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("subject mismatch", err)
+
+    def test_malformed_primary_state_refuses(self):
+        repo, _row = self._armed(raw="not json {")
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("not decodable JSON", err)
+
+    def test_review_boundary_unclassified_without_valid_ack_stays_refused(
+            self):
+        # The unclassified hop with no valid authorization keeps the fresh
+        # review path: readiness refuses and never passes through the new
+        # wiring. A wrong-digest entry is equally refused.
+        repo, row = self._armed(entries=[])
+        (repo.root / _ACK_STATE_RELPATH).unlink()
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("receipt leg refused", err)
+        repo2, row2 = self._armed()
+        self._write_state(
+            repo2.root, [_ack_entry(row2, row_digest="a" * 64)])
+        rc2, _out2, err2 = self._run_gate(
+            repo2.root, repo2.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc2, 1, (_out2, err2))
+        self.assertIn("no correction_authorizations entry", err2)
+
+    def test_primary_state_shadow_prefers_the_primary_checkout(self):
+        # From a secondary worktree: the primary checkout's matching entry
+        # wins over a conflicting local decoy (pass); invalid or absent
+        # primary state plus a valid local decoy refuses.
+        repo, row = self._fixture()
+        parent = Path(tempfile.mkdtemp(prefix="ack-shadow-"))
+        self.addCleanup(shutil.rmtree, parent, True)
+        secondary = parent / "secondary"
+        repo.git("worktree", "add", str(secondary), "-b", "ack-shadow-side")
+        # Direction 1: matching primary entry, conflicting local decoy.
+        # The decoy carries the SAME row digest under a different writer
+        # identity: an array-union regression would surface as the
+        # non-unique refusal, so the pass proves the primary array alone
+        # was selected.
+        self._write_state(repo.root, [_ack_entry(row)])
+        self._write_state(secondary, [_ack_entry(
+            row, writer_session_id="sess-decoy-writer")])
+        self._write_round(secondary, row)
+        rc, out, err = self._run_gate(secondary, secondary / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        # Direction 2a: undecodable primary state, valid local decoy.
+        self._write_state(repo.root, None, raw="{not json")
+        self._write_state(secondary, [_ack_entry(row)])
+        rc, out, err = self._run_gate(secondary, secondary / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("not decodable JSON", err)
+        # Direction 2b: absent primary state, valid local decoy.
+        (repo.root / _ACK_STATE_RELPATH).unlink()
+        rc, out, err = self._run_gate(secondary, secondary / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("unresolvable witness", err)
+
+    def _clean_fixture(self):
+        """The honest clean shape: D1 seed, round-close commit, seal
+        entry, and NO hop, so the declared digest equals both the
+        round-start digest and the current bytes with no corrections
+        record."""
+        repo = cr.build_scratch_repo(self)
+        plans_dir = repo.root / "docs" / "history" / "plans"
+        reviews_dir = repo.root / ".ai-playbook" / "reviews"
+        plans_dir.mkdir(parents=True)
+        reviews_dir.mkdir(parents=True)
+        (repo.root / ".ai-playbook").mkdir(exist_ok=True)
+        (repo.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8"
+        )
+        start = repo.commit_file(_GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = repo.commit_allow_empty("round 1 close")
+        repo.append_seal_entry(
+            _GRADED_SLUG, 1, _GRADED_PLAN_REL, start,
+            cr.sha256_hex(_GRADED_D1), close,
+        )
+        reviews_dir.joinpath(
+            "%s-plan-review-%s-r1.md" % (_GRADED_DATE, _GRADED_SLUG)
+        ).write_text(
+            _graded_markdown().replace(
+                "## Metadata\n",
+                "## Metadata\n- URL or Artifact: %s\n" % _GRADED_PLAN_REL,
+                1,
+            ),
+            encoding="utf-8",
+        )
+        reviews_dir.joinpath(
+            "%s-plan-review-%s-r1.stats.json" % (_GRADED_DATE, _GRADED_SLUG)
+        ).write_text(
+            json.dumps(_graded_payload(cr.sha256_hex(_GRADED_D1))),
+            encoding="utf-8",
+        )
+        return repo
+
+    def _stub_primary_resolution(self):
+        """Swap the graded arm's primary-checkout resolver for a plumbing
+        failure, restoring the original afterward."""
+        original = vrs._resolve_primary_checkout
+
+        def _failed(repo):
+            return None, "git worktree list --porcelain failed"
+
+        vrs._resolve_primary_checkout = _failed
+        self.addCleanup(setattr, vrs, "_resolve_primary_checkout", original)
+
+    def test_primary_resolution_failure_with_acked_row_is_indeterminate(
+            self):
+        # A plumbing failure over the primary-checkout resolution is
+        # fail-closed: with an operator-acked row in play the graded arm
+        # reports the indeterminate class naming the plumbing failure
+        # instead of guessing, and readiness maps it to exit 2.
+        repo, row = self._fixture()
+        self._write_state(repo.root, [_ack_entry(row)])
+        self._write_round(repo.root, row)
+        self._stub_primary_resolution()
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 2, (out, err))
+        self.assertTrue(
+            out.rstrip().endswith("OUTCOME: indeterminate"), out)
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("git plumbing failed", err)
+        self.assertIn("primary checkout", err)
+
+    def test_primary_resolution_failure_without_acked_row_is_inert(self):
+        # Without an operator-acked row nothing consults the primary
+        # checkout, so the same plumbing failure changes nothing: the
+        # clean shape still passes silently and never reports
+        # indeterminate.
+        repo = self._clean_fixture()
+        self._stub_primary_resolution()
+        rc, out, err = self._run_gate(repo.root, repo.root / _GRADED_PLAN_REL)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
 
 
 # --------------------------------------------------------------------------- #

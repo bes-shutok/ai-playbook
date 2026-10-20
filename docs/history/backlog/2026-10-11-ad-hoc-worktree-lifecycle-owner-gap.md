@@ -7,7 +7,7 @@
 - **Origin class:** observed temporary-worktree cleanup delay
 - **Class:** worktree lifecycle ownership gap
 - **Driving force:** reliability + operator time
-- **Cluster:** docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
 - **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same artifact class: a run's worktree and claim outliving their session; investigate 2026-10-20 roster)
 - **Skill/step:** `agents/skills/plans/SKILL.md`, Final Step authoring closeout; `agents/skills/execute-plan/SKILL.md`, Step 0.1 and Phase 5; `agents/skills/done/SKILL.md`, worktree transfer-out and removal
 

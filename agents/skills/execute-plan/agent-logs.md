@@ -21,7 +21,7 @@ The run briefing is not a log: the orchestrator owns and rewrites it (workers re
 
 The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent-executed Step 1.4 light boundary reads the path itself, required only when Step 1.2b ran for the task.
 
-Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
+Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is the canonical execute-plan session slug (SKILL.md Step 0.4): a dated plan file `YYYY-MM-DD-<name>.md` derives `<name>` (strip the leading date and the `.md` extension); a dated plan directory with a `PLAN.md` charter derives `<slug>` (strip the leading date from the directory name); a plan file without a date prefix derives the filename without the extension.
 
 ## Write semantics (create vs append: do not overwrite)
 

@@ -129,6 +129,8 @@ way. This run's baseline capture succeeded only with the single quoted space-sep
 **See also:** Lesson 4 (skill prose versus machine contract precedence);
 `agents/skills/execute-plan/SKILL.md` (capture recipe carrying the two-argument shape).
 
+**Second witness (2026-10-21, execution closeout):** the same `--dirs` operand is also a hand-maintained twin of the script's facts-resolved family: the recipe pins three dirs while `FACTS_DIR_KEYS` resolves four (`review_certs_dir` joined on 2026-10-18), so the run's code-family seal was never baselined and had to be mirrored by hand before teardown; when the script can resolve the list from facts, pass no operand (row `docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md`). Shell corollary from the same closeout: zsh does not word-split an unquoted variable, so `--files $LIST` with a newline-joined list arrives as one path (`path must not contain a newline`); pipe through `xargs` or use `${=LIST}`.
+
 ## 10. Prove the Landing Base and the Completion Marks, Not the Diff Shape
 
 **Principle:** Family H (verify the real thing, not the abstraction: a tree-identical gate
@@ -1533,6 +1535,8 @@ a plan-readiness gate refused with "plan file resolves outside plans_dir"
 when run from the primary checkout for a worktree-owned plan. All three
 resolved by following the tool's contract over the recipe wording.
 
+Second witness (2026-10-21, execution run r2): the exec rounds' run-id continuity binds across the code-family chain too (an r2 minted fresh was refused); a code-family record validates only through `--source-code-repo <root> --source-code-plan <sidecar>` against a seal block whose `round_start_digest` equals sha256 of `git diff <reviewed_base>...<reviewed_head>` (`--source-plan` reads the plan family and refuses with `source_kind mismatch`); and the code-review name shape does not satisfy the plans-egress evidence leg, which greps `*-plan-review-<slug>-exec-r<N>.md` for the archived bytes' sha256, so the backfill completion record is written before `check-archive`.
+
 **See also:** #62 (re-derive a script's flag grammar at invocation); #60
 (a dispatch text's coverage claim is not evidence about the disk).
 
@@ -2465,7 +2469,7 @@ Re-witnessed 2026-10-20 (playbook repo, execution run): the run's two `-code-rev
 
 **Rule:** the squash landing lands branch content only; the executed plan's move from the plans root to the completed archive is a branch commit the executor composes and lands through a second landing call (the egress backfill record carrying the archived bytes' sha256 gates it). After the implementation landing passes, verify the plan's archive location on disk before teardown; a missing move means the archive landing is still owed.
 
-**Why:** witnessed 2026-10-19 (playbook repo, execution run): the first landing passed with the egress record present, but the plan stayed at the plans root; the move was composed as a branch commit and landed as a second squash. The same shape repeated the prior day's run, and the gate-removal squash-accounting row records the accounting twin of it. See also #104 (the origins archive gate's covered-row arm) and #107 (the egress record the archive move wants).
+**Why:** witnessed 2026-10-19 (playbook repo, execution run): the first landing passed with the egress record present, but the plan stayed at the plans root; the move was composed as a branch commit and landed as a second squash. The same shape repeated the prior day's run, and the gate-removal squash-accounting row records the accounting twin of it. Third witness (2026-10-21, certification-seal-landing-survival landing): when the archive move rides the same squash, any post-squash step that resolves the plan's review series by identity (the readiness oracle keys `plan_identity` to the pre-archive active path) finds nothing at the completed path; run such a step against the pre-archive identity or order it before the move (residual L1 in `docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md`). See also #104 (the origins archive gate's covered-row arm) and #107 (the egress record the archive move wants).
 
 ## 123. A Squash Landing Absorbs the Branch; Post-Landing Branch Work Rebases as a Reset
 
@@ -2679,3 +2683,307 @@ Re-witnessed 2026-10-20 (playbook repo, execution run): the run's two `-code-rev
 **Why:** witnessed 2026-10-20 (playbook repo): an authoring landing (`docs/history/plans/2026-10-20-usage-wall-probe-before-timed-resume.md`) reported complete with teardown done, and the oracle on main refused its lesson-#32-compliant seal on the anchor leg; the pre-landing rebase had already forced one in-branch re-anchor of the same fields. A seal census found 7 of 37 seals anchored on main; of twelve open plans, the two refused were the two whose seals resolved for their latest round, and the rest passed through the degradation warning or on re-anchored seals. The re-anchor passed the oracle without touching the bytes or the gate.
 
 **See also:** #137 (the consumer side: an anchor-leg refusal over unchanged bytes is a filed gap, never a silent skip), #132 (committed witness lines never cite branch-local shas), #136 (a fail-open default for the unknown case becomes the common path), #32 (the machine-resolvable seal shape), backlog row `docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md` (fix of record: an unorphaning anchor leg or a landing-written `landed_as` witness).
+## 142. A Fail-Closed State Reader Catches Decode Errors With I/O Errors
+
+**Principle:** Family G (guard fail-closed: a verifier's contract is that every bad-input mode resolves to a named refusal, never an exception, so the catch tuple must cover the read's full raise surface, not the failure shapes its happy path suggests).
+
+**Trigger:** wrapping a text-mode read of operator-editable or untrusted state (a state file, a witness record, a copied authorization) in a fail-closed refusal path, and writing the except tuple from the I/O failure shape alone.
+
+**Rule:** derive the tuple from the call's full raise surface: reading bytes that are invalid in the expected encoding raises `UnicodeDecodeError`, a `ValueError` subclass that no `except OSError` catches, so a decode failure escapes the guard and crashes the verifier instead of producing the refusal the caller's gate matches on. Guard such reads with `except (OSError, ValueError)`, and pin the mode with a test that feeds undecodable bytes and asserts the named unreadable-state refusal comes back (no exception). A fail-closed verifier that crashes on malformed input is open, not closed.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 1 review): the corrections-record authorization loader (`scripts/corrections_record.py`) guarded its state read with `except OSError` only; undecodable state bytes crashed the verifier with `UnicodeDecodeError` instead of the unreadable-witness refusal. The fix widened the guard to `(OSError, ValueError)` and added an undecodable-bytes refusal test.
+
+Re-witnessed 2026-10-20 (playbook repo, corrections-chain Task 3 review): the same module's writer drift-guard re-read still caught only `OSError` after the pre-read had been widened, so a decode failure at the re-read would have escaped the retry guard; the re-read now routes through the pre-read's exact `(OSError, ValueError)` leg, probe-witnessed by feeding undecodable bytes at the re-read and observing the named refusal. The read-site form of the rule: every read of the same protected file converts the same error set to the same named refusal; widen per file, not per incident.
+
+**See also:** user-level UL#335 (the seam-parity facet: a test seam's broader except tuple enumerates the natural path's gap).
+
+## 143. Serialize Mutation-Probe Workers Against Peer Review Workers Sharing One Worktree
+
+**Principle:** Family D (single source of truth: a reviewer's reviewed-files-unchanged guard reads the shared tree as evidence, and a peer's sanctioned temporary mutation makes that evidence lie).
+
+**Trigger:** an orchestration that runs several review workers concurrently against one worktree, when any worker validates tests by temporary mutation (mutate the code or a fixture, run the suite, revert).
+
+**Rule:** a testing worker's temporary mutation probes are writes to the reviewed tree, so every other worker's unchanged-files check observes them and can raise a false external-writer alarm against the author under review. Either serialize the probe-mutating worker against peer workers, or have each worker pin before and after digests of the files it reviews and attribute a digest change to its own disclosed probes before raising the alarm. A probe-mutating worker must disclose its plan to the orchestrator up front so the serialization decision can be made before the round starts.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 1 review): a correctness worker's reviewed-files guard fired mid-round while a concurrent testing worker ran disclosed, fully reverted mutation probes; the tree re-verified byte-identical and the alarm was attributed to the probes. Without the disclosure the signal would have stood as an unexplained integrity failure.
+
+**See also:** #64 (probe mechanics: never probe pin mutations with an in-place editor that leaves residue), #31 (a worktree's untracked run artifacts are the run's own estate to protect).
+
+## 144. A Conditionally Refused Flag's Help States the Exact Trigger Condition
+
+**Principle:** Family C (shared-artifact coordination: the flag's help text is the operator-facing contract and must co-evolve with the refusal condition the same change wires).
+
+**Trigger:** rewiring a CLI flag or source selector so it refuses only when a specific state is in play (for example, when the chain declares an operator-acked row), while it stays legal and inert otherwise.
+
+**Rule:** the help text states the exact condition under which the refusal fires and that the flag is inert otherwise; scope any "absent keeps the default" sentence to the behavior family where it holds, and check the drafted help against the same diff's new pass paths so it cannot contradict them. An unconditional-refusal claim over a conditional refusal reads as a broken flag, not a scoped one.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 2 review): the rewritten flag help claimed an unconditional refusal beside the plan-source selector, and its trailing default sentence contradicted the pass path the same diff added; three of the four review workers flagged the same over-claim, and the fix scoped the refusal sentence and family-scoped the default sentence.
+
+**See also:** #142 (the fail-closed refusal family the help describes), #18 (a gate's refusal message as the authoritative enumeration).
+
+## 145. A Deliberate Duplicate Is Pinned by a Same-Fixture Parity Test
+
+**Principle:** Family D (single source of truth: a deliberately duplicated recipe is one contract in two copies; the parity pin is what makes the second copy a view of the first).
+
+**Trigger:** adding or reviewing a helper copied between modules instead of imported (to preserve a dependency direction or keep a leaf dependency-free), and any later edit to either copy.
+
+**Rule:** when duplication is deliberate, pin both copies with one parity test over the same fixture (a real end-to-end leg plus a synthetic-input leg where the contract has edge shapes); without the pin, drift between the copies is silent, because no import failure or suite asymmetry can surface it. Name the owning original in the copy's docstring so the pin's intent is discoverable.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 2 review): the staging validator grew its own copy of the primary-checkout resolver the done-sweep gates library owns (docstring names the owner; no import, preserving dependency direction); the review flagged the missing parity pin, and one same-fixture parity test (a real two-worktree leg, a fabricated porcelain-list leg) closed it.
+
+**See also:** #143 (the same task's serialization rule for review workers sharing one worktree).
+
+## 146. A Fail-Closed Refusal Names an Absent Input Absent, Not Only Unreadable
+
+**Principle:** Family B (error-policy propagation: absent and unreadable are distinct unsuitability causes of a guard, and the refusal message routes the operator's first diagnosis).
+
+**Trigger:** writing or widening a fail-closed refusal message for input that may simply not exist yet (a record never written) alongside genuinely corrupt or undecodable input.
+
+**Rule:** the refusal distinguishes an absent input from an unreadable one, or names both worlds ("absent or unreadable"), so a never-recorded input does not read as corruption; widen the message rather than replace it, preserving the refusal tokens callers and tests match on.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 2 review): an absent state file refused with "is unreadable", reading as corruption rather than never-recorded; the message widened to "absent or unreadable" with the docstring and comment naming both, and every existing token assertion held unchanged.
+
+**See also:** #142 (the catch tuple behind the same refusal).
+
+## 147. A Precedence-Chain Fixture Clears the Full Source Set Before Pinning
+
+**Principle:** Family A (equivalence-class coverage: a fixture's meaning is fixed by every input that participates in the decision it asserts, not only the member it pins).
+
+**Trigger:** writing or reviewing a test fixture that sets one environment source of a multi-source precedence chain (session identity, config resolution, credential selection) while the other sources are left inherited from the ambient shell.
+
+**Rule:** the fixture deletes every higher-precedence source in the chain before pinning the members the assertion is about (save for restore, clear the full set, pin, assert). An inherited source is an unpinned class: the assertion's meaning then depends on the ambient environment, and agent shells carry session-identity variables ambiently, so a pin-only fixture false-reds a correct implementation exactly in the deployment environment the code targets.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 3 fold): a classifier stimuli arm set only the lowest-precedence session source and passed in a clean shell, but failed as `ambient decoy value != expected derived value` under an ambient higher-precedence variable; the red was reproduced first, then the arm cleared all four sources and verified green under all three ambient decoys.
+
+**See also:** user-level UL#200 (env control inside a fixture suite: a requested fixture runs after a same-scope autouse fixture).
+
+## 148. A Stated Shape Contract Binds the Scan Down to the Type Level
+
+**Principle:** Family G (guard fail-closed: a scan's stated contract, malformed state resolves to a named refusal and never to a silent non-match, binds its shape enumeration; a skipped deviation is the silent twin of #142's escaping exception).
+
+**Trigger:** writing or reviewing a validator that iterates an array or map whose members are expected to be objects, where the loop body's member access implies the type check and the enumeration stops at field-level shapes.
+
+**Rule:** the shape enumeration includes the type-level deviation: a non-object member hits the named malformed refusal, never the filter. When a helper's docstring states the contract ("a shape-malformed entry is malformed state, never a silent non-match"), read the scan against the sentence clause by clause; a contract the code does not enforce is a live contradiction, and the fix enforces the scan rather than weakening the sentence.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 3 review): the row-digest shape gate skipped non-dict array members while its helper's stated intent covered every shape-malformed entry; the scan now refuses with the malformed-family leg ("an array member is not a JSON object") and the docstring names both refusal shapes.
+
+**See also:** #142 (the exception-surface twin in the same family), #146 (the refusal wording the named leg reuses).
+
+## 149. Check Paren Balance at an Insertion Point Before Adding a Clause
+
+**Principle:** Family C (shared-artifact coordination: an enumeration's paren nesting is part of the operative contract, and an inserted clause inherits the structure at its insertion point, not the level its author intends).
+
+**Trigger:** appending a clause or list item to an existing enumeration in operative prose (skill text, contract docs), where an earlier edit may have left a parenthetical unclosed.
+
+**Rule:** before inserting, walk the target enumeration and verify paren (and bracket) balance up to the insertion line; a pre-existing unclosed parenthetical re-levels the inserted clause into a nested position and mis-attributes it to the wrong enumeration member. Verify end-of-line paren depth is zero at the insertion point, and close a pre-existing imbalance as its own minimal edit in the same change.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 3 review): a new write-mode clause landed inside a parenthetical an earlier change had left unclosed at HEAD, nesting the clause one level deep in the write-mode enumeration; one byte closed the imbalance and the clause moved to the enumeration's top level.
+
+**See also:** #144 (the same family's co-evolution rule for a refusal's help text).
+
+## 150. An Owed Offset Survives Only on a Tracked Path with an Owner
+
+**Principle:** Family D (single source of truth: a disclosed obligation is authoritative where it is tracked; a run log's disclosure is a witness, never an owner).
+
+**Trigger:** landing a change that grows skill text past its byte budget while the repo's offset discipline still runs at review time, and recording the owed offset in the implement log.
+
+**Rule:** carry the owed byte offset onto a tracked surface a later run actually reads (a named later task's existing item in the same plan, or an open backlog row naming the file and the owed size). A disclosure that lives only in the run's log leaks when the log is archived, because nothing later reads it back; the tracked row, not the log line, is the record the pricing obligation consumes.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 3): a skill-file byte growth was priced at review time and carried explicitly onto the plan's existing later-task anti-growth item, updating the owed total in the same change; the carry, not the log disclosure, is what keeps the debt collectable.
+
+Re-witnessed 2026-10-20 (playbook repo, corrections-chain Task 4): the carried debt was paid by exactly the route the rule predicts. The targeted later task read the owed total and landed it as deletions-only trims of superseded enumeration text (1978 bytes from the same file against the owed 1959), leaving the file net-negative for the plan; the tracked item was read back and collected, not rediscovered.
+
+**See also:** the skill-text anti-growth rules in this repository's AGENTS.md (review-time pricing pending the byte-budget gate).
+
+## 151. A Contract Edit Sweeps Its File's Disclaimers and Case-Space Inventories
+
+**Principle:** Family D (single source of truth: a contract's same-file mirrors and case-space inventories are derived views; updating the source without the views leaves the file contradicting itself).
+
+**Trigger:** rewriting a contract sentence or adding a case to its case space in a shared doc that also carries a single-homing disclaimer or an inventory enumerating that case space.
+
+**Rule:** in the same change, sweep the file's sibling prose surfaces that scope against or enumerate the edited contract. A "does not restate it" disclaimer must carve out mirrored pinned sentences that legitimately restate part of the contract; every enumeration of the contract's case space gains the new case. The sweep crosses the file boundary when the enumeration lives on another file's owned surface (a helper's docstring, a README's pinned-idiom sentence): grep the repo for the contract's artifact names, not just the edited file. An unscoped disclaimer over-claims, a stale inventory under-claims, and both read as the file disagreeing with itself.
+
+**Why:** witnessed 2026-10-20 (playbook repo, corrections-chain Task 4 review): the skill-gate README's "does not restate it" disclaimer was contradicted by its own pinned idiom sentence, and the lessons-recall README (the contract's designated owner) gained a new precedence source while its own per-session isolation inventory still stopped at the earlier cases. Two one-line folds closed both (the disclaimer scoped to the pinned sentence; the inventory gained the clause).
+
+Re-witnessed 2026-10-21 (playbook repo, corrections-chain operator-ack r1 review): one same-file residue (an unscoped empty-state sentence below the all-source empty rule it defers to) and two cross-file ones (a helper docstring and a README pinned-idiom sentence, consumer inventories missing the derivation's new third consumer class); the cross-file pair was invisible to the then same-file sweep, which is the extension above (`docs/history/backlog/2026-10-21-corrections-contract-doc-residues.md`).
+
+**See also:** #26 (the fold-time re-sweep of scope-declaring plan surfaces), #67 (the retirement-direction sweep over pin and fixture layers), #144 (executable-prose co-evolution for a refusal's help), #145 (the pinned mirror a disclaimer must carve out).
+
+## 152. A Depth Fault Escapes a Decode-Widened Catch Tuple
+
+**Principle:** Family G (guard fail-closed: the raise-surface derivation behind the catch tuple continues past the decode leg; a parser's raise set over unbounded input outruns any named enumeration).
+
+**Trigger:** wrapping a JSON parse of operator-editable or machine-written input in a tuple widened for decode errors, and leaving a same-guard dump or re-serialization outside the guard.
+
+**Rule:** input nested past the interpreter recursion limit raises `RecursionError` from the parser, and `json.dumps` raises it the same way; neither is an `OSError` or a `ValueError`, so a decode-widened tuple still leaks a bare traceback where the named refusal belongs. Add `RecursionError` to the tuple, bring the dump inside a guard, and pin the leg with a deeply nested fixture.
+
+**Why:** witnessed 2026-10-21 (playbook repo, corrections-chain operator-ack r1 review): all three state-read sites of `scripts/corrections_record.py` correctly carried the `(OSError, ValueError)` widening and still escaped. A risk-lens probe of scheduler-state JSON nested to extreme depth raised uncaught `RecursionError` at each, with the writer's re-serialization outside any try. Fail-closed in direction (a crash grants no authority; the input is unreachable from sanctioned writers); the fix, tuple widening plus a dumps guard, is tracked in `docs/history/backlog/2026-10-21-corrections-chain-recursion-refusal-and-pins.md`.
+
+**See also:** #142 (the raise-surface derivation this extends), #148 (the type-level twin in the same family), #146 (the refusal wording the leaked traceback replaces).
+
+## 153. A Shared Kind's Definition Scopes Its Route Requirements Per Family
+
+**Principle:** Family C (shared-artifact coordination: a multi-family kind's definition is the operator-facing contract and must co-evolve with the per-family routing the executable wires; one family's route requirements stated as the kind's requirements strand the sibling route).
+
+**Trigger:** adding a family to a shared kind or mode whose executable resolves each family through a different route (a primary state resolution for one, a turn record or witness flag for the other), and writing the definition paragraph with the new family's requirements stated family-blind.
+
+**Rule:** a definition paragraph over a multi-family kind scopes each requirement to the family whose route carries it, or enumerates every family's route and defers each to its owning contract; when a family is added, re-read the definition against the executable's per-family branches so a requirement only the new family's route holds is not left reading as the kind's requirement. A family-blind definition makes the sibling route undiscoverable: following the text for the sibling family walks into a fail-closed refusal the text never mentions.
+
+**Why:** witnessed 2026-10-21 (playbook repo, corrections-chain operator-ack r1 review): the `operator-acked` row kind's definition in the review-staging contract gained the plan family's state-route requirements (a fixed state selector, a nonempty author session, primary-state resolution) stated family-blind, while the verifier routes only plan-family acked rows to the state route and keeps the code family's turn-record resolution, so following the text for a code-family row walks into a fail-closed refusal with the route undiscoverable, even though the executable gates stayed self-consistent. The family-scoping fix is tracked in `docs/history/backlog/2026-10-21-corrections-contract-doc-residues.md`.
+
+**See also:** #144 (the same family's conditional-refusal help rule), #151 (the sibling-surface sweep this complements), #146 (the refusal wording a stranded route ends in).
+
+## 160. The Claim Gateway Is Atomic: Never Pre-Create the Run Worktree
+
+**Principle:** Family A (sequence discipline: a gateway that bundles two steps refuses when one step's effect already exists, so the bundling is the interface, not an optimization).
+
+**Trigger:** starting an execute-plan run: creating the ad-hoc worktree manually before (or instead of) the execution-claim `take` call.
+
+**Rule:** obtain the run worktree only through the claim gateway's `take` mode (claim create-or-refuse immediately followed by worktree creation); never `git worktree add` the run branch by hand first. A pre-existing worktree on the branch makes `take` refuse with `branch ... is held by an existing worktree` and rolls back its own fresh claim; the remedy is to remove the manual worktree and branch, then re-run `take` so it creates both atomically.
+
+**Why:** witnessed 2026-10-21 (playbook repo, certification-seal-landing-survival execution, Phase 0): the orchestrator created the worktree, copied facts, then called `take`, which refused on the branch the call's own worktree half had just claimed and deleted its fresh claim; the retry after removing the manual worktree and branch passed on the first attempt.
+
+**See also:** #43 (shell cwd resets between calls; the same re-derive-from-disk discipline at each step boundary).
+
+## 161. stdlib Exclusion in Import Probes Needs a Directory-Provenance Leg
+
+**Principle:** Family H (verify the real thing, not the abstraction: the real stdlib is the running interpreter's stdlib directory, not a declared module-name set).
+
+**Trigger:** writing or reviewing any tool that classifies imported modules as stdlib versus third-party to gate a probe, allowlist, or scan: import probes, dependency audits, module enumeration, import-linter configuration.
+
+**Rule:** treat a module as stdlib only when at least one of three legs holds: the name is in `sys.stdlib_module_names`, the name is in `sys.builtin_module_names`, or the module's `__file__` resolves under `dirname(realpath(os.__file__))` of the running interpreter. Never ship the name-set legs alone: distribution builds of CPython ship real stdlib-directory modules that `sys.stdlib_module_names` omits. Before trusting a green probe, preview it on every interpreter the tool will run under, in a clean environment, not only the authoring virtualenv.
+
+**Why:** witnessed 2026-10-21 (playbook repo): the new deployment verifier's import probe (`scripts/verify_runtime_deployment.py`) keyed its provenance assertion on the name-set legs alone. Under Homebrew CPython 3.15, `unittest` imports `_missing_stdlib_info`, a genuine stdlib-directory module absent from `sys.stdlib_module_names`, so a clean home produced 10 probe failures; adding the directory-provenance leg probed all 55 real manifest entries clean under both 3.14 and 3.15 (verified empirically on both interpreters before implementation). The gap is environment-silent: it never reproduces in the authoring virtualenv, only on machines with that distribution.
+
+**See also:** backlog row `docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md` (the verifier's open review findings); backlog row `docs/history/backlog/2026-10-21-learn-captures-shared-corpus-promotion.md` (landing the Python-ecosystem restatement in `python_guidelines.md`).
+
+## 162. Grade a Review's Pin Claims With a Mutation Matrix
+
+**Principle:** Family H (credit comes from a killed mutation, not from reasoning that a pin would kill one).
+
+**Trigger:** reviewing a diff whose tests pin behavior; the reviewer can name several "most likely wrong implementations" but has only read the pins, not run them.
+
+**Rule:** turn each hypothesized wrong implementation into a planted mutant: copy the implementation to a scratch location, apply one wrong implementation, re-run the targeted tests, record caught or passed, restore. A caught mutant is evidence the pin holds; a passing mutant is a real pin-gap finding to file, never an argument to have. Report the tally (caught/total) in the review record so the pin set's strength is measured, and let the passing mutants, not the reviewer's confidence, name the gaps.
+
+**Why:** witnessed 2026-10-21 (playbook repo, execute-plan Task 2 review): the panel planted five wrong implementations against the new deployment-verification suite; four flipped a test, and one (removing the probe child's `-S` hardening flag) passed the whole suite, naming an unpinned flag that reading had scored as pinned. The matrix converted five hypotheses into 4 verified catches plus 1 filed gap.
+
+**See also:** #64 (run each mutate-assert-restore cycle from a pristine capture, never an in-place backup), #140 (a validation pin quotes the prescribed bytes, and an absence arm carries a positive control), User-level lesson UL#330 (the fixture-authoring sibling: one mutation-killing witness per guard conjunct), backlog row `docs/history/backlog/2026-10-21-runtime-deployer-test-pin-gaps.md` (the filed gap this matrix found).
+
+## 165. Full-Mode Plan Readiness Stales on Progress Ticks; Run Pre-Round at Task Boundaries
+
+**Principle:** Family B (ordering: a check that binds to byte identity runs after the last write that changes those bytes, never between writes).
+
+**Trigger:** executing a certified plan whose Validation block or Done-when invokes full-mode `plan_readiness.py` while tasks remain; the first boundary's checkbox ticks have already changed the plan bytes the certification sidecar digests.
+
+**Rule:** at task boundaries run only the `--pre-round` invocation (structural checks, review record not consulted); run the full-mode invocation once, at Phase 2, after the corrections chain's zero-round re-bind binds the certified record to the final ticked bytes. A full-mode exit 1 mid-run naming a stale sidecar digest is the boundary's own ticks, not a task defect: record it as a witnessed deferral naming Phase 2 on the boundary row and never edit the plan, the sidecar, or the validator to clear it; stash-prove the failure pre-exists the task's change before attributing it.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan-validation-command-undefined-repo execution): Task 1's boundary commit ticked four checkboxes; Task 2's implement pass then inherited full-mode exit 1 on the r3 sidecar digest, stash-proved the failure present without its own change, and deferred the re-bind to Phase 2 instead of working around it, keeping the task's five gates green and the plan bytes untouched.
+
+**See also:** the fold-side twin at the review-loop lesson on re-binding the closure certification's `source_digest` after a cap-round fold (the same digest-binding invariant at the review side), #43 (shell cwd resets between calls; re-derive at each boundary).
+## 154. A Refusal's Remedy Points at the Surface the Flagged Defect Lives On
+
+**Principle:** Family B (error-policy propagation: the remedy line routes the operator's first repair the way the refusal wording routes the first diagnosis; a remedy naming one canonical surface strands the class members whose defect lives elsewhere).
+
+**Trigger:** writing or widening a gate refusal's remedy text for a refusal class whose flagged items can live on more than one input surface, or aggregating several refusal classes behind one shared remedy arm.
+
+**Rule:** the remedy directs the repair to the surface where the flagged defect actually lives, derived per flagged instance; a class-aggregate arm prints each refusal class its own remedy rather than one shared line, and a remedy that cannot close the class it prints for (a migrate re-run for a citation refusal) is never printed for that class.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 1 and its review): the closeout gate's aggregate refusal arm printed the migrate remedy for every class, including citation refusals no migrate run can satisfy; the class split fixed that, and the review then caught the new citation remedy naming the plan header for claims-file refusals - the fold directs the repair to the surface where the citation lives.
+
+**See also:** #139 (which artifact closes the empty-owned-set refusal), #144 (the help text a conditional refusal co-evolves), #146 (the refusal wording routing the first diagnosis), #71 (identify the pinned invocation before repairing).
+
+## 155. An Agreement Test Pins the Cross-Reference, Not Only the Shared Vocabulary
+
+**Principle:** Family D (single source of truth: a consumer surface's restatement of a canonical rule is bound to it by the reference, not by the vocabulary; a vocabulary-only pin passes on an unbound restatement that then drifts into an independent rule).
+
+**Trigger:** writing or reviewing a text-contract test that asserts a producer doc and a consumer doc agree on a canonical rule (skill text, contract docs), or folding a review finding into one.
+
+**Rule:** the agreement test asserts the cross-reference itself - the consumer-side phrase tying the surface to the canonical definition, byte-exact per #140 - alongside the shared vocabulary and operand shapes. Vocabulary presence holds whether or not the binding pointer exists, so a vocabulary-only agreement test cannot catch a consumer silently becoming an independent statement of the rule.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 1 review): the skill-text agreement class pinned the producer's canonical rule arms and the consumer's prescribed invocation operand shape, and both held while nothing bound the consumer text to the producer's rule; the fold asserted the consumer-side cross-reference phrase, making the binding itself the pinned contract.
+
+**See also:** #140 (the byte-exact quoting the phrase assertion inherits), #145 (the parity pin for deliberately duplicated logic - a distinct shape from a referenced restatement), #151 (the edit-time sweep over sibling surfaces that restate a contract).
+
+## 156. A Log's Test Counts and RED Inventories Are Counted, Not Recalled
+
+**Principle:** Family H (verify the real thing: a boundary log's numeric claims are themselves checkable claims, and the check runs against the suite and the run output, not the writer's recall).
+
+**Trigger:** writing a boundary or implement log's test-identity summary (how many tests a new class holds, which failures a RED run printed), especially while the run's details are still in memory.
+
+**Rule:** derive each reported count by counting the named source at write time (the test class's methods, the run output's failure list), and let a RED inventory enumerate every failure the run printed - never a hand-picked subset. A reconciling summary total can carry a miscounted composition: omitted rows and inflated counts cancel, and only a per-source recount exposes it.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 1): the implement log reported the two new classes one member high each (12/15 against actual 11/14) and its RED inventory omitted two printed gate-side failures, while the summary totals reconciled; the parent's testing-review correction caught both, and nothing in the log's own arithmetic flagged them.
+
+**See also:** #105 (count each class per member on disk - the inventory sibling), user-level UL#337 (record the first actually-failing gate the executed block shows - the authoring-time anchor sibling).
+
+## 157. A Mode Created to Adjudicate One Thing Cannot Pass on a Skip
+
+**Principle:** Family B (fail closed where the surface owns the decision: an outcome verdict is machine-readable authorization, and a skip that leaves the mode's only question unanswered is a refusal, not a pass).
+
+**Trigger:** adding or reviewing an epilogue that maps internal skip/early-return shapes onto an OUTCOME line, in a mode (or flag combination) whose sole purpose is producing that verdict.
+
+**Rule:** in a mode whose only authority is the verdict it prints, a missing disposition (any skip shape) maps to fail with the skip reason echoed; the worktree-mode skip-then-pass stays defensible only where an independent gate owns the underlying decision. Enumerate every reachable skip shape and give the fail arm a probe, not just the pass arm.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 2 review): the branch-only gate failed only on an explicit retained status, so a missing manifest, a manifest with no branch record, an unresolved branch, or a non-git target all fell through to OUTCOME: pass, exit 0, with zero branch accounting; OUTCOME: pass is what the done operator sequence keys on, and the probe proved each shape live.
+
+**See also:** #154 (the refusal names the surface the defect lives on - the skip line the fail arm echoes), #131 (fail-open report shapes).
+
+## 158. A Doc That Names a Command Names the Executable Form
+
+**Principle:** Family D (single source of truth: prose that restates a command the code prints is a consumer restatement, bound to the executable form, not to an idealized one).
+
+**Trigger:** writing or reviewing operator documentation that paraphrases a command a script prints or runs.
+
+**Rule:** settle the documented form by running the surrounding procedure, not by what the procedure should require: a live probe showed plain `git worktree remove` refuses on any untracked file while the gate does not promise a porcelain-clean tree, so the documented command is the forced form plus its verification precondition, verbatim with the script's printed line.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 2 review): done SKILL.md step 5 said "without force, using the sanctioned command the pass printed" while the pass printed `git worktree remove --force`; the operator following the doc verbatim hits exit 128 on the first untracked file.
+
+**See also:** #155 (the agreement pin that holds such a restatement to the canonical form), #149 (doc/code drift as a review finding class).
+
+## 159. Fixture Git Runs Under a Pinned Identity, Home, and Clock
+
+**Principle:** Family H (verify the real thing: a fixture's git subprocesses are part of the host environment surface, and inherited environment is uncontrolled input).
+
+**Trigger:** writing or extending test fixtures that create git repositories or launch the CLI under test.
+
+**Rule:** every git and CLI subprocess a fixture launches takes one shared hermetic env: inherited `GIT_*` cleared, HOME pointed at a fixture-local directory, locale and timezone pinned (LC_ALL/LANG=C, TZ=UTC). A helper that only pins the lock variables still leaks host git config and clock zone into every child it spawns.
+
+**Why:** witnessed 2026-10-21 (playbook repo, plan gate-removal-closeout-accounting Task 2): the lock-env helper pinned lock roots but copied the full host environment, so commit dates, message rendering, and identity in fixtures depended on the host's git config and timezone; the fix routed every subprocess through one `_hermetic_git_env` helper.
+
+**See also:** #105 (count the source, not the recall - the same derivation-over-recall discipline for fixture claims).
+
+## 163. Re-Pin Every Certified Code-Family Home After a Tip Move
+
+**Principle:** Family D (single source of truth: the certified range is one fact recorded in four homes, and a tip move invalidates all four together).
+
+**Trigger:** a clean code-family review round has been certified (seal block, sidecar, record, plans-egress backfill record) and the branch tip then moves: a bookkeeping boundary commit (the residual row the round itself backlogs), a pre-landing rebase onto an advanced base, or a merge-base change that alters the branch delta.
+
+**Rule:** treat the four homes as one record keyed on `reviewed_base...reviewed_head`: after any tip move, recompute the delta digest at the new merge-base, rewrite the seal block's anchors and range, the sidecar's `certified_range` and `source_digest`, the record's Round and Source digest lines, and the backfill record's range and digest, then re-run the staging validator through the code-source context before the lock. A home left at the old tip refuses later with `the round-start bytes do not re-hash` or `is not an ancestor of HEAD`, and the plan-family landed-anchor recovery does not apply to the code family.
+
+**Why:** witnessed 2026-10-21 (playbook repo, certification-seal-landing-survival execution): r2 was certified at the fold tip, then the residual-row append, the rebase onto the advanced main, and the base re-pin each required a hand re-pin of all four homes (three re-pins, each re-validated green). The Step 3.4 sentence already calls backlog rows bookkeeping outside the digest, while the code-family digest hashes the whole branch diff; that seam is the open row `docs/history/backlog/2026-10-21-code-family-certification-stale-after-tip-moves.md`.
+
+**See also:** #65 (the validator is the contract over the recipe); #123 (post-landing rebase semantics); #128 (rebase range after a completed rebase).
+
+## 164. Quote a Closed Vocabulary From Its Validator at Every Producer Surface
+
+**Principle:** Family D (single source of truth: a validator's closed enum owns the field's vocabulary; a producer-facing surface that mandates the field without quoting the owner's values invents a scale that refuses at validation time).
+
+**Trigger:** assembling worker prompts, shared catalogs, or sidecar instructions for a pipeline whose downstream validator enforces closed vocabularies; or writing a catalog line that mandates a field by name without stating its allowed values.
+
+**Rule:** before dispatch, extract each closed set from its validator and paste it verbatim into every producer-facing surface that mandates the field. Parent-side mapping of a near-miss value onto the closed enum at synthesis is recovery, not prevention: it costs a refused record and a revalidation pass every time the invented scale diverges.
+
+**Why:** witnessed 2026-10-10 (playbook repo: three vocabularies refused across one authoring session's review rounds) and re-witnessed 2026-10-21 (plan-validation-command-undefined-repo review r1): the lens-worker return schema offered `verified|likely|speculative`, the staging validator's closed enum is `hypothesis|strong-evidence|verified`, and synthesis mapped the finding to `strong-evidence` before the re-run passed. The worker-facing catalog (`agents/skills/review-agents/severity-calibration.md`, "Required on every finding") mandates `confidence` without enumerating it, so every assembled prompt reinvents a scale.
+
+**See also:** #146 (the refusal wording routes the diagnosis once it fires; quoting the enum keeps it from firing), backlog row `docs/history/backlog/2026-10-10-review-loop-dispatch-closed-vocabulary.md` (the adoption fix and the fourth-vocabulary witness), review-staging's closed-enums line (the doc-side statement this rule extends to the worker side).
+
+## 165. Transfer the Run Inputs In Before the Done Boundary Setup
+
+**Principle:** Family B (ordering: a setup step that resolves project facts observes the transferred tree, so the transfer-in precedes it).
+
+**Trigger:** entering a fresh ad-hoc worktree for a run that will commit through the done boundary.
+
+**Rule:** run the Worktree-first transfer-in (the facts file and the reviews home) before `done_run.sh setup`, even though the boundary setup is the first edit-time action: the setup's run-manifest writer resolves the facts keys and refuses without them, and a refused attempt leaves the done lock held by the now-dead shell. A transferred-in reviews home also needs the setup's staging classification before the manifest write: enumerate unclaimed candidates with the sweep-gates lib's `--emit-foreign-candidates` invocation and re-run setup with `--foreign-review-from`. Release an abandoned hold only with the original token from the failed setup's own stdout, after corroborating the lock's meta.env repo_root against the checkout - never by stealing it from a fresh acquire path.
+
+**Why:** witnessed 2026-10-21 (playbook repo, authoring-worktree-landing-shape execution): two setup attempts refused in one run (facts config error, then claim-or-foreign over 3264 transferred staging docs), each stranding its lock until the original-token release.
+
+**See also:** #81 (the boundary setup precedes every owned edit; the transfer-in is not an edit and precedes the setup), #104 (archive origin rows covered, never rm).

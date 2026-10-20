@@ -34,7 +34,7 @@ python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/con
 
 **Do not bulk-load** canonical guideline files or whole skill corpora at task start. Open the **specific section or numbered rule** when editing, reviewing, or adding guidance in that domain (see `agent_workflow_guidelines.md` §51).
 
-At task start: read **`user_facts_path`**, then ownership/repo facts when scoped (Cursor: `load-facts-at-task-start`).
+At task start: read only the facts keys or sections needed from **`user_facts_path`**, then ownership/repo facts when scoped; local values may be sensitive, so never dump a whole facts file or print credential values (Cursor: `load-facts-at-task-start`; see `agent_workflow_guidelines.md` §50.6).
 
 ## Instruction and facts hierarchy
 

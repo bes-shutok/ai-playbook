@@ -1,7 +1,7 @@
 # Backlog: review names for current meaning and clear parallels between analogous types
 
 - **Filed:** 2026-10-15, after repeated readability corrections during a feature implementation and naming audit
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-21-semantic-naming-and-analogous-class-review.md)
 - **Workflow:** skill text adjudication
 - **Priority:** normal
 - **Origin class:** user feedback

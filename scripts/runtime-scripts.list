@@ -1,8 +1,9 @@
 # Runtime manifest: one deployed filename per line; '#' comments allowed.
 # Admission criterion: a name the maintenance/execute-plan/done skills resolve
-# from the deployed home copy (~/.ai-playbook/scripts). Seed inventory pinned
-# by the 2026-09-26 maintenance-scripts-deployment-step plan; further
-# loop-consumed names join by one-line manifest edits.
+# from the deployed home copy (~/.ai-playbook/scripts), and an admitted entry
+# pulls in every transitive local sibling module it plain-imports. Seed
+# inventory pinned by the 2026-09-26 maintenance-scripts-deployment-step plan;
+# further loop-consumed names join by one-line manifest edits.
 #
 # The ten currently-deployed symlinks among the loop-consumed set:
 harness_detection.py
@@ -75,10 +76,34 @@ check_cleanup_scope_baseline.py
 deploy_runtime_helpers.sh
 test_deploy_runtime_helpers.py
 #
+# Deployment verification (born by the 2026-10-18-review-runtime-sibling-module-deployment
+# plan; the deployed deployer copy resolves the verifier beside its own
+# realpath, so the home carries the twin and the probe covers its own imports):
+verify_runtime_deployment.py
+#
 # The plan-shape resolver joined by the 2026-10-08 plan-directory-shape plan
 # (deployed beside its consumers plan_readiness.py and validate_review_staging.py;
 # the one grammar derivation for plan operands):
 plan_shape.py
+#
+# Import-closure members joined by the 2026-10-18-review-runtime-sibling-module-deployment
+# plan (the transitive local sibling modules the admitted entries plain-import,
+# admitted under the header's closure criterion; imported by plan_readiness.py,
+# validate_review_staging.py, done_sweep_gates_lib.py, worktree_closeout_migrate.py,
+# lessons.py, and each other):
+execute_plan_resume_watcher.py
+execute_plan_runtime.py
+invocation_telemetry.py
+lessons_adopt.py
+lessons_classify.py
+lessons_corpus.py
+lessons_index.py
+lessons_migrate.py
+lessons_recall.py
+review_plan_identity.py
+review_record_selection.py
+review_staging_calibration.py
+runtime_capabilities.py
 #
 # More names the done skill's resolution conventions resolve from the deployed
 # home copy (probe repo-local first then deployed home, or a Configuration

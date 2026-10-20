@@ -1145,16 +1145,41 @@ def _plan_item_path_tokens(item: str) -> list[str]:
 _PLAN_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 
 
+# Interpreter words the acceptance tokenizer strips before the leading-token
+# match: an acceptance item quoting ``bash scripts/foo.sh`` names its target
+# through the command line's leading path token, not the whole span. The
+# vocabulary is closed at these five words; extending it is its own
+# machinery touch.
+_INTERPRETER_WORDS = {"bash", "sh", "zsh", "python3", "python"}
+
+
 def _plan_acceptance_path_token(span: str) -> str | None:
     """Normalized path token for one backticked acceptance-item span, or
     ``None`` when the span is out of scope.
 
-    The span is normalized through ``_review_scope_path_token`` (the
-    module's shared token normalization, applied exactly as
-    ``_plan_item_path_tokens`` applies it to a backticked span) and must
-    pass ``_plan_path_shaped`` verbatim plus the scheme exclusion: a
-    scheme-bearing token is not a repository path.
+    The span is read as a command line: a leading ``_INTERPRETER_WORDS``
+    member is stripped, and the compared token is the command line's first
+    whitespace-delimited token, normalized through
+    ``_review_scope_path_token`` (the module's shared token normalization,
+    applied exactly as ``_plan_item_path_tokens`` applies it to a
+    backticked span) and must pass ``_plan_path_shaped`` verbatim plus the
+    scheme exclusion: a scheme-bearing token is not a repository path and
+    is out of scope with no fall-through. Only a non-path-shaped leading
+    token (the ``bash -c`` flag shape), or a blank command line after
+    the strip, falls through to the whole-span normalization of today's
+    behavior.
     """
+    command = span.lstrip()
+    words = command.split()
+    if words and words[0] in _INTERPRETER_WORDS:
+        command = command[len(words[0]):].lstrip()
+    lead = command.split()
+    if lead:
+        token = _review_scope_path_token(f"`{lead[0]}`")
+        if token and _plan_path_shaped(token):
+            if _PLAN_URL_SCHEME_RE.match(token):
+                return None
+            return token
     token = _review_scope_path_token(f"`{span}`")
     if not token or not _plan_path_shaped(token):
         return None
@@ -1183,7 +1208,9 @@ def plan_files_coverage_warnings(plan_text: str) -> list[str]:
     checklist-item collector ``_plan_item_path_tokens``; that collector's
     plain-prose tokens are deliberately out of scope here because they
     would exceed the priced false-positive cost (one adjudicated warning
-    line per omission). Each span is normalized through
+    line per omission). Each span's compared token (the leading path token
+    after the pinned interpreter-word strip in
+    ``_plan_acceptance_path_token``) is normalized through
     ``_review_scope_path_token`` and must be path-shaped
     (``_plan_path_shaped``) and scheme-free. The comparison set is the
     ``Files:`` items the module already collects (``_plan_files_items``),
@@ -1531,8 +1558,54 @@ def _gated_probe_reason(problem: str, min_date: str, round_no: int, round_date: 
 _GATE_INDETERMINATE_PREFIX = "readiness indeterminate: "
 
 
+def _validate_verification_head(
+    value: str, plan_operand: Path
+) -> tuple[str | None, str | None]:
+    """Validate an explicit ``--verification-head`` value against the
+    plan's source repository: a full 40-character lowercase hex commit OID
+    present as a commit object. Returns ``(oid, None)`` when valid and
+    ``(None, reason)`` otherwise; callers reject BEFORE corrections
+    verification runs."""
+    oid = value.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", oid):
+        return None, (
+            "--verification-head must be a full 40-character lowercase hex "
+            f"commit OID, not an abbreviated or malformed value: {value!r}"
+        )
+    env = (
+        corrections_record.hermetic_git_env()
+        if corrections_record is not None
+        else None
+    )
+    try:
+        toplevel = subprocess.run(
+            [
+                "git", "-C", str(plan_operand.parent),
+                "rev-parse", "--show-toplevel",
+            ],
+            capture_output=True, text=True, timeout=5, env=env,
+        )
+        probe = subprocess.run(
+            ["git", "-C", plan_operand.parent, "cat-file", "-e",
+             "%s^{commit}" % oid],
+            capture_output=True, text=True, timeout=5, env=env,
+        ) if toplevel.returncode == 0 and toplevel.stdout.strip() else None
+    except (subprocess.SubprocessError, OSError):
+        return None, (
+            "--verification-head could not run git against the plan's "
+            "source repository"
+        )
+    if probe is None or probe.returncode != 0:
+        return None, (
+            f"--verification-head {oid} is not a commit present in the "
+            "plan's source repository"
+        )
+    return oid, None
+
+
 def _plan_corrections_context(
-    plan_path: Path, plan_bytes: bytes
+    plan_path: Path, plan_bytes: bytes,
+    verification_head: str | None = None,
 ) -> dict | None:
     """The correction context for the shared gate's graded stale arm
     (review-cert-graded-binding plan, Task 6): the plan's repository root
@@ -1540,7 +1613,15 @@ def _plan_corrections_context(
     root (the artifact identity the certification seal names), and the
     current bytes. ``None`` when the plan does not resolve inside a git
     working tree: the graded arm never arms and the legacy exact-match
-    digest rule applies unchanged."""
+    digest rule applies unchanged. ``verification_head`` (the validated
+    ``--verification-head`` OID, or None) rides as the context's ``head``
+    so the graded arm pins every HEAD-dependent corrections check to it;
+    omitted keeps the repository's own HEAD. The context carries no witness
+    path (direct readiness never accepts a caller-selected witness) and no
+    primary checkout: the shared graded arm in validate_review_staging
+    resolves the primary checkout itself (corrections-chain-operator-ack
+    plan, Task 2), so staging validation and this gate consume the same
+    correction-record helper with the same already-resolved primary."""
     try:
         proc = subprocess.run(
             [
@@ -1560,7 +1641,7 @@ def _plan_corrections_context(
         artifact_rel = plan_path.relative_to(root).as_posix()
     except ValueError:
         return None
-    return {
+    context = {
         "family": "plan",
         "repo": str(root),
         "artifact_path": artifact_rel,
@@ -1572,6 +1653,9 @@ def _plan_corrections_context(
         # machine identity; the story key stays preserved in prose.
         "slug": artifact_slug(plan_path),
     }
+    if verification_head is not None:
+        context["head"] = verification_head
+    return context
 
 
 def _first_gate_error_reason(
@@ -1627,6 +1711,7 @@ def evaluate_readiness(
     plans_dir: Path,
     reviews_dir: Path,
     advisories: list[str] | None = None,
+    verification_head: str | None = None,
 ) -> tuple[bool, str | None]:
     """Evaluate the readiness conditions in order.
 
@@ -1634,6 +1719,9 @@ def evaluate_readiness(
     and is ``None`` on success. ``advisories`` is the optional out-parameter
     threaded down to ``latest_review_round``: the caller owns the list and any
     printing (this function neither prints nor keeps module state).
+    ``verification_head`` (the validated ``--verification-head`` OID) threads
+    into the corrections context so the graded arm pins its HEAD-dependent
+    checks; omitted keeps the repository's own HEAD.
     """
     plans_dir = plans_dir.expanduser().resolve()
     reviews_dir = reviews_dir.expanduser().resolve()
@@ -1915,7 +2003,9 @@ def evaluate_readiness(
     # and run the round-anchored digest check on EVERY authoritative
     # freshness check; a plan outside any git repository passes no context
     # and keeps the legacy exact-match disposition.
-    corrections_context = _plan_corrections_context(resolved, plan_bytes)
+    corrections_context = _plan_corrections_context(
+        resolved, plan_bytes, verification_head
+    )
     staging_result = vrs.ValidationResult(path=latest_path)
     vrs.validate_stats_sidecar(
         latest_path,
@@ -2781,6 +2871,16 @@ def _main(argv: list[str] | None = None) -> int:
         "no verdict token); exit 0 when none, exit 1 listing them",
     )
     parser.add_argument(
+        "--verification-head",
+        metavar="COMMIT",
+        help=(
+            "Pin the corrections verification context: a full 40-character "
+            "commit OID present in the plan's source repository, used for "
+            "every HEAD-dependent check while the plan and seal files are "
+            "read from disk. Omitted keeps the repository's HEAD."
+        ),
+    )
+    parser.add_argument(
         "--pre-round",
         action="store_true",
         help="Run the structural-only pre-round gate (plans rule 29) over "
@@ -2997,12 +3097,27 @@ def _main(argv: list[str] | None = None) -> int:
     # from a subdirectory or outside the repo must not false-reject a valid
     # relative plan path).
     plan_operand = anchor_at_root(args.plan_path)
+    # The explicit verification head is validated against the plan's source
+    # repository BEFORE any readiness evaluation (and so before corrections
+    # verification): an abbreviated, malformed, empty, or unavailable value
+    # is a tool error, never a graded refusal.
+    verification_head: str | None = None
+    if args.verification_head is not None:
+        verification_head, head_error = _validate_verification_head(
+            args.verification_head, plan_operand
+        )
+        if head_error is not None:
+            print(f"readiness FAILED: {head_error}", file=sys.stderr)
+            print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
     # Advisory out-parameter (review-record legacy identity plan, Task 1):
     # main owns the list; evaluate_readiness threads it down to the series
     # resolver, and the pass path prints ONE non-blocking advisory line
     # beside the coverage warnings. The advisory never changes the outcome.
     advisories: list[str] = []
-    ok, reason = evaluate_readiness(plan_operand, plans_dir, reviews_dir, advisories)
+    ok, reason = evaluate_readiness(
+        plan_operand, plans_dir, reviews_dir, advisories, verification_head
+    )
     if ok:
         # Warning-only Files:-coverage arm (machinery row
         # script:plan-files-coverage-arm): human-readable stderr evidence

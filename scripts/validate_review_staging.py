@@ -3931,6 +3931,52 @@ def _canonical_slug(artifact_path):
         return None
 
 
+def _resolve_primary_checkout(repo):
+    """The first ``git worktree list --porcelain`` worktree entry: the
+    same first-entry primary-checkout recipe done_sweep_gates_lib owns
+    for its dirty-state gate (execution lanes close out in linked
+    worktrees whose own tree is not the primary one). The
+    corrections-record helper stays a stdlib-only leaf, so each consumer
+    resolves the primary checkout itself and passes the already-resolved
+    path into the correction-record verifier. Returns (path, None) on
+    success and (None, reason) when the plumbing fails or prints no
+    entry."""
+    cr = _sibling_module("corrections_record")
+    text = (cr.git_text(repo, "worktree", "list", "--porcelain")
+            if cr is not None else None)
+    if text is None:
+        return None, "git worktree list --porcelain failed"
+    for line in text.splitlines():
+        if line.startswith("worktree "):
+            return Path(line[len("worktree "):]).expanduser(), None
+    return None, "git worktree list --porcelain printed no worktree entry"
+
+
+def _validate_verification_head(value: str, repo) -> str | None:
+    """None when ``value`` is a full 40-character lowercase hex commit OID
+    present in ``repo``, otherwise the named rejection reason. Callers run
+    this BEFORE corrections verification so an abbreviated, malformed, or
+    unavailable value is a tool error, never a verification refusal."""
+    oid = value.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", oid):
+        return (
+            "--verification-head must be a full 40-character lowercase hex "
+            "commit OID, not an abbreviated or malformed value"
+        )
+    cr = _sibling_module("corrections_record")
+    probe = (
+        cr.run_git(repo, "cat-file", "-e", "%s^{commit}" % oid)
+        if cr is not None
+        else None
+    )
+    if probe is None or probe.returncode != 0:
+        return (
+            "--verification-head %s is not a commit present in the source "
+            "repository" % oid
+        )
+    return None
+
+
 def _run_graded_stale_arm(
     payload: dict,
     result: ValidationResult,
@@ -4042,7 +4088,7 @@ def _run_graded_stale_arm(
             result.add_error(slug_reason)
         return True
     rel = cr.seal_relpath(artifact_path or "", slug)
-    entry = cr.load_seal_entry(repo, rel, round_number)
+    entry = cr.load_seal_entry(repo, rel, round_number, family)
     if entry is None:
         if record_declared:
             result.indeterminate_reason = cr.leg_reason(
@@ -4072,12 +4118,32 @@ def _run_graded_stale_arm(
             hunks, ok, message = pdc.classify_delta(old_bytes, new_bytes)
             return [] if ok else [message]
 
+        # The primary checkout (corrections-chain-operator-ack plan,
+        # Task 2): the correction_authorizations state lives in the
+        # PRIMARY checkout's scheduler state file, never a worktree-local
+        # copy, so the graded arm resolves it here once and hands the
+        # already-resolved path to the correction-record helper. A
+        # plumbing failure over the resolution is fail-closed: with an
+        # acked row in play the arm reports the indeterminate class
+        # instead of guessing, and without one the unresolved primary is
+        # inert (only operator-acked plan rows consult it).
+        primary_checkout, _primary_error = _resolve_primary_checkout(repo)
+        if primary_checkout is None and any(
+                isinstance(r, dict)
+                and r.get("kind") == cr.KIND_OPERATOR_ACKED
+                for r in rows):
+            result.indeterminate_reason = cr.leg_reason(
+                "receipt", "git plumbing failed while resolving the "
+                           "primary checkout")
+            return True
+
         verified, message = cr.verify_corrections(
-            repo, artifact_path, "plan", round_number, declared_digest,
+            repo, artifact_path, family, round_number, declared_digest,
             rows, current_bytes=corrections_context.get("current_bytes"),
             classify=classify,
+            head=corrections_context.get("head", "HEAD"),
             witness_path=corrections_context.get("witness_path"),
-            slug=slug,
+            slug=slug, primary_checkout=primary_checkout,
         )
     else:
         cdc = _sibling_module("code_delta_classifier")
@@ -15947,6 +16013,21 @@ _UNSAFE_PLAN_REL = "docs/history/plans/2026-09-22-AB-12-acme_plan.md"
 _CORRECTIONS_D1 = ("# plan\n\nalpha \u2014 bravo.\n").encode("utf-8")
 _CORRECTIONS_D2 = b"# plan\n\nalpha, bravo.\n"
 _CORRECTIONS_D3 = b"# plan\n\nalpha omega.\n"
+# The session-channel env pin for the operator-acked mint arms: all four
+# session sources are pinned or cleared for the classifier CLI child, the
+# Claude source carrying the identity the arms assert (Task 3 derivation;
+# the child env is built fresh per call, the caller's env is untouched).
+_ACK_SESSION_ENV = {
+    "CLAUDE_CODE_SESSION_ID": None,
+    "CURSOR_SESSION_ID": None,
+    "CURSOR_CONVERSATION_ID": None,
+    "CODEX_SESSION_ID": None,
+}
+
+
+def _ack_session_env(author: str) -> dict:
+    """The pin dict with the Claude source carrying ``author``."""
+    return {**_ACK_SESSION_ENV, "CLAUDE_CODE_SESSION_ID": author}
 _CODE_V0 = b"def f():\n    return 1\n"
 _CODE_V1 = b"def f():\n    return 2\n"
 _CODE_V2 = b"def g():\n    return 3\n"
@@ -15965,15 +16046,25 @@ def _sibling(name: str):
     return __import__(name)
 
 
-def _run_cli(script_name: str, *args):
-    """Run a classifier CLI hermetically and return the completed process."""
+def _run_cli(script_name: str, *args, session_env=None):
+    """Run a classifier CLI hermetically and return the completed process.
+    ``session_env`` optionally pins the four session-channel environment
+    variables for the child (None clears a name); the child env is built
+    fresh here, so the caller's process environment is never mutated."""
     import subprocess
 
     cr = _sibling("corrections_record")
     script = Path(__file__).resolve().parent / script_name
+    env = cr.hermetic_git_env()
+    if session_env:
+        for name, value in session_env.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
     return subprocess.run(
         [sys.executable, str(script)] + list(args),
-        capture_output=True, text=True, env=cr.hermetic_git_env(),
+        capture_output=True, text=True, env=env,
     )
 
 
@@ -16476,7 +16567,10 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     )
 
     # Moved preamble-recorded anchor: the seal entry's round-start commit
-    # is not an ancestor of HEAD.
+    # is an orphan, but the sealed bytes ride HEAD's first-parent history,
+    # so the anchor leg resolves the landed anchor and the existing
+    # ordering check refuses the move (a resolved single anchor still
+    # goes through the ordering check).
     moved_result = plan_arm(
         "plan-moved-anchor",
         fixture_kwargs={"orphan_start": True},
@@ -16485,9 +16579,9 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         current=_CORRECTIONS_D1,
     )
     check(
-        "moved anchor refuses: a seal entry whose round-start commit is not an ancestor of HEAD names the anchor leg",
-        _corrections_family_errors(moved_result, "anchor leg refused",
-                                   "not an ancestor"),
+        "moved anchor refuses: an orphaned round-start anchor resolved by byte identity still takes the ordering refusal",
+        _corrections_family_errors(moved_result,
+                                   "round-start commit postdates"),
     )
 
     # Digest-binding refusal: the plan blob evidence leg. The row's declared
@@ -16579,7 +16673,10 @@ def _selftest_corrections_grading(root: Path, check) -> None:
                                    "not exempt"),
     )
 
-    # Ack-receipt refusal: an operator-acked row with no resolvable witness.
+    # Ack-receipt refusals: an operator-acked plan row resolves only
+    # through the primary state route, so a row whose receipt names
+    # anything else refuses naming the receipt leg, and the state route's
+    # authorization arms refuse through the same family.
     ack_repo, ack_fx = _grading_plan_fixture(cleanup)
     ack_row = _minted_row(_run_cli(
         "plan_delta_classifier.py",
@@ -16599,8 +16696,68 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         corrections_context=_plan_context(ack_repo),
     )
     check(
-        "ack-receipt refusal: an operator-acked row without a resolvable witness names the receipt leg",
+        "ack-receipt refusal: an operator-acked row whose receipt names no fixed selector names the receipt leg",
         _corrections_family_errors(ack_result, "receipt"),
+    )
+
+    # The state-route pass arm (Task 2): an operator-acked row whose
+    # receipt names the fixed selector and whose primary checkout carries
+    # the unique matching authorization entry passes the graded arm with
+    # no caller-selected witness path in play.
+    state_repo, state_fx = _grading_plan_fixture(cleanup)
+    state_receipt_path = root / "state-route-receipt.json"
+    state_receipt_path.write_text(json.dumps({
+        "directive": "accept the typography re-bind",
+        "authorization_witness": cr.ACK_STATE_SELECTOR,
+        "classifier_gap_row": "docs/history/backlog/state-route-gap.md",
+    }))
+    state_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(state_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", state_fx["start"], "--emit-row",
+        "--kind", "operator-acked",
+        "--receipt", str(state_receipt_path),
+        session_env=_ack_session_env("sess-author-lib")))
+    # The emitting session's identity is derived inside the producer CLI
+    # from the session-channel helper (the corrections-chain plan, Task
+    # 3); the arm pins the helper's env source and asserts the derived
+    # value instead of augmenting the row test-side.
+    assert state_row["author_session_id"] == "sess-author-lib", state_row
+    state_repo.write_file(
+        "docs/history/backlog/state-route-gap.md",
+        "# classifier gap\n\nproposal: a typography bucket covering hunk "
+        "digest %s\n" % state_row["hunks"][0]["digest"])
+    state_repo.commit_all("file the state-route gap row")
+    state_dir = state_repo.root / ".ai-playbook"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "scheduler-state.json").write_text(json.dumps(
+        {"correction_authorizations": [{
+            "row_digest": cr.correction_row_digest(state_row),
+            "writer_session_id": "sess-writer-lib",
+            "operator_direction": state_row["receipt"]["directive"],
+            "recorded_at": state_row["recorded_at"],
+            "author_session_id": state_row["author_session_id"],
+            "artifact_path": _CORRECTIONS_PLAN_REL,
+            "before_digest": state_row["before_digest"],
+            "after_digest": state_row["after_digest"],
+            "evidence_commit": state_row["evidence_commit"],
+            "hunk_digests": [h["digest"] for h in state_row["hunks"]],
+        }]}))
+    state_result = _graded_staging_call(
+        _grading_stage(
+            root, "plan-ack-state",
+            _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                                slug=_CORRECTIONS_PLAN_SLUG)
+            | {"extensions": {"corrections": [state_row]}}),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D2),
+        source_kind="plan",
+        corrections_context=_plan_context(state_repo),
+    )
+    check(
+        "operator-acked plan row with its primary-state authorization passes the graded arm",
+        state_result is not None and state_result.ok
+        and not state_result.errors,
     )
 
     # Terminal refusal: a chain ending away from the current bytes.
@@ -16980,22 +17137,190 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     )
 
     # ------------------------------------------------------------------
-    # r1 fold R2: the operator-ack witness threading (production CLI arms)
+    # Family-aware seal lookup and the explicit verification head
+    # (certification-seal-landing-survival plan, Task 1): the graded arm
+    # passes its parsed family to the seal loader and the verifier, and a
+    # validated --verification-head pins every HEAD-dependent check while
+    # the source bytes stay the worktree's.
+    # ------------------------------------------------------------------
+
+    collision_repo, collision_fx = _grading_code_fixture(cleanup)
+    collision_seal_rel = cr.seal_relpath(_CORRECTIONS_SRC_REL,
+                                         _CORRECTIONS_CODE_SLUG)
+    collision_repo.write_file(collision_seal_rel, "\n".join([
+        "## round 2",
+        "artifact: %s" % _CORRECTIONS_SRC_REL,
+        "round_start_commit: %s" % collision_fx["c2"],
+        "round_start_digest: %s" % cr.sha256_hex(collision_fx["certified"]),
+        "round_close_commit: %s" % collision_fx["close"],
+        "reviewed_base: %s" % collision_fx["b0"],
+        "reviewed_head: %s" % collision_fx["c2"],
+        "range_digest: %s" % cr.sha256_hex(collision_fx["certified"]),
+        "family: code",
+        "staging_round: r2",
+        "",
+        "## round 2",
+        "artifact: %s" % _CORRECTIONS_PLAN_REL,
+        "round_start_commit: %s" % collision_fx["b0"],
+        "round_start_digest: %s" % cr.sha256_hex(_CORRECTIONS_D1),
+        "round_close_commit: %s" % collision_fx["close"],
+    ]) + "\n")
+    collision_repo.commit_all("colliding seal rounds")
+    collision_payload = _grading_v1_payload(
+        "code", cr.sha256_hex(collision_fx["certified"]),
+        slug=_CORRECTIONS_CODE_SLUG, round_value="r2")
+    collision_result = _graded_staging_call(
+        _grading_stage(root, "code-collision", collision_payload,
+                       kind="code"),
+        hard=True,
+        expected_digest=cr.sha256_hex(collision_fx["certified"]),
+        source_kind="code",
+        corrections_context=_code_context(collision_repo),
+    )
+    check(
+        "review-staging resolves code family by staging_round",
+        collision_result is not None and collision_result.ok
+        and not collision_result.errors,
+    )
+
+    head_repo, head_fx = _grading_plan_fixture(cleanup)
+    head_tree = head_repo.git(
+        "rev-parse", "%s^{tree}" % head_fx["start"]).stdout.strip()
+    landing = head_repo.git(
+        "commit-tree", head_tree, "-m", "squash landing").stdout.strip()
+    floating = head_repo.git(
+        "commit-tree", "%s^{tree}" % head_repo.head(), "-m",
+        "floating worktree head").stdout.strip()
+    head_repo.git("update-ref", "HEAD", floating)
+    head_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D1), slug=_CORRECTIONS_PLAN_SLUG)
+    pinned_result = _graded_staging_call(
+        _grading_stage(root, "head-pinned", head_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D1),
+        source_kind="plan",
+        corrections_context={**_plan_context(head_repo,
+                                             current_bytes=_CORRECTIONS_D1),
+                             "head": landing},
+    )
+    check(
+        "explicit verification-head: the graded plan arm verifies against the pinned landing OID while the source bytes stay the worktree's",
+        pinned_result is not None and pinned_result.ok
+        and not pinned_result.errors,
+    )
+    default_head_result = _graded_staging_call(
+        _grading_stage(root, "head-default", head_payload),
+        hard=True,
+        expected_digest=cr.sha256_hex(_CORRECTIONS_D1),
+        source_kind="plan",
+        corrections_context=_plan_context(head_repo,
+                                          current_bytes=_CORRECTIONS_D1),
+    )
+    check(
+        "omitted verification-head: the same seal verifies against the repository's own HEAD, so the orphaned anchors refuse with no byte identity",
+        default_head_result is not None
+        and _corrections_family_errors(default_head_result,
+                                       "no first-parent ancestor"),
+    )
+
+    invalid_head_repo, invalid_head_fx = _grading_plan_fixture(cleanup)
+    invalid_head_stage = _grading_stage(
+        root, "head-cli-invalid",
+        _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D2),
+                            slug=_CORRECTIONS_PLAN_SLUG))
+    for bad_head in (invalid_head_fx["start"][:10], "not-a-commit",
+                     "a5" * 20):
+        bad_rc, bad_out, bad_err = cli_call(
+            ["--hard", str(invalid_head_stage),
+             "--source-plan",
+             str(invalid_head_repo.root / _CORRECTIONS_PLAN_REL),
+             "--verification-head", bad_head])
+        check(
+            "CLI verification-head: an abbreviated, malformed, or unavailable value is a tool error before corrections verification (exit 3)",
+            bad_rc == 3 and "OUTCOME: tool_error" in bad_out
+            and "--verification-head" in bad_err,
+        )
+
+    head_cli_repo, head_cli_fx = _grading_plan_fixture(cleanup)
+    head_cli_repo.write_file(_CORRECTIONS_PLAN_REL, _CORRECTIONS_D1)
+    cli_landing_tree = head_cli_repo.git(
+        "rev-parse", "%s^{tree}" % head_cli_fx["start"]).stdout.strip()
+    cli_landing = head_cli_repo.git(
+        "commit-tree", cli_landing_tree, "-m",
+        "squash landing").stdout.strip()
+    head_cli_stage = _grading_stage(
+        root, "head-cli-pass",
+        _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D1),
+                            slug=_CORRECTIONS_PLAN_SLUG))
+    head_rc, head_out, _head_err = cli_call(
+        ["--hard", str(head_cli_stage),
+         "--source-plan",
+         str(head_cli_repo.root / _CORRECTIONS_PLAN_REL),
+         "--verification-head", cli_landing])
+    check(
+        "CLI verification-head: the validated OID drives the graded plan arm to a pass (exit 0)",
+        head_rc == 0 and head_out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    # r1 F5 discriminator: head-cli-pass above is zero-hop (the seal
+    # anchors stay reachable from the source worktree's own HEAD), so a
+    # regression deleting the --verification-head threading would still
+    # pass it. This case orphans the source worktree's HEAD (a parentless
+    # commit-tree of the post-fix tree, the same shape as the
+    # head-pinned/default pair), so the graded plan arm reaches a pass
+    # only when the CLI threads args.verification_head into the
+    # corrections context; the unthreaded companion below pins the
+    # fixture's orphan premise.
+    threaded_repo, threaded_fx = _grading_plan_fixture(cleanup)
+    threaded_repo.write_file(_CORRECTIONS_PLAN_REL, _CORRECTIONS_D1)
+    threaded_landing_tree = threaded_repo.git(
+        "rev-parse", "%s^{tree}" % threaded_fx["start"]).stdout.strip()
+    threaded_landing = threaded_repo.git(
+        "commit-tree", threaded_landing_tree, "-m",
+        "squash landing").stdout.strip()
+    threaded_floating_tree = threaded_repo.git(
+        "rev-parse", "HEAD^{tree}").stdout.strip()
+    threaded_floating = threaded_repo.git(
+        "commit-tree", threaded_floating_tree, "-m",
+        "orphan worktree head").stdout.strip()
+    threaded_repo.git("update-ref", "HEAD", threaded_floating)
+    threaded_stage = _grading_stage(
+        root, "head-cli-orphan-threaded",
+        _grading_v1_payload("plan", cr.sha256_hex(_CORRECTIONS_D1),
+                            slug=_CORRECTIONS_PLAN_SLUG))
+    unthreaded_rc, _unthreaded_out, unthreaded_err = cli_call(
+        ["--hard", str(threaded_stage),
+         "--source-plan",
+         str(threaded_repo.root / _CORRECTIONS_PLAN_REL)])
+    check(
+        "CLI verification-head discriminator premise: with the orphaned source-worktree HEAD and no --verification-head, the same seal refuses with the no-first-parent-ancestor reason (exit 1)",
+        unthreaded_rc == 1
+        and "corrections verification:" in unthreaded_err
+        and "no first-parent ancestor" in unthreaded_err,
+    )
+    threaded_rc, threaded_out, _threaded_err = cli_call(
+        ["--hard", str(threaded_stage),
+         "--source-plan",
+         str(threaded_repo.root / _CORRECTIONS_PLAN_REL),
+         "--verification-head", threaded_landing])
+    check(
+        "CLI verification-head threading: the pinned landing OID drives the orphaned-HEAD graded plan arm to a pass (exit 0), reachable only through the threaded corrections context",
+        threaded_rc == 0 and threaded_out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    # ------------------------------------------------------------------
+    # Task 2 (corrections-chain-operator-ack plan): the operator-ack
+    # witness threads through the graded gates from the primary checkout's
+    # correction_authorizations array. The plan family never resolves a
+    # caller-selected witness path; the code-family arms below keep the
+    # turn-record resolution unchanged.
     # ------------------------------------------------------------------
     ack_cli_repo, ack_cli_fx = _grading_plan_fixture(cleanup)
-    ack_witness_path = root / "ack-witness-r2.record"
-    ack_witness_path.write_text("\n".join([
-        "turn: authorize-rebind",
-        "writer: scheduler-turn-writer",
-        "operator_direction: accept the typography re-bind",
-        "artifact: %s" % _CORRECTIONS_PLAN_REL,
-        "before_digest: %s" % cr.sha256_hex(_CORRECTIONS_D1),
-        "after_digest: %s" % cr.sha256_hex(_CORRECTIONS_D2),
-    ]) + "\n")
+    ack_directive = "accept the typography re-bind"
     ack_receipt_path = root / "ack-receipt-r2.json"
     ack_receipt_path.write_text(json.dumps({
-        "directive": "accept the typography re-bind",
-        "authorization_witness": str(ack_witness_path),
+        "directive": ack_directive,
+        "authorization_witness": cr.ACK_STATE_SELECTOR,
         "classifier_gap_row": "docs/history/backlog/ack-gap-r2.md",
     }))
     ack_cli_row = _minted_row(_run_cli(
@@ -17003,32 +17328,79 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "--plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL),
         "--since", ack_cli_fx["start"], "--emit-row",
         "--kind", "operator-acked",
-        "--receipt", str(ack_receipt_path)))
+        "--receipt", str(ack_receipt_path),
+        session_env=_ack_session_env("sess-author-r2")))
+    # The emitting session's identity is derived inside the producer CLI
+    # from the session-channel helper (the corrections-chain plan, Task
+    # 3); the arm pins the helper's env source and asserts the derived
+    # value instead of augmenting the row test-side.
+    assert ack_cli_row["author_session_id"] == "sess-author-r2", ack_cli_row
     ack_cli_repo.write_file(
         "docs/history/backlog/ack-gap-r2.md",
         "# classifier gap\n\nproposal: a typography bucket covering hunk "
         "digest %s\n" % ack_cli_row["hunks"][0]["digest"])
-    ack_md_payload = _grading_v1_payload(
-        "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG)
-    ack_md_payload["extensions"] = {"corrections": [ack_cli_row]}
-    ack_md = _grading_stage(root, "cli-ack-witness", ack_md_payload)
-    ack_witnessed_rc, ack_witnessed_out, _ack_witnessed_err = cli_call(
-        ["--hard", str(ack_md),
-         "--source-plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL),
-         "--ack-witness", str(ack_witness_path)])
+    ack_cli_repo.commit_all("file the ack gap row")
+
+    def _ack_entry_for(row):
+        return {
+            "row_digest": cr.correction_row_digest(row),
+            "writer_session_id": "sess-writer-r2",
+            "operator_direction": row["receipt"]["directive"],
+            "recorded_at": row["recorded_at"],
+            "author_session_id": row["author_session_id"],
+            "artifact_path": _CORRECTIONS_PLAN_REL,
+            "before_digest": row["before_digest"],
+            "after_digest": row["after_digest"],
+            "evidence_commit": row["evidence_commit"],
+            "hunk_digests": [h["digest"] for h in row["hunks"]],
+        }
+
+    def _write_ack_state(entries):
+        state_dir = ack_cli_repo.root / ".ai-playbook"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "scheduler-state.json").write_text(json.dumps(
+            {"correction_authorizations": entries}))
+
+    def _ack_stage():
+        ack_payload = _grading_v1_payload(
+            "plan", cr.sha256_hex(_CORRECTIONS_D2), slug=_CORRECTIONS_PLAN_SLUG)
+        ack_payload["extensions"] = {"corrections": [ack_cli_row]}
+        return _grading_stage(root, "cli-ack-witness", ack_payload)
+
+    def _ack_cli_call(*extra):
+        return cli_call(
+            ["--hard", str(_ack_stage()),
+             "--source-plan",
+             str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL)] + list(extra))
+
+    _write_ack_state([_ack_entry_for(ack_cli_row)])
+    ack_witnessed_rc, ack_witnessed_out, _ack_witnessed_err = _ack_cli_call()
     check(
-        "CLI ack witness: a complete operator-acked receipt with its witness record and gap row resolves through the graded plan gate (exit 0)",
+        "CLI ack witness: a complete operator-acked plan row with its "
+        "primary-state authorization resolves through the graded plan gate "
+        "(exit 0)",
         ack_witnessed_rc == 0
         and ack_witnessed_out.rstrip().endswith("OUTCOME: pass"),
     )
-    ack_default_rc, _ack_default_out, ack_default_err = cli_call(
-        ["--hard", str(ack_md),
-         "--source-plan", str(ack_cli_repo.root / _CORRECTIONS_PLAN_REL)])
+    _write_ack_state([])
+    ack_default_rc, _ack_default_out, ack_default_err = _ack_cli_call()
     check(
-        "CLI ack witness: the same shape without --ack-witness keeps the unattended default (exit 1 naming the receipt leg)",
+        "CLI ack witness: the scheduled shape with no recorded "
+        "authorization keeps the receipt-leg refusal (exit 1)",
         ack_default_rc == 1
         and "corrections verification:" in ack_default_err
-        and "receipt" in ack_default_err,
+        and "no correction_authorizations entry" in ack_default_err,
+    )
+    _write_ack_state([_ack_entry_for(ack_cli_row)])
+    ack_rogue_witness = root / "ack-witness-r2.record"
+    ack_rogue_rc, _ack_rogue_out, ack_rogue_err = _ack_cli_call(
+        "--ack-witness", str(ack_rogue_witness))
+    check(
+        "CLI ack witness: a caller-selected --ack-witness path refuses for "
+        "a plan source even beside a valid authorization entry (exit 1)",
+        ack_rogue_rc == 1
+        and "corrections verification:" in ack_rogue_err
+        and "caller-selected witness path" in ack_rogue_err,
     )
 
     code_ack_repo, code_ack_fx = _grading_code_fixture(cleanup)
@@ -18090,16 +18462,33 @@ def _main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--verification-head",
+        metavar="COMMIT",
+        help=(
+            "Pin the corrections verification context: a full 40-character "
+            "commit OID present in the source repository, used for every "
+            "HEAD-dependent check while the source and seal files are read "
+            "from disk. Omitted keeps the repository's HEAD."
+        ),
+    )
+    parser.add_argument(
         "--ack-witness",
         metavar="PATH",
         help=(
-            "Operator-ack witness record path threaded into the plan and "
-            "code corrections contexts, so an operator-acked corrections "
-            "row resolves its receipt out of band against this record "
-            "through the graded gates. Requires a source surface "
+            "Operator-ack turn-record witness path for the CODE "
+            "corrections context: a code-family operator-acked row "
+            "resolves its receipt out of band against this record through "
+            "the graded code gate. A plan source never accepts it: the "
+            "plan family selects authority only by the fixed "
+            "scheduler-state selector resolved from the primary checkout, "
+            "so --ack-witness beside --source-plan refuses naming the "
+            "receipt leg when the chain declares an operator-acked row "
+            "(otherwise the flag is inert). Requires a source surface "
             "(--source-plan or --source-code-repo/--source-code-plan). "
-            "Absent keeps the unattended default: the receipt leg refuses "
-            "and the re-review default applies."
+            "For the code family, absent keeps the unattended default: "
+            "the receipt leg refuses and the re-review default applies; "
+            "the plan family needs no flag and passes when the primary "
+            "checkout carries a valid authorization entry."
         ),
     )
     args = parser.parse_args(argv)
@@ -18116,7 +18505,7 @@ def _main(argv: list[str] | None = None) -> int:
                 "silently skip the stale-digest gate (unset shell variable?)"
             )
     for flag_name in ("--source-code-repo", "--source-code-plan",
-                      "--ack-witness"):
+                      "--ack-witness", "--verification-head"):
         flag_value = getattr(
             args, flag_name.lstrip("-").replace("-", "_"))
         if flag_value is not None and not str(flag_value).strip():
@@ -18138,6 +18527,22 @@ def _main(argv: list[str] | None = None) -> int:
             "--source-code-repo and --source-code-plan must be supplied "
             "together; one alone would grade half a code-source context"
         )
+
+    # --verification-head validation emits the same tool-error shape as
+    # the other usage/input refusals below; one nested emitter keeps the
+    # two source surfaces' wiring identical.
+    def verification_head_tool_error(message):
+        payload = {
+            "ok": False,
+            "errors": [message],
+            "outcome": OUTCOME_LABELS[3],
+        }
+        if args.json:
+            print(json.dumps(payload))
+        else:
+            print(f"ERROR: {message}", file=sys.stderr)
+            print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        return 3
 
     if args.selftest:
         return run_selftest()
@@ -18307,6 +18712,13 @@ def _main(argv: list[str] | None = None) -> int:
             )
             if cr_module is not None and toplevel:
                 repo_root = Path(toplevel.strip())
+                # The plan family's witness authority is selected only by
+                # the fixed scheduler-state selector resolved from the
+                # PRIMARY checkout (Task 2); the graded arm resolves the
+                # primary checkout itself. A caller-selected --ack-witness
+                # path is threaded so the verifier can name its refusal;
+                # it never selects plan-family authority. The code family
+                # keeps the caller-selected turn-record resolution.
                 corrections_context = {
                     "family": "plan",
                     "repo": repo_root,
@@ -18315,6 +18727,17 @@ def _main(argv: list[str] | None = None) -> int:
                     "current_bytes": source_bytes,
                     "witness_path": args.ack_witness or None,
                 }
+                # The explicit verification head is validated against the
+                # plan's source repository BEFORE corrections verification
+                # runs; an invalid value is a tool error, never a graded
+                # refusal.
+                if args.verification_head is not None:
+                    head_error = _validate_verification_head(
+                        args.verification_head, repo_root)
+                    if head_error is not None:
+                        return verification_head_tool_error(head_error)
+                    corrections_context["head"] = \
+                        args.verification_head.strip()
     else:
         _SOURCE_PATH_FOR_ERROR = None
 
@@ -18426,6 +18849,12 @@ def _main(argv: list[str] | None = None) -> int:
             "slug": code_slug,
             "witness_path": args.ack_witness or None,
         }
+        if args.verification_head is not None:
+            head_error = _validate_verification_head(
+                args.verification_head, code_repo)
+            if head_error is not None:
+                return verification_head_tool_error(head_error)
+            corrections_context["head"] = args.verification_head.strip()
 
     # Outcome contract: the CLI's own input must be openable. A missing or
     # unreadable staging path is tool error (exit 3) naming the path, never

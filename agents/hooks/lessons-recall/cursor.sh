@@ -15,16 +15,17 @@
 #
 # Session model (r10-B1): SID is derived VERBATIM as
 #   SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
-# The helper returns CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID
-# or "" (Claude precedence when both env vars are set).
+# (shared helper contract, owned by agents/hooks/lessons-recall/README.md,
+# "Session channel precedence").
 #
 # Bridge dependency (v2, optional): per-tab session isolation requires
 # cursor-session-bridge.sh registered FIRST in the sessionStart array so
 # Cursor exports .session_id into CURSOR_SESSION_ID for later
-# hooks in the same composer tab. Without the bridge installed, session_channel
-# returns empty for Cursor -> this adapter OMITS `--session-id` -> core keys
-# `no-session` + FULL window (v1 steady state, unchanged). With the bridge,
-# each tab gets a distinct session hash for dedup state and skill-gate markers.
+# hooks in the same composer tab. Only when every supported source is unset or
+# empty (Cursor without the bridge) does the helper print empty -> this adapter
+# OMITS `--session-id` -> core keys `no-session` + FULL window (v1 steady
+# state, unchanged). With the bridge, each tab gets a distinct session hash for
+# dedup state and skill-gate markers.
 #
 # The session args are passed to the index-builder only for path-key
 # consistency of the per-(project,session) state file used by the core's dedup

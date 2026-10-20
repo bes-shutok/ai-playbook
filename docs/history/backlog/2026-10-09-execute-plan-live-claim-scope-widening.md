@@ -10,6 +10,7 @@
 - **Skill/step:** `agents/skills/execute-plan/SKILL.md`, task scope recovery; `scripts/execute_plan_runtime.py`, claim recovery
 - **Severity:** high; a legitimate in-plan file omitted from the task `Files:` list can remain required by Review Scope after launch, while no supported operation widens the active claim
 Cluster: execution-claim-reliability (the live-claim member: scope recovery against the seeded claim paths)
+Cluster: docs/history/backlog/2026-10-05-execute-plan-reviewed-scope-recovery.md; docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md; docs/history/backlog/2026-10-10-execute-plan-recovery-full-stem-resolution.md (shared surface: execute-plan scope and recovery transitions)
 
 ## Problem
 

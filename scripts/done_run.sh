@@ -326,12 +326,17 @@ cmd_setup() {
     fi
   fi
 
-  # 4. Worktree residue sweep (fail-open, report-and-continue).
+  # 4. Worktree residue sweep (fail-open, report-and-continue). The sweep
+  #    removes stale registrations only; on-disk worktrees, their artifacts,
+  #    and every branch ref stay operator-controlled, so the setup report
+  #    carries every retained branch name, its disposition, the proven OID,
+  #    and the retention reasons through the final closeout (plan
+  #    2026-10-19-gate-removal-closeout-accounting Task 2).
   SWEEP="$(resolve_helper worktree_closeout_migrate.py)"
   if [ -n "$SWEEP" ]; then
     PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
     SWEEP_OUT="$(python3 "$SWEEP" sweep --target "$PRIMARY" --apply 2>&1 || true)"
-    printf 'done_run setup: residue sweep (fail-open): %s\n' "$(printf '%s' "$SWEEP_OUT" | grep -E '^(OUTCOME|verdict|sweep):' | tail -n 3)"
+    printf 'done_run setup: residue sweep (fail-open): %s\n' "$(printf '%s' "$SWEEP_OUT" | grep -E '^(OUTCOME|remove|registration|branch-report):')"
   fi
 
   # 5. Partial-setup classification (read-only unless --from-manifest).

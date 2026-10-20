@@ -30,6 +30,34 @@
 #   writing: every anomaly prints one advisory line naming the deploy remedy,
 #   and check mode always ends OUTCOME: pass and exits 0 (the drift advisory
 #   never gates).
+# - Post-walk verification: after the walk, the deployer runs
+#   verify_runtime_deployment.py over the same canonical repo, runtime home,
+#   and mode, resolved beside this script's own realpath, never from the
+#   runtime home. The verifier scans the admitted entries' transitive
+#   local-sibling closure over canonical bytes and probes every admitted
+#   .py entry (shell entries are outside its domain): one -I -S -B child per
+#   entry with a minimized environment (no PYTHONPATH), cwd and import root
+#   a shared materialized probe root holding dereferenced copies of the
+#   home's canonical-linked entries; the probe only executes bytes that are
+#   symlinks dereferencing into the canonical scripts directory, and probing
+#   those bytes executes module bodies, the residual trust extended to
+#   admitted bytes. Deploy mode: any refusal (closure gap, canonical-missing,
+#   home-absent, unreadable or unparseable bytes, not-canonical,
+#   import-probe failure), or a verifier that cannot run at all, ends
+#   OUTCOME: fail with exit 1, terminal in-run: every violation named in the
+#   one run, never a retry or a skip-and-pass, and park-for-operator is the
+#   bounded repair when no named remedy converges. Check mode: the same
+#   findings are advisories, one converging remedy per class (closure gap:
+#   the manifest edit; canonical-missing: restore the file or drop the
+#   line; home-absent: the deploy run; unreadable or unparseable bytes:
+#   restore the file, or drop the line for an admitted entry; not-canonical:
+#   run the deploy run from the primary checkout or remove the foreign
+#   file; probe failure: the named entry, a missing sibling the manifest
+#   edit, otherwise park-for-operator), and an unresolvable or failed
+#   verifier prints one
+#   skipped-verification advisory; both keep the report-only contract
+#   (OUTCOME: pass, exit 0). The verifier's own OUTCOME line is dropped so
+#   the run carries exactly one final OUTCOME line.
 # - Nothing is ever written under the canonical repo: the repo is the source,
 #   the runtime home is the destination, never the reverse.
 # - --home DIR names the runtime scripts directory (default
@@ -166,7 +194,7 @@ while IFS= read -r entry || [ -n "$entry" ]; do
   fi
   bak="$dst.bak-$bak_date"
   if [ "$MODE" = "check" ]; then
-    echo "stale: $base (deploy remedy: run $REMEDY to move it aside to $bak and replace it with a symlink to the canonical file)"
+    echo "stale: $base (deploy remedy: run $REMEDY from the primary checkout to move it aside to $bak and replace it with a symlink to the canonical file)"
   else
     rm -f "$bak"
     mv "$dst" "$bak"
@@ -175,4 +203,53 @@ while IFS= read -r entry || [ -n "$entry" ]; do
   fi
 done < "$manifest"
 
-echo "OUTCOME: pass"
+# The verifier resolves beside this script's own realpath, never from the
+# runtime home: a deployed deployer copy is a symlink whose realpath lands in
+# the canonical scripts directory, so the canonical twin is the one that runs.
+verifier=""
+self_real=""
+if command -v python3 >/dev/null 2>&1; then
+  self_real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0" 2>/dev/null)" || self_real=""
+fi
+if [ -n "$self_real" ]; then
+  candidate="$(dirname "$self_real")/verify_runtime_deployment.py"
+  if [ -f "$candidate" ]; then
+    verifier="$candidate"
+  fi
+fi
+
+if [ -z "$verifier" ]; then
+  if [ "$MODE" = "check" ]; then
+    echo "advisory: deployment verification skipped: no verify_runtime_deployment.py beside the deployer (resolved from $(dirname "$0")); run the deploy run once a canonical repo carries it"
+    echo "OUTCOME: pass"
+    exit 0
+  fi
+  echo "error: deployment verification could not run: no verify_runtime_deployment.py beside the deployer (resolved from $(dirname "$0"))"
+  echo "OUTCOME: fail"
+  exit 1
+fi
+
+verify_rc=0
+verify_out="$(python3 "$verifier" --repo "$canonical" --home "$RUNTIME_HOME" --manifest "$manifest" --mode "$MODE" 2>&1)" || verify_rc=$?
+verify_lines="$(printf '%s\n' "$verify_out" | grep -v '^OUTCOME:' || true)"
+
+if [ "$verify_rc" -eq 0 ]; then
+  if [ -n "$verify_lines" ]; then
+    printf '%s\n' "$verify_lines"
+  fi
+  echo "OUTCOME: pass"
+  exit 0
+fi
+if [ "$MODE" = "check" ]; then
+  echo "advisory: deployment verification skipped: the verifier could not run (exit $verify_rc); run python3 $verifier --repo $canonical --home $RUNTIME_HOME --mode check for its evidence"
+  echo "OUTCOME: pass"
+  exit 0
+fi
+if [ "$verify_rc" -ne 1 ]; then
+  echo "error: deployment verification could not run (verifier exit $verify_rc)"
+fi
+if [ -n "$verify_lines" ]; then
+  printf '%s\n' "$verify_lines"
+fi
+echo "OUTCOME: fail"
+exit 1

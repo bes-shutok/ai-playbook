@@ -4,9 +4,10 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** medium
-- **Cluster:** docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md (same artifact class: claim files outliving their session)
+- **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (same artifact class: claim files outliving their session)
 - **Cluster:** docs/history/backlog/2026-10-13-execution-claim-retry-ceiling-unpinned.md (same gateway: `scripts/execution_claim.sh` arms)
 - **Cluster:** docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md (same artifact class: a run's worktree and claim outliving their session; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/backlog/2026-10-21-execution-claim-release-archived-plan-operand.md (same artifact class: the execution claim file's lifecycle end)
 - **Origin class:** observed recovery gap
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/maintenance/template-execution.md` (EXECUTION CLAIM paragraph: stale-foreign takeover arm); `agents/skills/execute-plan/SKILL.md` (Execution claim registration; Recovery section); `scripts/execution_claim.sh` (branch-occupant pre-takeover gate)
@@ -27,6 +28,14 @@ Arm 3 verifies against the manifest shape the skill actually writes (accept `ses
 ## Why not fixed now
 
 The fix touches the claim gateway (a guard-bearing path, plan route only) plus the manifest contract and the recovery text; the live witness was closed by hand.
+
+## Refusal-path no-exit analysis
+
+- **Add a sanctioned exit:** the existing `take` command owns existing-claim conversion; `claim` creates a fresh claim and cannot replace it. The planned status provider authorizes conversion only for the exact prior session in terminal state, with completed-run evidence and both existing locks held; missing or unusable provider configuration retains the current refusal. `done-lock release-orphaned` recovers a dead lock holder but does not establish claim-owner status.
+- **Remove the false positive:** accepting a live, paused, unresolved, or unknown owner, or incomplete run evidence, can leave two sessions editing the same run. The two recorded dead-owner incidents support exact-ID terminal status and complete parent-owned task/review boundaries before conversion.
+- **Simplify the flow:** retain the existing `take` gateway and locks: its per-worktree done-lock covers the recovery evidence, and the repository merge-lock serializes all claim operations. This avoids a manual claim rewrite, a separate conversion mode, or a new lock family while eliminating the unlink/create gap through atomic replacement.
+
+The plan pre-registers the configured exact-ID status-provider check, completed-run boundary, and existing-lock serialization before enabling recovery. It cites the two witnessed incidents, prices a false positive as one refused resume, and sets review on 2027-04-21 with removal if no additional catch occurs by then. A done-lock PID is not treated as proof of session identity.
 
 ## Source
 

@@ -201,7 +201,7 @@ Record in staging Metadata under the `Guideline pack:` field (the field name `re
 
 ## Step 3: Launch Sub-Agents in Parallel
 
-Read `review-agents/review-panel-selection.md` to determine the recommended five-worker or focused panel and which conditional lenses `risk` loads. Record selection rationale and Domains in staging metadata.
+Select the full or focused panel per `review-agents/review-panel-selection.md`, recording its rationale and Domains. Before launch, mint usage per `review-staging`'s **Usage capture (production write path)** and carry its identity through the round.
 
 **Soften watchlist (multi-round / review-loop):** Before launching workers, read `### Soften watchlist` from the previous staging doc for this branch (and git log subjects matching `Soften r` when the section is missing). Pass every `open` row into each relevant worker prompt. Workers must either restage the issue or return an explicit reaffirmation; the orchestrator records the outcome in the new staging doc. Do not discard with `prior-review` alone when the prior outcome was a soften/revert.
 

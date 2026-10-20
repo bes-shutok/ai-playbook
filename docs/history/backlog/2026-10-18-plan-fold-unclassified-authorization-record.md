@@ -8,7 +8,7 @@
 - **Class:** fix-class
 - **Driving force:** correctness
 - **Skill/step:** `agents/skills/plans/SKILL.md`, Plan Quality Gate rule 2
-- **Cluster:** docs/history/backlog/2026-10-10-plan-delta-classifier-excluded-region-gap.md; docs/history/backlog/2026-10-16-corrections-chain-unclassified-mechanical-hops.md
+- **Cluster:** docs/history/backlog/completed/2026-10-10-plan-delta-classifier-excluded-region-gap.md; docs/history/backlog/completed/2026-10-16-corrections-chain-unclassified-mechanical-hops.md (both covered by docs/history/plans/completed/2026-10-18-corrections-chain-operator-ack-end-to-end.md)
 - **Dedup probe:** compared the two clustered classifier rows; this row records the required authorization for a semantic plan fold and its fresh-review route, while the clustered rows concern mechanical edit classification and post-certification correction verification.
 
 ## Problem

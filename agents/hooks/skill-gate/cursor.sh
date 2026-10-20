@@ -9,6 +9,9 @@
 #   {"permission":"deny","user_message":"...","agent_message":"..."}
 #
 # Session: SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
+# (shared helper contract, owned by agents/hooks/lessons-recall/README.md,
+# "Session channel precedence"; empty only when every supported source is
+# unset or empty -> omit --session-id -> core keys `no-session`).
 set -u
 
 SESSION_CHANNEL="$HOME/.ai-playbook/scripts/session_channel.py"

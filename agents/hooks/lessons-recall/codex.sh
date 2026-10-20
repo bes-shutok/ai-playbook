@@ -20,11 +20,13 @@
 #
 # Session model (r10-B1): SID is derived VERBATIM as
 #   SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
-# At v9 the helper returns empty for Codex (no verified per-session env var),
-# so the adapter OMITS `--session-id` -> core keys `no-session` + FULL window
-# (per-session isolation is Claude-only at v9; this is the DOCUMENTED STEADY
-# STATE for Codex, NOT a degraded fallback). No empty-SID alarm is emitted
-# (only the Claude adapter warns).
+# (shared helper contract, owned by agents/hooks/lessons-recall/README.md,
+# "Session channel precedence"; CODEX_SESSION_ID is the FINAL fallback, never
+# a generic SESSION_ID). Only when every supported source is unset or empty
+# does the helper print empty, and then the adapter OMITS `--session-id` ->
+# core keys `no-session` + FULL window (the documented steady state for Codex
+# without an exported CODEX_SESSION_ID, NOT a degraded fallback). No empty-SID
+# alarm is emitted (only the Claude adapter warns).
 #
 # Exit 0 ALWAYS. Core stderr is DISCARDED.
 set -u

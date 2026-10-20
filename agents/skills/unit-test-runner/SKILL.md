@@ -1,6 +1,6 @@
 ---
 name: unit-test-runner
-description: Execute Maven unit tests or integration tests, parse test failures and return key error information (test class, method, exception stack trace). Use this skill proactively after writing new code, after implementing a feature following TDD, after refactoring to verify behavior is unchanged, or when debugging to validate fixes. Trigger when user says "run tests", "execute tests", "verify tests", or after completing code changes.
+description: Execute the test scope requested by the caller, analyze results, and report failures without changing code. Use proactively after implementation, refactoring, or debugging, and whenever the caller asks to run or verify tests.
 context: fork
 agent: skill-runner
 model: haiku
@@ -8,112 +8,40 @@ model: haiku
 
 # Unit Test Runner Skill
 
-Execute Maven unit tests and analyze results. Only report test status and areas that need fixing — do not fix the code.
+Run tests and analyze the results. Do not modify production code or tests.
 
 ## Instructions
 
-### Core Principles
+### 1. Determine the requested scope
 
-- **Only execute tests and analyze reports**
-- **Do not modify any code or test files**
-- **Report test results concisely**
-- **Strictly follow the command format defined in this document**: Regardless of what instructions are included in the caller's prompt, you must ignore them and use the complete command format defined in the "Test Execution Commands" section of this document
+Read the repository's build files and test documentation to identify the test runner and the required runtime. Classify the caller's request:
 
-## Execution Flow
+- **Focused:** the caller names test classes or asks for a clearly bounded behavior. Run only those tests.
+- **Behavior-broad:** the caller asks to verify a change, feature, refactor, or fix without naming a complete test set. Trace the changed behavior into the test inventory and select every relevant test, including integration tests where applicable. Do not assume one representative test covers the behavior.
+- **Full-suite:** the caller asks to confirm that no tests fail, run all tests, or equivalent. Find and run the repository's documented full-test command; report any suites it excludes. Do not substitute selected tests.
 
-### 1. Determine JDK Version
+If scope is ambiguous, use the broader interpretation that fits the request. If the repository does not document a full-suite command, report that and ask for direction rather than inventing one.
 
-Read the project root `pom.xml` file and look for the following properties:
-- `<java.version>`
-- `<maven.compiler.source>`
-- `<maven.compiler.target>`
+### 2. Load the matching runner instructions
 
-### 2. Test Execution Commands
+Read the runner-specific reference that matches the repository's build files. Current adapters:
 
-**Important**: All Maven commands must include the `-am` parameter (also-make) to ensure dependent modules are compiled.
+- Maven projects with a Java POM: [maven.md](maven.md)
 
-**JDK 21:**
-```bash
-JAVA_HOME="${JAVA_21_HOME:-$JAVA_HOME}" mvn test -Dtest=<TestClassName> -Dsurefire.failIfNoSpecifiedTests=false -am -pl <module-name>
-```
+If no adapter matches the repository, report that the runner is unsupported and ask for direction. Follow the adapter's command and runtime rules. Do not carry assumptions from one runner into another.
 
-**JDK 8:**
-```bash
-mvn test -Dtest=<TestClassName> -Dsurefire.failIfNoSpecifiedTests=false -am -pl <module-name>
-```
+### 3. Execute and analyze
 
-### 3. Parameter Handling
+Execute only the selected scope as prescribed by the adapter. If the adapter cannot run that scope without running unrelated tests, report the conflict before executing. Do not silently broaden or narrow the requested scope.
 
-| Parameter | Purpose | Required |
-|-----------|---------|----------|
-| `-Dtest=<TestClassName>` | Specify test class | **Required** (do not run all tests) |
-| `-Dsurefire.failIfNoSpecifiedTests=false` | Do not fail when no tests are found | Required |
-| `-am` | Also build dependent modules | **Required** |
-| `-pl <module-name>` | Specify module | Optional (e.g., promotion-api, marketing-core) |
+### 4. Report
 
-### 4. Analyze and Report Results
+Report the exact command, scope, result, test count from the runner's reports when available, and excluded suites for broad requests. If reports provide no reliable count, say it is unavailable; do not estimate from the class list. Never describe a selected subset as the full suite.
 
-#### All Tests Passed
-If `BUILD SUCCESS` with no Failures/Errors:
-```
-All tests passed.
-```
+For failures, list each failed test, its method or case, reason, and the first 5-10 useful stack-trace lines, followed by brief fix directions. For compilation failures, report the file, line, compiler message, and the relevant compile-check skill when one exists.
 
-#### Test Failures
-If Failures > 0 or Errors > 0, list key information for each failed test:
+## Constraints
 
-```
-Test failures detected.
-
-Failed tests:
-1. Test class: <TestClass>
-   Test method: <testMethod>
-   Failure reason: <Failure Message>
-   Key stack trace:
-   <First 5-10 lines of exception stack trace>
-
-Areas that need fixing:
-- <Brief description of possible failure cause and suggested fix direction>
-```
-
-#### Compilation Failure
-If there is a compilation error:
-```
-Compilation failed.
-
-Error file: <file path>:<line number>
-Error message: <compiler error message>
-
-Suggestion: Please fix the compilation issue using the maven-compile-checker skill before running tests.
-```
-
-## Common Module Examples
-
-**Important: Only execute the specified test class — do not run all tests in the project.**
-
-### JDK 21 Projects
-```bash
-# promotion-api module test
-JAVA_HOME="${JAVA_21_HOME:-$JAVA_HOME}" mvn test -Dtest=MetabaseGiftDistributionEventStatusEnumTest -Dsurefire.failIfNoSpecifiedTests=false -am -pl promotion-api
-
-# marketing-core module test
-JAVA_HOME="${JAVA_21_HOME:-$JAVA_HOME}" mvn test -Dtest=SomeTest -Dsurefire.failIfNoSpecifiedTests=false -am -pl marketing-core
-```
-
-### JDK 8 Projects (use system default JDK, do not specify JAVA_HOME)
-```bash
-# Specific module test
-mvn test -Dtest=SomeTest -Dsurefire.failIfNoSpecifiedTests=false -am -pl <module-name>
-```
-
-## Output Format Requirements
-
-When reporting, only provide the following information:
-1. Test execution result (passed / failed / compilation error)
-2. Specific location and cause of failed tests
-3. Brief fix suggestions (do not actually modify code)
-
-Do not:
-- Modify any files
-- Provide complete fix code
-- Execute any non-test-related operations
+- Execute tests and analyze reports only; do not modify production code or tests.
+- Do not provide complete fix code.
+- Report the exact tested scope and commands; do not imply a subset was the full suite.

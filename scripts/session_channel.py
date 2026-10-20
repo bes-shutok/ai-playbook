@@ -26,7 +26,9 @@ fallback: Cursor injects that into the agent process but only injects
 ``CURSOR_SESSION_ID`` into hook subprocesses (via ``cursor-session-bridge.sh``).
 The conversation id matches the bridged session id for the same composer tab, so
 marker writers (learn/plans skills in the agent shell) and gate readers (hooks)
-agree. Each agent normally sets only its own var; see
+agree. v4 adds ``CODEX_SESSION_ID`` as the FINAL fallback (the Codex source is
+not a generic ``SESSION_ID`` fallback); the Claude/Cursor precedence is
+unchanged. Each agent normally sets only its own var; see
 ``agents/hooks/lessons-recall/README.md`` (Session channel precedence).
 """
 
@@ -38,14 +40,17 @@ import sys
 CLAUDE_SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 CURSOR_SESSION_ENV = "CURSOR_SESSION_ID"
 CURSOR_CONVERSATION_ENV = "CURSOR_CONVERSATION_ID"
+CODEX_SESSION_ENV = "CODEX_SESSION_ID"
 
 
 def _derive() -> str:
-    """Return the per-session channel value (Claude, then Cursor hook, then Cursor agent)."""
+    """Return the per-session channel value (Claude, then Cursor hook, then
+    Cursor agent, then Codex)."""
     return (
         os.environ.get(CLAUDE_SESSION_ENV)
         or os.environ.get(CURSOR_SESSION_ENV)
         or os.environ.get(CURSOR_CONVERSATION_ENV)
+        or os.environ.get(CODEX_SESSION_ENV)
         or ""
     )
 
@@ -107,7 +112,8 @@ def selftest(argv: list[str] | None = None) -> int:
             return
         all_ok = _selftest_check(label, condition, detail) and all_ok
 
-    env_names = (CLAUDE_SESSION_ENV, CURSOR_SESSION_ENV, CURSOR_CONVERSATION_ENV)
+    env_names = (CLAUDE_SESSION_ENV, CURSOR_SESSION_ENV,
+                 CURSOR_CONVERSATION_ENV, CODEX_SESSION_ENV)
 
     # ------------------------------------------------------------------ #
     # v1 arms (derive_session_channel_env_var): Claude env only.
@@ -116,6 +122,7 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CURSOR_SESSION_ENV, None)
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CLAUDE_SESSION_ENV] = "abc-123"
         rc, out = _capture_main()
         check(
@@ -131,6 +138,7 @@ def selftest(argv: list[str] | None = None) -> int:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ.pop(CURSOR_SESSION_ENV, None)
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         rc, out = _capture_main()
         check(
             "derive_session_channel_env_var: UNSET -> stdout empty",
@@ -144,6 +152,7 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CURSOR_SESSION_ENV, None)
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CLAUDE_SESSION_ENV] = ""
         rc, out = _capture_main()
         check(
@@ -161,6 +170,7 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CURSOR_SESSION_ENV] = "abc-123"
         rc, out = _capture_main()
         check(
@@ -176,6 +186,7 @@ def selftest(argv: list[str] | None = None) -> int:
         os.environ[CLAUDE_SESSION_ENV] = "claude-sess"
         os.environ[CURSOR_SESSION_ENV] = "cursor-sess"
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         rc, out = _capture_main()
         check(
             "precedence_claude_over_cursor: both set -> Claude value",
@@ -195,6 +206,7 @@ def selftest(argv: list[str] | None = None) -> int:
         try:
             os.environ.pop(CURSOR_SESSION_ENV, None)
             os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+            os.environ.pop(CODEX_SESSION_ENV, None)
             if claude_value is None:
                 os.environ.pop(CLAUDE_SESSION_ENV, None)
             else:
@@ -212,6 +224,7 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CURSOR_SESSION_ENV] = ""
         rc, out = _capture_main()
         check(
@@ -227,6 +240,7 @@ def selftest(argv: list[str] | None = None) -> int:
         os.environ[CLAUDE_SESSION_ENV] = "claude-only"
         os.environ[CURSOR_SESSION_ENV] = ""
         os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         rc, out = _capture_main()
         check(
             "cursor_empty_string_env: Cursor empty, Claude set -> Claude value",
@@ -243,6 +257,7 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CURSOR_CONVERSATION_ENV] = "conv-123"
         rc, out = _capture_main()
         check(
@@ -258,6 +273,7 @@ def selftest(argv: list[str] | None = None) -> int:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ[CURSOR_SESSION_ENV] = "cursor-sess"
         os.environ[CURSOR_CONVERSATION_ENV] = "conv-123"
+        os.environ.pop(CODEX_SESSION_ENV, None)
         rc, out = _capture_main()
         check(
             "precedence_cursor_session_over_conversation: both set -> session value",
@@ -272,6 +288,7 @@ def selftest(argv: list[str] | None = None) -> int:
         os.environ[CLAUDE_SESSION_ENV] = "claude-sess"
         os.environ.pop(CURSOR_SESSION_ENV, None)
         os.environ[CURSOR_CONVERSATION_ENV] = "conv-123"
+        os.environ.pop(CODEX_SESSION_ENV, None)
         rc, out = _capture_main()
         check(
             "precedence_claude_over_conversation: Claude + conversation -> Claude value",
@@ -285,11 +302,105 @@ def selftest(argv: list[str] | None = None) -> int:
     try:
         os.environ.pop(CLAUDE_SESSION_ENV, None)
         os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ.pop(CODEX_SESSION_ENV, None)
         os.environ[CURSOR_CONVERSATION_ENV] = ""
         rc, out = _capture_main()
         check(
             "cursor_conversation_empty_string: empty conversation, others unset -> stdout empty",
             rc == 0 and out == "",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    # ------------------------------------------------------------------ #
+    # v4 arms: CODEX_SESSION_ID (final fallback).
+    # ------------------------------------------------------------------ #
+    saved = _save_env(*env_names)
+    try:
+        os.environ.pop(CLAUDE_SESSION_ENV, None)
+        os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ[CODEX_SESSION_ENV] = "codex-sess-9"
+        rc, out = _capture_main()
+        check(
+            "codex_session_id_fallback: Codex set, others unset -> Codex value",
+            rc == 0 and out == "codex-sess-9",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    saved = _save_env(*env_names)
+    try:
+        os.environ.pop(CLAUDE_SESSION_ENV, None)
+        os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ[CODEX_SESSION_ENV] = ""
+        rc, out = _capture_main()
+        check(
+            "codex_empty_string_env: Codex empty, others unset -> stdout empty",
+            rc == 0 and out == "",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    saved = _save_env(*env_names)
+    try:
+        os.environ[CLAUDE_SESSION_ENV] = "claude-sess"
+        os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ[CODEX_SESSION_ENV] = "codex-sess-9"
+        rc, out = _capture_main()
+        check(
+            "precedence_claude_over_codex: Claude + Codex -> Claude value",
+            rc == 0 and out == "claude-sess",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    saved = _save_env(*env_names)
+    try:
+        os.environ.pop(CLAUDE_SESSION_ENV, None)
+        os.environ[CURSOR_SESSION_ENV] = "cursor-sess"
+        os.environ.pop(CURSOR_CONVERSATION_ENV, None)
+        os.environ[CODEX_SESSION_ENV] = "codex-sess-9"
+        rc, out = _capture_main()
+        check(
+            "precedence_cursor_session_over_codex: session + Codex -> session value",
+            rc == 0 and out == "cursor-sess",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    saved = _save_env(*env_names)
+    try:
+        os.environ.pop(CLAUDE_SESSION_ENV, None)
+        os.environ.pop(CURSOR_SESSION_ENV, None)
+        os.environ[CURSOR_CONVERSATION_ENV] = "conv-123"
+        os.environ[CODEX_SESSION_ENV] = "codex-sess-9"
+        rc, out = _capture_main()
+        check(
+            "precedence_cursor_conversation_over_codex: conversation + Codex -> conversation value",
+            rc == 0 and out == "conv-123",
+            repr(out),
+        )
+    finally:
+        _restore_env(saved)
+
+    saved = _save_env(*env_names)
+    try:
+        os.environ[CLAUDE_SESSION_ENV] = "claude-sess"
+        os.environ[CURSOR_SESSION_ENV] = "cursor-sess"
+        os.environ[CURSOR_CONVERSATION_ENV] = "conv-123"
+        os.environ[CODEX_SESSION_ENV] = "codex-sess-9"
+        rc, out = _capture_main()
+        check(
+            "precedence_full_chain: all four sources set -> Claude value",
+            rc == 0 and out == "claude-sess",
             repr(out),
         )
     finally:

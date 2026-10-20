@@ -37,7 +37,12 @@ the bytes-changed-no-hunks refusal so a digest-changing delta with no
 line-level hunks is never vacuously exempt, and refuses any hunk-bearing
 delta whose sides disagree on the trailing newline (the line model drops
 that fact); ``build_row`` produces
-corrections rows through corrections_record's schema builder. Refusals
+corrections rows through corrections_record's schema builder; an
+operator-acked row records the emitting session's nonempty
+``author_session_id``, which the CLI derives from
+scripts/session_channel.py, and a missing or empty identity refuses the
+emission so the hop stays on the fresh-review path, while a
+script-verified row never carries the key. Refusals
 start with MARKER_PREFIX and contain no banned literal. Decoding is
 UTF-8 strict. Consumers: the staging validator and the readiness gate
 re-run the classifier over bytes re-derived from git.
@@ -508,9 +513,15 @@ def classify_delta(old_bytes, new_bytes):
 
 def build_row(kind, old_bytes, new_bytes, evidence_commit, hunks,
               receipt=None, recorded_at=None,
-              recorded_by="plan_delta_classifier"):
+              recorded_by="plan_delta_classifier", author_session_id=None):
     """A corrections row built through corrections_record's schema builder
-    (row_keys + validate_row), so every emitted row is born-conformant."""
+    (row_keys + validate_row), so every emitted row is born-conformant.
+    Only an operator-acked row records the emitting session's identity:
+    the caller passes the nonempty value the session-channel helper
+    returned, and a missing (None) or empty identity refuses the
+    emission so the hop stays on the fresh-review path - there is no
+    key-free operator-acked default emission. A script-verified row
+    never carries the key."""
     row = {
         "kind": kind,
         "before_digest": cr.sha256_hex(old_bytes),
@@ -525,6 +536,24 @@ def build_row(kind, old_bytes, new_bytes, evidence_commit, hunks,
         row["recorded_at"] = _utc_now()
     if kind == cr.KIND_OPERATOR_ACKED:
         row["receipt"] = receipt
+        if author_session_id is None:
+            raise cr.CorrectionsSchemaError(cr.leg_reason(
+                "schema",
+                "operator-acked emission refused: no author session "
+                "identity was provided; the hop remains on the "
+                "fresh-review path"))
+        if not isinstance(author_session_id, str) or \
+                not author_session_id.strip():
+            raise cr.CorrectionsSchemaError(cr.leg_reason(
+                "schema",
+                "operator-acked emission refused: the author session "
+                "identity is empty; the hop remains on the "
+                "fresh-review path"))
+        row[cr.AUTHOR_SESSION_KEY] = author_session_id
+    elif author_session_id is not None:
+        raise cr.CorrectionsSchemaError(cr.leg_reason(
+            "schema",
+            "a script-verified row never carries author_session_id"))
     cr.validate_row(row, cr.FAMILY_PLAN)
     return row
 
@@ -662,9 +691,16 @@ def run_directory_plan_mode(args):
             try:
                 receipt = load_receipt(args.receipt) \
                     if args.kind == cr.KIND_OPERATOR_ACKED else None
+                # The emitting session's identity comes from the shared
+                # session-channel helper (Task 3); an empty derivation
+                # refuses the operator-acked emission below and the hop
+                # remains on the fresh-review path.
+                author = cr.session_identity() \
+                    if args.kind == cr.KIND_OPERATOR_ACKED else None
                 for _rel, old_bytes, new_bytes, hunks in changed:
                     row = build_row(args.kind, old_bytes, new_bytes, head,
-                                    hunks, receipt=receipt)
+                                    hunks, receipt=receipt,
+                                    author_session_id=author)
                     print("corrections-row-json: %s"
                           % json.dumps(row, sort_keys=True))
             except (OSError, ValueError, UnicodeDecodeError) as exc:
@@ -826,8 +862,15 @@ def main(argv=None):
             try:
                 receipt = load_receipt(args.receipt) \
                     if args.kind == cr.KIND_OPERATOR_ACKED else None
+                # The emitting session's identity comes from the shared
+                # session-channel helper (Task 3); an empty derivation
+                # refuses the operator-acked emission below and the hop
+                # remains on the fresh-review path.
+                author = cr.session_identity() \
+                    if args.kind == cr.KIND_OPERATOR_ACKED else None
                 row = build_row(args.kind, old_bytes, new_bytes, head,
-                                hunks, receipt=receipt)
+                                hunks, receipt=receipt,
+                                author_session_id=author)
             except (OSError, ValueError, UnicodeDecodeError) as exc:
                 return tool_error("the receipt operand %s is unreadable "
                                   "or not decodable JSON: %s"

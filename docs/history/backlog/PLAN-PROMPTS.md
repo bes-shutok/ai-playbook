@@ -128,12 +128,112 @@ PLAN-PROMPTS-PRUNE: clocked-order-successor-verification -> docs/history/plans/2
 PLAN-PROMPTS-PRUNE: executor-landing-helper-routing-gap -> docs/history/plans/2026-10-19-executor-landing-helper-routing-gap.md (executed and landed by this run; the frozen entry pruned by the plan's own landing rider; origin row deleted in the same rider commit)
 PLAN-PROMPTS-PRUNE: fold-verification-runs-committed-bytes -> docs/history/plans/2026-10-20-fold-verification-runs-committed-bytes.md (r6-certified ready=yes zero blocking at certified digest 0daa05c58072942e5005b79f7b91cd0697f9f44c44607676600fe36bef7ae12a, seal .ai-playbook/review-certs/fold-verification-runs-committed-bytes.md; the frozen entry pruned by its own landing rider; origin row covered-flipped with the second-mandate out-of-scope disposition)
 PLAN-PROMPTS-PRUNE: readiness-files-coverage-quote-prefix -> docs/history/plans/2026-10-20-readiness-files-coverage-quote-prefix.md (r5-certified ready=yes zero blocking at certified digest b7523e6a232b14f63adb80d7372e94d259c02867c011b124ef6a48d2b1aca3c0, seal .ai-playbook/review-certs/readiness-files-coverage-quote-prefix.md; the frozen entry pruned by its own landing rider; origin row covered-flipped)
-PLAN-PROMPTS-PRUNE: authoring-worktree-landing-shape -> docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md (plan file exists at the plans root; pruned by the 2026-10-20 11:00 scheduler turn monitor duty under the standing plan-file-exists rule)
+PLAN-PROMPTS-PRUNE: authoring-worktree-landing-shape -> docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md (plan file exists at the plans root; pruned by the 2026-10-20 11:00 scheduler turn monitor duty under the standing plan-file-exists rule; executed and landed by the 2026-10-21 run, all three origin rows archived covered under docs/history/backlog/completed/)
 PLAN-PROMPTS-PRUNE: worktree-rebase-feature-start-boundary -> docs/history/plans/2026-10-19-worktree-rebase-feature-start-boundary.md (plan file exists at the plans root; pruned by the 2026-10-20 11:00 scheduler turn monitor duty under the standing plan-file-exists rule)
 PLAN-PROMPTS-PRUNE: done-immediate-commit-single-homing -> docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md (plan file exists at the plans root; pruned by the 2026-10-20 11:00 scheduler turn monitor duty under the standing plan-file-exists rule)
 PLAN-PROMPTS-PRUNE: java-construction-and-interface-conventions -> docs/history/plans/2026-10-20-java-construction-and-interface-conventions.md (r2-certified ready=yes zero blocking at certified digest 5427477c5ed21e347327e6d22efda437685b6f55c7c5d1712b5364e1129b60ce, seal .ai-playbook/review-certs/java-construction-and-interface-conventions.md; the frozen entry pruned by its own landing rider; origin row covered-flipped)
 
 PLAN-PROMPTS-PRUNE: usage-wall-probe-before-timed-resume -> docs/history/plans/2026-10-20-usage-wall-probe-before-timed-resume.md (r4-certified ready=yes zero blocking, source digest d7e6efc274fa14fac4f222dad5ca76a0d15461bfc0d7a9643a3c92db384cce67, seal .ai-playbook/review-certs/usage-wall-probe-before-timed-resume.md; landing in this commit)
+
+PLAN-PROMPTS-PRUNE: description-length-gate-restore-blocking-posture -> docs/history/plans/2026-10-21-description-length-checker-scope-and-admission.md (landed plan authoring record; own entry pruned with its plan landing)
+PLAN-PROMPTS-PRUNE: maintenance-exec-setup-transfer-order -> docs/history/plans/2026-10-21-maintenance-exec-bootstrap-lapse-disposition.md (r2-certified ready=yes zero blocking, seal .ai-playbook/review-certs/maintenance-exec-bootstrap-lapse-disposition.md; own authoring landing rider)
+
+## authoring-claim-marker-and-closeout-lifecycle
+
+Added: 2026-10-21, investigate pass during learn closeout; grouped the marker-lifetime conflict with the open registry-file closeout duty because both touch the plans/template authoring-claim lifecycle
+
+Work-type verdict: plan-worthy because the marker rule conflicts across two operative skills and must be reconciled with the liveness probe, digest-integrity boundary, and existing closeout-delete origin; the changes span the plan-authoring contract and maintenance closeout/consult text, so the Ad-hoc backlog arm's single-surface sentence-scale test does not hold (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-plans-authoring-claim-marker-contract.md
+- docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md
+
+Stage 1 roster: the two origins above; `docs/history/backlog/2026-10-20-authoring-worktree-landing-shape.md` is related lifecycle context but is covered by `docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md`, so it is not an origin.
+
+Urgency: medium - the contradiction leaves authors unsure whether certification should remove a provenance line, while the separate closeout defect can leave registry files behind; existing liveness and digest rules limit immediate impact, but the shared instructions keep reproducing uncertainty across authoring runs.
+
+Scope arms:
+- Reconcile marker lifetime at the owning contract: retain the plan header line as permanent provenance, align `agents/skills/plans/SKILL.md` with `agents/skills/maintenance/template-authoring.md` and lesson 48, and keep the mutable claim file's deletion duty explicit at closeout.
+- Closeout complement: make the existing claim-file delete and ownership re-check reachable from the actual authoring closeout path, and preserve the existing stale-heartbeat consult behavior; do not fold marker cleanup into registry cleanup.
+- Remove marker after certification: keep the current plans-skill rule and change the template and lesson, accepting post-review artifact churn.
+- Remove the marker entirely: rely only on the claim file and liveness probe, leaving an untracked plan without its in-file session witness.
+- Add a marker-lifetime validator or a new registry field: mechanically reject inconsistent wording or duplicate marker state.
+
+Orientation: the temporary-lifetime sentence entered `agents/skills/plans/SKILL.md` with the 2026-10-06 authoring-round-liveness-gap landing (`10d7618a0`), whose rationale says the plan self-identifies until certification so the liveness probe can read it. The plan/template split later relocated the operational claim recipe, while the template's current AUTHORING CLAIM paragraph says the header marker is permanent provenance and lesson 48 records a teardown removal that was reverted by digest-integrity review. The liveness implementation is `scripts/check_authoring_plans_liveness.py`; its focused tests assert the marker phrase and exercise claim-to-plan classification. The open closeout row independently records that the claim-file delete is not named by the actual closeout path. These are two lifecycle artifacts with different lifetimes: deleting the mutable registry file does not imply deleting the reviewed plan's provenance snapshot.
+
+Prompt: Author one plan from `docs/history/backlog/2026-10-21-plans-authoring-claim-marker-contract.md` and `docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md`. Trace the marker from first plan write through certification, landing, archive, and teardown; read the Phase 0 marker rule in `agents/skills/plans/SKILL.md`, the AUTHORING CLAIM paragraph in `agents/skills/maintenance/template-authoring.md`, lesson 48, `scripts/check_authoring_plans_liveness.py` and its tests, and the closeout paths that should delete the mutable claim file. Keep the artifact lifetimes distinct: align the plan skill with the template and lesson so the header marker remains permanent provenance; make the existing claim-file delete and ownership re-check reachable at the actual closeout boundary; retain the liveness probe's current marker use and stale-heartbeat semantics. Update only the owning instruction surfaces, paying for operative-text growth with deletion. Do not add a marker validator, registry field, gate, lock, ledger, or ceremony. Run the liveness tests, the pins suite, the hygiene scan, and `check-no-em-dash.sh touched`.
+
+Rejected alternatives:
+- Keep the plan skill's temporary-marker rule and change the template plus lesson: rejected because lesson 48 records a real post-review removal that digest-integrity review reverted, and archived plans retain the line as provenance (`docs/maintenance/development_lessons.md`)
+- Delete the marker together with the registry file at closeout: rejected because the mutable claim file and reviewed plan header have different lifetimes, and the liveness probe reads the header marker (`scripts/check_authoring_plans_liveness.py`)
+- Remove all marker use from the liveness probe: rejected because the marker is the in-file witness that lets an untracked plans-root artifact identify its owning session (`agents/skills/plans/SKILL.md`)
+- Add a validator or registry field to enforce the lifetime: rejected because the defect is contradictory operative text and existing tests already cover the marker consumer; no witnessed incident requires new blocking machinery (`scripts/test_authoring_plans_liveness.py`)
+- Investigate only the marker row: rejected because the open closeout row shares the same plan/template lifecycle and its existing claim-file deletion duty is the complementary mutable-state arm (`docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md`)
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is recommended; the validator arm is rejected because the instruction conflict is the witnessed defect and the existing liveness test covers the consumer.
+
+
+
+## facts-values-safe-loading-and-audit
+
+Added: 2026-10-21, investigate pass over the session-witnessed exposure from reading a complete local facts file
+
+Work-type verdict: plan-worthy because the remaining work audits owner-controlled local facts stores, reconciles the general facts rule with the narrower OAuth rule, and must preserve each facts consumer; this is not a body-named single-surface edit under the Ad-hoc backlog arm in `agents/skills/maintenance/decisions.md`.
+
+Origins:
+- docs/history/backlog/2026-10-21-facts-values-safe-loading-and-audit.md
+
+Urgency: high - one full-file read put a credential-like local value into tool output; the new minimal-read instruction prevents the same reading pattern, but existing stored values and consumers have not been audited.
+
+Scope arms:
+- Review the applicable local facts stores using a non-printing method that reports only sanitized key or field classifications; do not emit values or machine-specific paths.
+- Trace consumers of any credential-like values and prepare owner-approved migration or removal through the existing secret-storage workflow, verifying consumers after each change.
+- Keep §53.1 and widen its storage prohibition to credential classes beyond MCP access and refresh tokens; preserve the OAuth-specific backup and restore procedure in §53.2-§53.4.
+- Keep §50.6 as the read-output complement to the storage rule, with a lower-tier task-start pointer and no duplicated OAuth procedure.
+- Decide whether a reusable safe audit method is justified. Do not add a blocking scanner unless the plan establishes how it avoids printing matches and provides the machinery admission evidence.
+
+Orientation: `agent_workflow_guidelines.md` §53.1 was introduced as part of the MCP OAuth path workflow in commit `250882b13`; its text specifically prohibits access and refresh tokens. The session exposed a separate failure mode: the task-start rule to read applicable facts was interpreted as permission to print the whole local file. The current session adds §50.6 and the task-start pointer in `docs/AGENTS.md`, which cover safe retrieval and output. Keep and widen §53.1 for general credential storage, while preserving the existing OAuth-specific procedure as its narrower complement. The new backlog item owns the unresolved audit and storage policy, not the already-made instruction edit.
+
+Prompt: In a local-only plan authoring session, inspect `agent_workflow_guidelines.md` §50.6 and §53, the task-start facts rule in `docs/AGENTS.md`, the facts format guidance in `agents/skills/learn/`, and the credential workflow in §53.2-§53.4. Do not inspect remote state. Identify the local facts stores and their owners through already-available paths, but never print a whole file, matched value, secret-bearing line, machine path, or account identifier. Use a safe method that emits only sanitized key names or classifications; if no such method is available, stop the read and recommend an approved private audit route. Classify any values that require review without copying them into the plan, tools, logs, or reports. Trace affected consumers before recommending owner-approved removal or migration to the existing secret storage. Verify that the consumers still resolve credentials after an authorized migration, and determine whether any exposed credential requires owner-directed rotation. Reconcile the general safe-read rule with the narrower MCP OAuth storage rule using the smallest canonical edit and a pointer at lower tiers. Do not alter company or user-owned facts without their owner's approval. Do not create a new scanner or gate unless the plan supplies machinery admission evidence. Record only sanitized outcomes and leave the actual local facts remediation for its owner-approved execution.
+
+Rejected alternatives:
+- Remove §53.1 because §50.6 now prevents output disclosure: rejected because the existing rule addresses a separate storage harm and has a documented MCP OAuth workflow (commit 250882b13)
+- Keep §53.1 unchanged and rely on §50.6 alone: rejected because the safe-read rule governs retrieval and output, while §53.1's current storage scope names only access and refresh tokens (commit 250882b13)
+- Narrow §53.1 to MCP OAuth only and close the issue after adding §50.6: rejected because the witnessed exposure shows the general facts surface also needs an owner-led credential audit (`docs/history/backlog/2026-10-21-facts-values-safe-loading-and-audit.md`)
+- Remove every credential-like field immediately without tracing consumers or ownership: rejected because facts are consumed by machine-specific workflows and the task-start policy defines their path and ownership roles (`docs/AGENTS.md`)
+- Add a blocking scanner over local facts now: rejected because the session provides one exposure witness but no safe scanner behavior, catch-frequency estimate, or false-positive cost; a raw match could repeat the disclosure (`docs/history/backlog/2026-10-11-done-sensitive-scan-neutral-token-assignment.md`)
+- Treat the existing neutral-token scanner false positive as the same issue: rejected because that row concerns source-diff scanning of ordinary parser variables, while this origin concerns safe reading and storage of local facts (`docs/history/backlog/2026-10-11-done-sensitive-scan-neutral-token-assignment.md`)
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is proposed. The plan may consider a safe audit helper only after it establishes non-printing behavior, expected catch frequency, false-positive cost, and a review date.
+
+## review-staging-hard-validator-fail-fast-iteration
+
+Added: 2026-10-21, investigate pass anchored on the row filed after the gate-removal-closeout-accounting execution's Phase 3 canonical record authoring
+
+Work-type verdict: plan-worthy because the smallest fix arm changes `scripts/validate_review_staging.py`, a guard-bearing validator with hard-mode pins, and the Ad-hoc backlog arm's eligibility test excludes guard-bearing paths (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-review-staging-hard-validator-fail-fast-iteration.md
+
+Urgency: medium - every first-time canonical review record authoring re-pays the witnessed cost (eight fix-validate rounds for one record on 2026-10-21); the validator's single-error fail-fast is a deliberate deterministic ordering (module docstring and the ordering comment near the hard-mode gate, introduced in the 10480a1a5 wave), so the fix must preserve that contract while removing the iteration tax.
+
+Scope arms:
+- Change hard mode to collect and report every failing gate in one pass, each line ordered by the existing deterministic ordering (coverage presence, source-kind family, digest family), failing with the same exit and OUTCOME semantics; a record that passes still passes identically, so no passing record's verdict moves.
+- Give each reported error line a pointer to the owning clause in `agents/skills/review-staging/SKILL.md` (section name or recording-rule number), so each failure routes straight to its documentation.
+- Re-run the validator's self-test suite and the existing hard-mode pins; any pin that asserts one-error-per-pass is updated in the same change with the pin's rationale restated against the new multi-error shape.
+- Pay for growth: the validator docstring's outcome-contract paragraph absorbs the multi-error wording without a new section.
+
+Orientation: the validator's individual contract clauses are all documented in `agents/skills/review-staging/SKILL.md` (witness-ledger shape, per-worker budget with overflow, finding conservation, enums, pattern-id format, attempt deadlines), so the gap is not missing documentation but the pay-per-error authoring loop: a first-time author cannot pre-check the clause set and discovers each gap only after the previous fix. The 2026-10-19 schema-scaffold plan (docs/history/plans/2026-10-19-review-staging-schema-scaffold-and-validation-reuse.md) owns the validator's current shape and is the archaeology home for its ordering design.
+
+Prompt: In a plans session, author a plan that modifies `scripts/validate_review_staging.py` hard mode to report all failing gates per pass in the existing deterministic order (each line naming the owning `agents/skills/review-staging/SKILL.md` clause), preserving exit codes, the final `OUTCOME:` line, `--json` outcome parity, and every passing-record verdict. Re-derive the current hard-mode gate flow and the ordering design from disk before writing (the module docstring, the ordering comment near the hard-mode gate, and the 2026-10-19 schema-scaffold plan). Update or retire any pin asserting the one-error-per-pass shape in the same change, with the rationale restated. Verify with the validator's self-test suite plus the maintenance pins suite (both exit 0) and one end-to-end authoring rehearsal over a deliberately multi-flawed record showing all classes reported in a single pass. The plan must not add a new gate, ledger, or ceremony, and must not restate or reorganize the skill's existing clause documentation.
+
+Rejected alternatives:
+- Consolidate a preflight checklist into `agents/skills/review-staging/SKILL.md`: rejected because every clause is already documented in that file and a checklist restates them, the exact cross-section duplication the skill design guidelines' merge rule prices; the validator-side fix removes the tax without a second home for the clauses (agents/skills/review-staging/SKILL.md)
+- Leave the fail-fast shape as-is: rejected because the witnessed cost (eight rounds, origin row) re-pays on every first-time canonical authoring and the record authoring cadence is regular (multiple canonical records per week across exec runs)
+- Report all errors without the deterministic ordering: rejected because the ordering is a deliberate design (coverage presence, source-kind family, digest family) introduced with the validator wave (10480a1a5); multi-error reporting preserves it instead of dropping it
+- Extend soft mode to gate: rejected because soft mode's report-only posture is pinned by the outcome contract (scripts/OUTCOME_CONTRACT.md; a soft run over a findings-bearing record already ends OUTCOME: fail at exit 0 by design)
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is added; the change widens an existing validator's failure reporting. Incident it prevents: the eight-round authoring cost (docs/history/backlog/2026-10-21-review-staging-hard-validator-fail-fast-iteration.md). Expected catch frequency: every canonical record authored with an early clause mistake. False-positive cost: none for passing records (verdict unchanged); a multi-error report only adds lines to failing runs. Review date: revisit after the first five post-landing canonical record authorings.
 
 ## maintenance-plan-authoring-authorization
 Frozen: docs/tmp/authoring-claims/2026-10-20-maintenance-plan-authoring-authorization-conflict.md (2026-10-20; maintenance in-session authoring under the standing operator directive)
@@ -166,43 +266,9 @@ Rejected alternatives:
 Machinery admission: no machinery is recommended; a new approval flag or blocking mechanism is rejected because there is no witnessed incident requiring it beyond the instruction conflict itself, and the fix is a contract clarification across existing skills.
 
 
-## certification-seal-landing-survival
-Frozen: docs/tmp/authoring-claims/2026-10-07-corrections-graded-freshness-post-squash.md (2026-10-20; maintenance in-session authoring under the live operator directive)
-
-Added: 2026-10-20, investigate pass anchored on the corrections-graded-freshness-post-squash row after its third witness (an exec-lane selection skip of a certified plan)
-
-Work-type verdict: plan-worthy because the fix spans a guard-bearing validator path (`scripts/corrections_record.py` anchor leg, consumed by `scripts/plan_readiness.py` and `scripts/validate_review_staging.py`), a producer complement in the landing step of the plans skill, and the exec lane's dispatchability class in `agents/skills/maintenance/decisions.md`, with one open design choice (where the landed-anchor witness lives: a seal field the landing writes, or ancestry resolution through the landing commit's tree); the Ad-hoc backlog arm's single-surface, no-guard-change test fails on every count (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
-
-Origins:
-- docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md
-- docs/history/backlog/2026-10-15-review-plan-seal-grammar-drift.md
-
-Urgency: high - three witnesses in twelve days on independent runs (exec-side 2026-10-08, authoring-side 2026-10-14, exec-lane selection 2026-10-20), and the third escalates the cost from a mid-run repair to a certified plan sitting undispatched for a day while an exec fire ran with spare mandate; every authoring plan whose seal is written before its squash landing is exposed, and the only mitigation is unwritten practice.
-
-Scope arms:
-- Consumer widening (`scripts/corrections_record.py` anchor leg, `verify_corrections`): accept a seal entry whose round commits are orphaned when a landing witness names a HEAD-ancestor commit whose artifact blob re-hashes to the sealed round-start digest; keep every other leg (digest re-derivation, start-never-postdates-close ordering, append-only introducing commit) unchanged, so a moved anchor without byte identity still refuses; fixtures for the post-squash accept, the byte-mismatch refusal, and the unchanged pre-landing path.
-- Producer complement (the plans skill's landing critical section and the round-close seal duty it shares with `agents/skills/review-plan/SKILL.md` and `agents/skills/execute-plan/SKILL.md`): after the squash lands, the landing step writes the landing witness into the seal entry (or seals after the landing on the landing commit, the 2026-10-14 mitigation made a duty), re-runs `python3 scripts/plan_readiness.py` on the landed plan, and treats a refusal as a landing defect, not a later run's problem.
-- Seal grammar single-homing (the second origin): the three producer skills' seal paragraphs show the parser's `## round N` / lowercase `key: value` block grammar with one worked example, or `parse_seal` accepts the documented one-line shape; a certification whose grading degraded for want of a resolvable seal entry is a defect to fix before closeout, never a passing round.
-- Dispatchability class (`agents/skills/maintenance/decisions.md` D1 needs-recert rule and the PRE-STEP in `agents/skills/maintenance/template-execution.md`): an anchor-leg refusal over bytes that re-hash to the latest ready sidecar's digest joins the needs-recert class (dispatchable, repaired in the child's PRE-STEP) instead of falling through as a silent not-ready skip.
-- Anti-growth: each skill-text arm is a sentence inside the existing seal paragraph or rule; no new section, field paragraph, or validator mode beyond the one witness field; pay growth with equivalent deletion where a file sits at its cap.
-
-Orientation: the anchor leg was introduced by the 2026-10-04 review-cert-graded-binding plan as the fail-closed rail of the graded corrections binding (a seal anchored at committed round commits so an editing session cannot rebind arbitrary edits through a self-written seal; `docs/history/plans/completed/2026-10-04-review-cert-graded-binding.md`, Terms and the security assumption). Two later decisions broke its premise that round commits survive: the 2026-10-11 re-homing of the seal to the gitignored run artifact (`docs/history/plans/completed/2026-10-11-review-certs-seal-home-untracked.md`), so the seal never travels with a landing, and the squash landing discipline (`scripts/land_squash.sh`; lesson 132 in `docs/maintenance/development_lessons.md` records that pre-landing shas dangle), which orphans every authoring-branch commit. The 2026-10-20 witness shows the exec consumers have no class for the result: `scripts/plan_readiness.py` exits 1 with `anchor leg refused`, D1's needs-recert dispatchability covers only a stale `source_digest`, and the PRE-STEP's re-certification branch names the same stale-digest class, so a byte-identical certified plan is skipped without a mark. The row's 2026-10-14 witness records the working mitigation (seal on the landing commit after the landing), and the 2026-10-20 repair applied it after the fact by re-anchoring the local seal with a `landing_note:` field the parser tolerates; neither is skill text today.
-
-Prompt: Author a plan from `docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md` and `docs/history/backlog/2026-10-15-review-plan-seal-grammar-drift.md` as one unit. First read the two rows in full (all witness sections), the introducing plan `docs/history/plans/completed/2026-10-04-review-cert-graded-binding.md` (Terms, the security assumption, the anchor-leg tests), the re-homing plan `docs/history/plans/completed/2026-10-11-review-certs-seal-home-untracked.md`, `verify_corrections` and `parse_seal` in `scripts/corrections_record.py`, the corrections context in `scripts/plan_readiness.py`, the round-close seal paragraphs in `agents/skills/plans/SKILL.md`, `agents/skills/review-plan/SKILL.md`, and `agents/skills/execute-plan/SKILL.md`, the D1 needs-recert rule in `agents/skills/maintenance/decisions.md`, and the PRE-STEP in `agents/skills/maintenance/template-execution.md`. Decide the landing-witness shape (a seal field the landing writes versus ancestry resolution through the landing commit) and record the decision with its rejected twin. Then write tasks for: the consumer widening with fixtures (post-squash accept on byte identity, byte-mismatch refusal, pre-landing path unchanged, moved-anchor refusal preserved); the producer complement in the landing step with a readiness re-run on the landed plan; the seal grammar single-homing across the three producer skills with one worked example; and the needs-recert class for the anchor-leg refusal in D1 and the PRE-STEP. Validation: `python3 scripts/test_corrections_record.py`, `python3 scripts/test_plan_readiness.py`, the pins suite `bash scripts/check_maintenance_pins.sh` for the maintenance edits, and a live probe that re-runs `python3 scripts/plan_readiness.py` on a plan whose seal anchors a squash-orphaned commit. Keep every path repo-relative and every skill-text change inside its existing paragraph.
-
-Rejected alternatives:
-- Remove the anchor leg so orphaned anchors stop refusing: rejected because the leg is the graded binding's fail-closed rail against a moved anchor rebinding arbitrary edits, a protection the introducing plan states as its security assumption (`docs/history/plans/completed/2026-10-04-review-cert-graded-binding.md`; `scripts/corrections_record.py`, the seal-integrity dating comment in `verify_corrections`)
-- Keep the leg and only document the seal-after-landing practice: rejected because the 2026-10-14 witness already recorded that practice and the 2026-10-20 skip happened anyway, so unwritten practice does not reach the runs that need it (`docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md`, the 2026-10-14 and 2026-10-20 witnesses)
-- Land authoring branches by rebase or fast-forward instead of squash so round commits survive: rejected because the squash is the landing discipline of record and lesson 132 builds on it; a plan whose seal happens to survive (the 2026-10-19 worktree-rebase-feature-start-boundary seal) survived by accident, not contract (`scripts/land_squash.sh`; `docs/maintenance/development_lessons.md` lesson 132)
-- Track the seal again so it travels with the landing: rejected because the 2026-10-11 plan deliberately re-homed it to the untracked run artifact and tracking it would not make orphaned shas reachable either (`docs/history/plans/completed/2026-10-11-review-certs-seal-home-untracked.md`)
-- Teach only the exec PRE-STEP to re-anchor the seal at dispatch time: rejected because it treats a landing defect as the consumer's job on every later run and leaves the authoring-side post-landing readiness refusal unfixed (`agents/skills/maintenance/template-execution.md`, the PRE-STEP's stale-digest branch; the row's 2026-10-14 witness)
-- Separate entries for the grammar-drift row and the anchor row: rejected because both are the one seal contract between the producer skills and `parse_seal`/`verify_corrections`, the grammar row already clusters on the anchor row, and one plan touching the three seal paragraphs covers both in one pass (`docs/history/backlog/2026-10-15-review-plan-seal-grammar-drift.md`, Cluster line)
-
-Standing pre-authorization: the consumer widening, the producer complement, and the grammar single-homing (uncontested on evidence across all three witnesses); the dispatchability-class arm is scoped to a needs-recert mark and no new skip reason.
-
-Machinery admission: no new gate, validator, lock, ledger, or ceremony is recommended; the change narrows an existing refusal (fewer blockers) and adds one witness field the landing step already has the data for; no removal of a protection tied to a witnessed harm.
 
 ## dead-run-resume-arm3-manifest-key-drift
+Frozen: docs/tmp/authoring-claims/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (2026-10-21)
 
 Added: 2026-10-20, investigate pass anchored on the dead-execution-run-resume row filed after the done-immediate-commit-single-homing closeout resume
 
@@ -232,41 +298,6 @@ Rejected alternatives:
 Standing pre-authorization: the key alignment, the fixture truth, and the Recovery sentence (uncontested on evidence; the key-owner choice is the one open decision).
 
 Machinery admission: no new gate, validator, lock, ledger, or ceremony; the change makes an existing recovery arm reachable and adds no refusal.
-
-## description-length-gate-restore-blocking-posture
-
-Added: 2026-10-20, investigate pass anchored on the skills-review rows filed by the execute-plan description closeout and the all-skills loader review
-
-Work-type verdict: plan-worthy because the recommended fix moves a gate from the warning roster to refusal (a guard change the ad-hoc eligibility test excludes), narrows the gate's checker scope, and adds a pre-registered registry row; `scripts/done_sweep_gates_lib.py` and `scripts/machinery_registry.json` are guard-bearing and denylisted paths.
-
-Origins:
-- docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md
-- docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md
-
-Urgency: high - the class bit twice in three weeks on one file (2026-09-27 over-cap trimmed by hand; 2026-10-19 over-cap landed and the skill vanished from a runtime until 2026-10-20), the gate built for it fired as an unread warning at every landing in between, and every description edit grows the folded length; the next over-cap landing silently removes a skill from a runtime again.
-
-Scope arms:
-- Checker scope first (prerequisite for refusal): `scripts/check_skill_description_length.py` selects tracked `SKILL.md` files (`git ls-files -- agents/skills`) when the root is inside a checkout, falling back to the current glob otherwise; explicit-paths and `--selftest` modes unchanged; one selftest case where a nested gitignored over-cap file produces no finding.
-- Posture: remove `description-length` from `LANDING_WARNING_GATES` in `scripts/done_sweep_gates_lib.py` so a non-zero checker child refuses the landing, restoring the posture the delivering plan designed ("failing on any over-cap skill file", `docs/history/plans/completed/2026-09-30-skill-description-length-gate.md`).
-- Admission record: the four admission fields written into the plan and into the registry entry note for `script:check_skill_description_length.py`, plus a pre-registered removals row naming the re-demotion criterion and review date.
-- Protocol balance: a promoted blocker retires or demotes an existing blocker in the same change, or the operator explicitly approves net growth after a true catch; the plan's Phase 1 asks for that decision with this entry's ledger witness, naming any retirement candidate the authoring survey finds; a refusal keeps warning posture and lands only the scope and admission-record arms.
-- Done skill text: the roster parenthetical in `agents/skills/done/SKILL.md` Step 3 (the landing sweep description) drops `description-length` from its warning-posture list; clause edit only, no new section.
-
-Orientation: the gate was designed blocking on 2026-09-30 after the same file crossed the cap on 2026-09-27; the 2026-10-18 squash (f3894756d) moved it to warning posture with the lib comment "no ledger catches" and no registry row recording the demotion or its promotion criteria; the 2026-10-19 light-boundary wording edit grew the description from 988 to 1159; on 2026-10-20 the skill was found missing from the runtime, trimmed to 852 (landing 36b9da15b), the ledger row `description-length: catches=1` landed (0dc47617f), and lesson 135 named the unread-warning shape. The checker's recursive glob dates to the gate's landing (61e868979) and now warns about the gitignored `agents/skills/synced/` cache (lesson 138). The plan-readiness tool-error row shares the warning roster but owns a distinct derivation-parity defect and is not an origin here.
-
-Prompt: Author a plan that restores the description-length gate's blocking posture per the two origin rows. Read both rows, lesson 135 and lesson 138 in `docs/maintenance/development_lessons.md`, the delivering plan `docs/history/plans/completed/2026-09-30-skill-description-length-gate.md`, the roster and `gate_description_length` in `scripts/done_sweep_gates_lib.py`, the checker `scripts/check_skill_description_length.py` and its tests, the registry entry `script:check_skill_description_length.py` in `scripts/machinery_registry.json`, and the Machinery admission protocol section of the repository guidelines. Task 1 scopes the checker to the tracked set with the selftest case. Task 2 moves `description-length` out of `LANDING_WARNING_GATES`, updates the done Step 3 roster text, and lands the registry entry note and pre-registered removals row; Phase 1 records the operator's net-growth decision or the named retirement, and a refusal re-scopes Task 2 to the records only. Validation: the checker selftest and tests pass; the lib's gate test asserts refusal on an over-cap tracked file and silence on a nested gitignored one; the registry validator passes; `git grep` shows no remaining warning-posture mention of the gate in skill text.
-
-Rejected alternatives:
-- Keep warning posture and rely on the ledger row plus lesson 135 to make the next firing read: rejected because the first catch went unread at every landing for a day while a skill was absent from a runtime, and the sweep prints the warning among thousands of foreign-staging report lines (`docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md`)
-- Hand-trim or delete the cached synced copies to silence the checker: rejected because the tree is gitignored, externally synced, and overwritten on the next sync, and autonomously managed trees are never vendored or hand-edited (`docs/maintenance/development_lessons.md`)
-- Skip the `synced` directory by name in the checker: rejected because it encodes one external tool's layout; selecting the tracked set is the general form and also excludes any future untracked residue (`docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md`)
-- Lower the cap or widen the 950 warning band: rejected because 1024 is the consuming loader's own limit and the band already fired at 988 on 2026-10-18 without being read; the threshold is right and the posture discarded the catch (`docs/history/plans/completed/2026-09-30-skill-description-length-gate.md`)
-- A loader-side check in place of the repo gate: rejected because the loader's silent drop is the incident and this repository cannot change it; the landing sweep is the only gate under its control (`agents/skills/how-to-write-skills/SKILL.md`)
-- Fold the plan-readiness tool-error row into this plan as a third origin: rejected because it owns a derivation-parity defect (direct validator versus composed sweep) rather than posture, and grouping it would widen a one-roster-line change into exemption-logic work (`docs/history/backlog/2026-10-18-done-plan-readiness-child-tool-error.md`)
-
-Standing pre-authorization: the checker-scope arm and the admission-record arm, uncontested on evidence (the recursive glob, the gitignore rule, and the missing registry row are re-derived from disk); the posture arm is bound by the protocol's balance clause and carries none, taking the operator's Phase 1 decision.
-
-Machinery admission: incident `docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md` (a skill absent from a runtime from 2026-10-19 to 2026-10-20 after an over-cap landing the gate had warned about at every landing); expected catch frequency: two over-cap events on one file in three weeks, so roughly monthly fleet-wide as descriptions grow across edits; false-positive cost: none once the checker reads the tracked set, because an over-cap tracked description is always a dropped skill on the consuming runtime and the in-run remedy is a trim; sunset or review: the pre-registered removals row re-demotes the gate after twelve months with zero further ledger catches, review date 2027-10-20.
 
 ## done-dirt-regression-valid-correction-path
 
@@ -394,6 +425,70 @@ Machinery admission: the recommendation adds no machinery (convention wording pl
 Standing pre-authorization: none.
 
 
+## code-family-certification-digest-scope-and-tip-moves
+
+Added: 2026-10-21, investigate pass anchored on the code-family certification row filed after the certification-seal-landing-survival execution landing
+
+Work-type verdict: plan-worthy because the fix spans the code-family corrections verifier (`scripts/corrections_record.py`, the anchor leg's code-family arm, consumed by `scripts/validate_review_staging.py --source-code-repo`), the staging sidecar's `source_digest` byte function, and two skill texts (`agents/skills/execute-plan/SKILL.md` Step 3.4 and Phase 4, `agents/skills/review-plan/SKILL.md` round-close seal paragraph), with one open design choice (whether the code-family digest is scoped to reviewed source paths or the round-close ordering moves bookkeeping ahead of the digest); the Ad-hoc backlog arm's single-surface, no-guard-change test fails on every count (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-code-family-certification-stale-after-tip-moves.md
+
+Urgency: medium - every execution run whose base advanced before landing rebases under the probe's containment rule and every clean round backlogs a residual row, so each such run re-derives the seal, sidecar, record, and backfill identities by hand (three re-pins on the 2026-10-21 witness); a run that skips a re-pin lands with a stale certification that the post-squash diagnostic then reports as degraded.
+
+Scope arms:
+- Digest-scope alignment (the missing complement): the execute-plan Step 3.4 sentence already defines bookkeeping (backlog rows, manifest updates, disposition notes) as non-mutations of the reviewed digest, while the code-family `source_digest` and seal `range_digest` hash the whole `git diff base...head`; compute the code-family digest over the reviewed source scope (the branch delta minus the sanctioned bookkeeping paths) so the round-close residual append is a non-mutation by construction, with the byte function stated once (review-staging owns it) and both validators and `land_squash.sh`'s three-way receipt equality reading the same function.
+- Post-rebase re-pin step (skill text): one Phase 4 sentence before the lock naming the re-pin after a pre-landing rebase (seal block anchors and `reviewed_base`/`reviewed_head`, sidecar `certified_range` and `source_digest`, the record's Round and Source digest lines, the plans-egress backfill record) and the re-validation through `--source-code-repo`; the review-plan seal paragraph's code-family sentence points at it.
+- Fixtures: the staging selftest and `scripts/test_corrections_record.py` gain the bookkeeping-append non-mutation case and the rebased-tip re-pin case.
+- Anti-growth: the Step 3.4 sentence is the home the digest-scope arm extends; no new section, field, ledger, or gate.
+
+Orientation: the code-family anchor leg refuses a non-ancestor anchor outright (`the seal entry's ... is not an ancestor of HEAD`, `scripts/corrections_record.py`, f3894756d), and the 2026-10-20 plan's landed-anchor byte-identity complement is plan-family only (`if landed_anchor is None and family == FAMILY_PLAN`, 097826d60); the whole-diff digest was adopted when the code family was added so the landing's three-way receipt check could re-derive it from the branch delta alone, which is why the digest-scope arm must keep a single byte function the landing can still re-derive.
+
+Prompt: Author a plan from `docs/history/backlog/2026-10-21-code-family-certification-stale-after-tip-moves.md` that keeps a clean code-family round's certification valid across the two tip moves its own lifecycle prescribes. Task 1: define the code-family reviewed-scope byte function once (review-staging), excluding the sanctioned bookkeeping paths the execute-plan Step 3.4 sentence names, and thread it through the sidecar `source_digest`, the seal `range_digest`/`round_start_digest` producer guidance, `scripts/validate_review_staging.py --source-code-repo`, `scripts/corrections_record.py` code-family legs, and the `land_squash.sh` receipt equality, with fixtures proving a residual-row append after certification is a non-mutation and a source edit still is. Task 2: add the Phase 4 pre-lock re-pin sentence in `agents/skills/execute-plan/SKILL.md` and the pointer in `agents/skills/review-plan/SKILL.md`, paying growth with deletion, with a fixture for the rebased-tip re-validation. Keep the plan-family paths frozen. Validation: both focused suites, the staging selftest, `check-no-em-dash.sh touched`, the hygiene scan, and the pins suite exit 0.
+
+Rejected alternatives:
+- Remove the code-family anchor leg so a rebased tip stops refusing: rejected because the leg is the graded binding's fail-closed refusal of moved anchors (`docs/history/plans/completed/2026-10-04-review-cert-graded-binding.md`)
+- Widen the code-family leg with a landed-anchor complement keyed on delta-tree identity across a rebase: rejected as the first arm because a rebase onto a new merge-base changes the delta bytes whenever the base touched a reviewed path, so tree identity would resolve only the no-overlap case while the re-pin sentence covers every case; revisit after the digest-scope arm lands (`scripts/corrections_record.py`, `resolve_landed_anchor`)
+- Land without rebasing (merge-tree squash over the diverged base): rejected because the landing helper's probe requires containment of the live base tip before the lock (`scripts/land_squash.sh`, probe mode)
+- Order the residual-row append before the certifying digest by skill text alone: rejected as the whole fix because it leaves the rebase case and still hashes bookkeeping into a digest the Step 3.4 sentence says is not part of the reviewed scope (`agents/skills/execute-plan/SKILL.md`, Step 3.4)
+
+Standing pre-authorization: the digest-scope alignment and the re-pin sentence; the landed-anchor widening stays an authoring-side decision.
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is recommended; the digest-scope arm narrows an existing validator's byte function and the re-pin sentence names an existing step.
+
+## closeout-migration-same-run-mirror-replace
+
+Added: 2026-10-21, investigate pass anchored on the closeout-migration row filed by the session analysis of the plan-validation-command-undefined-repo execution run (landed 28127e322)
+
+Work-type verdict: plan-worthy because the fix changes the collision arm of `scripts/worktree_closeout_migrate.py migrate` (a closeout-owned script the Phase 5 transfer-out and the done closeout both run, so a guard-bearing path) and carries one open design choice (same-run detection keyed on the mirror duty's own path set versus content ancestry in the run's history), with a fixture pair in `scripts/test_worktree_closeout_migrate.py` and one-clause skill-text edits; the Ad-hoc backlog arm's single-surface, no-guard-change test fails (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-closeout-migration-collision-renames-run-mirrors.md
+
+Stage 1 roster (design context, not origins): `docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md` (same script, the baseline-dirs leg; already routed to `docs/history/backlog/EXEC-PROMPTS.md` as `closeout-baseline-capture-facts-resolved-dirs`) and `docs/history/backlog/2026-10-08-worktree-closeout-baseline-fallback.md` (same script, the configured-dirs fallback; stays its own open row).
+
+Urgency: medium - every worktree execution run mirrors its manifest and runtime state to the primary at each light boundary (Step 1.4, 75fc94ac9), so every such run's closeout migration now meets its own earlier mirrors as collisions and leaves the primary canonical copies stale behind `.wt-<suffix>` twins; the closeout gate reads the primary `runtime_state.json`, so the staleness misstates terminal evidence unless the orchestrator re-copies by hand, as the 2026-10-21 run did.
+
+Scope arms:
+- Same-run replace (the missing complement): the collision arm keeps its rename for foreign collisions and gains one distinction for an incoming file whose primary counterpart is the same run's boundary mirror; the detection key is the open design choice (the mirror duty's own path set under the run's session directory, or content ancestry: the existing primary bytes equal a byte-state the run mirrored earlier), stated once in the script and recorded in the migration manifest as a replacement, never a rename.
+- Fixture pair: `scripts/test_worktree_closeout_migrate.py` gains the same-run-replace case beside the existing foreign-collision case, proving a foreign collision still renames and still prints its loud `COLLISION:` line.
+- Skill text: the Step 1.4 record mirror sentence and the closeout migration paragraph in `agents/skills/execute-plan/SKILL.md` name the replace outcome in one clause each, paying growth with deletion.
+- Anti-growth: the collision arm is the home the distinction extends; no new mode, flag, ledger, or gate.
+
+Orientation: the collision rename entered the script at 3b05b66a6 (2026-09-20) for foreign-session collisions, and 6b7c41018 (2026-10-19) made each rename loud with incoming and existing digests; the record mirror duty that writes the run's own files to the primary mid-run landed the same day at 75fc94ac9, after the collision arm, so the arm never priced the same-run case; the witnessed transcript (run 20261021T171723Z-410d4ab7306b) renamed `manifest.md`, `runtime_state.json`, `closeout-baseline.json`, and the metrics jsonl, every one a mirror of the run's own bytes.
+
+Prompt: Author a plan from `docs/history/backlog/2026-10-21-closeout-migration-collision-renames-run-mirrors.md` so the closeout migration's collision arm replaces the run's own earlier boundary mirrors and still renames foreign collisions. Read the row, the Step 1.4 record mirror and closeout migration paragraphs in `agents/skills/execute-plan/SKILL.md`, the collision arm and its `COLLISION:` line in `scripts/worktree_closeout_migrate.py`, the two roster rows, and the Machinery admission protocol. Task 1: decide the same-run detection key (mirror-path set versus content ancestry), implement it in the migrate arm with the replacement recorded in the migration manifest, and add the fixture pair (same-run replace, foreign rename) to `scripts/test_worktree_closeout_migrate.py`. Task 2: the one-clause skill-text edits naming the replace outcome, paying growth with deletion. Validation: the migrate test module, `check-no-em-dash.sh touched`, the hygiene scan, and the pins suite exit 0.
+
+Rejected alternatives:
+- Keep the rename and add a hand re-copy step to the closeout: rejected because it formalizes the per-run compensation the witnessed run already performed by hand and leaves the primary canonical paths stale between the migration and the re-copy (`docs/history/backlog/2026-10-21-closeout-migration-collision-renames-run-mirrors.md`)
+- Remove the collision rename so incoming bytes always win: rejected because the rename is the priced protection for foreign-session twins and its loud line landed as a true catch on the same script (6b7c41018; `scripts/worktree_closeout_migrate.py`)
+- Stop mirroring the run's state to the primary mid-run so no same-run collision exists: rejected because the mirror is the resumability evidence the dead-run resume arms and the primary closeout gate read before the migration runs (75fc94ac9; `agents/skills/execute-plan/SKILL.md`)
+- Exclude the session directory's own paths from the migration through a configured skip list: rejected because a skip list is a hand-maintained twin of the mirror duty's path set, and the baseline-dirs sibling already witnessed that twin shape drifting (`docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md`)
+
+Standing pre-authorization: the same-run replace arm and its fixture pair; the detection key is the authoring-side decision.
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony; the change narrows an existing rename arm's trigger and can only reduce stranded twins.
+
 ## run-tmp-evidence-loss-mid-run
 
 Added: 2026-10-19, investigate pass over the 2026-10-18 two-plan execution run's witnessed scratch loss (the wiper is unverified; archaeology first)
@@ -518,64 +613,10 @@ PLAN-PROMPTS-PRUNE: personal-project-remote-boundary-enforcement -> docs/history
 PLAN-PROMPTS-PRUNE: landing-conflict-intent-union -> docs/history/plans/2026-10-18-landing-conflict-intent-union.md (r4-certified ready=yes zero blocking, seal .ai-playbook/review-certs/landing-conflict-intent-union.md; the frozen entry pruned by its own landing rider; origin row covered with the superseded base-side remedy revision carried in the plan)
 
 PLAN-PROMPTS-PRUNE: skill-monolith-module-extraction -> docs/history/plans/2026-10-14-skill-monolith-module-extraction.md (r7-certified ready=yes zero blocking, seal .ai-playbook/review-certs/skill-monolith-module-extraction.md; the frozen entry pruned by its own landing rider, landing b776b965d; the origin row covered by rider 63381bf8a)
-PLAN-PROMPTS-PRUNE: gate-removal-squash-accounting-requires-archive-twin -> docs/history/plans/2026-10-19-gate-removal-closeout-accounting.md (r2-certified ready=yes zero blocking at certified digest 8ad463c0b3b1b9966ba5779b01b279f9cd7e5daf03d4ac35ef4a79c217b838e1, seal .ai-playbook/review-certs/gate-removal-closeout-accounting.md; the frozen entry pruned by this landing rider; two witnessed origin rows covered by the landing rider)
+PLAN-PROMPTS-PRUNE: gate-removal-squash-accounting-requires-archive-twin -> docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md (r2-certified ready=yes zero blocking at certified digest 8ad463c0b3b1b9966ba5779b01b279f9cd7e5daf03d4ac35ef4a79c217b838e1, seal .ai-playbook/review-certs/gate-removal-closeout-accounting.md; the frozen entry pruned by this landing rider; two witnessed origin rows covered by the landing rider)
 
 PLAN-PROMPTS-PRUNE: done-cached-diff-authorized-reversal -> docs/history/plans/2026-10-19-done-cached-diff-authorized-reversal.md (r8-certified ready=yes zero blocking, digest 16aa7cfbd2f0900dba9445e344111ee4384df2c966d7840e5cf7d51d96b3c691, seal .ai-playbook/review-certs/done-cached-diff-authorized-reversal.md; the frozen entry pruned by this closeout rider; the plan landed at the plans root 44201ff2b before certification closed; origin row already covered 44201ff2b)
 
-## semantic-naming-and-analogous-class-review
-
-Added: 2026-10-15, investigate pass over the naming/readability review gap
-
-Work-type verdict: plan-worthy; assigning semantic naming across existing review lenses and defining a focused-panel trigger requires a cross-skill design choice, not a single-surface no-choice edit.
-
-Origins:
-- docs/history/backlog/2026-10-15-semantic-naming-and-analogous-class-review.md
-
-Urgency: normal - existing review guidance checks local naming consistency, while this session showed that stale responsibilities and parallel class/interface roles can remain hard to understand even when individual names follow local conventions.
-
-Scope arms: widen the quality naming check to include semantic accuracy and analogous-type comparisons; put the duty in the simplification lens; keep current naming checks and rely on the default full panel; add a conditional panel-retention signal for naming-sensitive changes; add a new worker or universal full-panel requirement.
-
-Orientation: assign semantic naming to the existing lens whose responsibility best fits after reading the current catalogs, and state how that lens collaborates with the other without duplicated ownership. Require evidence from type declarations, callers, and contracts; distinguish true role parallels from misleading symmetry. Decide whether a focused review should retain the owning lens when a change renames or introduces analogous interfaces/implementations, while keeping unrelated focused reviews narrow. Reconcile with the completed callback-readability plan's changed-code-shape trigger so the two duties compose without duplicated triggers or a new review round. Prefer edits to existing prompt and panel-selection text only. Do not add a worker, gate, validator, or automated naming framework without a witnessed recurring incident and explicit machinery admission evidence. Keep examples generic and omit company, repository-consumer, ticket, and class identifiers from the source conversation.
-
-Prompt: Investigate and design the smallest update to the existing review-agent prompts and focused-panel selection rules that catches stale or misleading names and names that obscure meaningful parallels between analogous interfaces and implementations. First inspect the existing naming-consistency list in `agents/skills/review-agents/quality.md`, the simplicity checklist and ownership boundary in `agents/skills/review-agents/simplification.md`, `agents/skills/review-agents/review-panel-selection.md`, the completed callback-readability plan, and the session-origin backlog item. Use local history to establish why these current rules and triggers were introduced, then compare the session witnesses against them. Decide whether quality or design-simplicity owns semantic naming, whether a focused review should retain that existing lens for diffs that rename or add paired types, and how reviewers distinguish meaningful role symmetry from false uniformity. Include explicit positive, negative, and pre-deployment examples. Preserve the callback plan's existing scope and avoid adding a worker, universal full-panel requirement, review round, validator, gate, or naming framework. Audit for overlapping naming instructions and specify one canonical owner with pointers where needed. Produce a plan only after resolving these choices; include concrete acceptance checks against the sanitized witnesses and run the required review-agent portability, door, and public-hygiene checks if agent prompts or panel policy are in scope. Keep all examples and artifacts free of external project identifiers and personal data.
-
-Rejected alternatives:
-- Treat the existing local naming-consistency check as sufficient: rejected because it says names should follow local conventions but does not call for checking current responsibilities or analogous type roles (`agents/skills/review-agents/quality.md`)
-- Put the entire duty in simplification: rejected because that catalog scopes findings to avoidable structure, while the quality catalog already owns Naming and Structural Clarity (`agents/skills/review-agents/simplification.md`; `agents/skills/review-agents/quality.md`)
-- Rely on the default full panel and make no focused-panel change: rejected because the selection policy permits focused panels to omit design-simplicity and the session's concern surfaced at class/interface level across related roles (`agents/skills/review-agents/review-panel-selection.md`; `docs/history/backlog/2026-10-15-semantic-naming-and-analogous-class-review.md`)
-- Expand every focused review or add a dedicated naming worker: rejected because the panel policy explicitly allows narrow reviews and there is no witnessed incident supporting a new worker or universal expansion; use conditional retention of an existing lens (`agents/skills/review-agents/review-panel-selection.md`; no witnessed incident)
-- Fold the issue into callback readability as already solved: rejected because the completed plan's changed-shape signals cover callbacks, local types, and method limits, not semantic naming across analogous types (`docs/history/plans/2026-10-15-framework-callback-readability-and-review-scope.md`)
-
-
-## execute-plan-step-3-4-primary-cadence
-
-Added: 2026-10-17, investigation of the open Step 3.4 cadence residual from the placement-doctrine review
-
-Work-type verdict: plan-worthy because the change governs when a per-task execution boundary runs `done`'s learn and closeout stages under the primary placement, coordinating guard-bearing contracts across execute-plan and done; outside the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
-
-Origins:
-- docs/history/backlog/2026-10-17-execute-plan-step-3-4-iteration-done-scoping.md
-
-Urgency: low - the mismatch is limited to the primary placement's review-iteration boundary, and the shared placement doctrine already states the intended once-at-end cadence.
-
-Scope arms:
-- Mirror Step 1.4's primary-resolution scoping in Step 3.4: retain per-iteration commit and verification duties, defer learn and full closeout to the run's end, and keep the existing worktree behavior.
-- Keep Step 3.4's full `done` invocation for both placement modes, treating the newer primary-placement doctrine as a Step 1.4-only exception.
-- Remove the per-iteration `done` invocation and batch review fixes until the loop exits.
-- Move learn and closeout policy into a new shared boundary helper or validator.
-
-Orientation: the primary-placement doctrine landed in `agents/skills/execute-plan/SKILL.md` Step 1.4 and the shared policy paragraph at commit `0e8815007`; its motivating plan defines immediate per-change commits and one end-of-work `done` run. Step 3.4 separately requires `done` after every review iteration and lacks the same placement condition. Preserve that boundary's commit and verification purpose while applying the already-landed primary cadence; keep the worktree resolution unchanged. The origin's code-review record declined to charge this as a post-certification correction, so this is a follow-up contract alignment rather than a branch repair.
-
-Prompt: Author a plan to align `agents/skills/execute-plan/SKILL.md` Step 3.4 with the shared primary-placement cadence. Read the origin, Step 3.4, Step 1.4, the Worktree-first policy paragraph, `agents/skills/done/SKILL.md`'s per-task boundary contract, and the completed placement-doctrine plan first. Under the primary resolution, keep each review iteration's commit and verification duties but defer learn capture and full closeout to the run's end; under worktree placement, preserve the documented per-iteration behavior. Update Step 3.4's verification gate to match, without changing the shared placement policy or introducing a new mechanism. Keep the task scoped to the named skill section and its acceptance evidence. Validate both placement modes and confirm the existing per-iteration commit boundary remains intact.
-
-Rejected alternatives:
-- Keep the full `done` workflow after every review iteration under primary placement: rejected because the shared policy and Step 1.4 say the primary run performs learn and closeout once at end; witnessed in `agents/skills/execute-plan/SKILL.md`.
-- Remove Step 3.4's `done` invocation and batch review fixes until loop exit: rejected because the review-iteration boundary still owns commit and verification; witnessed in `agents/skills/execute-plan/SKILL.md`.
-- Add a helper, validator, or gate to enforce cadence: rejected because the mismatch is a two-section text contract and no witnessed incident supports new machinery (`AGENTS.md`, Machinery admission protocol; no witnessed incident).
-
-Machinery admission: no machinery is recommended; the helper/validator arm is rejected because there is no witnessed incident requiring a blocking mechanism (`AGENTS.md`, Machinery admission protocol).
-
----
 
 ## done-advisory-threshold-pin-and-re-aim-comment-trim
 
@@ -604,3 +645,38 @@ Rejected alternatives:
 Standing pre-authorization: both arms.
 
 Machinery admission: the pin row is one more warning-only presence grep in an existing family and moves no exit code; no gate, validator, lock, ledger, or ceremony is added.
+
+PLAN-PROMPTS-PRUNE: semantic-naming-and-analogous-class-review -> docs/history/plans/2026-10-21-semantic-naming-and-analogous-class-review.md (r4-certified ready=yes zero blocking, seal .ai-playbook/review-certs/semantic-naming-and-analogous-class-review.md; the frozen entry pruned by its own landing rider; origin row covered by this plan)
+PLAN-PROMPTS-PRUNE: execute-plan-step-3-4-primary-cadence -> docs/history/plans/completed/2026-10-18-done-final-only-learn-intermediate.md (completed plan exists and its origin row is deleted; pruned by the maintenance monitor)
+
+## landing-diagnostic-own-plan-target
+
+Added: 2026-10-21, investigate pass anchored on the landing-diagnostic row filed by the session analysis of the plan-validation-command-undefined-repo execution run (landed 28127e322); the row's archaeology was corrected in the same pass (the procedure text already scopes the record to this plan)
+
+Work-type verdict: plan-worthy because the fix edits the receipt contract of a just-landed plan (Task 2 of `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md` is the declared single source for receipt branch behavior, so its outcome matrix and both ledger headers reconcile together), spanning the plans skill's landing-closeout bullet and the tracked ledger `docs/history/certification-seal-landing-diagnostics.md`, with one open design choice (where the identity sentence lives); the Ad-hoc backlog arm's single-surface test fails (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md
+
+Stage 1 roster (design context, not an origin): `docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md` (same diagnostic surface; its readiness-not-pass residual over an archived identity is the matrix's own row and stays with that row).
+
+Urgency: low - the diagnostic is warning-only and the witnessed receipt is honest about observing nothing, but a receipt whose `plan_path` names a foreign plan certifies nothing about the landing that produced it, and the second receipt on the ledger already took that shape (1846d9e6b), so the ledger's signal decays with every landing until the identity tie is stated.
+
+Scope arms:
+- Identity sentence (the smallest arm): one contract sentence beside the receipt content contract (the ledger header in `docs/history/certification-seal-landing-diagnostics.md` or the Post-squash certification diagnostic arm in `agents/skills/plans/SKILL.md`), requiring the receipt's `plan_path` to equal the landing's own archived-plan identity and its `source_worktree_head` the landing's own source worktree, a mismatch routing the receipt through the existing `docs/history/certification-seal-landing-diagnostic-write-failures.md` fallback rather than the main ledger.
+- Matrix reconciliation: the sentence's branch is reconciled with Task 2's receipt outcome matrix (the declared single source) so the matrix carries the mismatch row and both ledger headers keep pointing at it; no second branch source.
+- Anti-growth: the receipt content contract is the home the sentence extends; the plan deletes equivalent bytes from the procedure arm where it restates the matrix.
+
+Orientation: the diagnostic landed at 097826d60 (2026-10-21) as a manual plans-skill procedure whose text already reads "the highest ready review record for this plan"; the witnessed receipt (appended at landing 28127e322, committed by a peer as 1846d9e6b) resolved `plan_path` to a peer's open plan and `source_worktree_head` to a third session's worktree, every validator `not run` with the warning `not_observed`, so the failure is a producer resolving "this plan" against the corpus instead of the landing, with no post-append check tying the receipt to the landed identity.
+
+Prompt: Author a plan from `docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md` that ties every certification-seal landing receipt to the landing that produced it. Read the row, the Post-squash certification diagnostic arm of the landing-closeout bullet in `agents/skills/plans/SKILL.md`, both ledger headers, Task 2's receipt outcome matrix in `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md`, the two receipts on the primary ledger, and the Machinery admission protocol. Task 1: add the identity sentence (receipt `plan_path` equals the landing's archived-plan identity, `source_worktree_head` the landing's own source worktree; a mismatch routes to the write-failures fallback) at the home the plan chooses, and add the mismatch row to the outcome matrix keeping one branch source. Task 2: pay growth with deletion in the procedure arm. Do not add a producer script, a new ledger, a lock, or a closeout condition; the diagnostic stays warning-only. Validation: the hygiene scan, `check-no-em-dash.sh touched`, the document-registry validator, and the pins suite exit 0.
+
+Rejected alternatives:
+- Add a mechanical producer script keyed on the landing commit that resolves the plan and worktree itself: rejected as the first arm because it adds a landing-side component for a warning-only diagnostic with no witnessed incident beyond one foreign-target receipt, while the identity sentence removes the witnessed cost at sentence cost (`docs/history/certification-seal-landing-diagnostics.md`)
+- Narrow the record selection rule in the procedure text: rejected because the text already scopes the record to this plan and the witnessed receipt is a resolution drift, not a selection-rule defect (the corrected archaeology in `docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md`)
+- Remove the diagnostic until a producer exists: rejected because the diagnostic is the landed warning-only detector for the squash-orphaned seal class and its first receipt already rode a real landing (ada922c7e; `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md`)
+- Promote the identity check to a blocking closeout condition: rejected because the certifying plan fixed the diagnostic as warning-only adding no closeout condition, and no witnessed incident shows a foreign receipt misleading a landing decision (`agents/skills/plans/SKILL.md`)
+
+Standing pre-authorization: the identity sentence and the matrix row; the sentence's home is the authoring-side decision.
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony; the producer-script arm is rejected above with the missing-incident absence named, and the identity sentence routes a mismatch through an existing fallback ledger.

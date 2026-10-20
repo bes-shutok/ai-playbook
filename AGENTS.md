@@ -62,6 +62,7 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 - When reviewing uncommitted changes for confidential data, path leakage, or naming issues, inspect the actual changed file set from `git status --short`, including untracked files, before narrowing the review to a subset of files.
 - Before committing skill or instruction changes, run the hygiene scan from `public_hygiene_scan_script` in user facts (exit 0 required). Deny patterns: `public_hygiene_patterns_file` (template: `docs/scan-public-hygiene.patterns.example`). Personal contact email is allowed only in `LICENSE.txt` copyright lines.
 - Whenever a change touches `agents/skills/review-agents/`, run `python3 scripts/check_review_agent_portability.py` (exit 0 required) to keep the shared catalogs free of stack-specific tokens (mirrors the hygiene-scan mandate), and run `python3 scripts/test_review_agent_doors.py` (exit 0 required) so the door-pattern registry (typed-catalog enumeration, helper-retarget-after-door, delivery-slice-meta) keeps its required actions.
+- Run the `scripts/` test suites as `PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_<name>.py'`; `scripts/` is not an importable package, so `python3 -m unittest scripts.test_<name>` fails at import.
 
 ## Agent-Specific Runtime Safety
 - Before host-level changes (package installs, shell profile edits), state execution context (host vs sandbox), expected impact, and rollback plan.

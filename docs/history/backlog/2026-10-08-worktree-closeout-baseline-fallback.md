@@ -7,6 +7,8 @@
 - **Cluster:** docs/history/backlog/2026-10-08-done-closeout-placement-and-ceremony-overhead.md; docs/history/plans/completed/2026-10-08-done-closeout-ceremony-friction.md
 - **Cluster:** docs/history/backlog/2026-10-06-continuity-probe-baseline-recapture-loss.md (same surface: the closeout baseline's digest matching in worktree_closeout_migrate.py)
 - **Cluster:** docs/history/backlog/2026-10-19-reviews-home-migration-collision-twins.md (same tool, closeout-migration family)
+- **Cluster:** docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md (same surface: the execute-plan Step 0.4 baseline capture set)
+- **Cluster:** docs/history/backlog/2026-10-21-closeout-migration-collision-renames-run-mirrors.md (same script: the collision arm renames the run's own boundary mirrors)
 - **Origin class:** observed recovery gap
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/execute-plan/SKILL.md`, worktree closeout; `scripts/worktree_closeout_migrate.py`

@@ -71,22 +71,20 @@ SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 ```
 
 This idiom is PINNED here so the plans-skill marker recipe and every adapter
-use the SAME artifact (Family D single source). The helper prints
-``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or CURSOR_CONVERSATION_ID or ""``
-with NO trailing newline (Claude at v9; Cursor hook bridge at v2; Cursor
-agent-shell conversation fallback at v3). When `SID` is empty the adapter OMITS
-`--session-id`, so the core keys the literal `no-session` and uses the FULL
-window. Per-session isolation is Claude-only at v9 and Cursor-without-bridge at
-v9; optional Cursor bridge install (v2) supplies `CURSOR_SESSION_ID` per
-composer tab; v3 also lets agent-shell marker writers key the same session via
-`CURSOR_CONVERSATION_ID`. The cores NEVER import `session_channel.py`; they
+use the SAME artifact (Family D single source). The helper prints the first
+set and non-empty value of ``CLAUDE_CODE_SESSION_ID, CURSOR_SESSION_ID,
+CURSOR_CONVERSATION_ID, CODEX_SESSION_ID``, else `""`, with NO trailing
+newline. When `SID` is empty (every supported source unset or empty) the
+adapter OMITS `--session-id`, so the core keys the literal `no-session` and
+uses the FULL window. The cores NEVER import `session_channel.py`; they
 accept `--session-id` as opaque data.
 
-**Precedence and multi-agent use:** see `agents/hooks/lessons-recall/README.md`
-(**Session channel precedence**, **Same repository, multiple agents**). Summary:
-Claude wins over any Cursor var; `CURSOR_SESSION_ID` wins over
-`CURSOR_CONVERSATION_ID`; normally each agent only sets its own var, so Claude
-and Cursor hooks on the same repo do not interfere.
+**Precedence, the all-source empty rule, and per-runtime session behavior:**
+`agents/hooks/lessons-recall/README.md` owns that contract (**Session channel
+derivation**, **Session channel precedence**, **Same repository, multiple
+agents**); this README restates only the pinned idiom sentence above (a
+mirrored Family D artifact), not the contract itself. Normally each agent only sets its
+own var, so hooks of different agents on the same repo do not interfere.
 
 Only the Claude adapter warns on empty SID (`CLAUDE_CODE_SESSION_ID absent;
 running in no-session mode`, BEFORE invoking the core); for Codex/Cursor/agy

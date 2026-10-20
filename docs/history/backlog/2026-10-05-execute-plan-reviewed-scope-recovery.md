@@ -1,5 +1,7 @@
 # Execute-plan cannot resume after a reviewed task scope widens
 
+Cluster: docs/history/backlog/2026-10-09-execute-plan-live-claim-scope-widening.md; docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md; docs/history/backlog/2026-10-10-execute-plan-recovery-full-stem-resolution.md (shared surface: execute-plan scope and recovery transitions)
+
 ## Problem
 
 The STORY-KEY run had an intent-backed prelaunch claim for Task 3. The checked-in plan had since been expanded to include `database/schema-contracts/segment.sql`, `docs/architecture/integrations.md`, and `scripts/generate-schema-contracts.sh`, while the runtime manifest still held the earlier seven-path scope. Ordinary preflight correctly refused to launch with `scope drift`, leaving the successor claim stranded.

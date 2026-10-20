@@ -48,17 +48,20 @@ SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 ```
 
 This idiom is PINNED here so the plans-skill marker recipe and every adapter
-use the SAME artifact (Family D single source). The helper prints
-``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or CURSOR_CONVERSATION_ID or ""``
-with NO trailing newline (Claude at v9; Cursor hook bridge at v2 via
-`CURSOR_SESSION_ID`; Cursor agent-shell fallback at v3 via
-`CURSOR_CONVERSATION_ID`, which matches the bridged session id for the same
-composer tab). When `SID` is empty the adapter OMITS `--session-id`, so the
-core keys the literal `no-session` and uses the FULL window. Per-session
-isolation is Claude-only at v9 and Cursor-without-bridge at v9; optional Cursor
-bridge install (v2) supplies `CURSOR_SESSION_ID` per composer tab; v3 also lets
-agent-shell marker writers (learn/plans) key the same session without the bridge
-env var.
+use the SAME artifact (Family D single source). The helper prints the first
+set and non-empty value of ``CLAUDE_CODE_SESSION_ID, CURSOR_SESSION_ID,
+CURSOR_CONVERSATION_ID, CODEX_SESSION_ID``, else `""`, with NO trailing
+newline (Claude at v9; Cursor hook bridge at v2 via `CURSOR_SESSION_ID`;
+Cursor agent-shell fallback at v3 via `CURSOR_CONVERSATION_ID`, which matches
+the bridged session id for the same composer tab; Codex final fallback at v4
+via `CODEX_SESSION_ID`, not a generic `SESSION_ID` fallback). When `SID` is
+empty (every supported source unset or empty) the adapter OMITS
+`--session-id`, so the core keys the literal `no-session` and uses the FULL
+window. Per-session isolation is Claude-only at v9 and Cursor-without-bridge
+at v9; optional Cursor bridge install (v2) supplies `CURSOR_SESSION_ID` per
+composer tab; v3 also lets agent-shell marker writers (learn/plans) key the
+same session without the bridge env var; at v4 an exported
+`CODEX_SESSION_ID` keys a Codex session the same way.
 
 The cores NEVER import `session_channel.py`; they accept `--session-id` as
 opaque data, so the agent-agnostic-core invariant holds.
@@ -68,19 +71,32 @@ opaque data, so the agent-agnostic-core invariant holds.
 `session_channel.py` evaluates **one subprocess environment** per hook invocation:
 
 ```text
-CLAUDE_CODE_SESSION_ID     →  if set and non-empty, use it
-else CURSOR_SESSION_ID     →  if set and non-empty, use it (hook bridge)
+CLAUDE_CODE_SESSION_ID      →  if set and non-empty, use it
+else CURSOR_SESSION_ID      →  if set and non-empty, use it (hook bridge)
 else CURSOR_CONVERSATION_ID →  if set and non-empty, use it (Cursor agent shell)
-else ""                    →  adapter omits --session-id (no-session key)
+else CODEX_SESSION_ID       →  if set and non-empty, use it (Codex)
+else ""                     →  adapter omits --session-id (no-session key)
 ```
 
 **Claude wins when both Claude and any Cursor var are set in the same process.**
 `CURSOR_SESSION_ID` wins over `CURSOR_CONVERSATION_ID` when both are set.
-Cursor does not override Claude. The precedence rule exists for the rare case
+Cursor does not override Claude. `CODEX_SESSION_ID` is the FINAL fallback: it
+is consulted only when the Claude and Cursor sources are all unset or empty,
+so a Claude or Cursor value in the same process outranks it, and it is never a
+generic `SESSION_ID` fallback. The precedence rule exists for the rare case
 where env vars leak into one hook subprocess (for example
 `CLAUDE_CODE_SESSION_ID` exported in your shell while Cursor hooks also set
 `CURSOR_SESSION_ID`). In that edge case, hooks use the Claude session id, not
 Cursor's.
+
+**All-source empty rule:** when every supported source is unset or empty, the
+helper prints `""` and every adapter OMITS `--session-id`, so the core keys
+the literal `no-session` and uses the FULL window. Per-runtime empty shapes:
+Claude empty is the unexpected case (the Claude adapter warns on stderr);
+Cursor is empty without the optional bridge; Codex is empty unless something
+exported `CODEX_SESSION_ID` into its subprocess (the documented Codex steady
+state without that export); agy sets none of the four sources, so its output
+is empty by construction.
 
 **Cursor agent shell vs hook subprocess (v3):** Cursor injects
 `CURSOR_CONVERSATION_ID` into the agent process and `CURSOR_SESSION_ID` into
@@ -112,7 +128,7 @@ scripts for Claude, Codex, and agy were not rewritten.
 | Agent | Recall hook event | Recall tier | Session env (steady state) | Session bridge | Skill-gate |
 |-------|-------------------|-------------|----------------------------|----------------|------------|
 | Claude | `UserPromptSubmit` (every prompt) | FULL | `CLAUDE_CODE_SESSION_ID` (product) | N/A | `PreToolUse` block, live |
-| Codex | `SessionStart` one-shot | DEGRADED | none (`no-session`) | N/A | adapter exists; config often unwired |
+| Codex | `SessionStart` one-shot | DEGRADED | none by default (`no-session`); `CODEX_SESSION_ID` if exported | N/A | adapter exists; config often unwired |
 | agy | `PreInvocation` | DEGRADED | none (`no-session`) | N/A | `PreToolUse` block, live |
 | Cursor | `sessionStart` one-shot | DEGRADED | none without bridge; `CURSOR_SESSION_ID` with bridge | **optional** `cursor-session-bridge.sh` | `PreToolUse` block, live |
 
@@ -139,8 +155,8 @@ Using Claude Code, Cursor, Codex CLI, and agy on **one git repo** is supported.
   bridge is installed. Same repo, different agents → different session components
   → no cross-agent marker admission unless you reuse the same session id on purpose.
 - **Shared symlinked cores** under `~/.ai-playbook/scripts/` are updated once and
-  used by every agent's adapters. Backward compat: when `CURSOR_SESSION_ID` is unset,
-  `session_channel.py` output matches v1 (Claude var or empty).
+  used by every agent's adapters. Backward compat: with the Cursor and Codex
+  sources unset, `session_channel.py` output matches v1 (Claude var or empty).
 
 Per-prompt recall quality remains agent-specific (Claude FULL; others degraded as in
 the table above). That is a product wiring limitation, not a v2 regression.
@@ -253,8 +269,10 @@ python3 ~/.ai-playbook/scripts/hooks_log_summary.py --days 7
 Legacy LOUD keying metadata is separate JSONL lines (no `event` field):
 
 - The CORE emits `keying=env-var` (Claude steady state: a session id was
-  supplied; Cursor with optional session bridge installed) or
-  `keying=project-only` (Codex steady state; Cursor/agy without bridge at v9:
+  supplied; Cursor with optional session bridge installed; Codex with an
+  exported `CODEX_SESSION_ID`) or
+  `keying=project-only` (Codex without an exported `CODEX_SESSION_ID`;
+  Cursor/agy without bridge at v9:
   no session id). `keying` is PURE LOG METADATA and drives NO core branch.
 - The RESOLVER `facts_paths.resolve_project_key` emits `keying=no-anchor` to the
   SAME file on its git-failure branch (a non-git dir; in a non-git tree the

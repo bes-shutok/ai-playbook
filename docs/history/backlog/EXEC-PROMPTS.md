@@ -9,37 +9,65 @@ Standing rules (by their labels in `docs/history/backlog/PLAN-PROMPTS.md`, each 
 - Entries dispatch to exec-mode sessions: the top ready entry is an ad-hoc run's context source per `agents/skills/maintenance/SKILL.md` (the Exec-mode selection rule and the Rolling prompt log duties' EXEC-PROMPTS dispatch leg); the write turn never executes or dispatches its payload.
 - Writes follow the targeted-edit drift-retry rules and the same-turn commit duty per `agents/skills/maintenance/SKILL.md` (re-read and compare before every write; targeted section edits; commit in the same turn; repo-relative-only entries carrying no personal or machine-specific data).
 
-## learn-commit-own-edit-check-mechanical-shape
+EXEC-PROMPTS-PRUNE: learn-commit-own-edit-check-mechanical-shape -> landing in this commit (ad-hoc reviewed landing; focused contract-docs + correctness-completeness panel over the branch delta, one blocking fold (absolute worktree path in the freeze mark) plus three minor folds, verdict ready=yes after folds; residual F2/F6 captured as docs/history/backlog/2026-10-21-own-edit-check-pure-deletion-carve-out.md; origin row deleted per the covered-row rule)
 
-Added: 2026-10-20, investigate pass anchored on the learn-commit clobber row filed from the 06:35 scheduled exec run; re-witnessed and widened 2026-10-20 by the 11:00 scheduler turn session's learn pass (the row's second witness, investigate entry commit 563d2e2e)
+## learn-lesson-number-allocation-fresh-read
 
-Work-type verdict: ad-hoc-able because every arm is a sentence in a tracked skill-text surface named in the origin row (`agents/skills/learn/step-1-extract.md`, the Step 1.8 commit rule, and `agents/skills/investigate/SKILL.md`, the Stage 4 write bullet), the fix is body-named with no open design choice, no guard-bearing path, state schema, dependency, or machinery is touched, and the pins suite script itself stays unchanged (the report-only arm only tells the run when to execute it and report).
+Added: 2026-10-21, investigate pass anchored on the lesson-number collision row filed by the learn pass over the certification-seal-landing-survival execution session
+
+Work-type verdict: ad-hoc-able - two body-named sentence edits inside one skill (`agents/skills/learn/SKILL.md` re-read rule and `agents/skills/learn/step-6-instruction-updates.md` commit discipline), tracked skill text with no guard change, no new dependency, no state-schema change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`); the blocking-promotion arm is deliberately excluded (see the rejected alternatives).
 
 Origins:
-- docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md
+- docs/history/backlog/2026-10-21-learn-lesson-number-collision-parallel-sessions.md
 
-Urgency: high - every learn, investigate, and backlog commit on the base branch runs the same explicit-path staging while peers land; the witnessed clobber reverted operative maintenance text on main and the pin stood red for about a day, the same day's second witness resurrected a just-pruned dispatch entry for about twenty hours, and the same shape recurs whenever a run holds a file read from before a peer landing.
+Urgency: high - four colliding heading pairs landed in one day from three sessions and the repair raced a live peer twice; every `See also #N` citation to a collided number is ambiguous until repaired, and the maintenance loop now runs several learn-bearing sessions per day.
 
 Scope arms:
-- Mechanical shape for the own-edit check: in the Step 1.8 commit rule, replace the judgment sentence's bare "verify the working-tree delta for that path is this session's own edit" with the probe it means: word-diff each staged non-backlog path against HEAD; a hunk that only removes text, a pure-addition hunk the session did not write, or a path whose last landing (`git log -1 --format=%cd -- <path>`) is newer than the session's read of it, is foreign and the path is skipped and reported; cite lesson 134 in at most one line.
-- The same sentence in the investigate Stage 4 write bullet: the same-turn entry commit runs the identical own-edit check before `git commit` (the bullet today carries the write-time re-read rule only, so a stale-read resurrection reaches the commit unexamined); one sentence inside the existing bullet, no new field.
-- Report-only pins run on pinned surfaces: in the same rule, when a staged path sits under `agents/skills/maintenance/`, run `bash scripts/check_maintenance_pins.sh` before the commit and print its result in the run output; a failure is reported, never a block, and the commit still proceeds only with the session's own hunks.
-- Anti-growth: every arm is a sentence inside the existing Commit rule paragraph or Stage 4 bullet, no new section or field; pay with equivalent deletion in the same paragraph if a file grows past its cap once the byte-budget gate lands, otherwise apply the discipline at review.
+- Allocation by fresh read: extend the SKILL.md re-read sentence ("Before each corpus write, re-read the destination file and re-apply the placement against its fresh state") so the project-corpus `#N` is derived as the maximum existing heading number plus one from that same fresh read, inside the write step, never from a number read earlier in the session.
+- Own-edit hunk check on the corpus commit: state in Step 6.6 (or the commit rule it points at) that the project corpus is staged by hunk after the Step 1.8 word-diff own-edit check, never whole-file, so a peer's uncommitted lesson is skipped and reported rather than swept into the committer's commit (lesson 134 is the class).
+- Pay growth with deletion: fold the number derivation into the existing re-read sentence and drop the "(warn-only, no script)" parenthetical's dangling claim that no script exists (the user-corpus `lessons.py index` already has the `duplicate` category).
 
-Orientation: the clobber mechanism is established in lesson 134 (`docs/maintenance/development_lessons.md`) and the origin row: the learn commit's direct parent was the exec landing that added the sentence, the hunk was a pure deletion, and the commit subject never named the file. Lesson 6 already names the same signature for squash landings, and the ad-hoc arm's suite-failure clause (`agents/skills/maintenance/decisions.md`) is what eventually reconciled the red pin; this entry closes the direct-commit side so the detection does not depend on an unrelated later run. Second witness (the row's Second witness line): the investigate entry commit 563d2e2e re-added a dispatch entry that a peer's direct commit 0c6a66f3f had pruned seventeen seconds earlier, as a pure-addition hunk inside the commit's own declared rolling log; neither the pure-deletion signature nor the declared-path test fires on that shape, only the path-age test does, and the investigate skill's commit carries no own-edit check at all (lesson 134's addition-direction arm).
+Orientation: the warn-only `grep | uniq -d` dates to the single-session era (380b46fc8, 2026-07-05) and was restated unchanged in the 2026-10-18 module split (867f8ed7e); the SKILL.md re-read rule already anticipates a parallel learn run but names only placement, not the number; the user corpus got a blocking `duplicate` category through `lessons.py index` while the project corpus kept the optional grep, so the two tiers diverged exactly on the invariant that failed.
 
-Prompt: Edit the Step 1.8 Commit rule paragraph in agents/skills/learn/step-1-extract.md: (1) give the own-edit check its mechanical shape (word-diff each staged non-backlog path against HEAD; a pure-deletion hunk, a pure-addition hunk the session did not write, or a path whose last landing date is newer than the session's read of it, is foreign: skip the path and report it; one-line lesson 134 citation); (2) add the report-only pins run for staged paths under agents/skills/maintenance/ (run bash scripts/check_maintenance_pins.sh before the commit, print the result, never block). (3) Add the same one-sentence own-edit check to the Stage 4 write bullet in agents/skills/investigate/SKILL.md, placed before its same-turn entry commit and citing lesson 134 in the same line. Keep every arm inside the existing paragraph or bullet with no new heading or field. Verify the learn router (agents/skills/learn/SKILL.md) still describes the module correctly, run the hygiene scan and the em-dash check, and run the doing-code-review panel over the branch delta per the ad-hoc arm; delete the origin row per the covered-row rule in the landing commit.
+Prompt: In an ad-hoc worktree, edit `agents/skills/learn/SKILL.md` so the per-write re-read sentence also derives the project-corpus lesson number as max existing `## N.` plus one from that fresh read, and edit `agents/skills/learn/step-6-instruction-updates.md` so the corpus commit is staged by own-edit hunk per the Step 1.8 word-diff check (never whole-file), replacing the "(warn-only, no script)" parenthetical with a pointer at the user-corpus validator's `duplicate` category as the shape a later promotion would reuse; keep both edits to the existing sentences; run the doing-code-review panel over the branch delta, the public-hygiene scan, and the pins suite; land per the Ad-hoc backlog arm with the origin row deleted in the same commit.
 
 Rejected alternatives:
-- Repository-wide git pre-commit hook running the pins suite: rejected because the squash landing path composes `commit-tree` plus `update-ref` and never runs hooks, and hooks install per agent rather than per repository (see scripts/land_squash.sh and docs/history/backlog/2026-10-20-ignored-audit-home-paths-force-tracked.md, Rejected)
-- A blocking pins gate on learn commits: rejected because one witnessed incident does not admit a new blocking gate under the repository guidelines' Machinery admission protocol (see AGENTS.md, Machinery admission protocol; the report-only arm is the sanctioned first landing)
-- Run the pins suite on every learn commit regardless of staged paths: rejected because the suite pins maintenance surfaces only, so commits outside `agents/skills/maintenance/` cannot break a pin and would pay the suite's cost for nothing (see scripts/check_maintenance_pins.sh)
-- Leave lesson 134 as the only fix: rejected because the lesson is recall material while the Step 1.8 Commit rule is the text that drives the staging decision, and the witnessed run passed that rule's judgment sentence by assumption (see agents/skills/learn/step-1-extract.md, Step 1.8 Commit rule, and docs/maintenance/development_lessons.md lesson 134)
-- A separate entry for the investigate skill's commit: rejected because the mechanism, the fix sentence, and the lesson are identical across both skills, so one landing covers both and a second entry would only split the same dispatch (see docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md, Second witness, and docs/maintenance/development_lessons.md lesson 134)
+- Promote the project-tier duplicate check to a blocking gate now: rejected for this entry because a warn-only check promoting to blocking is a guard change the Ad-hoc arm excludes and the Machinery admission protocol requires a retired or demoted blocker in the same change or explicit operator approval of net growth; the true catch is now ledgered for that decision in the origin row (the repository guidelines' Machinery admission protocol section; `docs/history/backlog/2026-10-21-learn-lesson-number-collision-parallel-sessions.md`)
+- Serialize learn corpus writes under the done lock: rejected because learn runs at every intermediate boundary outside done and the lock's span is the closeout, not the boundary (`agents/skills/learn/SKILL.md`, Integration Points with `done`)
+- Switch the project corpus to date-keyed or hash-keyed lesson identifiers: rejected because every existing `See also #N` citation and the `generalize` audit key on the numeric form, so the migration cost exceeds the collision cost the fresh-read allocation removes (`docs/maintenance/development_lessons.md`)
 
-Standing pre-authorization: every arm, uncontested on evidence (the origin row and lesson 134 record both witnesses from disk; no operator or peer correction argues against any arm).
+Standing pre-authorization: the two sentence edits.
 
-Machinery admission (report-only pins run): incident ce3a984b8 clobbering the Verify-successor sentence 19866b067 added, repaired by a42e0e1d4 (see docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md); expected catch frequency low (one witnessed in the corpus's history); false-positive cost a few seconds of suite runtime per learn or investigate commit that stages a maintenance path; review date 2027-01-20, retire if no second catch. The own-edit sentences add no machinery.
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added or promoted; the fresh-read allocation and the hunk-staging discipline are text within existing steps, and the promotion arm is recorded as rejected pending the operator's net-growth decision.
+
+## closeout-baseline-capture-facts-resolved-dirs
+
+Added: 2026-10-21, investigate pass anchored on the closeout-baseline row filed after the certification-seal-landing-survival execution closeout
+
+Work-type verdict: ad-hoc-able - a body-named single-surface skill-text fix in `agents/skills/execute-plan/SKILL.md` (the Step 0.4 session-bootstrap capture block), a tracked skill surface with no guard change, no new dependency, no state-schema change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`); the migration script is not edited.
+
+Origins:
+- docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md
+
+Urgency: high - every execution run that closes a code-family round writes its seal under the run worktree's review-certs home, and the Phase 5 transfer-out silently drops it before the worktree deletion; the 2026-10-21 witness kept its seal only because the operator session copied it by hand, and the plans skill's authoring bootstrap already describes the capture as "over the facts-resolved dirs", so the execute-plan block is the one site that disagrees with its own script.
+
+Scope arms:
+- Drop the explicit `--dirs "{reviews_dir} {tmp_dir} {metrics_dir}"` override from the Step 0.4 capture invocation so `worktree_closeout_migrate.py capture` resolves its four-key family (`reviews_dir`, `tmp_dir`, `metrics_dir`, `review_certs_dir`) from the facts block, matching the plans skill's wording and the script's `FACTS_DIR_KEYS`.
+- Name the seal file in the transfer-out artifact list sentence of `agents/skills/execute-plan/worktree-first.md` lifecycle step 5 ("review staging documents, stats sidecars, telemetry, ...") so the verify step reads it as a durable artifact.
+- Pay growth with deletion: the removed `--dirs` operand line pays for the added artifact noun.
+
+Orientation: the capture block's `--dirs` operand predates the script's facts-resolved family; 867f8ed7e (2026-10-18) widened it from two dirs to three on the same day f3894756d (2026-10-18) gave the script its four-key `FACTS_DIR_KEYS` resolution, so the skill lagged the script by exactly the review-certs key; the plans skill's Closeout-evidence establishment duty (Step 0) already delegates the invocation shape to this block while describing it as facts-resolved, so removing the override reconciles both texts with the script.
+
+Prompt: In an ad-hoc worktree, edit the Step 0.4 session-bootstrap capture block in `agents/skills/execute-plan/SKILL.md` so the `worktree_closeout_migrate.py capture` invocation passes no `--dirs` operand (the script resolves `reviews_dir`, `tmp_dir`, `metrics_dir`, and `review_certs_dir` from `.ai-playbook/facts.md`; a missing key already fails loud through the existing skip-note arm), and add the certification seal file to the artifact noun list of lifecycle step 5 in `agents/skills/execute-plan/worktree-first.md` (one noun, no new sentence). Verify by running `python3 scripts/worktree_closeout_migrate.py capture --out /tmp/baseline.json` from the primary checkout and confirming the written `dirs` list carries four entries including the review-certs home; run the doing-code-review panel over the branch delta, the public-hygiene scan, and the pins suite; land per the Ad-hoc backlog arm with the origin row deleted in the same commit.
+
+Rejected alternatives:
+- Add `{review_certs_dir}` as a fourth explicit `--dirs` operand: rejected because it keeps a hand-maintained twin of the script's `FACTS_DIR_KEYS` tuple that already drifted once (867f8ed7e versus f3894756d, both 2026-10-18); dropping the override removes the twin (`scripts/worktree_closeout_migrate.py`, `_facts_dirs`)
+- Make the migration script copy the review-certs home unconditionally regardless of the baseline: rejected because the baseline is the only thing that distinguishes run-created seals from pre-existing ones, and an unconditional copy re-opens the collision class the closeout migration already prices (`docs/history/backlog/2026-10-19-reviews-home-migration-collision-twins.md`)
+- Track the seal file so it rides the branch commits instead of the migration: rejected because the 2026-10-11 plan deliberately re-homed seals as untracked (`docs/history/plans/completed/2026-10-11-review-certs-seal-home-untracked.md`)
+
+Standing pre-authorization: the operand removal and the one-noun artifact-list edit.
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added or changed; the edit lets an existing capture resolve one more existing facts key.
 
 ## memory-index-compress-and-index-pass
 
@@ -83,6 +111,66 @@ EXEC-PROMPTS-PRUNE: review-staging-branch-review-path-glob-drift -> landing in t
 EXEC-PROMPTS-PRUNE: fold-commit-staged-record-precondition -> landing in this commit (ad-hoc reviewed landing; panel over the branch delta PASS zero blocking; fold-time staged-record duty line in the review-loop fix-and-fold batch step + Integration Points reconciliation; origin row deleted per the covered-row rule, the landing the witness)
 
 EXEC-PROMPTS-PRUNE: reviews-home-migration-collision-loudness -> landing in this commit (ad-hoc reviewed landing; panel over the branch delta, verdict PASS after one blocking fold - dangling-destination-symlink digest read made OSError-tolerant; origin row deleted per the covered-row rule; standing residual: a collision rename that fails copy verification reports via stderr ERROR, not a COLLISION line)
+
+## guard-signal-gates-authorized-action-lesson
+
+Added: 2026-10-21, investigate pass anchored on the lesson-candidate row filed after the gate-removal-closeout-accounting execution's Phase 3 risk-lens blocking fix
+
+Work-type verdict: ad-hoc-able - a body-named single-surface docs fix (one new lesson in `docs/maintenance/development_lessons.md`), a tracked docs surface with no guard change, no new dependency, no state-schema change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`).
+
+Origins:
+- docs/history/backlog/2026-10-21-guard-signal-gates-authorized-action-lesson.md
+
+Urgency: medium - the defect class (a guard's failure signal computed but only reported, so the gated action prints as authorized) is fixed at the witness site (1af769c59) but stays uncaptured for the next guard author; every session writing a new guard or disposition flag re-risks the same shape.
+
+Scope arms:
+- Capture one lesson stating the rule: an authorization decision (exit code, action line, verdict label) must consume the guard's failure signal as an input, never print beside a report that merely carries it; a guard whose evidence reaches only the report is inert.
+- Witness the rule with the 2026-10-21 shape: worktree-mode gate-removal computed a retained disposition whose reasons carried failed guards yet printed the force-removal authorization line with `OUTCOME: pass`; the fix 1af769c59 propagates a `removal_blocked` flag into the removal decision and the sweep verdict.
+- Land the lesson in the family the learn skill's placement rules select, linked to the fix commit and the origin row.
+
+Orientation: the plan gate-removal-closeout-accounting's Phase 3 risk lens found the guard-report/authorization split; the lessons the same plan already landed (151-156, and the task-boundary pair) cover family-blind definitions, claim-gateway atomicity, stdlib probes, mutation matrices, readiness staleness, refusal remedies, agreement-test cross-references, and log count discipline - none states the guard-signal-to-decision rule, so the class stays uncaptured (`docs/history/backlog/2026-10-21-gate-removal-task2-review-deferred.md` holds the plan's deferred non-blocking residues, a different defect class on the same surface).
+
+Prompt: Run the learn capture flow anchored on `docs/history/backlog/2026-10-21-guard-signal-gates-authorized-action-lesson.md`: re-derive the witness from disk (fix 1af769c59 in `scripts/worktree_closeout_migrate.py` and its tests), place one lesson in `docs/maintenance/development_lessons.md` under the family the learn placement rules select, write Principle/Trigger/Rule/Why/See-also in the house shape, cite the fix commit and the origin row, and re-check neighboring lessons' numbering and See-also links after insertion. Run the public-hygiene scan before the commit; land the lesson and the origin-row resolution in one commit on the primary checkout.
+
+Rejected alternatives:
+- Treat the fix as complete with no lesson: rejected because the class is generic to any guard/disposition split and the next guard author re-risks it; fix 1af769c59 is site-specific (`scripts/worktree_closeout_migrate.py`)
+- Add a mechanical gate requiring every guard to set a blocking flag: rejected under the machinery admission protocol - one witnessed incident, no catch-frequency estimate, and an unpriced false-positive cost for guards that legitimately report only (`docs/history/backlog/2026-10-21-guard-signal-gates-authorized-action-lesson.md`)
+- Route the rule to the review-agents checklist instead: rejected because the review side already caught the defect (the risk lens surfaced it as the plan's one blocking finding); the missing arm is the authoring-side rule, not reviewer vigilance (agents/skills/review-agents/SKILL.md)
+
+Standing pre-authorization: the single-lesson capture and its origin-row resolution.
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the capture is advisory lesson text.
+
+## execute-plan-phase2-staleness-class-and-exec-r-producer-step
+
+Added: 2026-10-21, investigate pass anchored on the two execute-plan skill-text rows filed by the session analysis of the plan-validation-command-undefined-repo execution run (landed 28127e322)
+
+Work-type verdict: ad-hoc-able - two body-named sentence-scale edits inside one tracked skill surface (`agents/skills/execute-plan/SKILL.md`: the Phase 2 failure arm and one Phase 4 producer step beside the archive commit), no guard change (the consuming gates in `scripts/reverse_squash_guard.py` and `scripts/done_sweep_gates_lib.py` are not edited), no new dependency, no state-schema change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`); both origins classify uniformly (same surface, same defect class: the skill omits a duty its own landing gates enforce), so the Stage 1 group routes as one entry.
+
+Origins:
+- docs/history/backlog/2026-10-21-execute-plan-phase2-staleness-remedy-pointer.md
+- docs/history/backlog/2026-10-21-execute-plan-exec-r-record-production-duty.md
+
+Urgency: medium - every multi-task execution run reaches Phase 2 with ticked checkboxes, so the full-mode readiness exit fires on every such run while the text's only remedy names an implementation task that does not exist (the 2026-10-21 run paid a pause-and-investigate cycle to derive the re-bind round from corpus history); every archived plan's landing runs the plans-egress gate, and both 2026-10-21 runs (this one and the readiness-files-coverage-quote-prefix sibling) learned the exec-r record duty from the guard's refusal text or a sibling's backfill record, never from the skill.
+
+Scope arms:
+- Phase 2 remedy class: extend item 2 of Phase 2 ("treat as a new fix iteration (implement sub-agent on the failing scope)") with the progress-tick staleness class: a full-mode `plan_readiness.py` exit whose only delta since the latest review round is task-checkbox ticks is not a failing scope; its exit is a fresh focused plan-review round over the current plan bytes whose record re-binds the digest (lesson 165 in `docs/maintenance/development_lessons.md`; the review-plan round-close seal duty), the implement arm staying for a genuinely failing validation command.
+- Phase 4 producer step: one step beside the archive commit naming the exec-r pointer record the landing's plans-egress gate demands (`<date>-plan-review-<slug>-exec-r<N>.md` under the resolved reviews home, carrying the egress bytes' sha256 and pointing at the exec-review record and its sidecar), and naming which gate each evidence shape satisfies: the reverse-squash guard's `check-archive` leg wants the series record for a plans-root egress, while `gate_archive_ceremony` also accepts a live plan-review receipt whose sidecar binds the plan identity, raw-byte digest, and yes verdict.
+- Pay growth with deletion: both edits are sentence-scale and the file sits under its warning-only cap (`scripts/skill_text_budget_caps.json`); any breach line the byte-budget gate reports is paid in the same change.
+
+Orientation: the Phase 2 failure arm's wording dates to the repository's initial commit (6f228dec0, 2026-06-05), before the executed-plan readiness gate existed (2242b2b3b, 2026-09-06) and before lesson 165 named the progress-tick class; the exec-r filename-series leg entered `scripts/done_sweep_gates_lib.py` at 44eec2a73 (2026-10-01) and `scripts/reverse_squash_guard.py` at 10a221758 (2026-10-02), while `agents/skills/execute-plan/SKILL.md` carries no `-exec-r<N>` record shape, no `egress`, and no guard name (working-tree grep and `git grep` at the tip agree); the skill's Phase 5 exec-review receipt existence check consumes the record but nothing produces it, and the sibling run's backfill record under the reviews home names the gate in its own "Why this record exists" text.
+
+Prompt: In an ad-hoc worktree, edit `agents/skills/execute-plan/SKILL.md` twice. (1) In Phase 2 (Plan Completion), extend item 2 so the progress-tick staleness class is named and routed: when the full-mode readiness exit's only delta since the latest review round is checkbox ticks, the remedy is a fresh focused plan-review round over the current plan bytes whose record re-binds the digest (lesson 165; the review-plan round-close seal duty), never an implement sub-agent; keep the implement arm for a genuinely failing validation command. (2) In Phase 4 (Archive Plan), add one producer step beside the archive commit: before landing, write the `<date>-plan-review-<slug>-exec-r<N>.md` pointer record into the resolved reviews home carrying the pre-archive plan bytes' sha256 and pointers to the exec-review record and its sidecar, and name which landing gate each evidence shape satisfies (the reverse-squash guard's series record for a plans-root egress; the bound plan-review receipt alternative for `gate_archive_ceremony`). Keep both edits to one or two sentences each inside the existing items; pay any byte-budget breach in the same change. Validation: `python3 scripts/skill_text_budget.py --check` prints no breach for the file, `bash scripts/check-no-em-dash.sh touched` and the public-hygiene scan exit 0, the pins suite exits 0; run the doing-code-review panel over the branch delta and land per the Ad-hoc backlog arm with both origin rows deleted in the same commit.
+
+Rejected alternatives:
+- Leave the plans-egress gate's refusal text as the only producer guidance: rejected because the refusal fires after the landing attempt, inside the lock's span, and both 2026-10-21 runs paid a read of the guard script to learn the record shape (`scripts/reverse_squash_guard.py`)
+- Have the reverse-squash guard or the archive ceremony generate the exec-r record itself: rejected because a gate writing its own evidence certifies nothing, and it adds landing-side machinery with no witnessed incident beyond the discoverability gap (`scripts/done_sweep_gates_lib.py`)
+- Drop the Phase 2 implement-sub-agent arm in favor of the re-bind round: rejected because a genuinely failing validation command still needs implementation work, and lesson 165 scopes the re-bind to the progress-tick class only (`docs/maintenance/development_lessons.md`)
+- Fix the Phase 2 class in the readiness script instead (recognize a ticks-only delta and pass): rejected because the digest binding is the review-plan seal's contract, so a readiness pass over un-rebound bytes would certify a digest no round produced (`agents/skills/review-plan/SKILL.md`)
+
+Standing pre-authorization: both sentence-scale edits (uncontested on evidence).
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added or changed; both edits name, inside existing steps, a remedy and a producer duty that existing gates already enforce.
 
 ## execute-plan-phase3-initial-pass-panel-selection-reference
 
@@ -189,3 +277,60 @@ Rejected alternatives:
 Standing pre-authorization: all three arms, uncontested on evidence (the recognized-key list and the README row's opt-in promise are re-derived from disk; no operator or peer correction argues against them).
 
 Machinery admission: not required - skill and docs text only, no gate, validator, lock, ledger, or ceremony; the hook arm is rejected above with the missing-incident absence named.
+
+## requested-test-verification-scope
+
+Added: 2026-10-21, investigate pass over the requested-test-scope-incomplete filing
+
+Work-type verdict: ad-hoc-able because the fix is localized to the existing Maven test runner contract, with explicit focused and broad request forms and no open design choice about the owner (`agents/skills/unit-test-runner/SKILL.md`); the Ad-hoc backlog arm's single-surface test is met.
+
+Origins:
+- docs/history/backlog/2026-10-21-requested-test-scope-incomplete.md
+
+Urgency: medium - a user-reported verification escaped affected test failures after a hand-selected subset ran green; the existing runner's mandatory one-class shape can repeat that omission whenever the request is broader.
+
+Scope arms:
+- Preserve the one-class command for explicitly focused requests.
+- Add a broad-request path that derives all relevant classes from the changed behavior and test inventory, supports both Surefire and Failsafe selectors, and uses the repository's documented full command when the user asks to confirm no tests fail.
+- Keep the result report tied to the exact command, test count, and any excluded suite; do not describe a selected subset as all tests.
+- Validate both paths with realistic sample contexts per `AGENTS.md` Testing Guidelines.
+
+Orientation: `agents/skills/unit-test-runner/SKILL.md` entered the repository in the initial skill-library commit and its current instructions still require `-Dtest=<TestClassName>`, say to execute only that class, and tell the runner to ignore caller instructions. Its description also triggers on integration tests and broad test requests, but the body has no alternate selection path. `AGENTS.md` Testing Guidelines cover skill validation and do not define implementation-test scope. The shared workflow guidance's full-suite requirement is limited to extraction, and execute-plan's full validation applies to plan execution rather than ad-hoc work.
+
+Prompt: Update `agents/skills/unit-test-runner/SKILL.md` so caller intent selects between its focused and broad modes: keep the one-class Surefire path for a focused request; for a broader request derive affected test classes from the changed behavior and test coverage, include the correct Failsafe command when integration tests are relevant, and use the repository's documented full test command when the user asks to confirm no tests fail. Report the exact command, test count, and excluded suites. Add realistic sample-context validation showing a focused request remains narrow and a broad request does not collapse to one class; run the public hygiene scan required for skill edits.
+
+Rejected alternatives:
+- Always run the full suite: rejected because it adds unnecessary cost when a user asks for one class, while the witnessed omission shows the value of retaining a focused path (`agents/skills/unit-test-runner/SKILL.md`).
+- Keep the one-class mandate and tell callers to name every class: rejected because the runner is instructed to ignore caller intent and has no broad path, the witnessed gap recorded by the origin row (`docs/history/backlog/2026-10-21-requested-test-scope-incomplete.md`).
+- Add only a general rule to `AGENTS.md`: rejected because it would not repair the runner's local instruction to ignore caller instructions and execute only `-Dtest=<TestClassName>`; the witnessed behavior is in the runner itself (`agents/skills/unit-test-runner/SKILL.md`).
+- Add a persisted test-scope ledger or validator: rejected because one caller-sensitive branch in the existing runner addresses the witnessed omission without another stateful check (`AGENTS.md`, Testing Guidelines; origin row above).
+
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is recommended; the witnessed scope omission is addressed by the runner's existing selection contract.
+
+## execution-claim-release-operand-after-archive
+
+Added: 2026-10-21, investigate pass anchored on the claim-release row filed after the certification-seal-landing-survival execution closeout
+
+Work-type verdict: ad-hoc-able - a body-named single-surface skill-text fix in `agents/skills/execute-plan/SKILL.md` (Phase 5, the claim-removal sentence), a tracked skill surface with no guard change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`); the claim gateway script is deliberately not edited here (see the rejected script arm).
+
+Origins:
+- docs/history/backlog/2026-10-21-execution-claim-release-archived-plan-operand.md
+
+Urgency: low - one failed invocation per execution closeout, self-explaining (`plan operand not readable`), recovered by re-invoking with the completed path.
+
+Scope arms:
+- In the Phase 5 closeout text that names the run-level execution claim removal by its owner, state the release operand: the plan's resolved archived path (`{plans_completed_dir}/<basename>`), because Phase 4's archive rider has already moved the plan when the release runs.
+- Pay growth with deletion: fold the operand clause into the existing sentence rather than adding one.
+
+Orientation: `resolve_context` in `scripts/execution_claim.sh` (f3894756d, 2026-10-18) requires a readable plan operand before resolving the claim file, which is correct for `take`, `claim`, and `refresh` (the plan is live) and only wrong for `release` after the archive move; the claim file itself records the active path, so a caller following the recorded `plan:` line hits the refusal.
+
+Prompt: In an ad-hoc worktree, edit the Phase 5 sentence in `agents/skills/execute-plan/SKILL.md` that names the run-level execution claim removal so it states the release invocation's operand as the archived plan path (the Phase 4 destination), with no new sentence or step; run the doing-code-review panel over the branch delta, the public-hygiene scan, and the pins suite; land per the Ad-hoc backlog arm with the origin row deleted in the same commit.
+
+Rejected alternatives:
+- Teach `release` to resolve the claim by slug or by the completed twin when the operand is absent: rejected for this entry because `scripts/execution_claim.sh` is the execution-claim gateway and the open `dead-run-resume-arm3-manifest-key-drift` entry in `docs/history/backlog/PLAN-PROMPTS.md` already opens that script for authoring; the release-operand arm folds into that plan when it authors rather than landing as a separate gateway edit (`docs/history/backlog/PLAN-PROMPTS.md`, dead-run-resume-arm3-manifest-key-drift)
+- Record the completed path in the claim file at archive time: rejected because the claim file is deleted at the same closeout and no reader needs the second path (`agents/skills/execute-plan/SKILL.md`, Phase 5 claim removal)
+- Release the claim before the archive rider: rejected because the claim must stand through the landing critical section so a fresh foreign claim is a guard-fire stop (`agents/skills/execute-plan/SKILL.md`, Queue-drain continuation)
+
+Standing pre-authorization: the operand clause.
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added or changed; the edit names an operand for an existing step.

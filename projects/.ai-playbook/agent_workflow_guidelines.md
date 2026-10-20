@@ -837,6 +837,8 @@ When an implement sub-agent reports that work for the current task "was already 
 
 50.5. **Cross-reference:** `learn` Step 2: Facts vs skill configuration; Step 3 qualification gate check #2.
 
+50.6. **Read facts minimally and safely.** Task-start instructions to read facts do not require printing the full file: retrieve only the keys or section needed, because local facts may contain credentials or other sensitive values. Keep secret values out of tool output, logs, diffs, and reports; verify presence without printing a value when possible.
+
 ## 53. MCP OAuth Credentials: Paths in Facts, Tokens in credentials/
 
 53.1. **Never store access or refresh tokens in `user_facts_path`, repo `repo_facts_rel`, committed docs, Jira, or Slack.** Facts may list **paths and workflow keys** (`mcp_credentials_dir`, `mcp_cursor_auth_backup`, `mcp_credentials_sync_script`).

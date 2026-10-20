@@ -6,6 +6,7 @@
 - **Priority:** high
 - **Origin class:** observed recovery blocker
 - **Class:** fix-class
+- **Cluster:** docs/history/backlog/2026-10-05-execute-plan-reviewed-scope-recovery.md; docs/history/backlog/2026-10-09-execute-plan-live-claim-scope-widening.md; docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md (shared surface: execute-plan scope and recovery transitions)
 - **Driving force:** reliability + recoverability
 - **Skill/step:** `agents/skills/execute-plan/runtime-contract.md`, “Out-of-scope plan-edit disposition”; `scripts/execute_plan_runtime.py`, `recover_out_of_scope_plan_edit`
 - **Severity:** high; the sanctioned recovery operation can reject before considering its documented edit classes because it resolves a date-prefixed plan path as `<plans_dir>/<plan_slug>.md`.

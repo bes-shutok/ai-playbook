@@ -9,6 +9,7 @@ host state is touched.
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corrections_record as cr
 import plan_delta_classifier as pdc
+import session_channel as sc
 
 EM = b"\xe2\x80\x94"
 EN = b"\xe2\x80\x93"
@@ -42,6 +44,167 @@ def assert_class(test, old, new, klass, *phrases):
         for phrase in phrases:
             test.assertIn(phrase, hunk["reason"])
     return hunk
+
+
+class BuildRowAuthorSessionTest(unittest.TestCase):
+    """author_session_id rides only operator-acked plan-family rows: the
+    emission records the emitting session's identity and refuses a
+    missing or empty one (the hop stays on the fresh-review path), and
+    never attaches the key to a script-verified row. Since Task 3 of the
+    corrections-chain-operator-ack plan there is no key-free
+    operator-acked default emission: the producer derives the identity
+    from the session-channel helper and passes it."""
+
+    HUNKS = [{"header": "@@ -2 +2 @@", "digest": cr.sha256_hex(b"hunk")}]
+
+    def build(self, kind=cr.KIND_OPERATOR_ACKED, author="sess-1"):
+        receipt = None
+        if kind == cr.KIND_OPERATOR_ACKED:
+            receipt = {"directive": "re-bind the delta",
+                       "authorization_witness": "w",
+                       "classifier_gap_row": "g"}
+        return pdc.build_row(kind, b"old\n", b"new\n", "c" * 40, self.HUNKS,
+                             receipt=receipt,
+                             recorded_at="2026-10-18T00:00:00Z",
+                             author_session_id=author)
+
+    def test_operator_acked_row_records_the_author_session(self):
+        row = self.build()
+        self.assertEqual(row["author_session_id"], "sess-1")
+        self.assertIsNone(cr.row_schema_reason(row, cr.FAMILY_PLAN))
+
+    def test_missing_identity_refuses_the_emission(self):
+        # The None default is gone for the operator-acked kind: an
+        # emission without a derived identity refuses the acknowledgment
+        # and the hop remains on the fresh-review path.
+        try:
+            self.build(author=None)
+            self.fail("expected CorrectionsSchemaError")
+        except cr.CorrectionsSchemaError as exc:
+            msg = str(exc)
+            self.assertTrue(msg.startswith(cr.MARKER_PREFIX), msg)
+            self.assertIn("operator-acked emission refused", msg)
+            self.assertIn("fresh-review", msg)
+
+    def test_empty_identity_refuses_the_emission(self):
+        for author in ("", "   "):
+            try:
+                self.build(author=author)
+                self.fail("expected CorrectionsSchemaError for %r" % author)
+            except cr.CorrectionsSchemaError as exc:
+                msg = str(exc)
+                self.assertTrue(msg.startswith(cr.MARKER_PREFIX), msg)
+                self.assertIn("operator-acked emission refused", msg)
+                self.assertIn("fresh-review", msg)
+
+    def test_script_verified_row_never_carries_the_key(self):
+        try:
+            self.build(kind=cr.KIND_SCRIPT_VERIFIED, author="sess-1")
+            self.fail("expected CorrectionsSchemaError")
+        except cr.CorrectionsSchemaError as exc:
+            msg = str(exc)
+            self.assertTrue(msg.startswith(cr.MARKER_PREFIX), msg)
+            self.assertIn("never carries author_session_id", msg)
+
+
+class AuthorSessionDerivationCliTest(unittest.TestCase):
+    """The producer CLI derives the emitting session's identity from the
+    shared session-channel helper (invoked as a subprocess) and records
+    it on operator-acked rows; an empty derivation refuses the emission
+    and keeps the hop on the fresh-review path. A script-verified row
+    never carries the key even when a session identity is available."""
+
+    BEFORE = b"# plan\n\nalpha " + EM + b" bravo.\n"
+    AFTER = b"# plan\n\nalpha charlie.\n"
+
+    def setUp(self):
+        self.repo = cr.build_scratch_repo(self, name="ack-mint")
+        self.start = self.repo.commit_file(PLAN_REL, self.BEFORE, "seed")
+        self.repo.write_file(PLAN_REL, self.AFTER)
+        self.receipt_path = self.repo.root / "receipt.json"
+        self.receipt_path.write_text(json.dumps({
+            "directive": "re-bind the delta",
+            "authorization_witness":
+                ".ai-playbook/scheduler-state.json#correction_authorizations",
+            "classifier_gap_row":
+                "docs/history/backlog/ack-mint-gap.md",
+        }))
+        self.saved_env = sc._save_env(sc.CLAUDE_SESSION_ENV,
+                                      sc.CURSOR_SESSION_ENV,
+                                      sc.CURSOR_CONVERSATION_ENV,
+                                      sc.CODEX_SESSION_ENV)
+
+    def tearDown(self):
+        sc._restore_env(self.saved_env)
+
+    def pin_env(self, **values):
+        for name in (sc.CLAUDE_SESSION_ENV, sc.CURSOR_SESSION_ENV,
+                     sc.CURSOR_CONVERSATION_ENV, sc.CODEX_SESSION_ENV):
+            os.environ.pop(name, None)
+        for name, value in values.items():
+            os.environ[name] = value
+
+    def run_cli(self, *args):
+        # hermetic_git_env copies the (pinned) process environment, so the
+        # child inherits exactly the session vars pin_env set.
+        return subprocess.run(
+            [sys.executable, str(CLASSIFIER)] + list(args),
+            capture_output=True, text=True, env=cr.hermetic_git_env())
+
+    def emitted_rows(self, proc):
+        return [json.loads(line.split(": ", 1)[1])
+                for line in proc.stdout.splitlines()
+                if line.startswith("corrections-row-json: ")]
+
+    def test_claude_source_is_recorded_on_the_row(self):
+        self.pin_env(**{sc.CLAUDE_SESSION_ENV: "sess-cli-a"})
+        proc = self.run_cli("--plan", str(self.repo.root / PLAN_REL),
+                            "--since", self.start, "--emit-row",
+                            "--kind", "operator-acked",
+                            "--receipt", str(self.receipt_path))
+        # The unclassified delta keeps its classification refusal (exit 1);
+        # the acked row is still minted for the operator-ack route.
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("classification leg refused", proc.stdout)
+        rows = self.emitted_rows(proc)
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertEqual(rows[0]["author_session_id"], "sess-cli-a")
+        self.assertIsNone(cr.row_schema_reason(rows[0], cr.FAMILY_PLAN))
+
+    def test_codex_source_is_recorded_on_the_row(self):
+        self.pin_env(**{sc.CODEX_SESSION_ENV: "codex-cli-9"})
+        proc = self.run_cli("--plan", str(self.repo.root / PLAN_REL),
+                            "--since", self.start, "--emit-row",
+                            "--kind", "operator-acked",
+                            "--receipt", str(self.receipt_path))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        rows = self.emitted_rows(proc)
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertEqual(rows[0]["author_session_id"], "codex-cli-9")
+
+    def test_empty_derivation_refuses_the_emission(self):
+        self.pin_env()
+        proc = self.run_cli("--plan", str(self.repo.root / PLAN_REL),
+                            "--since", self.start, "--emit-row",
+                            "--kind", "operator-acked",
+                            "--receipt", str(self.receipt_path))
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("operator-acked emission refused", proc.stderr)
+        self.assertIn("fresh-review", proc.stderr)
+        self.assertNotIn("corrections-row-json:", proc.stdout)
+
+    def test_script_verified_row_stays_key_free(self):
+        # The exempt typography delta emits a script-verified row even
+        # with a session identity available; the row stays key-free.
+        self.pin_env(**{sc.CLAUDE_SESSION_ENV: "sess-cli-a"})
+        self.repo.write_file(PLAN_REL, b"# plan\n\nalpha, bravo.\n")
+        proc = self.run_cli("--plan", str(self.repo.root / PLAN_REL),
+                            "--since", self.start, "--emit-row")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        rows = self.emitted_rows(proc)
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertNotIn("author_session_id", rows[0])
 
 
 class ClassifierTest(unittest.TestCase):
@@ -432,7 +595,10 @@ class ClassifierTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout)
         self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
         # The acked kind emits through the same schema builder and still
-        # reports the unclassified delta as a fail.
+        # reports the unclassified delta as a fail; the emitting session's
+        # identity is derived from the session-channel helper (pinned
+        # here with the selftest save/restore pattern; without a session
+        # source the emission refuses as a tool error).
         receipt_dir = tempfile.TemporaryDirectory(prefix="pdc-receipt-")
         self.addCleanup(receipt_dir.cleanup)
         receipt_path = Path(receipt_dir.name) / "receipt.json"
@@ -442,10 +608,24 @@ class ClassifierTest(unittest.TestCase):
             "classifier_gap_row":
                 "docs/history/backlog/2026-10-04-typography-bucket.md",
         }))
-        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
-                            "--since", "HEAD", "--emit-row",
-                            "--kind", "operator-acked",
-                            "--receipt", str(receipt_path))
+        saved_env = sc._save_env(sc.CLAUDE_SESSION_ENV,
+                                 sc.CURSOR_SESSION_ENV,
+                                 sc.CURSOR_CONVERSATION_ENV,
+                                 sc.CODEX_SESSION_ENV)
+        try:
+            # Clear every higher-precedence source before pinning the
+            # Codex value, so an ambient session variable cannot outrank
+            # the pin (same discipline as the sibling pin_env fixtures).
+            for name in (sc.CLAUDE_SESSION_ENV, sc.CURSOR_SESSION_ENV,
+                         sc.CURSOR_CONVERSATION_ENV):
+                os.environ.pop(name, None)
+            os.environ[sc.CODEX_SESSION_ENV] = "codex-stimuli-1"
+            proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                                "--since", "HEAD", "--emit-row",
+                                "--kind", "operator-acked",
+                                "--receipt", str(receipt_path))
+        finally:
+            sc._restore_env(saved_env)
         self.assertEqual(proc.returncode, 1, proc.stdout)
         self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
         rows = [line for line in proc.stdout.splitlines()
@@ -454,9 +634,7 @@ class ClassifierTest(unittest.TestCase):
         row = json.loads(rows[0].split(": ", 1)[1])
         self.assertIsNone(cr.row_schema_reason(row, cr.FAMILY_PLAN))
         self.assertEqual(row["kind"], cr.KIND_OPERATOR_ACKED)
-        self.assertEqual(sorted(row["receipt"]),
-                         ["authorization_witness", "classifier_gap_row",
-                          "directive"])
+        self.assertEqual(row["author_session_id"], "codex-stimuli-1")
         # Exit 3: an unreadable plan operand.
         proc = self.run_cli("--plan", str(repo.root / "absent.md"),
                             "--since", "HEAD")

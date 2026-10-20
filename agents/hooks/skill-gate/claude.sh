@@ -25,16 +25,17 @@
 #
 # Session model (r10-B1 subprocess model): the session id is derived VERBATIM as
 #   SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
-# (the helper prints CLAUDE_CODE_SESSION_ID with NO trailing newline). When SID
-# is non-empty the adapter passes `--session-id "$SID"`; when empty it OMITS
-# `--session-id` (Claude is the ONE agent with a verified per-session channel at
-# v9, so an empty SID means CLAUDE_CODE_SESSION_ID is unexpectedly absent).
+# (shared helper contract, owned by agents/hooks/lessons-recall/README.md,
+# "Session channel precedence"). When SID is non-empty the adapter passes
+# `--session-id "$SID"`; when empty it OMITS `--session-id` (empty means every
+# supported source is unset or empty; in a Claude hook that means
+# CLAUDE_CODE_SESSION_ID is unexpectedly absent, hence the alarm below).
 #
 # Empty-SID alarm (r12-M4 relocated alarm): the Claude adapter is the ONE place
 # that knows its own identity, so ONLY it emits the stderr warning
 # `CLAUDE_CODE_SESSION_ID absent; running in no-session mode` BEFORE invoking
-# the core when SID is empty-after-strip (for Codex/Cursor/agy empty is
-# documented steady state).
+# the core when SID is empty-after-strip (for the other runtimes empty is the
+# documented steady state per the README's all-source empty rule).
 set -u
 
 SESSION_CHANNEL="$HOME/.ai-playbook/scripts/session_channel.py"

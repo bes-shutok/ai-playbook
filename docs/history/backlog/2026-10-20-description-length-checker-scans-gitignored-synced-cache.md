@@ -1,7 +1,7 @@
 # Backlog: the description-length checker scans the gitignored synced skills cache and warns at every landing
 
 - **Filed:** 2026-10-20, all-skills loader review after the execute-plan description fix (learn Step 1.8 capture)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-21-description-length-checker-scope-and-admission.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** session-witnessed checker scope defect (recurring landing noise over files the repo does not author)

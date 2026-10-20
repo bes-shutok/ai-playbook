@@ -10,7 +10,23 @@ binding to bytes re-derived from git (the seal's round-start bytes as hop
 0); the linkage and terminal legs; seal integrity (the sidecar range
 against the seal's certified range and hop-commit dating; the
 append-only-entries duty is producer-side); the subject-bound
-operator ack receipt whose witness record path is injected by the caller;
+operator ack receipt whose witness record path is injected by the caller
+(code-family rows keep that turn-record resolution); the canonical
+correction-row digest (lowercase SHA-256 over the row's canonical JSON,
+excluding only receipt.authorization_witness); the plan-family
+primary-state authorization route (the receipt names the fixed
+scheduler-state selector and the verifier matches the unique
+correction_authorizations entry from the already-resolved primary
+checkout, a fully verified authorization letting that hop bypass only
+the classification leg; the injected turn-record route is retired for
+plan-family rows and refuses through the named receipt legs); the
+acknowledgment writer (``record_correction_authorization``, the
+production distinct-session append into the primary state file's
+``correction_authorizations`` array under the scheduler-turn targeted
+edit class, deriving its writer identity from the shared
+session-channel helper and confirming the append by read-back); the
+optional author_session_id row key
+(operator-acked plan-family rows only, absent-tolerated on legacy rows);
 the seal slug shape gate (a slug outside the safe kebab shape refuses as a
 schema error at the seal-path derivation, never echoing the slug); the
 advisory-lock corrections append keyed on the artifact slug; the
@@ -41,6 +57,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -86,12 +103,33 @@ RECEIPT_KEYS = frozenset(
     ("directive", "authorization_witness", "classifier_gap_row"))
 HUNK_KEYS = frozenset(("header", "digest"))
 
+# The operator-acked plan-family route: the receipt names this fixed
+# selector, and the verifier reads the named array from the primary
+# checkout's scheduler state file (the already-resolved primary-checkout
+# path is injected by the caller; a caller-selected witness path never
+# selects authority for plan-family rows).
+SCHEDULER_STATE_RELPATH = ".ai-playbook/scheduler-state.json"
+CORRECTION_AUTHORIZATIONS_KEY = "correction_authorizations"
+ACK_STATE_SELECTOR = "%s#%s" % (SCHEDULER_STATE_RELPATH,
+                                CORRECTION_AUTHORIZATIONS_KEY)
+# One correction_authorizations entry: the row digest plus the copied
+# row subject (audit readability); a copied field contradicting the
+# matched row refuses.
+AUTHORIZATION_ENTRY_KEYS = frozenset(
+    ("row_digest", "writer_session_id", "operator_direction", "recorded_at",
+     "author_session_id", "artifact_path", "before_digest", "after_digest",
+     "evidence_commit", "hunk_digests"))
+# The emitting session identity recorded on operator-acked plan-family
+# rows only; absent on legacy rows and on every other kind or family.
+AUTHOR_SESSION_KEY = "author_session_id"
+
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 SEAL_DIR_RELPATH = ".ai-playbook/review-certs"
 SEAL_ROUND_RE = re.compile(r"^## round (\d+)$")
 SEAL_FIELD_RE = re.compile(r"^([a-z_]+): (.*)$")
+LANDED_ANCHOR_SCAN_LIMIT = 400
 BACKLOG_DIR_RELPATH = "docs/history/backlog"
 
 # The seal slug shape (r1 fix fold): the artifact slug is interpolated into
@@ -188,13 +226,24 @@ def row_schema_reason(row, family=None):
         return _schema("unknown family %r" % (fam,))
     expected = row_keys(kind, fam)
     actual = set(row)
+    # Operator-acked plan-family rows may carry the emitting session's
+    # author_session_id (absent-tolerated, so every archived row recorded
+    # before the key existed re-validates unchanged); no other kind or
+    # family ever carries it.
+    optional = frozenset((AUTHOR_SESSION_KEY,)) \
+        if kind == KIND_OPERATOR_ACKED and fam == FAMILY_PLAN \
+        else frozenset()
     missing = sorted(expected - actual)
-    extra = sorted(actual - expected)
+    extra = sorted(actual - expected - optional)
     if missing:
         return _schema("missing required key(s) %s for kind %s family %s"
                        % (missing, kind, fam))
     if extra:
         return _schema("unexpected key(s) %s" % extra)
+    if optional and AUTHOR_SESSION_KEY in actual:
+        value = row[AUTHOR_SESSION_KEY]
+        if not isinstance(value, str) or not value.strip():
+            return _schema("author_session_id is not a non-empty string")
     for field in ("before_digest", "after_digest"):
         if not isinstance(row[field], str) or not HEX64_RE.match(row[field]):
             return _schema("%s is not a hex64 digest" % field)
@@ -237,6 +286,21 @@ def validate_row(row, family=None):
     reason = row_schema_reason(row, family)
     if reason is not None:
         raise CorrectionsSchemaError(reason)
+
+
+def correction_row_digest(row):
+    """The correction row identity: the lowercase SHA-256 of the
+    canonical JSON encoding (sorted keys, compact separators) of the
+    full correction row, excluding only ``receipt.authorization_witness``
+    so the fixed selector does not create a cycle."""
+    payload = dict(row)
+    receipt = payload.get("receipt")
+    if isinstance(receipt, dict):
+        trimmed = dict(receipt)
+        trimmed.pop("authorization_witness", None)
+        payload["receipt"] = trimmed
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return sha256_hex(canonical.encode("utf-8"))
 
 
 def corrections_array_reason(value):
@@ -333,6 +397,58 @@ def touches_path(repo, commit, path):
     return bool(text.strip())
 
 
+def commit_object_status(repo, object_id):
+    """'present' only for a commit object, 'missing' only for a
+    conclusive absent-object result, and 'error' otherwise (malformed
+    ids, wrong object types, or any other Git failure). An ambiguous or
+    otherwise inconclusive plumbing error never converts to 'missing'."""
+    if not isinstance(object_id, str) or not HEX40_RE.match(object_id):
+        return "error"
+    exists = run_git(repo, "cat-file", "-e", object_id)
+    if exists.returncode == 1:
+        return "missing"
+    if exists.returncode != 0:
+        return "error"
+    kind = git_text(repo, "cat-file", "-t", object_id)
+    if kind is None:
+        return "error"
+    return "present" if kind.strip() == "commit" else "error"
+
+
+def tree_blob_bytes(repo, commit, path):
+    """(bytes, None) when the commit's tree carries a blob at path,
+    (None, None) when the path is absent from that tree (a non-match),
+    and (None, reason) on any git plumbing failure over the ls-tree or
+    the blob read."""
+    listing = git_text(repo, "ls-tree", commit, "--", path)
+    if listing is None:
+        return None, ("git plumbing failed while reading the tree of %s"
+                      % commit)
+    if not listing.strip():
+        return None, None
+    blob = git_bytes(repo, "cat-file", "blob", "%s:%s" % (commit, path))
+    if blob is None:
+        return None, ("git plumbing failed while reading the blob %s:%s"
+                      % (commit, path))
+    return blob, None
+
+
+def resolve_landed_anchor(repo, artifact_path, digest, head_sha,
+                          limit=LANDED_ANCHOR_SCAN_LIMIT):
+    """Return (anchor, scan_error) using the caller's pinned HEAD id."""
+    text = git_text(repo, "rev-list", "--first-parent", "-n", str(limit),
+                    head_sha)
+    if text is None:
+        return None, "git plumbing failed while enumerating first-parent history"
+    for commit in text.split():
+        candidate, read_error = tree_blob_bytes(repo, commit, artifact_path)
+        if read_error is not None:
+            return None, read_error
+        if candidate is not None and sha256_hex(candidate) == digest:
+            return commit, None
+    return None, None
+
+
 # ---------------------------------------------------------------------------
 # Certification seal
 # ---------------------------------------------------------------------------
@@ -381,34 +497,6 @@ def seal_relpath(artifact_path, slug=None):
     return "%s/%s.md" % (SEAL_DIR_RELPATH, name)
 
 
-def parse_seal(text):
-    """The seal entries in file order. A malformed header or field line
-    yields an unparsable marker consumed by the caller as an unresolvable
-    seal."""
-    entries = []
-    current = None
-    for line in text.splitlines():
-        header = SEAL_ROUND_RE.match(line)
-        if header:
-            current = (int(header.group(1)), [])
-            entries.append(current)
-            continue
-        if current is None:
-            continue
-        field = SEAL_FIELD_RE.match(line)
-        if field:
-            current[1].append((field.group(1), field.group(2)))
-        elif line.strip():
-            return None
-    parsed = []
-    for number, lines in entries:
-        parsed.append(SealEntry(number, dict(lines),
-                                "\n".join(["## round %d" % number]
-                                          + ["%s: %s" % kv
-                                             for kv in lines])))
-    return parsed
-
-
 def seal_text(repo, rel):
     """The seal bytes on disk under the repo root, or None when the file
     is absent or unreadable (the seal is read from the working tree,
@@ -419,17 +507,142 @@ def seal_text(repo, rel):
         return None
 
 
-def load_seal_entry(repo, rel, round_number):
-    """The single seal entry for the round, or None when the seal is
-    unresolvable (missing file, unparsable text, absent or duplicated
-    round). The seal is read from the working tree, never from git."""
+# Legacy one-line seal rows: the exact prose shapes present in the
+# committed seal corpus (the pipe rows carrying ``round-start commit`` /
+# ``round-start ... digest`` labels and the dash-prefixed ``rN <date>
+# <path> round-start ... round-start-digest ... round-close ...`` rows),
+# recognized by an anchored grammar and normalized into the same entry
+# model as block records. A row-shaped line whose labeled fields do not
+# all extract stays prose (the round lookup then reports the seal
+# unresolvable), never a partially filled entry.
+_LEGACY_ROW_RE = re.compile(r"^(?:- )?r(\d+) (.+)$")
+_LEGACY_ARTIFACT_RE = re.compile(r"\bartifact (\S+)")
+_LEGACY_PATH_RE = re.compile(r"(?:^| )(\S+/\S+)")
+_LEGACY_START_COMMIT_A_RE = re.compile(r"\bround-start commit ([0-9a-f]+)")
+_LEGACY_START_PAIR_B_RE = re.compile(
+    r"\bround-start ([0-9a-f]+) digest ([0-9a-f]+)\b")
+_LEGACY_START_PAIR_C_RE = re.compile(
+    r"\bround-start ([0-9a-f]+) round-start-digest ([0-9a-f]+)")
+_LEGACY_START_DIGEST_A_RE = re.compile(r"\bround-start digest ([0-9a-f]+)\b")
+_LEGACY_START_DIGEST_C_RE = re.compile(
+    r"\bround-start-digest ([0-9a-f]+)\b")
+_LEGACY_CLOSE_COMMIT_A_RE = re.compile(r"\bround-close commit ([0-9a-f]+)")
+_LEGACY_CLOSE_COMMIT_B_RE = re.compile(r"\bround-close ([0-9a-f]+)\b")
+
+
+def _legacy_row_entry(line):
+    """One recognized legacy one-line seal row as a SealEntry, or None for
+    every other line. The grammar extracts exactly the canonical fields;
+    a row missing any of them is not an entry."""
+    match = _LEGACY_ROW_RE.match(line)
+    if match is None:
+        return None
+    body = match.group(2)
+    artifact_match = _LEGACY_ARTIFACT_RE.search(body)
+    artifact = artifact_match.group(1) if artifact_match else None
+    if artifact is None:
+        path_match = _LEGACY_PATH_RE.search(body)
+        artifact = path_match.group(1) if path_match else None
+    if artifact is None:
+        return None
+    pair_b = _LEGACY_START_PAIR_B_RE.search(body)
+    pair_c = _LEGACY_START_PAIR_C_RE.search(body)
+    start_a = _LEGACY_START_COMMIT_A_RE.search(body)
+    if start_a is not None:
+        start_commit = start_a.group(1)
+    elif pair_b is not None:
+        start_commit = pair_b.group(1)
+    elif pair_c is not None:
+        start_commit = pair_c.group(1)
+    else:
+        return None
+    digest_a = _LEGACY_START_DIGEST_A_RE.search(body)
+    if digest_a is not None:
+        start_digest = digest_a.group(1)
+    elif pair_b is not None:
+        start_digest = pair_b.group(2)
+    elif pair_c is not None:
+        start_digest = pair_c.group(2)
+    else:
+        return None
+    close_a = _LEGACY_CLOSE_COMMIT_A_RE.search(body)
+    if close_a is not None:
+        close_commit = close_a.group(1)
+    else:
+        close_b = _LEGACY_CLOSE_COMMIT_B_RE.search(body)
+        close_commit = close_b.group(1) if close_b else None
+    if close_commit is None:
+        return None
+    fields = {
+        "artifact": artifact,
+        "round_start_commit": start_commit,
+        "round_start_digest": start_digest,
+        "round_close_commit": close_commit,
+    }
+    return SealEntry(int(match.group(1)), fields, line)
+
+
+def parse_seal(text):
+    """The seal entries in file order. A malformed header or field line
+    yields an unparsable marker consumed by the caller as an unresolvable
+    seal. A legacy one-line seal row outside any block (the committed
+    corpus's prose shape) normalizes to an entry when its labeled fields
+    all extract; row-shaped prose that does not parse stays skipped."""
+    entries = []
+    current = None
+    for line in text.splitlines():
+        header = SEAL_ROUND_RE.match(line)
+        if header:
+            current = (int(header.group(1)), [])
+            entries.append(current)
+            continue
+        if current is None:
+            legacy = _legacy_row_entry(line)
+            if legacy is not None:
+                entries.append(legacy)
+            continue
+        field = SEAL_FIELD_RE.match(line)
+        if field:
+            current[1].append((field.group(1), field.group(2)))
+        elif line.strip():
+            return None
+    parsed = []
+    for item in entries:
+        if isinstance(item, SealEntry):
+            parsed.append(item)
+            continue
+        number, lines = item
+        parsed.append(SealEntry(number, dict(lines),
+                                "\n".join(["## round %d" % number]
+                                          + ["%s: %s" % kv
+                                             for kv in lines])))
+    return parsed
+
+
+def load_seal_entry(repo, rel, round_number, family=FAMILY_PLAN):
+    """The single seal entry for the round and family, or None when the
+    seal is unresolvable (missing file, unparsable text, zero or multiple
+    family matches, or a failing field shape). Plan-family entries select
+    by the numeric round header with no family field or ``family: plan``;
+    code-family entries select by ``family: code`` plus ``staging_round:
+    rN`` and never by the block number alone, so plan and code entries
+    sharing a staging number coexist and duplicates refuse. The seal is
+    read from the working tree, never from git."""
     text = seal_text(repo, rel)
     if text is None:
         return None
     entries = parse_seal(text)
     if entries is None:
         return None
-    matching = [e for e in entries if e.round == round_number]
+    if family == FAMILY_CODE:
+        token = "r%d" % round_number
+        matching = [e for e in entries
+                    if e.fields.get("family") == FAMILY_CODE
+                    and e.fields.get("staging_round") == token]
+    else:
+        matching = [e for e in entries
+                    if e.round == round_number
+                    and e.fields.get("family", FAMILY_PLAN) == FAMILY_PLAN]
     if len(matching) != 1:
         return None
     entry = matching[0]
@@ -462,6 +675,31 @@ def parse_witness_fields(text):
         if match:
             fields[match.group(1)] = match.group(2)
     return fields
+
+
+def _classifier_gap_reason(receipt, repo_root, hunks):
+    """The prefixed receipt-leg refusal for the receipt's classifier-gap
+    row (outside the backlog directory, dangling, or not quoting a
+    refused hunk digest), or None when the committed gap row preserves
+    the unclassified-hunk evidence."""
+    gap_rel = receipt["classifier_gap_row"]
+    gap_norm = os.path.normpath(gap_rel).replace(os.sep, "/")
+    if gap_norm.startswith("../") or not gap_norm.startswith(
+            BACKLOG_DIR_RELPATH + "/"):
+        return leg_reason(
+            "receipt", "classifier gap row %s is outside %s/"
+            % (gap_rel, BACKLOG_DIR_RELPATH))
+    gap_path = Path(repo_root) / gap_rel
+    if not gap_path.is_file():
+        return leg_reason(
+            "receipt", "dangling classifier gap row path: %s" % gap_rel)
+    gap_text = gap_path.read_text(encoding="utf-8", errors="replace")
+    for hunk in hunks:
+        if hunk["digest"] not in gap_text:
+            return leg_reason(
+                "receipt", "classifier gap row does not quote refused hunk "
+                "digest %s" % hunk["digest"])
+    return None
 
 
 def resolve_ack_receipt(row, witness_path, repo_root, artifact_path):
@@ -507,24 +745,419 @@ def resolve_ack_receipt(row, witness_path, repo_root, artifact_path):
             return False, leg_reason(
                 "receipt", "subject mismatch: the witness does not echo "
                 "%r" % member)
-    gap_rel = receipt["classifier_gap_row"]
-    gap_norm = os.path.normpath(gap_rel).replace(os.sep, "/")
-    if gap_norm.startswith("../") or not gap_norm.startswith(
-            BACKLOG_DIR_RELPATH + "/"):
-        return False, leg_reason(
-            "receipt", "classifier gap row %s is outside %s/"
-            % (gap_rel, BACKLOG_DIR_RELPATH))
-    gap_path = Path(repo_root) / gap_rel
-    if not gap_path.is_file():
-        return False, leg_reason(
-            "receipt", "dangling classifier gap row path: %s" % gap_rel)
-    gap_text = gap_path.read_text(encoding="utf-8", errors="replace")
-    for hunk in row["hunks"]:
-        if hunk["digest"] not in gap_text:
-            return False, leg_reason(
-                "receipt", "classifier gap row does not quote refused hunk "
-                "digest %s" % hunk["digest"])
+    reason = _classifier_gap_reason(receipt, repo_root, row["hunks"])
+    if reason is not None:
+        return False, reason
     return True, "receipt resolved against %s" % witness_path
+
+
+# ---------------------------------------------------------------------------
+# Correction authorizations (the plan-family primary-state witness)
+# ---------------------------------------------------------------------------
+
+
+def load_correction_authorizations(primary_checkout):
+    """(entries, None) with entries the primary state file's
+    correction_authorizations array (an absent member reads as empty), or
+    (None, prefixed receipt-leg refusal) when the scheduler state file is
+    absent or unreadable, not decodable JSON, not a JSON object, or the
+    named member is not an array."""
+    state_path = Path(primary_checkout) / SCHEDULER_STATE_RELPATH
+    try:
+        raw = state_path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        # OSError covers an absent path and an unreadable one; ValueError
+        # covers invalid UTF-8 bytes (UnicodeDecodeError), refused as
+        # malformed state, never an escaping crash.
+        return None, leg_reason(
+            "receipt", "unresolvable witness: the scheduler state file %s "
+            "is absent or unreadable" % SCHEDULER_STATE_RELPATH)
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None, leg_reason(
+            "receipt", "unresolvable witness: the scheduler state file %s "
+            "is not decodable JSON" % SCHEDULER_STATE_RELPATH)
+    if not isinstance(doc, dict):
+        return None, leg_reason(
+            "receipt", "unresolvable witness: the scheduler state file %s "
+            "is not a JSON object" % SCHEDULER_STATE_RELPATH)
+    entries = doc.get(CORRECTION_AUTHORIZATIONS_KEY)
+    if entries is None:
+        return [], None
+    if not isinstance(entries, list):
+        return None, leg_reason(
+            "receipt", "malformed correction_authorizations: the %s member "
+            "is not an array" % CORRECTION_AUTHORIZATIONS_KEY)
+    return entries, None
+
+
+def authorization_entry_reason(row, entry, artifact_path):
+    """The prefixed receipt-leg refusal for a matched
+    correction_authorizations entry that is malformed, whose copied
+    subject contradicts the matched row, or whose writer session does
+    not differ from the row's authoring session; None when the entry
+    accepts. The exact row-digest match itself is the caller's
+    (resolve_state_authorization selects the unique entry by
+    correction_row_digest); this function never re-derives it."""
+    author = row.get(AUTHOR_SESSION_KEY)
+    if not isinstance(author, str) or not author.strip():
+        # Without the row's own identity both writer-distinctness checks
+        # would silently no-op, so the state route refuses; archived
+        # legacy rows never reach this route.
+        return leg_reason(
+            "receipt", "unbound author session: the operator-acked "
+            "plan-family row carries no nonempty author_session_id")
+    if not isinstance(entry, dict):
+        return leg_reason(
+            "receipt", "malformed correction_authorizations entry: it is "
+            "not a JSON object")
+    missing = sorted(AUTHORIZATION_ENTRY_KEYS - set(entry))
+    extra = sorted(set(entry) - AUTHORIZATION_ENTRY_KEYS)
+    if missing:
+        return leg_reason(
+            "receipt", "malformed correction_authorizations entry: missing "
+            "required key(s) %s" % missing)
+    if extra:
+        return leg_reason(
+            "receipt", "malformed correction_authorizations entry: "
+            "unexpected key(s) %s" % extra)
+    reason = malformed_row_digest_reason([entry])
+    if reason is not None:
+        return reason
+    for field in sorted(AUTHORIZATION_ENTRY_KEYS - {"hunk_digests"}):
+        value = entry[field]
+        if not isinstance(value, str) or not value.strip():
+            return leg_reason(
+                "receipt", "malformed correction_authorizations entry: %s "
+                "is not a non-empty string" % field)
+    digests = entry["hunk_digests"]
+    if not isinstance(digests, list) or not digests or any(
+            not isinstance(d, str) or not HEX64_RE.match(d)
+            for d in digests):
+        return leg_reason(
+            "receipt", "malformed correction_authorizations entry: "
+            "hunk_digests is not a non-empty ordered list of hex64 digests")
+    if entry["writer_session_id"] == entry["author_session_id"]:
+        return leg_reason(
+            "receipt", "authorization written by the recording session: "
+            "writer_session_id equals the entry's author_session_id %r"
+            % entry["author_session_id"])
+    if entry["writer_session_id"] == author:
+        return leg_reason(
+            "receipt", "authorization written by the recording session: "
+            "writer_session_id equals the row's author_session_id %r"
+            % author)
+    copied = (
+        (AUTHOR_SESSION_KEY, author),
+        ("artifact_path", artifact_path),
+        ("before_digest", row["before_digest"]),
+        ("after_digest", row["after_digest"]),
+        ("evidence_commit", row["evidence_commit"]),
+        ("recorded_at", row["recorded_at"]),
+    )
+    for field, expected in copied:
+        if expected is not None and entry[field] != expected:
+            return leg_reason(
+                "receipt", "subject mismatch: the entry's copied %s "
+                "contradicts the matched row" % field)
+    if digests != [h["digest"] for h in row["hunks"]]:
+        return leg_reason(
+            "receipt", "subject mismatch: the entry's copied hunk digests "
+            "contradict the matched row's ordered hunk digests")
+    if entry["operator_direction"] != row["receipt"]["directive"]:
+        return leg_reason(
+            "receipt", "subject mismatch: the entry operator_direction "
+            "does not match the receipt directive")
+    return None
+
+
+def entries_matching_row_digest(entries, digest):
+    """The shared by-digest selector over a correction_authorizations
+    array: the verifier's unique-match leg and the acknowledgment
+    writer's idempotent-append leg both select entries through this one
+    match, so duplicate semantics cannot drift between reading and
+    writing. A non-dict member is never a match here; shape refusals for
+    such members belong to the malformed_row_digest_reason pre-scan, so
+    they surface as malformed state, never a silent non-match."""
+    return [e for e in entries
+            if isinstance(e, dict) and e.get("row_digest") == digest]
+
+
+def malformed_row_digest_reason(entries):
+    """The prefixed malformed refusal when any array member is not a JSON
+    object or any entry's row_digest fails the hex64 shape: a
+    shape-malformed entry is malformed state, never a silent non-match
+    (it would otherwise fall through to the missing-witness refusal and
+    hide the broken witness)."""
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return leg_reason(
+                "receipt", "malformed correction_authorizations entry: an "
+                "array member is not a JSON object")
+        value = entry.get("row_digest")
+        if not isinstance(value, str) or not HEX64_RE.match(value):
+            return leg_reason(
+                "receipt", "malformed correction_authorizations entry: "
+                "row_digest is not a hex64 digest")
+    return None
+
+
+def resolve_state_authorization(row, primary_checkout, repo_root,
+                                artifact_path, witness_path=None):
+    """Resolve an operator-acked plan-family row's receipt against the
+    correction_authorizations array of the primary checkout's scheduler
+    state file. The receipt must name the fixed selector; a caller-supplied
+    witness path never selects authority. Returns (True, detail) or
+    (False, prefixed ack-receipt reason)."""
+    receipt = row["receipt"]
+    named = receipt["authorization_witness"]
+    if os.path.normpath(named) != os.path.normpath(ACK_STATE_SELECTOR):
+        return False, leg_reason(
+            "receipt", "unresolvable witness: the receipt names %r; "
+            "plan-family authority is selected only by the fixed selector "
+            "%r, never by a caller-selected path" % (named,
+                                                     ACK_STATE_SELECTOR))
+    if witness_path is not None:
+        return False, leg_reason(
+            "receipt", "unresolvable witness: a caller-selected witness "
+            "path does not select authority for plan-family rows")
+    entries, reason = load_correction_authorizations(primary_checkout)
+    if reason is not None:
+        return False, reason
+    reason = malformed_row_digest_reason(entries)
+    if reason is not None:
+        return False, reason
+    digest = correction_row_digest(row)
+    matches = entries_matching_row_digest(entries, digest)
+    if not matches:
+        return False, leg_reason(
+            "receipt", "no correction_authorizations entry matches the row "
+            "digest %s" % digest)
+    if len(matches) > 1:
+        return False, leg_reason(
+            "receipt", "non-unique correction_authorizations match: %d "
+            "entries share the row digest %s" % (len(matches), digest))
+    reason = authorization_entry_reason(row, matches[0], artifact_path)
+    if reason is not None:
+        return False, reason
+    reason = _classifier_gap_reason(receipt, repo_root, row["hunks"])
+    if reason is not None:
+        return False, reason
+    return True, "authorization resolved from %s" % SCHEDULER_STATE_RELPATH
+
+
+# ---------------------------------------------------------------------------
+# Acknowledgment writer (the durable distinct-session record)
+# ---------------------------------------------------------------------------
+
+
+def session_identity():
+    """The invoking session's identity from the shared session-channel
+    helper, invoked as a subprocess per that helper's contract (it is
+    the single source of the channel value; cores never import it). Any
+    invocation failure reads as an empty identity, which every consumer
+    refuses fail-closed: a broken helper never mints an identity."""
+    helper = Path(__file__).resolve().parent / "session_channel.py"
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(helper)],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout
+
+
+def resolve_primary_checkout(repo):
+    """The primary checkout root: the first entry of ``git worktree list
+    --porcelain`` over the repo the caller passes (the same recipe every
+    production consumer applies before handing this module the
+    already-resolved path). Returns the path string, or None on a git
+    plumbing failure or a malformed listing."""
+    text = git_text(repo, "worktree", "list", "--porcelain")
+    if text is None:
+        return None
+    for line in text.splitlines():
+        if line.startswith("worktree "):
+            return line[len("worktree "):].strip() or None
+    return None
+
+
+def record_correction_authorization(repo, row, operator_direction,
+                                    artifact_path):
+    """The production acknowledgment writer (the 2026-10-18
+    corrections-chain-operator-ack plan, Task 3): append the durable
+    correction_authorizations entry binding an operator-acked plan-family
+    row's digest to a distinct later session after an explicit operator
+    direction. The write is a targeted state edit under the existing
+    scheduler-turn writer class: one member changes, the rest of the
+    document rides through, and the edit goes through a temp file plus
+    atomic replace with the one-retry drift guard.
+
+    The writer session identity is derived internally from the shared
+    session-channel helper and is never a caller argument; the write
+    target is always the primary checkout's scheduler state file resolved
+    through the first-entry worktree-list resolver over ``repo``, never a
+    caller-supplied path or a worktree-local copy. Returns (True,
+    detail) or (False, prefixed refusal). An exact repeated write is
+    idempotent (one entry per row digest); a same-digest entry with a
+    different writer identity or subject refuses as a conflicting
+    duplicate. After the atomic replace the writer reads the state file
+    back and confirms the appended digest, refusing with a named loss
+    instead of reporting success; state loss stays fail-closed and
+    requires a fresh operator direction."""
+    try:
+        validate_row(row, FAMILY_PLAN)
+    except CorrectionsSchemaError as exc:
+        return False, str(exc)
+    if row["kind"] != KIND_OPERATOR_ACKED:
+        return False, leg_reason(
+            "append", "the acknowledgment writer records only an "
+            "operator-acked plan-family row")
+    author = row.get(AUTHOR_SESSION_KEY)
+    if not isinstance(author, str) or not author.strip():
+        return False, leg_reason(
+            "append", "unbound author session: the operator-acked "
+            "plan-family row carries no nonempty author_session_id")
+    if not isinstance(operator_direction, str) or \
+            not operator_direction.strip():
+        return False, leg_reason(
+            "append", "the operator direction is empty: the "
+            "acknowledgment requires an explicit operator direction")
+    if operator_direction != row["receipt"]["directive"]:
+        return False, leg_reason(
+            "append", "subject mismatch: the operator direction does not "
+            "match the receipt directive")
+    writer = session_identity()
+    if not writer.strip():
+        return False, leg_reason(
+            "append", "unbound writer session: the writer session "
+            "identity is empty (every supported session source is unset "
+            "or empty); the acknowledgment is refused")
+    if writer == author:
+        return False, leg_reason(
+            "append", "authorization written by the recording session: "
+            "the writer session identity equals the row's "
+            "author_session_id %r" % author)
+    digest = correction_row_digest(row)
+    # recorded_at is a copied subject field bound to the row (the
+    # verifier refuses a copied timestamp contradicting the matched row),
+    # so the entry carries the row's own stamp, never the writer's wall
+    # clock; every copied field is byte-equal to the matched row.
+    entry = {
+        "row_digest": digest,
+        "writer_session_id": writer,
+        "operator_direction": operator_direction,
+        "recorded_at": row["recorded_at"],
+        "author_session_id": author,
+        "artifact_path": artifact_path,
+        "before_digest": row["before_digest"],
+        "after_digest": row["after_digest"],
+        "evidence_commit": row["evidence_commit"],
+        "hunk_digests": [h["digest"] for h in row["hunks"]],
+    }
+    # The writer only writes entries the verifier accepts: the same
+    # copied-subject and writer-distinctness legs run over the prepared
+    # entry before any byte is touched.
+    reason = authorization_entry_reason(row, entry, artifact_path)
+    if reason is not None:
+        return False, reason
+    primary = resolve_primary_checkout(repo)
+    if primary is None:
+        return False, leg_reason(
+            "append", "git plumbing failed while resolving the primary "
+            "checkout; no state file was selected")
+    state_path = Path(primary) / SCHEDULER_STATE_RELPATH
+    for _attempt in range(2):
+        try:
+            raw = state_path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return False, leg_reason(
+                "receipt", "unresolvable witness: the scheduler state "
+                "file %s is absent or unreadable" % SCHEDULER_STATE_RELPATH)
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            return False, leg_reason(
+                "receipt", "unresolvable witness: the scheduler state "
+                "file %s is not decodable JSON" % SCHEDULER_STATE_RELPATH)
+        if not isinstance(doc, dict):
+            return False, leg_reason(
+                "receipt", "unresolvable witness: the scheduler state "
+                "file %s is not a JSON object" % SCHEDULER_STATE_RELPATH)
+        current = doc.get(CORRECTION_AUTHORIZATIONS_KEY)
+        if current is None:
+            current = []
+        if not isinstance(current, list):
+            return False, leg_reason(
+                "receipt", "malformed correction_authorizations: the %s "
+                "member is not an array" % CORRECTION_AUTHORIZATIONS_KEY)
+        reason = malformed_row_digest_reason(current)
+        if reason is not None:
+            return False, reason
+        existing = entries_matching_row_digest(current, digest)
+        if len(existing) > 1:
+            return False, leg_reason(
+                "append", "non-unique correction_authorizations match: %d "
+                "entries share the row digest %s" % (len(existing), digest))
+        if len(existing) == 1:
+            if existing[0] == entry:
+                return True, "ack append idempotent: the authorization is " \
+                             "already present for row digest %s; no second " \
+                             "entry written" % digest
+            return False, leg_reason(
+                "append", "conflicting correction_authorizations "
+                "duplicate: an entry already carries the row digest %s "
+                "with a different writer identity or subject; exact "
+                "repeats are idempotent, conflicts refuse" % digest)
+        doc[CORRECTION_AUTHORIZATIONS_KEY] = current + [entry]
+        written = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+        tmp_path = state_path.with_name(
+            "%s.ack-tmp-%d" % (state_path.name, os.getpid()))
+        try:
+            tmp_path.write_text(written, encoding="utf-8")
+            # Targeted-edit drift guard: re-read immediately before the
+            # replace and retry once; the precondition re-evaluates on
+            # the fresh bytes. The re-read refuses through the same
+            # absent-or-unreadable leg as the pre-read: a concurrent
+            # corrupt replace surfaces as a decode error (ValueError),
+            # never an escaping crash.
+            try:
+                fresh = state_path.read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                return False, leg_reason(
+                    "receipt", "unresolvable witness: the scheduler state "
+                    "file %s is absent or unreadable"
+                    % SCHEDULER_STATE_RELPATH)
+            if fresh == raw:
+                os.replace(tmp_path, state_path)
+                break
+        except OSError as exc:
+            return False, leg_reason(
+                "append", "the scheduler state file is not writable: %s"
+                % exc)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+    else:
+        return False, leg_reason(
+            "append", "the scheduler state file drifted twice during the "
+            "acknowledgment append; no write was performed")
+    # Read-back: the append is only reported after the written file
+    # carries the digest; a lost append is a named loss, never a silent
+    # success, and requires a fresh operator direction.
+    entries_after, reason = load_correction_authorizations(primary)
+    if reason is not None or \
+            not entries_matching_row_digest(entries_after or [], digest):
+        return False, leg_reason(
+            "append", "ack append lost: the appended row digest %s is "
+            "absent from %s after the write; the acknowledgment is not "
+            "recorded and requires a fresh operator direction"
+            % (digest, SCHEDULER_STATE_RELPATH))
+    return True, "authorization recorded: row digest %s appended to %s in " \
+                 "the primary checkout" % (digest, SCHEDULER_STATE_RELPATH)
 
 
 # ---------------------------------------------------------------------------
@@ -861,25 +1494,49 @@ def verify_corrections(repo, artifact_path, family, round_number,
                        source_digest, rows, current_bytes=None,
                        certified_range=None, head="HEAD", classify=None,
                        witness_path=None, slug=None, seal_repo=None,
-                       record_declared=False):
+                       record_declared=False, primary_checkout=None):
     """Run every verification leg over a declared corrections record.
     Returns (True, success message) or (False, prefixed refusal reason).
+    The ``head`` argument resolves once at entry into the verification
+    snapshot id that every HEAD-dependent leg (the anchor checks, the
+    plan-family evidence ancestry, the code-family terminal comparison,
+    and the landed-anchor resolver scan) consumes; no callee resolves
+    symbolic HEAD again.
     Plan family: per-hop bytes are plan blobs at evidence commits, hop 0
     the seal's round-start blob, the terminal leg the current bytes. Code
     family: per-hop bytes are regenerated three-dot diffs over the row's
     refs, the first hop's before refs equal the seal's certified range,
-    and the terminal leg is the branch head."""
+    and the terminal leg is the branch head. primary_checkout is the
+    already-resolved primary checkout root: a plan-family operator-acked
+    row resolves its receipt against the primary state file's
+    correction_authorizations array through the receipt's fixed selector,
+    and only a fully verified authorization lets that hop bypass the
+    classification leg. Every production consumer resolves the primary
+    checkout (the first `git worktree list --porcelain` entry) and passes
+    it in; with primary_checkout None a plan-family acked row refuses
+    through the named receipt legs (a caller-selected witness path never
+    selects authority, and its absence stays the missing-witness
+    refusal), so the legacy turn-record route is retired for the plan
+    family. Code-family rows keep the injected witness_path resolution
+    and the classify verdict."""
     try:
         for row in rows:
             validate_row(row, family)
     except CorrectionsSchemaError as exc:
         return False, str(exc)
+    # Verifier snapshot contract: the supplied head resolves exactly once
+    # here, and every HEAD-dependent leg below consumes this one local id;
+    # no callee resolves symbolic HEAD again.
+    head_sha = resolve_commit(repo, head)
+    if head_sha is None:
+        return False, leg_reason(
+            "terminal", "the branch head %s is unresolvable" % head)
     srepo = seal_repo if seal_repo is not None else repo
     try:
         rel = seal_relpath(artifact_path, slug)
     except CorrectionsSchemaError as exc:
         return False, str(exc)
-    entry = load_seal_entry(srepo, rel, round_number)
+    entry = load_seal_entry(srepo, rel, round_number, family)
     if entry is None:
         return False, leg_reason(
             "anchor", "the seal file %s has no resolvable entry for round "
@@ -889,18 +1546,45 @@ def verify_corrections(repo, artifact_path, family, round_number,
             "anchor", "the seal entry names artifact %r, not %r"
             % (entry.fields.get("artifact"), artifact_path))
     # Anchor: the entry's commits must be reachable and its bytes
-    # re-derive to the round-start digest from git.
+    # re-derive to the round-start digest from git. A plan-family anchor
+    # the squash landing orphaned resolves through the first-parent
+    # ancestor whose plan blob carries the sealed bytes (byte identity,
+    # never the recorded sha); a moved anchor without byte identity
+    # still refuses.
+    anchors = dict((key, entry.fields[key])
+                   for key in ("round_close_commit", "round_start_commit"))
+    landed_anchor = None
     for key in ("round_close_commit", "round_start_commit"):
-        anchored = is_ancestor(srepo, entry.fields[key])
-        if anchored is None:
-            return False, leg_reason(
-                "anchor", "git plumbing failed over %s"
-                % entry.fields[key])
+        object_state = commit_object_status(srepo, anchors[key])
+        if object_state == "error":
+            return False, leg_reason("anchor", "Git cannot classify commit object %s" % anchors[key])
+        if object_state == "missing":
+            anchored = False
+        else:
+            anchored = is_ancestor(srepo, anchors[key], descendant=head_sha)
+            if anchored is None:
+                return False, leg_reason(
+                    "anchor", "git plumbing failed over %s" % anchors[key])
         if anchored is False:
-            return False, leg_reason(
-                "anchor", "the seal entry's %s is not an ancestor of HEAD"
-                % _ANCHOR_COMMIT_LABELS[key])
-    start_commit = entry.fields["round_start_commit"]
+            if family == FAMILY_CODE:
+                return False, leg_reason(
+                    "anchor", "the seal entry's %s is not an ancestor of HEAD"
+                    % _ANCHOR_COMMIT_LABELS[key])
+            scan_error = None
+            if landed_anchor is None and family == FAMILY_PLAN:
+                landed_anchor, scan_error = resolve_landed_anchor(
+                    srepo, artifact_path,
+                    entry.fields["round_start_digest"], head_sha)
+            if scan_error is not None:
+                return False, leg_reason("anchor", scan_error)
+            if landed_anchor is None:
+                return False, leg_reason(
+                    "anchor", "the seal entry's %s is not an ancestor of HEAD "
+                    "and no first-parent ancestor carries the sealed "
+                    "round-start bytes at %s"
+                    % (_ANCHOR_COMMIT_LABELS[key], artifact_path))
+            anchors[key] = landed_anchor
+    start_commit = anchors["round_start_commit"]
     if family == FAMILY_PLAN:
         start_bytes = blob_bytes(srepo, start_commit, artifact_path)
         if start_bytes is None:
@@ -931,7 +1615,7 @@ def verify_corrections(repo, artifact_path, family, round_number,
     # violation refuses naming the seal leg before any digest is
     # accepted.
     start_date = commit_date(srepo, start_commit)
-    close_date = commit_date(srepo, entry.fields["round_close_commit"])
+    close_date = commit_date(srepo, anchors["round_close_commit"])
     if start_date is None or close_date is None:
         return False, leg_reason(
             "seal", "git plumbing failed over seal commit dates")
@@ -954,9 +1638,13 @@ def verify_corrections(repo, artifact_path, family, round_number,
                 "vacuous", "a declared corrections record carries zero "
                 "hops")
         if source_digest == entry.fields["round_start_digest"]:
-            return True, ("%schain verified: zero hops, the declared "
-                          "digest equals the round %d round-start digest"
-                          % (MARKER_PREFIX, round_number))
+            verified = ("%schain verified: zero hops, the declared "
+                        "digest equals the round %d round-start digest"
+                        % (MARKER_PREFIX, round_number))
+            if landed_anchor is not None:
+                verified += ("; squash-orphaned seal anchors resolved "
+                             "through HEAD-ancestor %s" % landed_anchor)
+            return True, verified
         return False, leg_reason(
             "anchor", "bare rewrite: the declared digest matches neither "
                       "the round-start digest nor a verifying chain")
@@ -978,7 +1666,7 @@ def verify_corrections(repo, artifact_path, family, round_number,
                 return False, leg_reason(
                     "binding", "evidence commit %s is unresolvable"
                     % evidence)
-            ancestor = is_ancestor(repo, evidence)
+            ancestor = is_ancestor(repo, evidence, descendant=head_sha)
             if ancestor is None:
                 return False, leg_reason(
                     "binding", "git plumbing failed over evidence commit "
@@ -1073,11 +1761,7 @@ def verify_corrections(repo, artifact_path, family, round_number,
                 "terminal", "the chain's last after digest does not match "
                             "the current bytes")
     else:
-        head_commit = resolve_commit(repo, head)
-        if head_commit is None:
-            return False, leg_reason(
-                "terminal", "the branch head %s is unresolvable" % head)
-        if head_commit != rows[-1]["after_head"]:
+        if head_sha != rows[-1]["after_head"]:
             return False, leg_reason(
                 "terminal", "the chain's last after head is not the "
                             "branch head")
@@ -1089,10 +1773,39 @@ def verify_corrections(repo, artifact_path, family, round_number,
         return False, leg_reason(
             "anchor", "bare rewrite: the declared digest matches neither "
                       "the round-start digest nor a verifying chain")
-    # Ack receipts resolve out of band against the injected witness path.
+    # Ack receipts resolve out of band. A plan-family row resolves ONLY
+    # through the primary state file's correction_authorizations array via
+    # the receipt's fixed selector: every production consumer resolves the
+    # primary checkout and passes it in (Task 2 of the 2026-10-18
+    # corrections-chain plan), so the injected turn-record route is
+    # retired for plan-family rows - a caller-selected witness path never
+    # selects authority, and its absence stays the missing-witness
+    # refusal. Only after every other leg has passed does a fully
+    # verified state authorization mark its hop as classifier-bypassable
+    # (kind-aware: the bypass never touches script-verified or code-family
+    # rows, and code-family rows keep the injected turn-record
+    # resolution).
+    state_acked_hops = set()
     for index, row in enumerate(rows):
         if row["kind"] != KIND_OPERATOR_ACKED:
             continue
+        if family == FAMILY_PLAN:
+            if primary_checkout is not None:
+                resolved, message = resolve_state_authorization(
+                    row, primary_checkout, repo, artifact_path,
+                    witness_path=witness_path)
+                if not resolved:
+                    return False, message
+                state_acked_hops.add(index)
+                continue
+            if witness_path is not None:
+                return False, leg_reason(
+                    "receipt", "unresolvable witness: a caller-selected "
+                               "witness path does not select authority for "
+                               "plan-family rows")
+            return False, leg_reason(
+                "receipt", "unresolvable witness: no witness record path "
+                           "was provided")
         if witness_path is None:
             return False, leg_reason(
                 "receipt", "unresolvable witness: no witness record path "
@@ -1102,16 +1815,24 @@ def verify_corrections(repo, artifact_path, family, round_number,
         if not resolved:
             return False, message
     # Classification hook: the caller re-runs its own classifier over the
-    # re-derived bytes; a non-exempt verdict refuses the leg.
+    # re-derived bytes; a non-exempt verdict refuses the leg. A hop whose
+    # operator-acked plan-family row just verified through the primary
+    # state authorization is the only bypass.
     if classify is not None:
         for index, (old_bytes, new_bytes) in enumerate(history[1:]):
+            if index in state_acked_hops:
+                continue
             unclassified = classify(old_bytes, new_bytes)
             if unclassified:
                 return False, leg_reason(
                     "classify", "hunk(s) not exempt at hop %d: %s"
                                 % (index, unclassified[0]))
-    return True, "%schain verified: %d hop(s) anchored at round %d via " \
-                 "seal %s" % (MARKER_PREFIX, len(rows), round_number, rel)
+    verified = "%schain verified: %d hop(s) anchored at round %d via " \
+               "seal %s" % (MARKER_PREFIX, len(rows), round_number, rel)
+    if landed_anchor is not None:
+        verified += ("; squash-orphaned seal anchors resolved through "
+                     "HEAD-ancestor %s" % landed_anchor)
+    return True, verified
 
 
 # ---------------------------------------------------------------------------
@@ -1191,6 +1912,10 @@ class ScratchRepo:
             lines.append("reviewed_base: %s" % base)
             lines.append("reviewed_head: %s" % tip)
             lines.append("range_digest: %s" % digest)
+            # The code-family producer's fields: family-aware seal lookup
+            # selects the code entry by these, never the block number.
+            lines.append("family: %s" % FAMILY_CODE)
+            lines.append("staging_round: r%d" % round_number)
         return "\n".join(lines)
 
     def append_seal_entry(self, slug, round_number, artifact_rel,

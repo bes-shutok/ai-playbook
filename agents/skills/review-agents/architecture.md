@@ -170,6 +170,7 @@ When a large class or module is identified, suggest concrete extraction paths:
 - Concepts represented as tuples/groups: should be value objects (e.g., `Money(amount, currency)`, `Email`, `PhoneNumber`)
 - Inconsistent equality: value concepts compared by fields instead of proper equals()
 - Audit each new field/parameter the plan introduces: for every new `String`/`int`/`long` field or parameter, ask whether it should be a value object or domain enum. Especially flag stringly-typed values where a domain enum already exists (e.g. `String status` when `ProfileStatus` enum exists).
+- When a method accepts multiple semantically different identifiers as the same primitive type, flag the risk that callers can swap them; use a distinct value-object type for each identifier. Group cohesive multi-field inputs into a named request or command object instead of a long positional parameter list.
 
 ## Type Boundary Discipline
 

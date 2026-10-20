@@ -883,6 +883,282 @@ def test_plan_readiness_child_without_outcome_line_is_tool_error(
 
 
 # --------------------------------------------------------------------------- #
+# Operator-acked readiness through the done plan-readiness gate
+# (corrections-chain-operator-ack plan, Task 2): the gate's readiness child
+# resolves the primary checkout's correction_authorizations entry, so the
+# gate accepts (or refuses) the same witness object the staging validator
+# and direct readiness resolve. These arms run the REAL readiness validator
+# through the env seam; every other gate test stubs it.
+# --------------------------------------------------------------------------- #
+
+_ACK_PLAN_HEAD = (
+    "# P\n\n"
+    "## Assumptions\n\n"
+    "Decision points requiring a grill: none remain.\n\n"
+)
+_ACK_PLAN_TAIL = (
+    "\n## Tasks\n\n"
+    "### Task 1: Do the thing\n\n"
+    "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+)
+_ACK_D1 = (_ACK_PLAN_HEAD + "alpha bravo." + _ACK_PLAN_TAIL).encode("utf-8")
+_ACK_D3 = (_ACK_PLAN_HEAD + "alpha omega." + _ACK_PLAN_TAIL).encode("utf-8")
+_ACK_DATE = "2026-09-22"
+_ACK_SLUG = "acme-plan"
+_ACK_PLAN_NAME = "2026-09-22-acme-plan.md"
+_ACK_PLAN_REL = "docs/history/plans/" + _ACK_PLAN_NAME
+_ACK_AUTHOR = "sess-author-done-gate"
+_ACK_WRITER = "sess-writer-operator"
+_ACK_DIRECTIVE = "accept the unclassified done-gate re-bind"
+_ACK_GAP_REL = "docs/history/backlog/2026-10-18-done-gate-ack-gap.md"
+
+
+def _seed_operator_ack_repo(root: Path) -> dict:
+    """The graded fixture recipe over a done-sweep fixture repo (docs
+    tracked so the plan history commits): D1 seed, round-close commit, the
+    committed round-1 seal entry, the unclassified D3 hop, and the
+    committed classifier-gap row. Returns the operator-acked row."""
+    import corrections_record as cr
+
+    def head_sha() -> str:
+        return git(root, "rev-parse", "HEAD").stdout.strip()
+
+    def commit_all(message: str, allow_empty: bool = False) -> str:
+        proc = git(root, "add", "-A")
+        assert proc.returncode == 0, proc.stderr
+        args = ["commit", "-m", message, "-q"]
+        if allow_empty:
+            args.append("--allow-empty")
+        proc = git(root, *args)
+        assert proc.returncode == 0, proc.stderr
+        return head_sha()
+
+    (root / "docs" / "history" / "plans").mkdir(parents=True, exist_ok=True)
+    (root / _ACK_PLAN_REL).write_text(
+        _ACK_D1.decode("utf-8"), encoding="utf-8")
+    start = commit_all("seed plan")
+    commit_all("round 1 close", allow_empty=True)
+    close = head_sha()
+    seal_rel = ".ai-playbook/review-certs/%s.md" % _ACK_SLUG
+    seal_path = root / seal_rel
+    seal_path.parent.mkdir(parents=True, exist_ok=True)
+    seal_path.write_text(
+        "## round 1\n"
+        "artifact: %s\n"
+        "round_start_commit: %s\n"
+        "round_start_digest: %s\n"
+        "round_close_commit: %s\n" % (
+            _ACK_PLAN_REL, start, hashlib.sha256(_ACK_D1).hexdigest(), close,
+        ),
+        encoding="utf-8",
+    )
+    commit_all("seal: round 1")
+    (root / _ACK_PLAN_REL).write_text(
+        _ACK_D3.decode("utf-8"), encoding="utf-8")
+    hop = commit_all("unclassified fix")
+    row = {
+        "kind": cr.KIND_OPERATOR_ACKED,
+        "before_digest": hashlib.sha256(_ACK_D1).hexdigest(),
+        "after_digest": hashlib.sha256(_ACK_D3).hexdigest(),
+        "evidence_commit": hop,
+        "hunks": [{"header": "@@ -4 +4 @@",
+                   "digest": cr.sha256_hex(b"ack-hunk-bytes")}],
+        "recorded_at": "2026-10-18T00:00:00Z",
+        "recorded_by": "plan_delta_classifier",
+        "receipt": {
+            "directive": _ACK_DIRECTIVE,
+            "authorization_witness": cr.ACK_STATE_SELECTOR,
+            "classifier_gap_row": _ACK_GAP_REL,
+        },
+        "author_session_id": _ACK_AUTHOR,
+    }
+    gap = root / _ACK_GAP_REL
+    gap.parent.mkdir(parents=True, exist_ok=True)
+    gap.write_text(
+        "# classifier gap\n\nhunk digest %s\n" % row["hunks"][0]["digest"],
+        encoding="utf-8",
+    )
+    commit_all("file the ack gap row")
+    return {"row": row, "start": start, "hop": hop}
+
+
+def _ack_entry_for(row: dict) -> dict:
+    """The correction_authorizations entry binding the row digest and the
+    exact row subject, written by a distinct operator-ack session."""
+    import corrections_record as cr
+
+    return {
+        "row_digest": cr.correction_row_digest(row),
+        "writer_session_id": _ACK_WRITER,
+        "operator_direction": row["receipt"]["directive"],
+        "recorded_at": row["recorded_at"],
+        "author_session_id": row["author_session_id"],
+        "artifact_path": _ACK_PLAN_REL,
+        "before_digest": row["before_digest"],
+        "after_digest": row["after_digest"],
+        "evidence_commit": row["evidence_commit"],
+        "hunk_digests": [h["digest"] for h in row["hunks"]],
+    }
+
+
+def _write_ack_state(root: Path, entries: list) -> None:
+    state_dir = root / ".ai-playbook"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "scheduler-state.json").write_text(
+        json.dumps({"correction_authorizations": entries}), encoding="utf-8"
+    )
+
+
+def _write_ack_review(root: Path, row: dict) -> None:
+    """The review markdown plus the graded v1 sidecar (the proven graded
+    fixture shape from the readiness tests) declaring the operator-acked
+    row, at the round-start digest so the verified corrections chain
+    re-binds it."""
+    import validate_review_staging as vrs
+
+    payload = vrs._post_window_fixture_payload("plan")
+    payload["schema_version"] = 1
+    payload["review_type"] = "Branch Review"
+    payload["artifact_slug"] = _ACK_SLUG
+    payload["round"] = "r1"
+    payload["source_kind"] = "plan"
+    payload["source_digest"] = hashlib.sha256(_ACK_D1).hexdigest()
+    payload["verdict"] = "yes"
+    payload["deduplication_groups"] = []
+    payload["discarded"] = []
+    payload["severity_calibration"] = []
+    payload["triage_outcomes"] = []
+    payload["soften_watchlist"] = []
+    payload["extensions"] = {"corrections": [row]}
+    reviews_dir = root / ".ai-playbook" / "reviews"
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    markdown = vrs._post_window_fixture_markdown("plan")
+    if "- URL or Artifact:" not in markdown:
+        markdown = markdown.replace(
+            "## Metadata\n",
+            "## Metadata\n- URL or Artifact: %s\n" % _ACK_PLAN_REL, 1,
+        )
+    review = reviews_dir / (
+        "%s-plan-review-%s-r1.md" % (_ACK_DATE, _ACK_SLUG)
+    )
+    review.write_text(markdown, encoding="utf-8")
+    review.with_suffix(".stats.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+def _ack_gate_run(root: Path, monkeypatch) -> object:
+    monkeypatch.setenv(
+        "PLAN_READINESS_VALIDATOR", str(SCRIPTS_DIR / "plan_readiness.py")
+    )
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    write_deliverables(root, [_ACK_PLAN_REL])
+    return run_gate("plan-readiness", ctx_for(root))
+
+
+def test_plan_readiness_gate_accepts_operator_acked_witness(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The done plan-readiness gate runs the real
+    readiness child over a fixture whose primary checkout carries the
+    unique matching correction_authorizations entry: the child resolves
+    that same object and accepts the same terminal digest, so the gate
+    reports passed=1 and prunes the deliverable line."""
+    root = mktemp_repo("ack-gate-pass", gitignore_docs=False)
+    seeded = _seed_operator_ack_repo(root)
+    _write_ack_state(root, [_ack_entry_for(seeded["row"])])
+    _write_ack_review(root, seeded["row"])
+
+    result = _ack_gate_run(root, monkeypatch)
+
+    assert result.rc == 0, result.message
+    assert "passed=1" in result.message, result.message
+    assert read_deliverables(root) == []
+
+
+def test_plan_readiness_gate_refuses_without_authorization(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] With no authorization recorded (the
+    scheduled shape: no writer invocation, an empty array), the real
+    readiness child refuses through the missing-witness leg; the gate
+    reports the advisory modeled fail naming the receipt-leg reason."""
+    root = mktemp_repo("ack-gate-refuses", gitignore_docs=False)
+    seeded = _seed_operator_ack_repo(root)
+    _write_ack_state(root, [])
+    _write_ack_review(root, seeded["row"])
+
+    result = _ack_gate_run(root, monkeypatch)
+
+    assert result.rc == 0, result.message
+    assert "failed=1" in result.message, result.message
+    assert "no correction_authorizations entry" in result.message, (
+        result.message
+    )
+
+
+def test_primary_checkout_resolver_parity(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The two first-entry primary-checkout
+    resolver bodies (the staging validator's and the done lib's
+    dirty-state owner) behave identically: the same first entry wins on a
+    real two-worktree fixture, and on a fabricated two-entry porcelain
+    list whose primary path is written in ``~`` form both resolvers
+    select and expand it to the same path (the tilde form exists so a
+    resolver that forgets expanduser cannot pass this arm)."""
+    import corrections_record
+    import validate_review_staging as vrs
+
+    root = make_repo(tmp_path, "resolver-parity", gitignore_docs=False)
+    secondary_parent = tmp_path / "parity-wt"
+    secondary_parent.mkdir()
+    secondary = secondary_parent / "linked"
+    proc = git(root, "worktree", "add", str(secondary), "-b", "parity-side")
+    assert proc.returncode == 0, proc.stderr
+
+    # Real fixture: the primary (first) entry wins in both resolvers.
+    lib_primary, lib_error = lib._resolve_primary_checkout(ctx_for(root))
+    vrs_primary, vrs_error = vrs._resolve_primary_checkout(root)
+    assert lib_error == "" and vrs_error is None
+    assert lib_primary.resolve() == root.resolve()
+    assert vrs_primary.resolve() == root.resolve()
+
+    # Fabricated two-entry list with the tilde path as the primary (the
+    # first entry a resolver must select): both resolvers expand it to
+    # the same path.
+    porcelain = (
+        "worktree ~/elsewhere/primary\nHEAD %s\nbranch refs/heads/main\n\n"
+        "worktree %s\nHEAD %s\nbranch refs/heads/parity-side\n\n"
+        % ("0" * 40, root, "0" * 40)
+    )
+
+    class _FakeCtx:
+        def git(self, *args, input_text=None):
+            return subprocess.CompletedProcess(
+                args, 0, stdout=porcelain, stderr=""
+            )
+
+    lib_fake_primary, lib_fake_error = lib._resolve_primary_checkout(
+        _FakeCtx()
+    )
+    assert lib_fake_error == ""
+    assert lib_fake_primary == Path("~/elsewhere/primary").expanduser()
+
+    original_git_text = corrections_record.git_text
+    corrections_record.git_text = lambda repo, *args: porcelain
+    try:
+        vrs_fake_primary, vrs_fake_error = vrs._resolve_primary_checkout(
+            root
+        )
+    finally:
+        corrections_record.git_text = original_git_text
+    assert vrs_fake_error is None
+    assert vrs_fake_primary == Path("~/elsewhere/primary").expanduser()
+    assert lib_fake_primary == vrs_fake_primary
+
+
+# --------------------------------------------------------------------------- #
 # Defect fix (Task 2 blocking defect): doc-registry check-writes --stdin arm.
 # --------------------------------------------------------------------------- #
 def test_doc_registry_check_writes_stdin_dirty_repo(tmp_path, sweep_env, monkeypatch):

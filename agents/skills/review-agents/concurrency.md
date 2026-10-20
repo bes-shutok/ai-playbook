@@ -25,10 +25,10 @@ Without this trace, the finding cannot be validated. Verify the race window is a
 
 ## Locking and Synchronization
 
-1. Optimistic locking: version column or conditional UPDATE used for concurrent modifications
-2. A conditional UPDATE producing 0 rows IS an optimistic lock - do not flag it as missing
-3. Pessimistic locking: held for minimum duration, no nested locks (deadlock risk)
-4. Distributed locks: TTL set, release in finally block, handle lock acquisition failure
+1. Optimistic: use a version column or conditional UPDATE; zero affected rows is a valid lock, not a missing one.
+2. Pessimistic: minimize hold time; avoid nested locks (deadlock risk).
+3. Distributed: set a TTL, release in `finally`, and handle acquisition failure.
+4. For each lock, name its invariant and trace the competing path: both must use the same identity, with the lock held across check and state change. A lookup may guard a later write.
 
 ## Thread Safety
 

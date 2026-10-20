@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import review_plan_identity
@@ -36,12 +37,36 @@ LOCK_ENV_VARS = (
 )
 
 
+# The deterministic locale/timezone a git fixture pins (plan
+# 2026-10-19-gate-removal-closeout-accounting Task 2): commit dates and
+# message rendering never depend on the host locale or clock zone.
+FIXTURE_LOCALE_ENV = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
+
+
+def _hermetic_git_env(root: Path, **extra: str) -> dict[str, str]:
+    """Git-fixture hermeticity (plan 2026-10-19-gate-removal-closeout-
+    accounting Task 2): every inherited GIT_* variable is cleared, HOME
+    moves to a fixture-local directory (no host git config leaks in), and
+    the locale/timezone are deterministic. Every fixture passes the result
+    to its git subprocesses and to the CLI subprocesses it launches."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    home = Path(root) / "fixture-home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    env.update(FIXTURE_LOCALE_ENV)
+    env.update(extra)
+    return env
+
+
 def _hermetic_lock_env(root: Path, **extra: str) -> dict[str, str]:
     """Fixture hermeticity (plan 2026-10-10-done-closeout-lock-span Task 1):
     pin the merge-lock root and poll interval into the fixture tmp tree and
     the done-lock script at the repo-local copy, so a fixture's lock activity
-    never touches the host lock home."""
-    env = os.environ.copy()
+    never touches the host lock home. The git-side hygiene rides the same
+    env: inherited GIT_* variables are cleared, HOME is fixture-local, and
+    the locale/timezone are deterministic, because every CLI subprocess the
+    tests launch inherits this env (and any git it spawns inherits from it)."""
+    env = _hermetic_git_env(root)
     for var in LOCK_ENV_VARS:
         env.pop(var, None)
     env.update(
@@ -1416,11 +1441,26 @@ class GateRemovalTest(unittest.TestCase):
         record = ".ai-playbook/reviews/2026-10-07-plan-review-x-r1.md"
         plan = self._plan(f"# Plan\n\nPlan review record: {record}\n")
         _write(self.primary / record, b"r1\n")
+        # An on-disk worktree gets the sanctioned removal command, with the
+        # operand echoed exactly as given (plan gate-removal-closeout-
+        # accounting Task 2: the cleanup line stays truthful about what
+        # exists on disk).
+        (self.worktree.parent / "ai-playbook-wt-x").mkdir()
         code, out, err = self._run_gate(plan, "--worktree", "../ai-playbook-wt-x")
         self.assertEqual(code, 0)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
         removal_lines = [ln for ln in out.strip().splitlines() if "git worktree remove" in ln]
         self.assertEqual(removal_lines, ["removal: git worktree remove --force ../ai-playbook-wt-x"])
+        # A path absent from disk is a stale registration: the pass names
+        # the scoped administrative drain instead of a removal command that
+        # would fail.
+        shutil.rmtree(self.worktree.parent / "ai-playbook-wt-x")
+        code, out, err = self._run_gate(plan, "--worktree", "../ai-playbook-wt-x")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertNotIn("git worktree remove", out)
+        self.assertIn("no on-disk worktree at ../ai-playbook-wt-x", out)
+        self.assertIn("stale", out)
 
     def test_pass_series_with_member_under_primary_home(self):
         # The production header shape: a series pattern whose highest member
@@ -1548,13 +1588,29 @@ class GateRemovalTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertNotIn("OUTCOME:", proc.stdout)
 
+    def test_standalone_help_presents_gate_removal_once(self):
+        # Plan gate-removal-closeout-accounting Task 4: the flattened
+        # parser renders the dispatch token exactly once (the baseline
+        # defect printed "gate-removal gate-removal" in the usage line)
+        # and --help stays a metadata exit with no OUTCOME line.
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "gate-removal", "--help"],
+            capture_output=True, text=True, cwd=str(self.worktree),
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage:", proc.stdout)
+        self.assertNotIn("OUTCOME:", proc.stdout)
+        self.assertEqual(proc.stdout.count("gate-removal"), 1)
+        self.assertNotIn("gate-removal gate-removal", proc.stdout)
+
     def test_refuse_absolute_label_citation_to_existing_file_outside_primary_home(self):
         # The F1 loss class: an absolute label citation whose file exists
         # OUTSIDE the primary home (here the worktree's own staging copy)
         # must be refused, never verified through the pathlib join discard
         # that would land the check on the cited file itself; the refusal
         # renders repo-relative or basename, never the absolute path, and
-        # carries the migrate remedy.
+        # carries the citation-correction remedy (a never-verifiable
+        # citation: no migrate run can satisfy it).
         record = ".ai-playbook/reviews/2026-10-07-plan-review-x-r1.md"
         plan = self._plan(
             f"# Plan\n\nPlan review record: {self.worktree.resolve() / record}\n"
@@ -1569,7 +1625,8 @@ class GateRemovalTest(unittest.TestCase):
         self.assertNotIn(str(self.primary.resolve()), out)
         self.assertNotIn(str(self.worktree), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree.resolve()), out, "refusal leaked an absolute path")
-        self.assertIn("worktree_closeout_migrate.py migrate", out)
+        self.assertIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
+        self.assertNotIn("worktree_closeout_migrate.py migrate", out)
 
     def test_refuse_absolute_label_citation_resolving_under_primary_home(self):
         # An absolute citation cannot be trusted to be repo-relative: even
@@ -1631,7 +1688,7 @@ class GateRemovalTest(unittest.TestCase):
         self.assertNotIn(str(self.primary.resolve()), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree.resolve()), out, "refusal leaked an absolute path")
-        self.assertIn("worktree_closeout_migrate.py migrate", out)
+        self.assertIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
 
     def test_pass_relative_dotdot_citation_basename_twin_in_home(self):
         # The basename-fallback arm's directed case, live again once the
@@ -1730,7 +1787,7 @@ class GateRemovalTest(unittest.TestCase):
         self.assertNotIn(str(self.primary.resolve()), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree.resolve()), out, "refusal leaked an absolute path")
-        self.assertIn("worktree_closeout_migrate.py migrate", out)
+        self.assertIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
 
     def test_refuse_symlinked_series_member_resolving_outside_home(self):
         # The symlink presence fail-open, series form: a home record that
@@ -1802,7 +1859,7 @@ class GateRemovalTest(unittest.TestCase):
         self.assertNotIn(str(self.worktree), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.worktree.resolve()), out, "refusal leaked an absolute path")
         self.assertNotIn(str(self.primary.resolve()), out)
-        self.assertIn("worktree_closeout_migrate.py migrate", out)
+        self.assertIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
 
     def test_refuse_target_worktree_operand_confusion(self):
         # The target-operand self-verification hole: --target naming the
@@ -1999,6 +2056,93 @@ class GateRemovalTest(unittest.TestCase):
         self.assertIn(f"missing: {absent}", out)
         self.assertNotIn(f"missing: {present}", out)
         self.assertNotIn(str(self.primary.resolve()), out)
+
+    def test_header_boundary_is_first_hash_character_not_heading_parser(self):
+        # The implemented header boundary is the first post-title line
+        # whose first character is "#", not a general Markdown heading
+        # parse: a setext underline and an indented ATX heading (both
+        # headings to a Markdown parser) stay inside the region, so the
+        # label line after them is still owned (the absent mid record is
+        # reported missing), while a bare "#tag" line (not a CommonMark
+        # heading: no space after the hash) ends the region, so the label
+        # line after it is never scanned.
+        present = ".ai-playbook/reviews/2026-10-07-plan-review-hb-r1.md"
+        mid = ".ai-playbook/reviews/2026-10-07-plan-review-hb-r2.md"
+        body = ".ai-playbook/reviews/2026-10-07-plan-review-hb-body.md"
+        plan = self._plan(
+            f"# Plan\n\nPlan review record: {present}\n"
+            "\n"
+            "Setext Heading\n"
+            "---\n"
+            "\n"
+            "   ## Indented heading\n"
+            "\n"
+            f"Plan review record: {mid}\n"
+            "\n"
+            "#tag not-a-markdown-heading\n"
+            "\n"
+            f"Plan review record: {body}\n"
+        )
+        _write(self.primary / present, b"r1 under the primary home\n")
+        code, out, err = self._run_gate(plan)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {mid}", out)
+        self.assertNotIn(f"missing: {present}", out)
+        self.assertNotIn(body, out, "region did not end at the first '#' character")
+        self.assertNotIn(str(self.primary.resolve()), out)
+
+    def test_reverse_containment_warns_only_and_removal_proceeds(self):
+        # Reverse containment (plan gate-removal-closeout-accounting Task
+        # 3): the --worktree resolves inside the absolute external reviews
+        # home. The shape has no witnessed harmful catch, so the admission
+        # is warning-only: the warning names the shape and the
+        # machinery-admission fields (expected catch frequency low,
+        # false-positive cost relocation noise, review date 2027-01-19),
+        # and the run still verifies, still prints the sanctioned removal
+        # command, and still passes. The blocking refusal stays reserved
+        # for the opposite shape (the home inside the worktree), asserted
+        # absent here.
+        external_home = self.root / "external" / "reviews"
+        external_home.mkdir(parents=True)
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            (
+                "```toml\n"
+                f'reviews_dir = "{external_home}"\n'
+                'tmp_dir = "docs/tmp/"\n'
+                'metrics_dir = ".ai-playbook/metrics/"\n'
+                "```\n"
+            ).encode("utf-8"),
+        )
+        record = "2026-10-07-plan-review-rc-r1.md"
+        _write(external_home / record, b"r1 in the external home\n")
+        (external_home / "wt-inner").mkdir()
+        plan = self._plan(f"# Plan\n\nPlan review record: {record}\n")
+        code, out, err = self._run_gate(
+            plan, "--worktree", "../external/reviews/wt-inner"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("warning: reverse containment", out)
+        self.assertIn("../external/reviews/wt-inner", out)
+        self.assertIn("expected catch frequency low", out)
+        self.assertIn("false-positive cost is relocation noise", out)
+        self.assertIn("review date 2027-01-19", out)
+        self.assertIn(
+            "removal: git worktree remove --force ../external/reviews/wt-inner",
+            out,
+            "the warning blocked or displaced the sanctioned removal",
+        )
+        self.assertNotIn("refused:", out, "reverse containment refused")
+        self.assertNotIn("anchors inside the --worktree tree", out)
+        self.assertNotIn(str(self.root), out, "warning leaked an absolute path")
+        # The warning is read-only visibility riding the run, never a
+        # verdict: it precedes the removal line and the final outcome.
+        self.assertLess(
+            out.index("warning: reverse containment"),
+            out.index("removal: git worktree remove"),
+        )
 
 
 class GateSiblingArmTest(unittest.TestCase):
@@ -2759,7 +2903,7 @@ class SeriesTokenIdentityTest(unittest.TestCase):
         MODULE.subprocess.run = fake_run
         try:
             with contextlib.redirect_stdout(io.StringIO()) as buf:
-                gate_class, _evidence = MODULE._run_gate_on_twin(
+                gate_class, _evidence, _disposition = MODULE._run_gate_on_twin(
                     Path(self.worktree), "2026-10-19-x.md", str(plan_dir)
                 )
         finally:
@@ -2826,8 +2970,7 @@ class SweepTest(unittest.TestCase):
     # -- fixture primitives -------------------------------------------------
 
     def _git(self, repo: Path, *args: str, date: int | None = None, check: bool = True):
-        env = os.environ.copy()
-        env.update(self.GIT_IDENTITY)
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
         if date is not None:
             stamp = f"{date} +0000"
             env["GIT_AUTHOR_DATE"] = stamp
@@ -2905,6 +3048,46 @@ class SweepTest(unittest.TestCase):
         self.write_candidate_plan(path, basename)
         return path
 
+    def exact_tree_candidate(self, slug: str = "alpha", basename: str = "2026-10-01-alpha.md") -> Path:
+        """A candidate whose tip tree equals a destination-history commit's
+        tree while the branch is not an ancestor: the worktree branches
+        before the twin seeding, then commits the identical plans-root
+        vintage the seeding's first landing commit carries, so both trees
+        match and no archive twin is needed for the accounting."""
+        path = self.add_worktree(slug, branch=f"wt-{slug}")
+        self.seed_twin(basename)
+        cites = f".ai-playbook/reviews/2026-10-01-{slug}-r1.md"
+        _write(
+            Path(path) / "docs/history/plans" / basename,
+            f"# Plan\n\nPlan review record: {cites}\n".encode("utf-8"),
+        )
+        self._commit_all(path, "plan: identical plans-root vintage", date=self.EPOCH)
+        return path
+
+    def write_slug_manifest(self, basename: str, branch: str, worktree: Path) -> Path:
+        """The candidate's migration manifest at the slug-resolved session
+        directory (Task 2: the sweep passes it to the twin gate run)."""
+        slug = MODULE._plan_session_slug(Path(basename))
+        manifest_dir = self.primary / "docs/tmp/execute-plan" / slug
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        path = manifest_dir / "closeout-migration.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "migrated": [],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [{"branch": branch, "source": str(worktree)}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def branch_oid(self, branch: str) -> str:
+        return self._git(self.primary, "rev-parse", branch).stdout.strip()
+
     def hold_env(self, token: str = "sweep-token-1", repo_root: str | None = None, metaless: bool = False) -> dict[str, str]:
         """An authentic-hold export set for the primary checkout, derived
         exactly as the done-lock script derives it (toplevel digest under
@@ -2926,13 +3109,15 @@ class SweepTest(unittest.TestCase):
         }
 
     def run_sweep(self, *extra: str, env_overrides: dict[str, str] | None = None, target: Path | None = None):
-        env = os.environ.copy()
-        for var in self.SWEEP_ENV_VARS:
-            env.pop(var, None)
+        # Hermetic env (plan 2026-10-19-gate-removal-closeout-accounting
+        # Task 2): the sweep subprocess (and every git it spawns) inherits
+        # the cleared-GIT_*, fixture-local-HOME, deterministic-locale env.
+        env = _hermetic_git_env(self.root)
         # Hermetic lock pins (plan 2026-10-10-done-closeout-lock-span Task 1):
         # the merge-lock root lives in the fixture tmp tree and the done-lock
         # script is the repo-local copy; --apply fixtures override the root
         # through hold_env after these defaults.
+        env.pop("DONE_LOCK_ROOT", None)
         env["DONE_LOCK_SCRIPT"] = str(DONE_LOCK_SCRIPT_PATH)
         env["MERGE_LOCK_ROOT"] = str(self.merge_lock_root)
         env["MERGE_LOCK_POLL_SECS"] = "1"
@@ -2967,7 +3152,10 @@ class SweepTest(unittest.TestCase):
         wrong_name = self.add_worktree("misfit", branch="wt-misfit", name="sibling-wt-misfit")
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
-        self.assertIn(f"report {self._porcelain_path(eligible)}: removal eligible", proc.stdout)
+        self.assertIn(
+            f"report {self._porcelain_path(eligible)}: operator-controlled worktree retained",
+            proc.stdout,
+        )
         self.assertNotIn(str(wrong_parent.resolve()), proc.stdout)
         self.assertNotIn(str(wrong_name.resolve()), proc.stdout)
 
@@ -2982,7 +3170,8 @@ class SweepTest(unittest.TestCase):
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(
-            f"report {registered}: removal eligible (report-only mode; re-run with --apply)",
+            f"report {registered}: operator-controlled worktree retained "
+            "(on-disk worktree and artifacts preserved; branch refs are never removed by the sweep)",
             proc.stdout,
         )
         self.assertTrue(Path(path).is_dir(), "report mode removed the worktree")
@@ -3030,15 +3219,18 @@ class SweepTest(unittest.TestCase):
         # Fold r1 F1: the staging arm keys on ignored entries only. The
         # eligible candidate's checkout carries the tracked review record
         # under .ai-playbook/reviews (the landed vintage) and no docs/tmp
-        # content, both clean staging surfaces, so the chain proceeds to
-        # removal eligibility.
+        # content, both clean staging surfaces, so the chain proceeds past
+        # the staging arm and the worktree is reported as retained.
         path = self.eligible_candidate()
         self.assertTrue(
             (Path(path) / ".ai-playbook/reviews/2026-10-01-alpha-r1.md").is_file()
         )
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
-        self.assertIn(f"report {self._porcelain_path(path)}: removal eligible", proc.stdout)
+        self.assertIn(
+            f"report {self._porcelain_path(path)}: operator-controlled worktree retained",
+            proc.stdout,
+        )
 
     def test_sweep_locked_registration_skip(self):
         path = self.eligible_candidate()
@@ -3153,7 +3345,10 @@ class SweepTest(unittest.TestCase):
         os.utime(keyed, (stale_stamp, stale_stamp))
         proc = self.run_sweep(env_overrides=root_env)
         self.assertOutcome(proc, 0, "pass")
-        self.assertIn(f"report {self._porcelain_path(path)}: removal eligible", proc.stdout)
+        self.assertIn(
+            f"report {self._porcelain_path(path)}: operator-controlled worktree retained",
+            proc.stdout,
+        )
 
     def test_sweep_post_landing_commits_on_branch_skip(self):
         path = self.eligible_candidate()
@@ -3239,9 +3434,22 @@ class SweepTest(unittest.TestCase):
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(f"report {first_registered}: evaluation error: ", proc.stdout)
-        self.assertIn(f"report {second_registered}: removal eligible", proc.stdout)
+        self.assertIn(
+            f"report {second_registered}: stale registration drain eligible",
+            proc.stdout,
+        )
         self.assertIn(first_registered, self._registered_paths())
         self.assertIn(second_registered, self._registered_paths())
+        # The apply behaves the same for the unreadable candidate: its
+        # registration survives the evaluation error while the eligible
+        # sibling drains with its ref preserved.
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {first_registered}: evaluation error: ", proc.stdout)
+        self.assertIn(f"remove {second_registered}", proc.stdout)
+        self.assertIn(first_registered, self._registered_paths())
+        self.assertNotIn(second_registered, self._registered_paths())
+        self.assertFalse(self._branch_gone("wt-two"))
 
     # -- the authentic-hold refusal under --apply (four shapes) -------------
 
@@ -3281,21 +3489,35 @@ class SweepTest(unittest.TestCase):
 
     # -- removal, both candidate kinds, and the merge lock ------------------
 
-    def test_sweep_apply_removes_on_disk_candidate_full_pass(self):
+    def test_sweep_apply_preserves_on_disk_candidate_full_pass(self):
+        # Plan gate-removal-closeout-accounting Task 2: the apply mode
+        # removes only stale registrations. A fully passing on-disk
+        # candidate keeps its worktree, its registration, and its branch
+        # ref (the OUTCOME: pass never infers a deletion); the run still
+        # cleans up the twin temp file and never takes the merge lock
+        # without a registration drain.
         path = self.eligible_candidate()
         registered = self._porcelain_path(path)
+        oid_before = self.branch_oid("wt-alpha")
         proc = self.run_sweep("--apply", env_overrides=self.hold_env())
         self.assertOutcome(proc, 0, "pass")
-        self.assertIn(f"remove {registered}", proc.stdout)
-        self.assertFalse(Path(path).exists(), "the worktree survived the removal")
-        self.assertNotIn(registered, self._registered_paths())
-        self.assertTrue(self._branch_gone("wt-alpha"))
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained "
+            "(on-disk worktree and artifacts preserved; branch refs are never removed by the sweep)",
+            proc.stdout,
+        )
+        self.assertNotIn(f"remove {registered}", proc.stdout)
+        self.assertTrue(Path(path).is_dir(), "the on-disk worktree was removed")
+        self.assertIn(registered, self._registered_paths())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before, "the branch ref moved")
         self.assertEqual(list((self.primary / "docs/tmp").glob("sweep-twin-*")), [], "twin temp file leaked")
-        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the merge lock was not released")
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the merge lock was taken without a drain")
 
     def test_sweep_apply_removes_stale_registration_scoped(self):
         path = self.eligible_candidate()
         registered = self._porcelain_path(path)
+        oid_before = self.branch_oid("wt-alpha")
         shutil.rmtree(path)
         proc = self.run_sweep("--apply", env_overrides=self.hold_env())
         self.assertOutcome(proc, 0, "pass")
@@ -3303,7 +3525,15 @@ class SweepTest(unittest.TestCase):
         self.assertNotIn(registered, self._registered_paths())
         admin = self.primary / ".git" / "worktrees" / Path(registered).name
         self.assertFalse(admin.exists(), "the administrative dir survived the scoped release")
-        self.assertTrue(self._branch_gone("wt-alpha"))
+        # The branch ref is preserved with an unchanged OID: the drain
+        # never infers a branch deletion from the gate's OUTCOME: pass.
+        self.assertIn(
+            f"registration: drained {registered} (stale registration "
+            "only; branch refs are never removed by the sweep)",
+            proc.stdout,
+        )
+        self.assertFalse(self._branch_gone("wt-alpha"))
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before, "the stale drain moved the branch ref")
         self.assertFalse(Path(path).exists(), "the stale release recreated a tree")
 
     def test_sweep_stale_siblings_drain_together(self):
@@ -3311,12 +3541,19 @@ class SweepTest(unittest.TestCase):
         second = self.eligible_candidate(slug="two", basename="2026-10-01-two.md")
         first_registered = self._porcelain_path(first)
         second_registered = self._porcelain_path(second)
+        first_oid = self.branch_oid("wt-one")
+        second_oid = self.branch_oid("wt-two")
         shutil.rmtree(first)
         shutil.rmtree(second)
         proc = self.run_sweep("--apply", env_overrides=self.hold_env())
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(f"remove {first_registered}", proc.stdout)
         self.assertIn(f"remove {second_registered}", proc.stdout)
+        # Both drains preserve their branch refs unchanged.
+        self.assertFalse(self._branch_gone("wt-one"))
+        self.assertFalse(self._branch_gone("wt-two"))
+        self.assertEqual(self.branch_oid("wt-one"), first_oid)
+        self.assertEqual(self.branch_oid("wt-two"), second_oid)
 
     def test_sweep_foreign_prunable_registration_defers_stale_release(self):
         path = self.eligible_candidate()
@@ -3361,8 +3598,14 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the merge lock was taken without removals")
 
     def test_sweep_merge_lock_held_refusal_is_tool_error(self):
+        # The apply mode queues stale-registration drains only, so the
+        # contended merge-lock acquire is reached with a stale candidate:
+        # the held merge lock refuses it as a tool error and the
+        # registration and the branch ref both survive.
         path = self.eligible_candidate()
         registered = self._porcelain_path(path)
+        oid_before = self.branch_oid("wt-alpha")
+        shutil.rmtree(path)
         holder = subprocess.Popen(["sleep", "60"])
         self.addCleanup(holder.wait)
         self.addCleanup(holder.kill)
@@ -3383,8 +3626,9 @@ class SweepTest(unittest.TestCase):
         merge_lines = [line for line in proc.stderr.splitlines() if line.startswith("merge-lock: ")]
         self.assertTrue(merge_lines, "no merge-lock re-prefixed evidence on stderr")
         self.assertNotIn("OUTCOME: fail", proc.stderr, "the acquire's final OUTCOME line was not dropped")
-        self.assertTrue(Path(path).is_dir(), "a removal ran while the merge lock was held")
-        self.assertIn(registered, self._registered_paths())
+        self.assertIn(registered, self._registered_paths(), "a drain ran while the merge lock was held")
+        self.assertFalse(self._branch_gone("wt-alpha"))
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before, "the branch ref moved")
 
     # -- the gate on the completed twin -------------------------------------
 
@@ -3446,6 +3690,218 @@ class SweepTest(unittest.TestCase):
 
     # -- invocation surface -------------------------------------------------
 
+    # -- Task 2: exact-tree accounting, retained tips, and the hermetic env -
+
+    def test_hermetic_git_env_clears_inherited_and_pins_home_locale(self):
+        # Plan gate-removal-closeout-accounting Task 2: the fixture env
+        # helper clears every inherited GIT_* variable, moves HOME into the
+        # fixture tree, pins the deterministic locale and timezone, and
+        # still applies the caller's explicit extras.
+        os.environ["GIT_TRACE_TASK2_LEAK"] = "1"
+        try:
+            env = _hermetic_git_env(self.root, GIT_AUTHOR_NAME="t")
+        finally:
+            os.environ.pop("GIT_TRACE_TASK2_LEAK", None)
+        self.assertNotIn("GIT_TRACE_TASK2_LEAK", env)
+        self.assertEqual(Path(env["HOME"]), self.root / "fixture-home")
+        self.assertTrue((self.root / "fixture-home").is_dir())
+        for key, value in FIXTURE_LOCALE_ENV.items():
+            self.assertEqual(env[key], value)
+        self.assertEqual(env["GIT_AUTHOR_NAME"], "t")
+        # A git subprocess launched with the helper's env sees the pinned
+        # identity, never the host's.
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
+        proc = subprocess.run(
+            ["git", "var", "GIT_AUTHOR_IDENT"],
+            capture_output=True, text=True, env=env, cwd=str(self.root),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("<t@t>", proc.stdout)
+
+    def test_sweep_exact_tree_candidate_reported_and_retained(self):
+        # Plan gate-removal-closeout-accounting Task 2: a tip whose complete
+        # tree equals a destination-history commit's tree is accounted
+        # without ancestry or an archive twin, and the non-ancestor branch
+        # stays retained in report mode.
+        path = self.exact_tree_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        proc = self.run_sweep()
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained",
+            proc.stdout,
+        )
+        self.assertIn(
+            "branch-report: branch wt-alpha: disposition exact-tree-accounted at ",
+            proc.stdout,
+        )
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+
+    def test_sweep_exact_tree_candidate_apply_preserves_worktree_and_ref(self):
+        # The apply mode reports the exact-tree disposition and preserves
+        # the on-disk worktree, its artifacts, and the branch ref.
+        path = self.exact_tree_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        oid_before = self.branch_oid("wt-alpha")
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained",
+            proc.stdout,
+        )
+        self.assertIn(
+            "branch-report: branch wt-alpha: disposition exact-tree-accounted at ",
+            proc.stdout,
+        )
+        self.assertNotIn(f"remove {registered}", proc.stdout)
+        self.assertTrue(Path(path).is_dir())
+        self.assertIn(registered, self._registered_paths())
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before)
+
+    def test_sweep_legacy_only_candidate_reports_evidence_and_retains(self):
+        # A branch accounted ONLY by the legacy changed-path scope: the
+        # disposition reports the evidence and the retention, and neither
+        # the worktree nor the ref is removed.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        oid_before = self.branch_oid("wt-alpha")
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained",
+            proc.stdout,
+        )
+        self.assertIn("disposition retained at", proc.stdout)
+        self.assertIn("legacy changed-path scope is accounting evidence only", proc.stdout)
+        self.assertTrue(Path(path).is_dir())
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before)
+
+    def test_sweep_advanced_candidate_retained_under_apply(self):
+        # A branch that advanced past the landing (post-landing commits): a
+        # chain skip in both modes; the apply preserves the worktree and the
+        # ref.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        _write(Path(path) / "advanced.md", b"post-landing work\n")
+        self._commit_all(path, "work past the landing", date=self.EPOCH + 100)
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {registered}: post-landing commits on branch", proc.stdout)
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+
+    def test_sweep_moved_ref_apply_preserves_worktree_and_artifacts(self):
+        # A moved ref (the branch tip re-pointed at an advanced commit
+        # before the run): the moved tip is reported and the apply preserves
+        # the worktree, its artifacts, and the moved ref itself.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        _write(Path(path) / "moved.md", b"unlanded tip work\n")
+        self._commit_all(path, "work: moved tip", date=self.EPOCH + 500)
+        moved_oid = self.branch_oid("wt-alpha")
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {registered}: post-landing commits on branch", proc.stdout)
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertEqual(self.branch_oid("wt-alpha"), moved_oid)
+
+    def test_sweep_sibling_checkout_reports_shared_branch_and_retains(self):
+        # A sibling worktree checkout on the same branch: the gate's guard
+        # names the sibling, the disposition is retained, and the candidate
+        # worktree and ref both survive the apply.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        sibling = self.add_worktree("sib", branch="wt-sib-tmp")
+        self._git(sibling, "checkout", "-q", "--ignore-other-worktrees", "wt-alpha")
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained",
+            proc.stdout,
+        )
+        self.assertIn("branch shared with 1 live worktree(s)", proc.stdout)
+        self.assertIn(str(sibling.resolve()), proc.stdout)
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+
+    def test_sweep_dirty_state_preserved_under_apply(self):
+        # Dirty/active state: the apply preserves the dirty worktree and the
+        # ref exactly like report mode.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        _write(Path(path) / "scratch-untracked.md", b"untracked\n")
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {registered}: dirty worktree", proc.stdout)
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+
+    def test_sweep_passes_legacy_manifest_filename_for_slug_twin(self):
+        # The twin's temporary filename differs from the candidate's slug;
+        # the sweep resolves the candidate's manifest at the LEGACY filename
+        # and the gate still binds the branch (the disposition flows).
+        path = self.exact_tree_candidate()
+        registered = self._porcelain_path(path)
+        manifest = self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        manifest.rename(manifest.parent / "migration-manifest.json")
+        proc = self.run_sweep()
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(
+            "branch-report: branch wt-alpha: disposition exact-tree-accounted at ",
+            proc.stdout,
+        )
+        self.assertIn(
+            f"report {registered}: operator-controlled worktree retained",
+            proc.stdout,
+        )
+
+    def test_sweep_manifest_identity_mismatch_is_preserved(self):
+        # A manifest binding a foreign branch: the identity mismatch refuses
+        # the twin gate run and the apply preserves the worktree, the
+        # registration, and the real branch.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-foreign-branch", path)
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {registered}: gate-removal fail", proc.stdout)
+        self.assertIn("exact-branch identity mismatch", proc.stdout)
+        self.assertIn("wt-foreign-branch", proc.stdout)
+        self.assertIn(registered, self._registered_paths())
+        self.assertTrue(Path(path).is_dir())
+        self.assertFalse(self._branch_gone("wt-alpha"))
+
+    def test_sweep_stale_drain_carries_disposition_and_preserves_ref(self):
+        # A stale registration drain under --apply carries the gate's
+        # disposition into the registration line and preserves the branch
+        # ref with an unchanged OID.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self.write_slug_manifest("2026-10-01-alpha.md", "wt-alpha", path)
+        oid_before = self.branch_oid("wt-alpha")
+        shutil.rmtree(path)
+        proc = self.run_sweep("--apply", env_overrides=self.hold_env())
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"remove {registered}", proc.stdout)
+        self.assertIn(
+            f"registration: drained {registered} (stale registration "
+            f"only; branch wt-alpha ref preserved, disposition retained at {oid_before})",
+            proc.stdout,
+        )
+        self.assertNotIn(registered, self._registered_paths())
+        self.assertEqual(self.branch_oid("wt-alpha"), oid_before)
+
     def test_sweep_usage_missing_target_is_tool_error(self):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "sweep", "--apply"],
@@ -3475,12 +3931,11 @@ class SweepTest(unittest.TestCase):
         self.assertIn("target directory not found", proc.stderr)
 
 
-class GateRemovalBranchCloseoutTest(unittest.TestCase):
-    """[class: REPOSITORY_TEST] Exact-branch closeout witnesses (plan
-    done-closeout-ceremony-friction Task 3): a real git fixture pair of a
-    primary checkout and a run worktree whose migration manifest records the
-    branch at transfer time, exercising the removable, preserve (shared
-    branch), preserve (unlanded work), and identity-mismatch arms."""
+class _BranchCloseoutFixture:
+    """Shared git fixture for the exact-branch closeout witnesses: a primary
+    checkout plus a run worktree whose migration manifest records the branch
+    at transfer time. Carries only helpers, never test methods, so each
+    concrete class collects its own tests."""
 
     GIT_IDENTITY = {
         "GIT_AUTHOR_NAME": "t",
@@ -3504,8 +3959,7 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
         self._git(self.primary, "worktree", "add", "-q", "-b", "wt-run", str(self.worktree))
 
     def _git(self, repo: Path, *args: str, check: bool = True):
-        env = os.environ.copy()
-        env.update(self.GIT_IDENTITY)
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
         proc = subprocess.run(
             ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env
         )
@@ -3516,6 +3970,14 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
     def _commit_all(self, repo: Path, message: str) -> None:
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-q", "-m", message)
+
+    def _branch_oid(self, branch: str) -> str:
+        return self._git(self.primary, "rev-parse", branch).stdout.strip()
+
+    def _rebind_manifest_branch(self, manifest_path: Path, branch: str) -> None:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["branch"][-1]["branch"] = branch
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     def _seed_migration_manifest(self, landed: bool) -> Path:
         """A migration manifest at the derived gate path: the branch record
@@ -3557,7 +4019,11 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
             self.worktree / plan_rel,
             b"# Plan\n\nPlan review record: .ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n",
         )
-        manifest_dir = self.primary / "docs/tmp/execute-plan/2026-10-08-x"
+        # The producer contract's slug directory: the gate's default lookup
+        # derives <PLAN_SLUG> = x from the dated plan 2026-10-08-x.md
+        # (leading date and extension stripped), so the manifest binds only
+        # when it sits under the date-stripped session directory.
+        manifest_dir = self.primary / "docs/tmp/execute-plan/x"
         manifest_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = manifest_dir / "closeout-migration.json"
         manifest_path.write_text(
@@ -3591,27 +4057,161 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
             cwd=self.worktree,
         )
 
-    def test_landed_branch_adjudicated_removable(self):
-        # Ordinary completed closeout: the records verify, the manifest binds
-        # the worktree to wt-run, the migrated artifact exists under the
-        # target, and the branch's work is accounted (content-scope match);
-        # the gate passes with the removable verdict and the deletable
-        # branch command.
+    def _run_gate_branch_only(self, branch: str, manifest: Path | None = None) -> tuple[int, str, str]:
+        plan = getattr(
+            self, "branch_only_plan",
+            self.primary / "docs/history/plans/completed/2026-10-08-x.md",
+        )
+        return _run_cli(
+            "gate-removal",
+            "--plan", str(plan),
+            "--target", str(self.primary),
+            "--branch", branch,
+            "--migration-manifest", str(manifest or (self.primary / "docs/tmp/execute-plan/x/closeout-migration.json")),
+            cwd=self.primary,
+        )
+
+    def _run_gate_with_midcheck_mutation(self, mutate) -> tuple[int, str, str]:
+        """Run cmd_gate_removal in-process with a subprocess.run wrapper
+        that mutates the repository immediately after the proven-OID
+        capture, so the ref re-compare arm is exercisable deterministically.
+        The mutate callable receives the hermetic run helper to use for its
+        own git calls."""
+        real_run = subprocess.run
+        state = {"fired": False}
+
+        def hermetic_run(argv, *a, **k):
+            if "env" not in k:
+                k["env"] = _hermetic_git_env(self.root)
+            return real_run(argv, *a, **k)
+
+        def fake_run(argv, *a, **k):
+            proc = hermetic_run(argv, *a, **k)
+            if (
+                not state["fired"]
+                and isinstance(argv, list)
+                and argv[:2] == ["git", "-C"]
+                and "rev-parse" in argv
+                and "--verify" in argv
+                and proc.returncode == 0
+            ):
+                state["fired"] = True
+                mutate(hermetic_run)
+            return proc
+
+        argv = [
+            # The flat parser (Task 4) takes the gate's options only; main
+            # consumes the dispatch token before parsing.
+            "--plan", str(self.worktree / "docs/history/plans/2026-10-08-x.md"),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+        ]
+        args = MODULE.build_gate_removal_parser().parse_args(argv)
+        with mock.patch.object(MODULE.subprocess, "run", side_effect=fake_run):
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                with contextlib.redirect_stderr(io.StringIO()) as errbuf:
+                    code = MODULE.cmd_gate_removal(args)
+        return code, buf.getvalue(), errbuf.getvalue()
+
+
+class GateRemovalBranchCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Exact-branch closeout witnesses (plan
+    done-closeout-ceremony-friction Task 3, re-aimed by
+    gate-removal-closeout-accounting Task 2): a real git fixture pair of a
+    primary checkout and a run worktree whose migration manifest records the
+    branch at transfer time, exercising the ancestry-accounted,
+    exact-tree-accounted, legacy-evidence, preserve (shared branch), preserve
+    (unlanded work), and identity-mismatch arms plus the ref re-compare
+    anomalies."""
+
+    def test_legacy_content_scope_is_evidence_only(self):
+        # Plan gate-removal-closeout-accounting Task 2: the fixture's
+        # squash-landed branch is accounted ONLY by the legacy changed-path
+        # scope, which is evidence now: the branch is retained with the
+        # evidence named, no force-delete instruction is printed, and the
+        # worktree cleanup stays authorized beside the branch verdict.
         self._seed_migration_manifest(landed=True)
         code, out, _err = self._run_gate()
         self.assertEqual(code, 0, out)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
-        self.assertIn("branch-closeout: branch wt-run removable", out)
-        # The fixture's shape is squash-accounted (the branch commit is
-        # merge-unreachable), so the proof-conditioned deletion instruction
-        # is the content-scope -D arm, never the plain -d that would refuse.
-        self.assertIn("git branch -D", out)
-        self.assertIn("proof-checked force delete", out)
+        self.assertIn("branch-closeout: preserve branch wt-run at ", out)
+        self.assertIn(
+            "changed-path scope: content landed inside the landing's file set "
+            "(legacy evidence only)",
+            out,
+        )
+        self.assertIn("never permits deleting a non-ancestor branch", out)
+        self.assertNotIn("git branch -D", out)
+        self.assertNotIn("proof-checked force delete", out)
+        self.assertNotIn("removable", out)
+        self.assertIn(
+            "branch-disposition: branch=wt-run disposition=retained oid=", out
+        )
+        self.assertIn("removal: git worktree remove --force", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-run", check=False).returncode,
+            0,
+            "the evidence-only proof deleted the branch",
+        )
+
+    def test_ancestry_accounted_branch_reports_proof_and_expected_oid(self):
+        # An ancestry-accounted branch (its tip is an ancestor of
+        # destination history) reports the proof and the proven OID, and the
+        # operator closeout line names the expected-OID delete.
+        self._seed_migration_manifest(landed=True)
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        expected = self._branch_oid("wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch wt-run ancestry-accounted at {expected}", out)
+        self.assertIn(f"expected OID {expected}", out)
+        self.assertIn(
+            f"branch-disposition: branch=wt-run disposition=ancestry-accounted oid={expected}",
+            out,
+        )
+        self.assertNotIn("git branch -D", out)
+
+    def test_exact_tree_branch_accounted_without_twin_or_ancestry(self):
+        # Plan gate-removal-closeout-accounting Task 2: a tip whose complete
+        # tree equals a destination-history commit's tree is landed WITHOUT
+        # ancestry or an archive twin, while the non-ancestor branch itself
+        # stays retained.
+        self._seed_migration_manifest(landed=True)
+        landing_tree = self._git(self.primary, "rev-parse", "HEAD^{tree}").stdout.strip()
+        root = self._git(self.primary, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        snap = self._git(
+            self.primary, "commit-tree", landing_tree, "-p", root, "-m", "snapshot vintage"
+        ).stdout.strip()
+        self._git(self.primary, "branch", "wt-snap", snap)
+        self._git(self.worktree, "checkout", "-q", "wt-snap")
+        self._rebind_manifest_branch(
+            self.primary / "docs/tmp/execute-plan/x/closeout-migration.json", "wt-snap"
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch wt-snap exact-tree-accounted at {snap}", out)
+        self.assertIn("the non-ancestor branch is retained", out)
+        self.assertIn(
+            f"branch-disposition: branch=wt-snap disposition=exact-tree-accounted oid={snap}",
+            out,
+        )
+        # No archive twin is needed for the accounting: the landing's
+        # completed twin predates this fixture branch, and the verdict names
+        # the tree match, not the twin.
+        self.assertNotIn("git branch -D", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-snap", check=False).returncode,
+            0,
+            "the exact-tree-only branch was deleted",
+        )
 
     def test_shared_branch_preserved(self):
-        # A live sibling worktree on the same branch: the gate still passes
-        # (the records and identity verify) but the branch verdict is
-        # preserve, naming the sibling.
+        # A live sibling worktree on the same branch: the records and
+        # identity verify, the branch verdict is preserve naming the
+        # sibling, and the failed guard holds the worktree removal (the
+        # on-disk worktree stays retained with the ref).
         self._seed_migration_manifest(landed=True)
         sibling = self.root / "proj-wt-sibling"
         # Git refuses a second checkout of one branch by default; the
@@ -3620,10 +4220,13 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
         self._git(self.primary, "worktree", "add", "-q", "-b", "wt-temp-sib", str(sibling))
         self._git(sibling, "checkout", "-q", "--ignore-other-worktrees", "wt-run")
         code, out, _err = self._run_gate()
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
         self.assertIn("branch-closeout: preserve branch wt-run", out)
         self.assertIn("live worktree(s)", out)
         self.assertIn(str(sibling), out)
+        self.assertIn("held: the branch disposition above names a failed guard", out)
+        self.assertNotIn("removal: git worktree remove", out)
 
     def test_unlanded_branch_preserved_and_reported(self):
         # Branch commits the landing does not account for: the identity and
@@ -3654,6 +4257,775 @@ class GateRemovalBranchCloseoutTest(unittest.TestCase):
         self.assertIn("exact-branch identity mismatch", out)
         self.assertIn("wt-other", out)
         self.assertIn("wt-run", out)
+
+    def test_missing_artifact_guard_holds_worktree_removal(self):
+        # A migrated artifact recorded verified whose destination is absent
+        # under the target: the guard retains the branch, names the missing
+        # destination, and holds the worktree removal (the failed artifact
+        # check withdraws the cleanup authorization; the on-disk worktree
+        # stays retained with the ref and the run fails).
+        manifest_path = self._seed_migration_manifest(landed=True)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["migrated"].append(
+            {
+                "source": ".ai-playbook/reviews/2026-10-08-vanished-artifact.md",
+                "destination": ".ai-playbook/reviews/2026-10-08-vanished-artifact.md",
+                "verified": True,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch-closeout: preserve branch wt-run at ", out)
+        self.assertIn("migrated artifact(s) missing under the target", out)
+        self.assertIn(
+            "branch-disposition: branch=wt-run disposition=retained oid=", out
+        )
+        self.assertIn("held: the branch disposition above names a failed guard", out)
+        self.assertNotIn("removal: git worktree remove", out)
+        self.assertTrue(
+            Path(self.worktree).is_dir(), "the guarded worktree was removed"
+        )
+
+    def test_unreadable_ref_at_capture_retains_branch_and_worktree(self):
+        # The proven OID cannot be captured (the ref does not resolve): the
+        # accounting is unknown, the gate refuses, and the branch and the
+        # on-disk worktree both stay for operator resolution.
+        self._seed_migration_manifest(landed=True)
+        real_run = subprocess.run
+
+        def kill_capture(argv, *a, **k):
+            if "rev-parse" in argv and "--verify" in argv:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="fatal: gone")
+            return real_run(argv, *a, **k)
+
+        args = MODULE.build_gate_removal_parser().parse_args(
+            [
+                "--plan", str(self.worktree / "docs/history/plans/2026-10-08-x.md"),
+                "--target", str(self.primary),
+                "--worktree", str(self.worktree),
+            ]
+        )
+        with mock.patch.object(MODULE.subprocess, "run", side_effect=kill_capture):
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                code = MODULE.cmd_gate_removal(args)
+        out = buf.getvalue()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch ref unreadable: wt-run does not resolve", out)
+        self.assertIn("branch-disposition: branch=wt-run disposition=unknown-ref", out)
+        self.assertNotIn("git worktree remove", out)
+        self.assertTrue(Path(self.worktree).is_dir(), "the on-disk worktree was removed")
+
+    def test_moved_ref_during_checks_refuses_and_retains(self):
+        # Plan gate-removal-closeout-accounting Task 2: the branch moves
+        # after the proven-OID capture; the re-compare reports changed,
+        # refuses the removal, and retains the branch and the on-disk
+        # worktree for operator resolution.
+        self._seed_migration_manifest(landed=True)
+        proven = self._branch_oid("wt-run")
+
+        def move_ref(run):
+            # update-ref is the plumbing: unlike branch -f it can move a
+            # ref a linked worktree still holds, which is exactly the
+            # out-of-band move this arm guards.
+            run(["git", "-C", str(self.primary), "commit", "-q", "--allow-empty", "-m", "move"])
+            head = run(
+                ["git", "-C", str(self.primary), "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            ).stdout.strip()
+            run(["git", "-C", str(self.primary), "update-ref", "refs/heads/wt-run", head])
+
+        code, out, _err = self._run_gate_with_midcheck_mutation(move_ref)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch ref changed during the closeout checks", out)
+        self.assertIn(f"proven OID {proven}", out)
+        self.assertIn("branch-disposition: branch=wt-run disposition=ref-changed", out)
+        self.assertNotIn("git worktree remove", out)
+        self.assertTrue(Path(self.worktree).is_dir(), "the on-disk worktree was removed")
+        self.assertNotEqual(self._branch_oid("wt-run"), proven)
+
+    def test_ref_deleted_at_recheck_reports_unknown_and_retains(self):
+        # The ref turns unreadable between the capture and the recheck: the
+        # closeout reports the unknown ref, refuses, and retains.
+        self._seed_migration_manifest(landed=True)
+
+        def delete_ref(run):
+            run(["git", "-C", str(self.primary), "update-ref", "-d", "refs/heads/wt-run"])
+
+        code, out, _err = self._run_gate_with_midcheck_mutation(delete_ref)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch ref unreadable at the closeout recheck", out)
+        self.assertIn("branch-disposition: branch=wt-run disposition=unknown-ref", out)
+        self.assertTrue(Path(self.worktree).is_dir(), "the on-disk worktree was removed")
+
+
+class GateOperatorCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Operator-closeout witnesses (plan
+    gate-removal-closeout-accounting Task 2): a sibling worktree attaching
+    after gate success but before quiescence retains the ref, and any
+    inventoried ignored or untracked file lacking a verified destination
+    retains the worktree and the ref."""
+
+    def test_sibling_attach_after_gate_success_retains_ref(self):
+        # The gate authorizes the operator closeout (ancestry-accounted,
+        # expected OID named); a sibling worktree then attaches before the
+        # quiesce point. The pre-delete confirmation re-runs the gate in
+        # branch-only mode, the linked-worktree guard fires, and the ref is
+        # retained.
+        self._seed_migration_manifest(landed=True)
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        expected_oid = self._branch_oid("wt-run")
+        self.assertIn(f"expected OID {expected_oid}", out)
+        # The sibling attaches after the gate success, before quiescence.
+        sibling = self.root / "proj-wt-sibling"
+        self._git(self.primary, "worktree", "add", "-q", "-b", "wt-temp-sib", str(sibling))
+        self._git(sibling, "checkout", "-q", "--ignore-other-worktrees", "wt-run")
+        code, out, _err = self._run_gate_branch_only("wt-run")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch shared with 2 live worktree(s)", out)
+        self.assertIn(str(sibling), out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-run", check=False).returncode,
+            0,
+            "the ref was deleted while a sibling worktree held it",
+        )
+        self.assertEqual(self._branch_oid("wt-run"), expected_oid, "the ref moved")
+
+    def test_unverified_ignored_file_retains_worktree_and_ref(self):
+        # An ignored staging record in the worktree with no verified
+        # destination under the primary home: the records gate fails, and
+        # the operator closeout retains the worktree and the ref.
+        self._seed_migration_manifest(landed=True)
+        record = ".ai-playbook/reviews/2026-10-08-ignored-unverified-r1.md"
+        _write(self.worktree / ".gitignore", f"{record}\n".encode("utf-8"))
+        self._commit_all(self.worktree, "chore: ignore the staged record")
+        _write(self.worktree / record, b"staged bytes never migrated\n")
+        plan = self.worktree / "docs/history/plans/2026-10-08-x.md"
+        _write(plan, f"# Plan\n\nPlan review record: {record}\n".encode("utf-8"))
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {record}", out)
+        self.assertNotIn("git worktree remove", out)
+        self.assertTrue(Path(self.worktree).is_dir(), "the worktree was removed")
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-run", check=False).returncode,
+            0,
+            "the ref was deleted over an unverified ignored artifact",
+        )
+
+    def test_unverified_untracked_file_retains_worktree_and_ref(self):
+        # An untracked file the run owns whose bytes exist nowhere at the
+        # destination: the records gate fails on its citation and the
+        # worktree and ref are retained.
+        self._seed_migration_manifest(landed=True)
+        record = ".ai-playbook/reviews/2026-10-08-untracked-unverified-r1.md"
+        _write(self.worktree / record, b"untracked bytes never migrated\n")
+        plan = self.worktree / "docs/history/plans/2026-10-08-x.md"
+        _write(plan, f"# Plan\n\nPlan review record: {record}\n".encode("utf-8"))
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {record}", out)
+        self.assertNotIn("git worktree remove", out)
+        self.assertTrue(Path(self.worktree).is_dir(), "the worktree was removed")
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-run", check=False).returncode,
+            0,
+            "the ref was deleted over an unverified untracked artifact",
+        )
+
+
+class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Branch-only gate mode witnesses (plan
+    gate-removal-closeout-accounting Task 2): explicit --branch plus
+    --migration-manifest and no --worktree adjudicates a ref with no linked
+    worktree under the full guard chain; an accounted branch reports its
+    proof and expected OID; missing proof or any failed guard retains the
+    ref."""
+
+    def _manifest_for(self, branch: str, destination: str | None = None) -> Path:
+        manifest_dir = self.primary / "docs/tmp/execute-plan/branch-only"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        path = manifest_dir / "closeout-migration.json"
+        migrated = [
+            {
+                "source": ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                "destination": destination
+                or ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                "verified": True,
+            }
+        ]
+        path.write_text(
+            json.dumps(
+                {
+                    "migrated": migrated,
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [{"branch": branch, "source": "branch-only"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def _seed_records(self) -> None:
+        reviews = self.primary / ".ai-playbook/reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        _write(
+            reviews / "2026-10-08-plan-review-x-exec-r1.md",
+            b"r1\n",
+        )
+        plan_rel = "docs/history/plans/2026-10-08-x.md"
+        _write(
+            self.primary / plan_rel,
+            b"# Plan\n\nPlan review record: .ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n",
+        )
+        self._commit_all(self.primary, "plan: seed the plan and its record")
+        self.branch_only_plan = self.primary / plan_rel
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._seed_records()
+
+    def test_accounted_branch_reports_proof_and_expected_oid(self):
+        branch = "wt-done"
+        self._git(self.primary, "branch", branch, "HEAD")
+        expected = self._branch_oid(branch)
+        manifest = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} ancestry-accounted at {expected}", out)
+        self.assertIn(f"expected OID {expected}", out)
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=ancestry-accounted oid={expected}",
+            out,
+        )
+        self.assertNotIn("git worktree remove", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+        )
+
+    def test_exact_tree_only_branch_reported_and_retained(self):
+        tree = self._git(self.primary, "rev-parse", "HEAD^{tree}").stdout.strip()
+        root = self._git(self.primary, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        snap = self._git(
+            self.primary, "commit-tree", tree, "-p", root, "-m", "snapshot vintage"
+        ).stdout.strip()
+        branch = "wt-snap"
+        self._git(self.primary, "branch", branch, snap)
+        manifest = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} exact-tree-accounted at {snap}", out)
+        self.assertIn("the non-ancestor branch is retained", out)
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=exact-tree-accounted oid={snap}",
+            out,
+        )
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+            "the exact-tree-only branch was deleted",
+        )
+
+    def test_missing_proof_retains_ref(self):
+        branch = "wt-unaccounted"
+        self._git(self.primary, "branch", branch, "HEAD")
+        # Commit the unlanded work ON the branch through a scratch worktree
+        # that is removed again, so the branch tip carries a commit no
+        # destination history contains while no worktree stays linked.
+        scratch = self.root / "proj-wt-scratch"
+        self._git(self.primary, "worktree", "add", "-q", str(scratch), branch)
+        _write(scratch / "unlanded.txt", b"never landed\n")
+        self._commit_all(scratch, "work: unlanded everywhere")
+        self._git(self.primary, "worktree", "remove", "--force", str(scratch))
+        manifest = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"branch-closeout: preserve branch {branch} at ", out)
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=retained oid=",
+            out,
+        )
+        self.assertIn("branch: preserve", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+            "the ref was deleted without proof",
+        )
+
+    def test_linked_worktree_guard_retains_ref(self):
+        branch = "wt-linked"
+        self._git(self.primary, "branch", branch, "HEAD")
+        linked = self.root / "proj-wt-linked"
+        self._git(self.primary, "worktree", "add", "-q", str(linked), branch)
+        manifest = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("branch shared with 1 live worktree(s)", out)
+        self.assertIn(str(linked), out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+            "the ref was deleted while a worktree held it",
+        )
+
+    def test_missing_artifact_guard_retains_ref(self):
+        branch = "wt-artifact"
+        self._git(self.primary, "branch", branch, "HEAD")
+        manifest = self._manifest_for(branch, destination=".ai-playbook/reviews/vanished.md")
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("migrated artifact(s) missing under the target", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+        )
+
+    def test_identity_binding_refuses_foreign_branch(self):
+        self._git(self.primary, "branch", "wt-bound", "HEAD")
+        manifest = self._manifest_for("wt-bound")
+        code, out, _err = self._run_gate_branch_only("wt-somewhere-else", manifest)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("exact-branch identity mismatch", out)
+        self.assertIn("wt-bound", out)
+        self.assertIn("wt-somewhere-else", out)
+
+    def test_missing_manifest_file_fails_branch_only_mode(self):
+        # A skip shape with no disposition (the explicit
+        # --migration-manifest path names an absent file; plan
+        # gate-removal-closeout-accounting Task 2: missing proof retains
+        # the ref): branch-only mode fails, it never passes without
+        # branch accounting.
+        branch = "wt-no-manifest"
+        self._git(self.primary, "branch", branch, "HEAD")
+        absent = self.primary / "docs/tmp/execute-plan/branch-only/absent-closeout.json"
+        code, out, _err = self._run_gate_branch_only(branch, absent)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(
+            "branch-closeout: skipped (no migration manifest at the "
+            f"explicit --migration-manifest path {absent}",
+            out,
+        )
+        self.assertIn(
+            "refused: branch-only closeout produced no branch disposition", out
+        )
+        self.assertNotIn("branch-disposition:", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+            "the ref was deleted over a skip shape with no disposition",
+        )
+
+    def test_manifest_without_branch_record_fails_branch_only_mode(self):
+        # A skip shape with no disposition (the manifest carries no branch
+        # record; plan gate-removal-closeout-accounting Task 2: missing
+        # proof retains the ref): branch-only mode fails, it never passes
+        # without branch accounting.
+        branch = "wt-no-record"
+        self._git(self.primary, "branch", branch, "HEAD")
+        manifest_dir = self.primary / "docs/tmp/execute-plan/branch-only"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "no-branch-record-closeout.json"
+        manifest.write_text(
+            json.dumps({"migrated": [], "renamed": [], "skipped": [], "failed": []}),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(
+            "branch-closeout: skipped (migration manifest carries no branch "
+            "record; legacy shape)",
+            out,
+        )
+        self.assertIn(
+            "refused: branch-only closeout produced no branch disposition", out
+        )
+        self.assertNotIn("branch-disposition:", out)
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
+            0,
+            "the ref was deleted over a skip shape with no disposition",
+        )
+
+    def test_usage_violations_are_tool_errors(self):
+        manifest = self._manifest_for("wt-any")
+        # --branch without --migration-manifest.
+        code, out, err = _run_cli(
+            "gate-removal", "--plan", "plan.md", "--target", str(self.primary),
+            "--branch", "wt-any", cwd=self.primary,
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("--migration-manifest", err)
+        # --branch together with --worktree.
+        code, out, err = _run_cli(
+            "gate-removal", "--plan", "plan.md", "--target", str(self.primary),
+            "--branch", "wt-any", "--worktree", "somewhere", cwd=self.primary,
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("mutually exclusive", err)
+        # Neither --branch nor --worktree.
+        code, out, err = _run_cli(
+            "gate-removal", "--plan", "plan.md", "--target", str(self.primary),
+            cwd=self.primary,
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("--worktree", err)
+        self.assertIsNotNone(manifest)
+
+
+class GateManifestSlugResolutionTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] Manifest-slug resolution and citation-remedy
+    witnesses (plan gate-removal-closeout-accounting Task 1): the default
+    migration-manifest lookup keys the execute-plan session directory by the
+    canonical <PLAN_SLUG> (a dated plan file loses its leading date and
+    extension; a dated plan directory's PLAN.md charter loses the leading
+    date from the directory name), the explicit --migration-manifest operand
+    stays authoritative with no fallback, and a never-verifiable citation
+    carries a correction remedy distinct from the migrate remedy."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wrmg-slug-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.worktree = self._scratch_pair_member(self.root / "wt-session")
+        self.primary = self._scratch_pair_member(self.root / "primary")
+
+    def _scratch_pair_member(self, path: Path) -> Path:
+        # One member of the scratch pair: a facts-resolved checkout-shaped
+        # directory (the gate reads only the facts block, the reviews home,
+        # and the manifest file on this path; the branch-closeout skip arms
+        # under test run before any git probe, so a gitless fixture is
+        # faithful).
+        path.mkdir(parents=True)
+        _write(
+            path / ".ai-playbook/facts.md",
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\ntmp_dir = \"docs/tmp/\"\nmetrics_dir = \".ai-playbook/metrics/\"\n```\n",
+        )
+        return path
+
+    def _plan(self, plan_rel: str, record_rel: str) -> Path:
+        # A plan under the worktree citing one review record, with the
+        # record present under the PRIMARY home, so the records gate
+        # verifies and the run reaches the branch-closeout lookup.
+        _write(self.primary / record_rel, b"r1\n")
+        plan = self.worktree / plan_rel
+        _write(plan, f"# Plan\n\nPlan review record: {record_rel}\n".encode("utf-8"))
+        return plan
+
+    def _manifest(self, session_dir_rel: str, name: str, body: bytes) -> Path:
+        path = self.primary / "docs/tmp" / session_dir_rel / name
+        _write(path, body)
+        return path
+
+    @staticmethod
+    def _manifest_body() -> bytes:
+        # A manifest carrying no branch record: reading it yields the named
+        # no-branch-record skip, the observable that proves WHICH file the
+        # lookup opened (distinct from the no-manifest legacy skip).
+        return json.dumps(
+            {"migrated": [], "renamed": [], "skipped": [], "failed": []}
+        ).encode("utf-8")
+
+    def _run_gate(self, plan: Path, *extra: str) -> tuple[int, str, str]:
+        return _run_cli(
+            "gate-removal",
+            "--plan", str(plan),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            *extra,
+            cwd=self.worktree,
+        )
+
+    NO_BRANCH_RECORD_SKIP = (
+        "branch-closeout: skipped (migration manifest carries no branch "
+        "record; legacy shape)"
+    )
+    NO_MANIFEST_SKIP = (
+        "branch-closeout: skipped (no migration manifest found; the "
+        "sweep arm owns legacy shapes)"
+    )
+
+    def test_date_prefixed_plan_resolves_to_stripped_session_dir(self):
+        # The gate should resolve a date-prefixed plan named
+        # 2026-10-19-feature to the feature execute-plan session directory:
+        # a manifest written under docs/tmp/execute-plan/feature/ is found
+        # (its no-branch-record skip prints), never the no-manifest legacy
+        # skip the dated-stem lookup would take.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-feature.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-feature-r1.md",
+        )
+        self._manifest("execute-plan/feature", "closeout-migration.json", self._manifest_body())
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_BRANCH_RECORD_SKIP, out)
+        self.assertNotIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_dated_directory_charter_resolves_to_stripped_session_dir(self):
+        # The gate should resolve a dated directory plan's charter operand
+        # (PLAN.md inside 2026-10-19-dirplan/) to the date-stripped session
+        # directory: the manifest under docs/tmp/execute-plan/dirplan/ is
+        # read, never the no-manifest skip (a PLAN stem lookup would miss).
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-dirplan/PLAN.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-dirplan-r1.md",
+        )
+        self._manifest("execute-plan/dirplan", "closeout-migration.json", self._manifest_body())
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_BRANCH_RECORD_SKIP, out)
+        self.assertNotIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_present_manifest_used_and_absent_reports_named_legacy_skip(self):
+        # Present manifest: used (the no-branch-record skip names it).
+        # Absent manifest: the named legacy skip, verbatim.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-present.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-present-r1.md",
+        )
+        self._manifest(
+            "execute-plan/present", "closeout-migration.json", self._manifest_body()
+        )
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_BRANCH_RECORD_SKIP, out)
+        absent_plan = self._plan(
+            "docs/history/plans/2026-10-19-absent.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-absent-r1.md",
+        )
+        code, out, _err = self._run_gate(absent_plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_missing_citation_keeps_migrate_remedy(self):
+        # A missing migration record keeps the migrate remedy: capture then
+        # migrate can land the record, so the citation-correction remedy is
+        # never printed for it.
+        plan_rel = "docs/history/plans/2026-10-19-missing.md"
+        record = ".ai-playbook/reviews/2026-10-19-plan-review-missing-r1.md"
+        plan = self.worktree / plan_rel
+        _write(plan, f"# Plan\n\nPlan review record: {record}\n".encode("utf-8"))
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(f"missing: {record}", out)
+        self.assertIn("remedy: run worktree_closeout_migrate.py capture", out)
+        self.assertNotIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
+
+    def test_never_verifiable_citation_gets_correction_remedy(self):
+        # A never-verifiable citation (an absolute header citation is always
+        # refused) carries the citation-specific attainable remedy and never
+        # the migrate remedy no migrate run can make attainable.
+        record = ".ai-playbook/reviews/2026-10-19-plan-review-abs-r1.md"
+        plan = self.worktree / "docs/history/plans/2026-10-19-abs.md"
+        _write(
+            plan,
+            f"# Plan\n\nPlan review record: {self.worktree.resolve() / record}\n".encode("utf-8"),
+        )
+        _write(self.worktree / record, b"r1 staged in the worktree only\n")
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused: label citation outside the reviews home:", out)
+        self.assertIn(MODULE._GATE_CITATION_REMEDY_LINE, out)
+        self.assertNotIn("remedy: run worktree_closeout_migrate.py capture", out)
+
+    def test_explicit_manifest_used_when_both_paths_exist(self):
+        # Precedence: with both the derived slug-directory manifest and the
+        # explicit override present, the override is read (its unreadable
+        # bytes refuse the run), never silently swapped for the derived one.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-both.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-both-r1.md",
+        )
+        self._manifest("execute-plan/both", "closeout-migration.json", self._manifest_body())
+        override = self.root / "override-both.json"
+        override.write_bytes(b"{not json")
+        code, out, _err = self._run_gate(plan, "--migration-manifest", str(override))
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("unreadable", out)
+        self.assertNotIn(self.NO_BRANCH_RECORD_SKIP, out)
+
+    def test_valid_override_without_derived_manifest(self):
+        # A valid override with no derived manifest adjudicates through the
+        # override (its no-branch-record skip prints), never the no-manifest
+        # legacy skip.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-ovr.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-ovr-r1.md",
+        )
+        override = self.root / "override-ovr.json"
+        override.write_bytes(self._manifest_body())
+        code, out, _err = self._run_gate(plan, "--migration-manifest", str(override))
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_BRANCH_RECORD_SKIP, out)
+        self.assertNotIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_missing_override_with_derived_manifest_is_distinct_skip(self):
+        # A missing override with a present derived manifest produces the
+        # DISTINCT explicit-path skip without falling back to the derived
+        # manifest: the explicit operand is authoritative, so the derived
+        # file is not consulted behind its back.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-gone.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-gone-r1.md",
+        )
+        self._manifest("execute-plan/gone", "closeout-migration.json", self._manifest_body())
+        absent_override = self.root / "override-gone.json"
+        code, out, _err = self._run_gate(
+            plan, "--migration-manifest", str(absent_override)
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("explicit --migration-manifest", out)
+        self.assertIn("no fallback", out)
+        self.assertNotIn(self.NO_BRANCH_RECORD_SKIP, out)
+        self.assertNotIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_legacy_migration_manifest_filename_accepted(self):
+        # Legacy compatibility: migration-manifest.json in the slug session
+        # directory is probed second and still binds (its no-branch-record
+        # skip prints).
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-legacyname.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-legacyname-r1.md",
+        )
+        self._manifest(
+            "execute-plan/legacyname", "migration-manifest.json", self._manifest_body()
+        )
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_BRANCH_RECORD_SKIP, out)
+        self.assertNotIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_legacy_skip_when_neither_supported_name_exists(self):
+        # With neither supported manifest filename in the slug session
+        # directory (a foreign file only), the named legacy no-manifest skip
+        # reports and the run keeps its informational pass.
+        plan = self._plan(
+            "docs/history/plans/2026-10-19-none.md",
+            ".ai-playbook/reviews/2026-10-19-plan-review-none-r1.md",
+        )
+        self._manifest("execute-plan/none", "other-file.json", b"{}\n")
+        code, out, _err = self._run_gate(plan)
+        self.assertEqual(code, 0, out)
+        self.assertIn(self.NO_MANIFEST_SKIP, out)
+
+    def test_plan_session_slug_forms(self):
+        # The canonical <PLAN_SLUG> derivation, direct: a dated plan file
+        # loses the leading date and extension; the dated directory's
+        # PLAN.md charter resolves to the date-stripped directory name; an
+        # undated file keeps its stem; an undated charter keeps the
+        # directory name.
+        self.assertEqual(
+            MODULE._plan_session_slug(Path("docs/history/plans/2026-10-19-feature.md")),
+            "feature",
+        )
+        self.assertEqual(
+            MODULE._plan_session_slug(Path("docs/history/plans/feature.md")), "feature"
+        )
+        self.assertEqual(
+            MODULE._plan_session_slug(
+                Path("docs/history/plans/2026-10-19-dirplan/PLAN.md")
+            ),
+            "dirplan",
+        )
+        self.assertEqual(
+            MODULE._plan_session_slug(Path("docs/history/plans/plain/PLAN.md")), "plain"
+        )
+
+
+class SkillSlugContractTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] The skill-text side of the canonical
+    <PLAN_SLUG> rule (plan gate-removal-closeout-accounting Task 1):
+    execute-plan's bootstrap and done's gate invocation agree on the
+    date-stripped directory slug and the PLAN.md charter operand, and the
+    agent log guide resolves <PLAN_SLUG> by linking the canonical
+    definition instead of restating a filename-only rule."""
+
+    REPO_ROOT = SCRIPT_PATH.parent.parent
+
+    def _read(self, rel: str) -> str:
+        return (self.REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def test_execute_plan_defines_canonical_slug_rule(self):
+        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        # Dated-file arm: strip the leading date and the .md extension.
+        self.assertIn("strip the leading date and the `.md` extension", skill)
+        # Dated-directory arm: the PLAN.md charter, date-stripped directory.
+        self.assertIn("dated plan directory", skill)
+        self.assertIn("`PLAN.md` charter", skill)
+        self.assertIn("from the directory name after stripping the leading date", skill)
+        # Explicit override and legacy skip remain distinct.
+        self.assertIn("--migration-manifest", skill)
+        self.assertIn("legacy skip", skill)
+
+    def test_execute_plan_bootstrap_and_done_invocation_agree(self):
+        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        done_text = self._read("agents/skills/done/SKILL.md")
+        # Both surfaces carry the prescribed gate invocation operand shape
+        # and the charter-file resolution for a dated directory plan.
+        self.assertIn(
+            "python3 scripts/worktree_closeout_migrate.py gate-removal "
+            "--plan <plan> --target <primary> --worktree <worktree>",
+            done_text,
+        )
+        self.assertIn("PLAN.md", done_text)
+        self.assertIn("date-stripped", done_text)
+        self.assertIn("per the execute-plan canonical session-slug rule", done_text)
+        self.assertIn("`PLAN.md` charter", skill)
+        # The done invocation names the same canonical rule execute-plan
+        # defines, so both producers and the consumer derive one slug.
+        self.assertIn("PLAN_SLUG", skill)
+        self.assertIn("PLAN_SLUG", done_text)
+
+    def test_agent_logs_guide_resolves_slug_and_links_canonical_definition(self):
+        guide = self._read("agents/skills/execute-plan/agent-logs.md")
+        # The filename-only restatement is gone; the guide derives <PLAN_SLUG>
+        # through the canonical rule and names its home.
+        self.assertNotIn("kebab-case slug from the plan filename", guide)
+        self.assertIn("canonical", guide)
+        self.assertIn("Step 0.4", guide)
+        self.assertIn("SKILL.md", guide)
+        self.assertIn("PLAN.md", guide)
+        self.assertIn("strip the leading date", guide)
+
+
+    def test_operator_closeout_and_retained_branch_reporting_are_pinned(self):
+        # Plan gate-removal-closeout-accounting Task 2: done carries the
+        # operator branch closeout (quiesce, inventory, no-force removal,
+        # expected-OID delete) as the only sanctioned deletion, and
+        # execute-plan carries the retained-branch reporting duty into the
+        # final closeout.
+        done_text = self._read("agents/skills/done/SKILL.md")
+        self.assertIn("Operator branch closeout", done_text)
+        self.assertIn("expected-OID compare", done_text)
+        self.assertIn("branch-only", done_text)
+        self.assertIn("retains the worktree and the ref", done_text)
+        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        self.assertIn("Retained-branch reporting", skill)
+        self.assertIn("branch-disposition", skill)
 
 
 if __name__ == "__main__":

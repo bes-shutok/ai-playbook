@@ -1465,6 +1465,12 @@ def gate_plan_readiness(ctx: GateContext) -> GateResult:
     names every non-passing bucket (the contract's multi-input rule). The
     candidate derivation, the exemption arms, and the missing-validator
     deployment-gap refuse keep their pre-migration shape.
+    Consumption note (corrections-chain-operator-ack plan, Task 2): the
+    real child consumes the correction-record helper's primary-state
+    authorization route, so an operator-acked hop's witness resolves from
+    the primary checkout's correction_authorizations array inside the
+    child; this gate's own ``_resolve_primary_checkout`` stays the
+    dirty-state owner and never selects witness authority.
     """
     gate = "plan-readiness"
     derivation = derive_plan_readiness_candidates(ctx)
