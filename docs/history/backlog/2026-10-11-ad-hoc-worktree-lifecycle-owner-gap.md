@@ -7,7 +7,8 @@
 - **Origin class:** observed temporary-worktree cleanup delay
 - **Class:** worktree lifecycle ownership gap
 - **Driving force:** reliability + operator time
-- **Cluster:** none standing (the 2026-10-09 plans authoring primary placement cluster head completed as docs/history/plans/completed/2026-10-16-placement-closing-doctrine-enforcement.md; the small-change row completed under its own plan)
+- **Cluster:** docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same artifact class: a run's worktree and claim outliving their session; investigate 2026-10-20 roster)
 - **Skill/step:** `agents/skills/plans/SKILL.md`, Final Step authoring closeout; `agents/skills/execute-plan/SKILL.md`, Step 0.1 and Phase 5; `agents/skills/done/SKILL.md`, worktree transfer-out and removal
 
 ## Problem
@@ -21,6 +22,7 @@ Two temporary worktrees remained registered until the operator asked for cleanup
 - `docs/tmp/execute-plan/plan-origins-coverage-parse/retired-worktree-cleanup.md` records the transferred runtime-state update, preserved intermediate patch, and the scratch checkout's already-landed base.
 - The plan-execution artifact-loss incident is separately recorded in `docs/history/plans/completed/2026-10-11-execute-plan-boundary-reliability.md`; this item concerns delayed ownership reconciliation and cleanup, not reconstruction of the missing worker log.
 - Re-witnessed 2026-10-19: after an authoring plan had landed and its worktree artifacts were migrated and verified, the closeout gate passed and authorized both removals. The operator requested worktree removal first, then separately requested branch deletion; the branch was removed only after the worktree registration was gone. This confirms the post-landing cleanup still needed operator follow-up, while the preservation gate itself worked as designed. Priority remains medium: the repeat cost is rediscovery and cleanup delay, with no lost implementation or evidence.
+- Re-witnessed 2026-10-20 (pause-and-resume execution run): an operator-ordered mid-closeout pause kept the worktree, branch, and claim deliberately for a scheduled resume, with the owner and the full resume-and-cleanup procedure recorded in the run manifest; the resuming carrier completed transfer-out, worktree and branch removal, and claim release without operator direction. The operator still asked afterwards whether the worktree and branch had been deleted: a resumable pause window reads as this row's residue from outside unless the pause report names the retained resources, their cleanup owner, and the step that removes them. Priority remains medium; the positive half (cleanup completed unprompted once the run reached its closeout) narrows the gap to interrupted and abandoned runs plus the pause-report wording.
 
 ## Expected
 
@@ -39,3 +41,7 @@ Trace the provisioning and closeout paths for both worktrees and the recovery re
 ## Machinery assessment
 
 No new gate or hook is admitted by this backlog. The expected catch frequency is not established beyond these two session observations, and the false-positive cost of deleting a live worktree is high. Reassess only after tracing the missed existing procedure; if a new blocking mechanism is proposed, apply the repository machinery-admission protocol with a concrete incident, catch-frequency estimate, false-positive cost, and sunset.
+
+## Witness 2026-10-20 (learn capture, scheduled authoring run)
+
+Two certified authoring plans closed out in one run: `gate-removal` refused `empty owned set` for both (the plans cite no `Plan review record:` header) until a `--claims` file named their records, then passed and left the worktree and branch registered; both removals ran by hand. Operating rule recorded as lesson 139 in `docs/maintenance/development_lessons.md`; this row still owns the terminal-ownership fix.

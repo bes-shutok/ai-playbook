@@ -1544,8 +1544,9 @@ done
 # branch as source, the confirmed base as target). Count-gated exactly 1 each
 # on the execute-plan skill so the fragments cannot drift out of their
 # arm-local scopes.
-pin "execute-plan company placement arm's per-run task-branch choice clause" test "$(grep -oF 'gains the per-run operator choice beside that base-branch-only rule' "$E" | wc -l | tr -d ' ')" -eq 1
-pin "execute-plan company task-branch arm's PR-pairing consequence clause" test "$(grep -oF 'names the PR pairing (the task branch as source, the confirmed base as target)' "$E" | wc -l | tr -d ' ')" -eq 1
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan company placement arm's per-run task-branch choice clause" test "$(grep -oF 'gains the per-run operator choice beside that base-branch-only rule' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
+pin "execute-plan company task-branch arm's PR-pairing consequence clause" test "$(grep -oF 'names the PR pairing (the task branch as source, the confirmed base as target)' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
 
 # Removed 2026-10-14, arm remove-beside-provenance (mirror coherence): this
 # passing mirror cross-referenced the canonical resume-fit and resume-pricing
@@ -1681,9 +1682,10 @@ pin "child lanes analysis home" grep -qF 'as their analysis home' "$E"
 # pinned literal exception.
 pin "telemetry substitution rule scopes the per-run telemetry paths" grep -qF 'governs the per-run telemetry log paths this policy names' "$E"
 # P48 Task 1 (unlanded-plan worktree cherry-pick): the canonical Worktree-first
-# standard's Transfer-in implementation in agents/skills/execute-plan/SKILL.md
+# standard's Transfer-in implementation in agents/skills/execute-plan/worktree-first.md
 # names the missing-plan remedy for plan bytes living on an unlanded branch.
-pin "worktree bootstrap names the unlanded-plan remedy" grep -qF 'cherry-pick only the plan-authoring commit' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "worktree bootstrap names the unlanded-plan remedy" grep -qF 'cherry-pick only the plan-authoring commit' "$repo/agents/skills/execute-plan/worktree-first.md"
 # P37 Task 4 (turn-usage live verification): the measurement primitive section
 # must name the store's turn_usage table (the live-verified source or the
 # recorded negative, per the variant applied).
@@ -1691,16 +1693,18 @@ pin "measurement primitive names turn_usage" grep -qF 'turn_usage' "$Z"
 # --- worktree-first r3 witness needles (plan
 # 2026-09-28-worktree-first-standard-only-mode.md, review round 3 address) ---
 # Exactly-once, wrap-tolerant (normalized) presence pins over the canonical
-# Worktree-first section's two r2/r3 fix-commit paragraphs in execute-plan
-# SKILL.md: the Provisioned-worktree adoption paragraph, and (removed from the
+# Worktree-first section's surviving r2/r3 fix-commit paragraph, originally in
+# execute-plan SKILL.md, now in agents/skills/execute-plan/worktree-first.md:
+# the Provisioned-worktree adoption paragraph, and (removed from the
 # pin set 2026-10-08: the Base-branch resolution rule's origin-HEAD fallback
 # arm, whose span landing 605761d54 deleted when it removed the class-derived
 # base-branch fallbacks and made the confirmed facts base_branch the consumed
 # resolution) the surviving paragraph below. Whole-file greps would satisfy a
-# stray copy in another file's prose, so both are scoped to "$E" and counted
+# stray copy in another file's prose, so the surviving paragraph is scoped to the worktree-first module and counted
 # normalized, per the r2 F5 wrap-tolerance convention; wholesale deletion of
-# either paragraph empties its count and fails here.
-python3 - "$E" <<'EOF' | route_heredoc_stream # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface 
+# the paragraph empties its count and fails here.
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the Provisioned-worktree adoption paragraph moved verbatim to agents/skills/execute-plan/worktree-first.md; the heredoc target follows the span.
+python3 - "$repo/agents/skills/execute-plan/worktree-first.md" <<'EOF' | route_heredoc_stream # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface 
 import sys
 e = open(sys.argv[1]).read()
 def norm(t): return " ".join(t.split())
@@ -1709,7 +1713,7 @@ for desc, needle in (
 ):
     n = norm(e).count(needle)
     if n != 1:
-        print("PIN FAIL: %s count %d != 1 in execute-plan SKILL.md" % (desc, n)); sys.exit(1)
+        print("PIN FAIL: %s count %d != 1 in execute-plan worktree-first.md" % (desc, n)); sys.exit(1)
 EOF
 heredoc_settle "${PIPESTATUS[0]}"
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
@@ -2474,7 +2478,8 @@ EPSP="$repo/agents/skills/execute-plan/subagent-prompts.md"
 pin "execute-plan wip checkpoint marker convention" grep -qF 'checkpoint commit-marker convention (a `wip:` subject prefix on the worktree branch)' "$E"
 pin "execute-plan wip checkpoint pause signals" grep -qF 'at every task boundary and every pause signal (quota pause, budget pause, stand-down, carrier expiry, input stop, lane hold; input stop being the stop-for-operator class of the Only-stop-between-tasks list)' "$E"
 pin "execute-plan wip no-new-ledger supersession" grep -qF 'no new ledger lands (the prompt arm' "$E"
-pin "execute-plan resume restart from last checkpoint" grep -qF 'restarts from the last checkpoint' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan resume restart from last checkpoint" grep -qF 'restarts from the last checkpoint' "$repo/agents/skills/execute-plan/worktree-first.md"
 # Removed 2026-10-14, arm remove-beside-provenance: the subagent-prompts wip
 # checkpoint batch mirror was adapter-era fan-out prose deliberately removed
 # by the certified landing e0d7d6961 (the sequential-only adapter-removal
@@ -2489,7 +2494,8 @@ PLN="$repo/agents/skills/plans/SKILL.md"
 WCM="$repo/scripts/worktree_closeout_migrate.py"
 pin "plans final handoff owned-files-clean preflight" grep -qF 'owned-files-clean removal preflight' "$PLN"
 pin "plans authoring checkpoint duty marker" grep -qF 'commits the plan file on its authoring branch under the `wip:` checkpoint marker' "$PLN"
-pin "execute-plan transfer-out owned-files-clean preflight" grep -qF 'owned-files-clean preflight' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan transfer-out owned-files-clean preflight" grep -qF 'owned-files-clean preflight' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "migrate script owned-files-clean subcommand" grep -qF 'def cmd_owned_files_clean' "$WCM"
 
 # --- deferred-corpus re-triage lane pins (plan
@@ -2648,7 +2654,8 @@ pin "override integrity exclusion present in the skill" grep -qF 'Integrity guar
 pin "dirty-primary classification arm present" grep -qF 'Dirty-primary classification arm' "$SA"
 pin "revert-set classifier wired in the survey" grep -qF 'revert_set_classifier.py classify --repo' "$SA"
 
-pin "squash tree-equality invariant present" grep -qF 'tree equality between the squashed branch tip and the produced squash commit' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "squash tree-equality invariant present" grep -qF 'tree equality between the squashed branch tip and the produced squash commit' "$repo/agents/skills/execute-plan/worktree-first.md"
 # Re-pointed/retired 2026-10-11 (plan
 # docs/history/plans/2026-10-11-execute-plan-boundary-reliability.md Task 2):
 # the spelled Worktree arm retired for the land_squash.sh land-worktree helper
@@ -2657,7 +2664,8 @@ pin "squash tree-equality invariant present" grep -qF 'tree equality between the
 # text (its needle lives in the step-4 paragraph's retained sentence).
 expect_absent_flat "retired worktree-arm tree-equality command must be absent from the execution template (wrap-tolerant; superseded 2026-10-11 by the boundary-reliability helper re-point)" 'git diff --quiet <branch> <new-tip>' "$TE"
 
-pin "check-landing base-freshness arm wired in execute-plan" grep -qF 'check-landing --source-branch <run-branch> --target-ref <base-branch>' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "check-landing base-freshness arm wired in execute-plan" grep -qF 'check-landing --source-branch <run-branch> --target-ref <base-branch>' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "check-landing mode present in the guard" grep -qF 'def cmd_check_landing' "$repo/scripts/reverse_squash_guard.py"
 
 # --- claim-fence warning-posture pins (plan
@@ -2675,7 +2683,8 @@ pin "claim-fence landing-boundary literal in the guard" grep -qF 'absent protect
 
 # --- landing-tail wiring pins (plan 2026-10-02-revert-set-clobber-and-reviews-home.md Task 2) ---
 pin "check-landed mode present in the guard" grep -qF 'def cmd_check_landed' "$repo/scripts/reverse_squash_guard.py"
-pin "post-landing sweep wired in execute-plan closeout" grep -qF 'check-landed --rev <squash-commit>' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "post-landing sweep wired in execute-plan closeout" grep -qF 'check-landed --rev <squash-commit>' "$repo/agents/skills/execute-plan/worktree-first.md"
 # Re-aimed 2026-10-14, arm re-aim beside provenance: the delegated-sweep
 # pointer in template-execution.md wrapped across a line break (the original
 # single-line literal can no longer match any line), so the pin follows the
@@ -2704,16 +2713,19 @@ pin "execution-claim gateway entry in the runtime manifest" grep -qFx 'execution
 # --- single-commit-per-lane-event tail pins (plan 2026-10-03-single-commit-per-lane-event.md Task 7) ---
 pin "plans landing tail owns the rider-commit flip ordering" grep -qF 'before the landing critical section' "$repo/agents/skills/plans/SKILL.md"
 pin "overlay payload orders the flip and prune before the critical section" grep -qF 'run before the landing critical section and their bytes land as rider commits on the authoring branch' "$TA"
-pin "execute-plan final-merge pins the rider-commit duty" grep -qF 'land as rider commits on the landing branch before the critical section' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan final-merge pins the rider-commit duty" grep -qF 'land as rider commits on the landing branch before the critical section' "$repo/agents/skills/execute-plan/worktree-first.md"
 # plans-egress trigger companion pins (plan docs/history/plans/2026-10-06-plans-egress-coverage.md Task 2)
-pin "plans-egress any-depth trigger" grep -qF 'at any depth under the root outside' "$E"
-pin "plans-egress sideways trigger" grep -qF 'sideways out of the source plans root entirely' "$E"
-pin "plans-egress deletion depth trigger" grep -qF 'deletes them from a plans root at any depth outside' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "plans-egress any-depth trigger" grep -qF 'at any depth under the root outside' "$repo/agents/skills/execute-plan/worktree-first.md"
+pin "plans-egress sideways trigger" grep -qF 'sideways out of the source plans root entirely' "$repo/agents/skills/execute-plan/worktree-first.md"
+pin "plans-egress deletion depth trigger" grep -qF 'deletes them from a plans root at any depth outside' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "digest-free witness rule in doc-hierarchy" grep -qF 'never a landing digest' "$repo/agents/skills/doc-hierarchy/SKILL.md"
 pin "digest-free witness rule in done" grep -qF 'never a landing digest' "$D"
 pin "digest-free witness rule in plans" grep -qF 'never a landing digest' "$repo/agents/skills/plans/SKILL.md"
 pin "digest-free witness rule in execute-plan" grep -qF 'never a landing digest' "$E"
-pin "check-single-commit usage literal in the execute-plan tail" grep -qF 'check-single-commit --prev-landing-of <new landing tip>' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "check-single-commit usage literal in the execute-plan tail" grep -qF 'check-single-commit --prev-landing-of <new landing tip>' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "check-single-commit mode present in the guard" grep -qF 'def cmd_check_single_commit' "$repo/scripts/reverse_squash_guard.py"
 pin "maintenance survey batch arm wired" grep -qF 'check-single-commit --scan-window' "$SA"
 
@@ -2733,8 +2745,9 @@ pin "closeout census fragment in the survey arm" grep -qF 'closeout census' "$SA
 pin "pre-swap empty-diff leg present in the parentage gate" grep -qF 'tree-identical to its parent' "$repo/scripts/landing_parentage_gate.py"
 pin "reflog-window subcommand present in the audit" grep -qF 'reflog-window' "$repo/scripts/base_reflog_audit.py"
 pin "landed-receipt subcommand present in the audit" grep -qF 'landed-receipt' "$repo/scripts/base_reflog_audit.py"
-pin "fast-forward verification wired in execute-plan" grep -qF 'merge-base --is-ancestor <old-tip> <new-tip>' "$E"
-pin "reflog-window audit leg wired in execute-plan" grep -qF 'base_reflog_audit.py reflog-window --repo <primary-root>' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "fast-forward verification wired in execute-plan" grep -qF 'merge-base --is-ancestor <old-tip> <new-tip>' "$repo/agents/skills/execute-plan/worktree-first.md"
+pin "reflog-window audit leg wired in execute-plan" grep -qF 'base_reflog_audit.py reflog-window --repo <primary-root>' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "base-branch receipts delegated in the blueprint" grep -qF 'scripts/base_reflog_audit.py' "$TE"
 
 # --- primary-checkout landing helper and staging-gate pins (plan
@@ -2753,7 +2766,8 @@ pin "base-branch receipts delegated in the blueprint" grep -qF 'scripts/base_ref
 # `check-landing --source-branch` containment literal is deliberately NOT
 # re-pinned here: its enforcement stays with the sibling plan's landed
 # landing-tail wiring (a recorded scoping decision, not an omission).
-pin "primary-checkout helper land invocation wired in execute-plan (tightened 2026-10-11: the land-worktree ownership sentence must not satisfy this pin as a substring)" grep -qF 'scripts/land_squash.sh land --branch' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "primary-checkout helper land invocation wired in execute-plan (tightened 2026-10-11: the land-worktree ownership sentence must not satisfy this pin as a substring)" grep -qF 'scripts/land_squash.sh land --branch' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "containment leg on the execution blueprint's helper invocation literal (re-pointed 2026-10-11 from the retired pre-swap literal)" grep -qF 'land_squash.sh land-worktree' "$TE"
 pin "containment leg on the authoring blueprint's helper invocation literal (re-pointed 2026-10-11 from the retired pre-swap literal)" grep -qF 'land_squash.sh land-worktree' "$TA"
 pin "execution claim base frontmatter line literal" grep -qF 'base: <the run_base value' "$TE"
@@ -2868,7 +2882,8 @@ pin "corrections_record banned-literal constants" grep -qF 'BANNED_LITERALS = ("
 # stays (still satisfied trivially).
 expect_absent "superseded seven-file remedy count literal must be absent from execute-plan" 'copy all seven' "$E"
 pin "code-family seal producer in execute-plan" grep -qF 'records the certification seal entry in the local seal file' "$E"
-pin "graded post-certification rule in plans" grep -qF 'a post-certification delta forces a fresh round unless the classifier proves every hunk exempt' "$repo/agents/skills/plans/SKILL.md"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 1): the needle's rule-29 span moved verbatim to agents/skills/plans/validation-authoring-rules.md.
+pin "graded post-certification rule in plans" grep -qF 'a post-certification delta forces a fresh round unless the classifier proves every hunk exempt' "$repo/agents/skills/plans/validation-authoring-rules.md"
 pin "graded fold-row producer span in plans" grep -qF 'A fully exempt fold records one CLI-produced correction row' "$repo/agents/skills/plans/SKILL.md"
 pin "graded exit-digest span in plans" grep -qF 'the digest the verified corrections chain terminates at' "$repo/agents/skills/plans/SKILL.md"
 pin "plan-family seal producer in review-plan" grep -qF 'records the certification seal entry for the round it certified in the local seal file' "$repo/agents/skills/review-plan/SKILL.md"
@@ -2903,7 +2918,8 @@ pin "prune receipt duty wired in the plans closeout" grep -qF 'PLAN-PROMPTS-PRUN
 pin "prune-audit invocation wired in the plans closeout" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <merge-base>' "$repo/agents/skills/plans/SKILL.md"
 pin "prune receipt duty delegated in the authoring blueprint" grep -qF 'PLAN-PROMPTS-PRUNE: <slug> -> <witness path>' "$TA"
 pin "prune-audit invocation delegated in the authoring blueprint" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <merge-base>' "$TA"
-pin "rider parenthetical names receipt and audit gate in execute-plan" grep -qF 'one `PLAN-PROMPTS-PRUNE: <slug> -> <witness path>` receipt line per removed entry, gated by the pre-rider prune audit' "$E"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "rider parenthetical names receipt and audit gate in execute-plan" grep -qF 'one `PLAN-PROMPTS-PRUNE: <slug> -> <witness path>` receipt line per removed entry, gated by the pre-rider prune audit' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "consultative prune-audit arm wired in the maintenance survey" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <ref>' "$DE"
 
 # --- execution-claim gateway wiring pins (plan
@@ -2931,7 +2947,8 @@ pin "consultative prune-audit arm wired in the maintenance survey" grep -qF 'pyt
 # gateway step and the claim registration paragraph; the queue-drain
 # continuation paragraph routes through the pinned invocation by reference
 # and must not grow a third literal copy).
-pin "execution-claim take gateway invocation in execute-plan lifecycle step 1" test "$(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$E" | wc -l | tr -d ' ')" -eq 2
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): split-count re-aim - the take invocation's site 1 (lifecycle step 1) moved verbatim to agents/skills/execute-plan/worktree-first.md and site 2 (claim registration) stays in agents/skills/execute-plan/SKILL.md; the pre-extraction total 2 is preserved as 1+1 across the two legs.
+pin "execution-claim take gateway invocation in execute-plan lifecycle step 1" test $(( $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ') + $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$E" | wc -l | tr -d ' ') )) -eq 2
 pin "execution-claim take invocation in the blueprint's per-execution worktree paragraph" test "$(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$TE" | wc -l | tr -d ' ')" -eq 1
 pin "execution-claim script named as the claim-creation procedure of record in the blueprint" grep -qF 'by scripts/execution_claim.sh, the creation procedure of record' "$TE"
 # --- primary-resolution stand-down pins (plan
@@ -2943,9 +2960,10 @@ pin "execution-claim script named as the claim-creation procedure of record in t
 # the base-branch verification stand-down, the serialization refusal, and the
 # resume branch-mismatch stand-down), each count-gated exactly 1 on the
 # post-edit tree so the fragments cannot drift out of their arm-local scopes.
-pin "primary resolution enum value falls back to unconfigured with a named report" test "$(grep -cF 'outside the two spelled forms, or an unresolvable root, is treated as unconfigured with a named report, never a silent fallback' "$E" | tr -d ' ')" -eq 1
-pin "primary resolution base-branch verification stand-down for personal and pet profiles" test "$(grep -cF 'is the base branch at run start, and a run finding a non-base current branch stands down with the remedy named in its stand-down report' "$E" | tr -d ' ')" -eq 1
-pin "primary resolution serialization refusal on a fresh run" test "$(grep -cF 'a fresh run in the primary checkout refuses to start while another live execution claim or recorded witness occupies the primary checkout' "$E" | tr -d ' ')" -eq 1
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "primary resolution enum value falls back to unconfigured with a named report" test "$(grep -cF 'outside the two spelled forms, or an unresolvable root, is treated as unconfigured with a named report, never a silent fallback' "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
+pin "primary resolution base-branch verification stand-down for personal and pet profiles" test "$(grep -cF 'is the base branch at run start, and a run finding a non-base current branch stands down with the remedy named in its stand-down report' "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
+pin "primary resolution serialization refusal on a fresh run" test "$(grep -cF 'a fresh run in the primary checkout refuses to start while another live execution claim or recorded witness occupies the primary checkout' "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
 pin "primary resolution resume branch-mismatch stand-down" test "$(grep -cF 'stands down on a mismatch instead of re-recording the switched branch' "$E" | tr -d ' ')" -eq 1
 
 # --- coordination single-writer TTL arm pins (plan
@@ -2954,7 +2972,8 @@ pin "primary resolution resume branch-mismatch stand-down" test "$(grep -cF 'sta
 # serialization, by reference in the execute-plan skill's resumed-lane
 # sentence (lifecycle step 1) and the claim-registration paragraph's grant
 # sentence; count-gated exactly 1 each on the post-edit tree.
-pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "per the claim gateway's arm-3 restored-worktree takeover (the receipt-to-row evidence shape, never process enumeration; verification failure defaults to the refusal)" "$E" | tr -d ' ')" -eq 1
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "per the claim gateway's arm-3 restored-worktree takeover (the receipt-to-row evidence shape, never process enumeration; verification failure defaults to the refusal)" "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
 pin "execute-plan claim-registration sentence names arms 3 and 4" test "$(grep -cF "the restored-worktree resume whose state verifies as the same run takes over its claim instead of colliding per the gateway's arm-3, verification failure defaulting to this refusal, and the gateway's claim mutations are last-instant compare-and-delete serialized per its arm-4 with a lost race refusing naming the racing holder" "$E" | tr -d ' ')" -eq 1
 pin "execution-claim take-refusal clause named in the user-directed-override rule" grep -qF 'the execution-claim take refusal (the run-worktree creation gateway refusing over a fresh foreign claim; its refusal names this rule as the override route)' "$GU"
 expect_absent_flat "retired execution-claim hand-write noclobber clause must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-07 by the execution-claim gateway wiring)" 'the write is create-if-absent noclobber, the redirection failure being the refusal path' "$P"
@@ -3313,7 +3332,8 @@ pin "plans Phase 0 establishment incompleteness boundary" grep -qF 'the worktree
 pin "plans completion-claims boundary names review-readiness evidence" grep -qF 'is review-readiness evidence, never completion evidence' "$PL"
 pin "plans Final Step deferral arm byte-identical" grep -qF 'The user explicitly says "not yet" / "wait" / "I'"'"'ll commit myself"; honor that and stop.' "$PL"
 pin "plans Final Step first-task-ownership deferral arm byte-identical" grep -qF 'say so and let `execute-plan` own the first commit' "$PL"
-pin "execute-plan stranded-input pre-pass routing literal" grep -qF 'stranded-input pre-pass' "$EP"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+pin "execute-plan stranded-input pre-pass routing literal" grep -qF 'stranded-input pre-pass' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "review effort follows scope and complexity" grep -qF "Select review effort from the plan and changed work's scope and complexity" "$RP"
 pin "shared panel policy has scope signals" grep -qF 'affected components and contracts, interactions' "$PA"
 pin "review-plan later recurring checkpoints" grep -qF 'For example, a five-round interval reflects at rounds 5, 10, and 15' "$PL"
@@ -3575,14 +3595,18 @@ placement_pin() { # placement_pin <file> <span>: warning-only presence grep, nev
     if [ -z "$PLACEMENT_MISSING" ]; then PLACEMENT_MISSING="$span ($disp)"; fi
   fi
 }
-placement_pin "$E" "outside the two spelled forms"
-placement_pin "$E" "immediate-commit rule"
-placement_pin "$PD" "committed right after the change"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "outside the two spelled forms"
+placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "immediate-commit rule"
+# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md Task 1): the removed full-rule wording is not restored; the pin guards the done skill's retained by-name reference to the immediate-commit rule owned by the Worktree-first standard.
+placement_pin "$PD" "immediate-commit rule"
 placement_pin "$PD" "editing no tracked corpus and committing nothing"
 placement_pin "$PD" "dangling session-owned work product"
-placement_pin "$PD" "exceeds the direct-commit class bounds"
-placement_pin "$E" "Delete only after verification"
-placement_pin "$E" "before any worktree removal, migrate the run"
+# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md Task 1): the threshold fragment alone under-pins the advisory; the pin now guards a distinctive span within the advisory's cumulative-diff measurement clause.
+placement_pin "$PD" "measures the session's cumulative diff of its own committed changes"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
+placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "Delete only after verification"
+placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "before any worktree removal, migrate the run"
 # dispatch-isolation span: the grep -q form over the short fragment plus the
 # full span count-gated exactly 1, so a stray duplicate copy also fails
 if ! grep -qF "per-execution ad-hoc worktrees per the Worktree-first standard" "$S" \
@@ -3590,7 +3614,8 @@ if ! grep -qF "per-execution ad-hoc worktrees per the Worktree-first standard" "
   echo "PIN FAIL: placement pin: dispatch-isolation span (agents/skills/maintenance/SKILL.md)"
   if [ -z "$PLACEMENT_MISSING" ]; then PLACEMENT_MISSING="dispatch-isolation span (agents/skills/maintenance/SKILL.md)"; fi
 fi
-placement_pin "$PL" "relocation-digest correction"
+# Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 1): the span lives in rule 29, moved verbatim to agents/skills/plans/validation-authoring-rules.md.
+placement_pin "$repo/agents/skills/plans/validation-authoring-rules.md" "relocation-digest correction"
 if [ -z "$PLACEMENT_MISSING" ]; then
   echo "placement pins: all hold"
 else

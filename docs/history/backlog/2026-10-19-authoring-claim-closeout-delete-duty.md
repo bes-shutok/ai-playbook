@@ -5,6 +5,10 @@
 - **Workflow:** backlog
 - **Priority:** high
 - **Cluster:** docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md (same defect class: terminal-state artifacts the closing boundary leaves behind)
+- **Cluster:** docs/history/backlog/2026-10-20-authoring-worktree-landing-shape.md (shared plans Final Step closeout surface; a different omitted terminal duty)
+- **Cluster:** docs/history/backlog/2026-10-14-authoring-worktree-create-path.md (shared plan-authoring lifecycle; worktree creation duty)
+- **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same artifact class: claim files outliving their session)
+- **Cluster:** docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
 - **Origin class:** observed recovery gap
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/maintenance/template-authoring.md` (AUTHORING CLAIM paragraph, the two-deletes arm); `agents/skills/plans/SKILL.md` (Final Step authoring-closeout handoff); `agents/skills/maintenance/SKILL.md` (Step 1 survey / D2 authoring-claim consult)

@@ -1,7 +1,7 @@
 ---
 name: github-pr-workflow
 description: >
-  GitHub PR workflow and shared GitHub PR operations: use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing a child after parent squash-merge, and creating one-off `-squashed` PR branches (not open-stack restack squash). For refreshing a stacked chain when trunk gains commits (merge parent then optional squash), use update-stacked-branches instead. Trigger phrases: "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr after squash-merge", "rebase --onto", "squashed branch", "one-off squash", "squashed PR", "GitHub PR workflow".
+  GitHub PR workflow and shared GitHub PR operations: use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing a child after parent squash-merge, and creating one-off `-squashed` PR branches (not open-stack restack squash). For an unspecified-strategy refresh of an open stack when trunk gains commits, use update-stacked-branches for its merge-based restack. For an explicit open-stack `git rebase`, use update-stacked-branches Method C, which retains child commits by default unless the user separately requests a squash. Trigger phrases: "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr after squash-merge", "rebase --onto", "squashed branch", "one-off squash", "squashed PR", "GitHub PR workflow".
 ---
 
 # GitHub PR Workflow
@@ -32,7 +32,8 @@ Use these routing rules before acting:
 |---|---|---|
 | Fresh review, e.g. "let's review <PR URL>" | `doing-code-review` | Fetch PR metadata, files, diff, existing comments, and post review |
 | Existing feedback, e.g. "address comments in <PR URL>" | `receiving-review` | Fetch review threads, reply to threads, resolve bot threads |
-| Trunk moved; refresh stacked chain `A → B → C` (merge then optional squash) | `update-stacked-branches` | Not primary; optional follow-up if PR bases still wrong after restack |
+| Trunk moved; refresh stacked chain `A → B → C` without a specified Git strategy | `update-stacked-branches` (merge-based restack) | Not primary; optional follow-up if PR bases still wrong after restack |
+| Explicit `git rebase` request for an open stack | `update-stacked-branches` (Method C: bottom-up rebase, retaining child commits by default unless squash is separately requested) | Not primary; this skill owns post-squash-merge `rebase --onto` |
 | Parent already squash-merged; reparent child with `rebase --onto` | `github-pr-workflow` | Owns the full task |
 | PR administration, e.g. description, stats, split, create, squashed branch | `github-pr-workflow` | Owns the full task |
 

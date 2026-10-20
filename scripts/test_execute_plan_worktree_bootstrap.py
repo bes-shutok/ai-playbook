@@ -9,7 +9,8 @@ Worktree-first standard carries the Transfer-in implementation for exactly
 that. This suite proves the recipe is load-bearing end to end:
 
 1. The FIRST fenced bash block after the "Transfer-in implementation (how
-   step 2 runs)" lead-in in ``agents/skills/execute-plan/SKILL.md`` is
+   step 2 runs)" lead-in in ``agents/skills/execute-plan/worktree-first.md``
+   (the Worktree-first standard module beside the skill's SKILL.md) is
    extracted at test runtime (so skill-text drift fails the test) and
    executed VERBATIM in a linked worktree of a synthetic primary repo
    fixture. The transfer-out-and-deletion migration recipe also lives in
@@ -57,7 +58,9 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL_PATH = REPO_ROOT / "agents" / "skills" / "execute-plan" / "SKILL.md"
+WORKTREE_FIRST_PATH = (
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "worktree-first.md"
+)
 READINESS_VALIDATOR = REPO_ROOT / "scripts" / "plan_readiness.py"
 
 BOOTSTRAP_LEAD_IN = "Transfer-in implementation (how step 2 runs)"
@@ -274,13 +277,13 @@ def extract_bootstrap_recipe(skill_text: str) -> str:
     lead_at = skill_text.find(BOOTSTRAP_LEAD_IN)
     if lead_at < 0:
         raise AssertionError(
-            f"bootstrap lead-in {BOOTSTRAP_LEAD_IN!r} not found in {SKILL_PATH.name}"
+            f"bootstrap lead-in {BOOTSTRAP_LEAD_IN!r} not found in {WORKTREE_FIRST_PATH.name}"
         )
     opener_at = skill_text.find("```bash", lead_at)
     if opener_at < 0:
         raise AssertionError(
             "no fenced bash block after the bootstrap lead-in in "
-            f"{SKILL_PATH.name}"
+            f"{WORKTREE_FIRST_PATH.name}"
         )
     body_start = skill_text.index("\n", opener_at) + 1
     body_end = skill_text.index("\n```", body_start)
@@ -293,21 +296,23 @@ def extract_closeout_migration_block(skill_text: str) -> str:
     ``migrate``), located by content instead of fence ordinal so inserting
     prose or recipe sections between the fences cannot desync the pick.
 
-    First match, not a uniqueness assertion: the Step 0.4 capture fence also
-    contains both words, but it sits far later in the file, so the first
-    match after the lead-in is the Transfer-out migration recipe.
+    First match, not a uniqueness assertion: the search runs over the
+    worktree-first module only, and the Step 0.4 capture fence that also
+    contains both words stays in the retained spine
+    (``agents/skills/execute-plan/SKILL.md``), so the first match after the
+    lead-in is the Transfer-out migration recipe.
     """
     search_at = skill_text.find(BOOTSTRAP_LEAD_IN)
     if search_at < 0:
         raise AssertionError(
-            f"bootstrap lead-in {BOOTSTRAP_LEAD_IN!r} not found in {SKILL_PATH.name}"
+            f"bootstrap lead-in {BOOTSTRAP_LEAD_IN!r} not found in {WORKTREE_FIRST_PATH.name}"
         )
     while True:
         opener_at = skill_text.find("```bash", search_at)
         if opener_at < 0:
             raise AssertionError(
                 "no fenced bash block carrying both closeout migration "
-                f"literals after the bootstrap lead-in in {SKILL_PATH.name}"
+                f"literals after the bootstrap lead-in in {WORKTREE_FIRST_PATH.name}"
             )
         body_start = skill_text.index("\n", opener_at) + 1
         body_end = skill_text.index("\n```", body_start)
@@ -435,7 +440,7 @@ class WorktreeBootstrapTest(unittest.TestCase):
         return primary, worktree
 
     def test_recipe_block_executes_verbatim_and_gate_exits_zero(self):
-        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        skill_text = WORKTREE_FIRST_PATH.read_text(encoding="utf-8")
         recipe = extract_bootstrap_recipe(skill_text)
         for marker in CLOSEOUT_BLOCK_MARKERS:
             self.assertNotIn(
@@ -513,7 +518,7 @@ class WorktreeBootstrapTest(unittest.TestCase):
         the claim-header selection binding), and the Reference contract no
         longer scopes the closeout-baseline capture to the execution payload
         (plan-authoring-done-closeout)."""
-        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        skill_text = WORKTREE_FIRST_PATH.read_text(encoding="utf-8")
         self.assertIn(
             "reports the plan missing",
             skill_text,

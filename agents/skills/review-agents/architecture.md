@@ -154,6 +154,7 @@ When a large class or module is identified, suggest concrete extraction paths:
 - Utility package dumping ground: too many "util" classes with unrelated functions
 - Deep nesting: packages more than 4-5 levels deep hard to navigate
 - Flat package structure: everything in one package with no logical grouping
+- Interface declared inside another type: declare it as a top-level type in its own source file; the language guideline owns the rule. Pattern: `architecture#nested-interface`
 
 ## Anemic Domain Model
 

@@ -9,7 +9,7 @@
 - **Driving force:** correctness
 - **Skill/step:** `agents/skills/execute-plan/SKILL.md`, rebase and review/fix loop
 - **Severity:** landing blocker; the plan's reviewed file scope predates a main-branch refactor that moved the target prompt into a new module.
-Cluster: docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md; docs/history/backlog/2026-10-10-worktree-rebase-feature-start-boundary.md (backlog-wide survey: rebase and landing-boundary verification)
+Cluster: docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md; docs/history/backlog/completed/2026-10-10-worktree-rebase-feature-start-boundary.md (backlog-wide survey: rebase and landing-boundary verification; origin moved to completed/ 2026-10-20, covered by docs/history/plans/completed/2026-10-19-worktree-rebase-feature-start-boundary.md)
 
 ## Problem
 

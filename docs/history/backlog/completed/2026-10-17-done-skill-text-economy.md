@@ -1,7 +1,7 @@
 # Backlog: done-skill text economy - the dual-owned immediate-commit triad and the advisory's redundant tail
 
 - **Filed:** 2026-10-17, exit row of the placement-closing-doctrine-enforcement review loop (r1 overflow F10, design-simplicity; r2 overflow O3, design-simplicity, same item)
-- **Status:** covered (docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md)
+- **Status:** done (covered by docs/history/plans/completed/2026-10-19-done-immediate-commit-single-homing.md, executed and landed 2026-10-20)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** review-loop deferred candidates (two rounds, same class)

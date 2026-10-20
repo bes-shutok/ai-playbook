@@ -82,8 +82,8 @@ Primary class anchors:
 - `Direct-landing advisory` in `agents/skills/done/SKILL.md`
 - `placement_pin` in `scripts/check_maintenance_pins.sh`
 
-- [ ] Remove the historical incident parenthetical so the advisory ends after the cumulative-diff measurement clause; preserve its warning-only label, threshold conditions, and worktree-transfer exception. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Retarget the first placement row to the done skill's retained by-name reference to the `immediate-commit rule`; do not restore the removed full rule wording. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Retarget the second placement row to a distinctive span within the advisory's cumulative-diff measurement clause, so drift in that behavior remains visible. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the existing placement-pin suite and record its result; confirm the two pins hold and the suite remains warning-only. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: trim done advisory and align placement pins` [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove the historical incident parenthetical so the advisory ends after the cumulative-diff measurement clause; preserve its warning-only label, threshold conditions, and worktree-transfer exception. [class: IMPLEMENTATION_REQUIRED]
+- [x] Retarget the first placement row to the done skill's retained by-name reference to the `immediate-commit rule`; do not restore the removed full rule wording. [class: IMPLEMENTATION_REQUIRED]
+- [x] Retarget the second placement row to a distinctive span within the advisory's cumulative-diff measurement clause, so drift in that behavior remains visible. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the existing placement-pin suite and record its result; confirm the two pins hold and the suite remains warning-only. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: trim done advisory and align placement pins` [class: IMPLEMENTATION_REQUIRED]

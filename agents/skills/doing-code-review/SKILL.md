@@ -155,7 +155,8 @@ The shared changed-scope trigger surfaces for every language overlay are enumera
 
 For Java/Spring reviews, the Guideline Pack is incomplete unless it includes
 the shared `java_guidelines.md`, `jvm_guidelines.md`, and
-`coding_guidelines.md` paths. Add rule hints for Java rules #16 through #25
+`coding_guidelines.md` paths. Add rule hints for the Java rules the
+`java-spring.md` overlay's Review-wide Java checks list names,
 when the diff contains Java, Maven, Spring configuration, generated request
 models, outbound HTTP clients, downstream error mapping, or changed dependency coordinates, or when a shared trigger surface from the paragraph above is present. Workers must open the relevant hinted sections during
 their lens pass, and staging metadata must record the applied Java rule hints.

@@ -4153,7 +4153,9 @@ class ExecutePlanProfilePlacementCompatibilityTest(unittest.TestCase):
 
     def test_direct_execution_matrix_preserves_all_profile_placement_pairs(self):
         root = Path(__file__).resolve().parents[1]
-        execute_plan = (root / "agents/skills/execute-plan/SKILL.md").read_text(encoding="utf-8")
+        # The profile/policy literals live in the Worktree-first standard module
+        # (extracted from SKILL.md, plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2).
+        execute_plan = (root / "agents/skills/execute-plan/worktree-first.md").read_text(encoding="utf-8")
         maintenance = (root / "agents/skills/maintenance/SKILL.md").read_text(encoding="utf-8")
         policy_start = execute_plan.index("**Project worktree policy (consulted at dispatch):**")
         policy_end = execute_plan.index("\n\n", policy_start)

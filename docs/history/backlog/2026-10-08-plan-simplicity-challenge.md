@@ -10,6 +10,7 @@ Priority: high
 Consumer urgency: projects using the shared plans skill need authoring to challenge unnecessary complexity before it hardens into implementation; the skills-repo personal priority profile must not defer this shared-skill improvement as formal-hardening for this repository alone.
 Class: fence-class
 Origin class: self-serving
+Cluster: docs/history/backlog/2026-10-20-maintenance-plan-authoring-authorization-conflict.md (same plans Phase 1 confirmation boundary; the new row records the maintenance standing-authorization conflict)
 Skill/step: `agents/skills/plans/SKILL.md`, Phase 1 Requirements Discovery & Validation; `agents/skills/review-agents/simplification.md`
 
 ## Problem

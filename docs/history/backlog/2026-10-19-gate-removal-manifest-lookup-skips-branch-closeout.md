@@ -1,7 +1,7 @@
 # Backlog: gate-removal derives the migration directory from a dated plan stem
 
 - **Filed:** 2026-10-19, done-immediate-commit-single-homing worktree closeout
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-19-gate-removal-closeout-accounting.md)
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** observed closeout friction

@@ -340,3 +340,56 @@ has a concurrency limit, enforce that limit with a semaphore (or a resource-spec
 shared at the scope of that resource. Acquire before using the resource and release in `finally`;
 make the permit wait interruptible or time-bounded when the caller has a deadline. Do not use a
 small virtual-thread pool as a resource limit. See [JEP 444](https://openjdk.org/jeps/444).
+
+## 27. Build Constructors With More Than Three Parameters Through a Builder
+
+Create an object through a builder when the constructor takes strictly more than three
+parameters; a construction with three or fewer parameters goes through the constructor.
+The threshold is judged per constructor: a type with several constructors is read one
+constructor at a time. Where Lombok is available, put `@Builder` on the record, or on
+the class (on its explicit constructor when the class declares one), so the builder
+covers the canonical constructor, and keep the validation of the canonical or compact
+constructor. Without Lombok, write the builder as a hand-written static nested builder
+class. Construction call sites in production and test sources follow the same rule.
+
+Framework construction is exempt. A dependency-injection or configuration-binding
+constructor keeps a plain constructor or `@RequiredArgsConstructor` over `final` fields:
+the runtime container invokes it to assemble the component, and application code never
+calls it. More than three injected dependencies is a coupling signal for the architecture
+lens, never a builder case. A framework-constructed data type, a type a library
+instantiates reflectively from external data, keeps the constructor that library
+requires; the builder is an addition for hand-written construction sites, not a
+replacement of the required constructor.
+
+```java
+// Generic example for rule 27: a four-component record built through a builder,
+// beside a managed component the rule leaves alone.
+@Builder
+record ShipmentQuote(String origin, String destination, int weightKg, String serviceLevel) {
+  ShipmentQuote {  // compact constructor keeps its validation
+    if (weightKg <= 0) throw new IllegalArgumentException("weightKg must be positive");
+  }
+}
+
+ShipmentQuote quote = ShipmentQuote.builder()
+    .origin(origin)
+    .destination(destination)
+    .weightKg(weightKg)
+    .serviceLevel(serviceLevel)
+    .build();
+
+@RequiredArgsConstructor
+class ShipmentService {
+  private final Pricing pricing;   // DI constructor over final fields: stays @RequiredArgsConstructor
+  private final Routes routes;
+  private final Auditor auditor;
+}
+```
+
+## 28. Declare Every Interface as a Top-Level Type
+
+Declare every interface as a top-level type in its own source file. Never declare an
+interface inside a class, record, enum, or another interface. The rule constrains where
+an interface is declared, not what it may contain: a sealed interface whose permitted
+records are nested inside it is fine, and a hand-written builder is a nested class,
+which this rule does not forbid.

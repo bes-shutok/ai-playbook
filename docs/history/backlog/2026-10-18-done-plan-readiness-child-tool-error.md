@@ -10,6 +10,8 @@
 - **Skill/step:** `agents/skills/done/SKILL.md` Step 3 landing sweep; `scripts/done_sweep_gates_lib.py` `derive_plan_readiness_candidates` and `gate_plan_readiness`
 - **Related backlog:** `docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md` (the stale plan-review digest after checkbox updates is shared; this row owns the additional composed-gate tool-error and exemption mismatch)
 
+- **Cluster:** docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster)
 ## Problem
 
 The 2026-10-18 Task 1 boundary stopped before committing an otherwise implemented and validated task. The task completion checkboxes changed the plan bytes after review r11, so a direct `scripts/plan_readiness.py` consult correctly reported the review sidecar's `source_digest` stale. The composed done sweep reported `tool_error=1` for that plan because its child exited 1 without a final `OUTCOME` line and exposed only a traceback header. The operator record also notes that direct candidate derivation exempted the plan with a fresh `workflow_state: active` execute-plan manifest, while the composed sweep still selected it. The execution manifest was later parked as `blocked`; no gate or validator was edited.

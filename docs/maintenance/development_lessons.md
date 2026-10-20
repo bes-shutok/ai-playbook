@@ -354,6 +354,14 @@ quoted source paths until the claims file was supplied. Witnessed 2026-10-15:
 skipping the pre-build refused the first manifest write on 2700 unpartitioned
 candidates, costing a lock release and a full setup retry.
 
+Re-witnessed 2026-10-20 (playbook repo, execution-run closeout): a pre-built foreign
+list excluded the run's two owned staging records by a shape suffix
+(`-code-review-r[12].md$`), which also dropped every peer record of that shape and
+inverted them into the owned set; setup refused with the claim-or-foreign violation
+naming them and exited holding the lock. Anchor an exclusion to the artifact's full
+identity (the slug-qualified path), never to a shape its peers share; the
+slug-anchored list passed on the retry after a hand release.
+
 ## 19. Thread a Boundary's Entry-Time Resolved Override Into Every Helper It Calls
 
 **Principle:** Family H (verify the real thing: an override's reach is the call chain
@@ -619,6 +627,8 @@ field, an empty-array edge, an extension-nested usage block, and
 inherited-coverage rows required by a yes verdict): the residual schema
 surface lives exactly in the sections no tool writes, so a scaffold mode or
 schema reference has to cover those too.
+
+Re-witnessed 2026-10-20 (playbook repo, execution run closeout): two code-review staging records drafted from memory were repaired against `validate_review_staging.py` one error class at a time (freshness Metadata lines, Record kind, usage mint pair, Panel and Counts grammar, per-finding sections with Pattern, the per-worker Low budget, lens-taxonomy coverage names, the producer-written sidecar the repair tool refuses to invent for non-zero findings) across roughly ten fix cycles; reading the validator's check families and fixture builders first would have been one draft.
 
 ## 31. Worktree Recreation Is Not Recovery for Untracked Run Artifacts
 
@@ -1206,6 +1216,10 @@ subcommand's value.
 **Why:** witnessed 2026-10-15: a `land-worktree` landing passed main's tip
 under the blanket base-tip rule, was refused, and landed on the retry with
 the source branch tip; the helper usage names both contracts explicitly.
+Re-witnessed 2026-10-20 (scheduled execution run): a `land-worktree` landing
+again passed the base tip; the refusal left its merge hold orphaned across the
+shell boundary (recovered per #109, the retry redone in one shell with the
+source tip).
 
 **See also:** #34 (the `land` side of the same flag).
 
@@ -2271,6 +2285,8 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 
 **Why:** witnessed 2026-10-19 (playbook repo): the silent-strand row was `git rm`-ed as the covering witness and the archive gate refused twice (missing = straggler) until the row was restored under the backlog completed archive with `- **Status:** covered (<plan path>)`; the default completed directory is `docs/history/backlog/completed`, not the plans completed dir.
 
+Re-witnessed 2026-10-20 (playbook repo, execution run): the plan's origin row was deleted by following the repository guidelines' covered-row bullet literally; the closeout's origins gate refused the done commit until the row was restored under the backlog completed archive with a done status naming the covering plan, costing a repair commit before the landing. The guideline bullet now names the archive disposition for a landed plan's origin rows, so the two no longer disagree.
+
 **See also:** #100 (landing helper contracts), #80 (done boundary setup).
 
 ## 105. Count Each Partition Class per Member, Never by Subtraction
@@ -2300,6 +2316,8 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 **Why:** witnessed 2026-10-18 (playbook repo, execution run): the first `land_squash.sh land-worktree` attempt refused at the plans-egress leg naming the missing record and the exact digest it must carry; writing the record and re-landing under the held lock passed. The record doubles as the migrated execution evidence.
 
 **See also:** #100 (landing helper contracts), #104 (archive gates fail closed).
+
+Re-witnessed 2026-10-20 (playbook repo, execution run): the run's two `-code-review-r<N>` records carried the archived plan's sha256, yet the first landing attempt was refused because the guard matches the `-exec-r<N>` name grammar, not the digest alone; the receipt was written after the refusal and the second attempt landed. Fourth same-shape witness in a week: the receipt belongs to the Phase 3 exit, not to the landing retry.
 
 ## 108. An Evidence Digest Comes From the Bytes on Disk, Never From a Command's Fallback Output
 
@@ -2467,7 +2485,7 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 
 **Rule:** a record's timestamp is derived from the current operation's clock at write time. A date quoted from an earlier turn's output, a carried variable, or a superseded turn's context lands as a wrong stamp that reads as the record's truth until a corrective pass finds it. When the only visible clock is a superseded turn's output, re-read the current time before writing the stamp; when auditing a landed stamp, cross-check it against the date of the commit that carried it, which is ground truth.
 
-**Why:** witnessed 2026-10-19 (playbook repo): a resumed session landed its resume-state section with the correct content but a section stamp two days stale, inherited from a superseded same-session turn's clock; the repair was a follow-up citation-only corrective commit whose message names the mechanism (e418023c2). Re-witnessed 2026-10-19 (same repo, hours after this lesson landed): a backlog row's Filed header and its commit message carried the operator-direction date quoted from an earlier conversation turn's context instead of the write-time date; the misstamp was removed with the row itself when the row was deleted as superseded (517c4e4d7).
+**Why:** witnessed 2026-10-19 (playbook repo): a resumed session landed its resume-state section with the correct content but a section stamp two days stale, inherited from a superseded same-session turn's clock; the repair was a follow-up citation-only corrective commit whose message names the mechanism (e418023c2). Re-witnessed 2026-10-19 (same repo, hours after this lesson landed): a backlog row's Filed header and its commit message carried the operator-direction date quoted from an earlier conversation turn's context instead of the write-time date; the misstamp was removed with the row itself when the row was deleted as superseded (517c4e4d7). Re-witnessed 2026-10-19 (same repo, execution lane): an implement worker stamped both of its pins re-aim provenance comments with the plan slug's filename date instead of the write-time date; the Step 1.2b intermediate review caught it and the fix folded before the task 1 boundary commit of the skill-monolith-module-extraction execution run (2026-10-19).
 
 ## 125. The Learn Marker Recipe Binds Every Project-Corpus Write
 
@@ -2499,7 +2517,7 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 
 **Rule:** the recorded reset time is a claim by the runtime that refused the operation, not a measurement of the boundary. Before letting a timed resume carrier fire at the recorded time, run one cheap probe of the refused operation itself: a clean probe lifts the pause immediately (the pause's own carrier is deleted by its owner as the duplicate-in-waiting it has become, and the pause record gains a resolution line), a refused probe leaves the carrier standing unchanged.
 
-**Why:** witnessed twice in this repo's runtime (2026-10-17 and 2026-10-19): two usage-wall pauses idled their lanes toward the recorded reset, and a one-call probe ran clean about two hours early both times; the nominal-reset posture cost the idle hours and armed a second carrier over the live lane. Routed as the probe-first arm (the usage-wall-probe-before-timed-resume entry) with this lesson as the witness.
+**Why:** witnessed twice in this repo's runtime (2026-10-17 and 2026-10-19): two usage-wall pauses idled their lanes toward the recorded reset, and a one-call probe ran clean about two hours early both times; the nominal-reset posture cost the idle hours and armed a second carrier over the live lane. Routed as the probe-first arm (the usage-wall-probe-before-timed-resume entry) with this lesson as the witness. Third witness 2026-10-20: a scheduler turn paused at 92 percent with the reset recorded for 16:39 and armed a 16:45 resume carrier; a probe at 13:44 read 1 percent with the live reset re-keyed to 18:37, so the recorded reset was replaced, not merely lifted early, and the carrier idled the lane about three hours. Fourth witness 2026-10-20: an execution run's probes read 63 and then 88 percent used against a reset recorded for 18:37 that evening with 165 minutes claimed remaining, and twenty-eight minutes after the second reading the window had already rolled over to 10 percent used with the reset re-keyed to 21:01, so a freshly reported reset was false within the half hour.
 
 ## 128. After a Completed Rebase the Next Rebase Is the Plain Form; Past a Diverged Fork Rebase Only the Owned Range
 
@@ -2519,7 +2537,7 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 
 **Rule:** an earlier turn's repository-state observations (worktree and branch existence, run manifests, plan location, review-series contents) were true when made, not when reused. Peer sessions may complete, archive, or rebuild the work between turns. Before any write or plan step in a later turn depends on those claims, re-derive them with the turn's first probes: the worktree list, the branch table, the plans root, the review-series listing, and the freshness of any claim or manifest the work keys on.
 
-**Why:** witnessed 2026-10-19 (playbook repo): a conversation resumed two days after its opening turns and filed a row directing work on run state read from the earlier turns; peers had meanwhile revived, executed, and archived the run and removed its worktree and branch, so the row was stale on arrival and was deleted the hour it landed (7249dbacc, deleted 517c4e4d7). The same resume found the plan's review series carried eleven rounds the earlier turns never saw.
+**Why:** witnessed 2026-10-19 (playbook repo): a conversation resumed two days after its opening turns and filed a row directing work on run state read from the earlier turns; peers had meanwhile revived, executed, and archived the run and removed its worktree and branch, so the row was stale on arrival and was deleted the hour it landed (7249dbacc, deleted 517c4e4d7). The same resume found the plan's review series carried eleven rounds the earlier turns never saw. Re-witnessed 2026-10-20: a session relayed a two-day-old stand-down record's conclusion ("the exit is an operator machinery decision") to the operator as still owed; a peer landing had already made that decision and deleted the record's origin row, which one `ls` plus one `git log` on the origin path would have shown.
 
 **See also:** #82 (precision values re-derived from disk at point of use), #124 (dated fields from the operation's own clock).
 
@@ -2534,3 +2552,130 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 **Why:** witnessed 2026-10-19 (playbook repo): `git branch --contains <sha> | head -3` listed three authoring worktree branches and cut main from the output; the truncated listing was read as proof the landing was absent from main and that a peer had advanced the branch under review, and the false alarm stood until the probe was re-run untruncated.
 
 **See also:** #38 (status and stderr masking: the same genus of a wrapper corrupting a probe's verdict).
+
+## 131. A Claim Is a Heartbeat Its Owner Keeps; a Refresh Lapse Surrenders the Lane
+
+**Principle:** Family H (verify the real thing, not the abstraction: the lane guard is the claim's current `updated:` line, not the session's belief that it still holds the lane).
+
+**Trigger:** any run longer than one refresh cadence (phase boundaries hours apart, a quota wall, an operator pause) that holds an execution or authoring claim.
+
+**Rule:** refresh the claim's `updated:` line at every phase boundary and immediately after any pause resumes, and treat its absence on return as a fact to re-derive, not a glitch to patch: before recreating it, check for a peer claim, a peer worktree, and the plan's state on the base branch (a sweeper may have read the stale claim as dead and a peer may have taken the lane); recreate only when no peer holds it, and record the gap. When a peer does hold it, touch none of its claim, branch, or worktree; hand unlanded findings over through a durable backlog row its review loop folds. The consumer rule (#77) corroborates liveness before sweeping; the owner's heartbeat is what makes that corroboration cheap, and a lapsed heartbeat is an invitation to be swept.
+
+**Why:** witnessed 2026-10-20 (playbook repo): an interactive execution run took its claim at the start of a multi-hour session and never refreshed it across three task boundaries, a review loop, and a quota-wall pause; a peer's stale-sweep deleted the file mid-run. No peer took the plan (verified by claim, worktree, and base-branch probes before the claim was recreated for the landing window), but the lane ran unguarded for hours while a scheduled exec automation fired. Re-witnessed 2026-10-20 from the surrendered side: a scheduled exec run paused on a usage wall without refreshing; a live peer took the lane (claim rewritten, branch rebased, plan archived), and the run backed off, filing its blocking finding as a backlog row the peer folded.
+
+**See also:** #77 (a claim file is not evidence of a live session: the consumer side of the same contract), #129 (re-derive repository state at each acting turn).
+
+## 132. Committed Witness Lines Name Paths and Dates, Never Branch-Local Shas
+
+**Principle:** Family D (single source of truth: a committed record cites identities that survive the landing, and a pre-landing commit sha is not one of them).
+
+**Trigger:** writing a registry audit note, a lesson witness, a backlog row, or any other tracked text that cites the run's own commits while the run's branch has not yet landed.
+
+**Rule:** a squash landing erases every pre-landing sha, so a committed witness that cites task-boundary or address-pass commits dangles on the base branch the moment it lands; name the artifact paths, the dates, and the record files instead, and keep shas in the gitignored run records (manifest, sidecars, receipts) where they are telemetry. Sweep the branch's tracked diff for seven-plus-hex sha literals before the landing call. The done skill's rule names only the landing digest; this is its general form.
+
+**Why:** witnessed 2026-10-20 (playbook repo): a registry audit note cited three task commits and two address commits, and a lesson witness cited a boundary commit; a pre-landing rebase renumbered all of them and the squash would have left six dangling references on main. Caught by a pre-landing sweep and rewritten as paths and dates in one additive commit.
+
+**See also:** #82 (ceremony-cited review records carry the full digest re-derived from disk: the digest a record MAY carry is the artifact's content hash, never a commit identity).
+## 133. update-ref --stdin CASes One Ref with a Single update Line, Never verify Plus update
+
+**Rule:** a `git update-ref --stdin` transaction that compare-and-swaps one ref expresses the swap as a single `update <ref> <new> <old>` line (the old-value check is built into the update); adding a `verify <ref> <old>` line for the same ref before the update makes git reject the whole transaction as multiple updates to that ref, so the composed CAS never lands. A detached-HEAD swap is the same single `update HEAD <new> <old>` preceded by `option no-deref`.
+
+**Why:** witnessed 2026-10-20 (playbook repo, authorized-restoration landing in `scripts/done_run.sh`): the first composed transaction input paired `verify` and `update` on the same ref and git refused it; the landed form is the single `update` old-value check per ref, probed against attached and detached HEADs.
+
+**See also:** #100 (ref-only landings), #123 (post-landing branch work rebases as a reset).
+
+## 134. A Direct Commit's Pure-Reversal Hunk Is a Peer Clobber, Not an Edit
+
+**Principle:** Family D (single source of truth: every staged hunk is attributable to the session's own edit; a hunk that only removes text a newer landing added is the stale-read clobber signature, whatever the landing path).
+
+**Trigger:** committing by explicit path in a shared checkout (a learn, investigate, or backlog commit on the base branch) while peers land, when a staged path's hunk is pure deletion, is a pure addition of text you did not write, or the path is outside the commit's declared edit set.
+
+**Rule:** lesson 6's run-scope diff check applies to direct commits as much as to squashes. Before `git commit`, word-diff each staged path against HEAD. A hunk that only removes text is foreign unless you deleted it on purpose; `git log -1 --format=%cd -- <path>` newer than your last read of that file proves it reverses a peer landing. Then re-read the file from HEAD, re-apply your edit, and never stage a path the commit's purpose does not name. A pure-addition hunk you did not write is the same signature in the resurrection direction (a peer's just-pruned span re-added by a stale-read write), so the path-age test runs on every staged path whatever its hunks' direction. When the path sits under a pinned surface (`agents/skills/maintenance/`), run the pins suite before committing; a red pin on the base branch stays red until some later run happens to execute the suite.
+
+**Why:** witnessed 2026-10-19 (playbook repo): a learn commit (ce3a984b8) nine minutes after a peer landing (19866b067) staged `agents/skills/maintenance/survey-arms.md` with a pure deletion of the sentence that landing had added. The commit's subject named lessons and a backlog witness, not that file. The pins suite went red on main and stayed red for a day, until an unrelated ad-hoc run's suite reconciliation traced it with `git log -S` and restored the sentence byte-verbatim (a42e0e1d4). Re-witnessed the same day in the resurrection direction: an investigate entry commit (563d2e2e, 15:39) written from a read taken before a peer's direct commit seventeen seconds earlier (0c6a66f3f) had pruned a dispatch entry re-added that entry as a pure-addition hunk inside the commit's own declared rolling log; neither the pure-deletion signature nor the declared-path test fires on that shape, the path-age test does, and the resurrected entry stayed dispatchable for about twenty hours until the next monitor prune (93fff300b).
+
+**See also:** #6 (the squash-landing form of the same signature), #129 (re-derive state at each acting turn), learn Step 1.8's own-edit staging check.
+
+## 135. A Warning-Posture Gate's True Catch Must Be Ledgered or It Never Promotes
+
+**Principle:** Family G (data-loss observability: a warning gate's firing is a record that real harm was detected; left in sweep stdout it is silently discarded from the only evidence stream that can promote the gate).
+
+**Trigger:** a landing sweep prints `<gate> ... failed` under a warning-posture gate; or a consumer-side breakage (a skill missing from an agent runtime, a dropped artifact) turns out to have been named by a warning gate at an earlier landing.
+
+**Rule:** treat a warning-posture gate's non-zero child as a catch, never as noise. (1) Fix the named file in the same run when it is yours. (2) Record the firing at finalize as `--guard-firing <gate>:catch:<evidence>:<note>` so the guard-liveness ledger carries it. (3) File the promotion row naming the harm the posture let through. A gate demoted for "no ledger catches" can re-earn blocking posture only through that ledger; a warning nobody reads is the same as no gate.
+
+**Why:** witnessed 2026-10-20 (playbook repo): a 2026-10-19 wording edit grew the frontmatter description of `agents/skills/execute-plan/SKILL.md` from 988 to 1159 characters. The ZCode skill loader drops any skill whose description exceeds 1024 characters, so the skill vanished from that runtime until a user asked why. The sweep's description-length checker exits 1 naming the file (reproduced on the old bytes), but the gate rides in warning posture, so every landing in between went through with the firing unledgered. The gate had been built for this exact class after the same file crossed the cap on 2026-09-27, and the authoring rule already existed (`how-to-write-skills`, frontmatter requirements); the gap was the discarded catch.
+
+**See also:** `coding_guidelines.md` #24 (drop-side observability), AGENTS.md Machinery admission protocol (promotion after a true catch), `docs/maintenance/demoted-sweep-arms.md`, backlog row `docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md`.
+
+## 136. A Shape Check Outlives the Convention It Encoded; Count the Compliant Population
+
+**Principle:** Family H (verify the real thing: a validator pins a shape, and the shape is a proxy for a meaning that conventions can move away from without the check noticing).
+
+**Trigger:** changing a corpus convention (what a served item looks like, when a token is written), or reading a validator's clean result as evidence that the meaning it was built for still holds.
+
+**Rule:** when a convention changes, grep the validators that classify the old shape and re-baseline each default the change inverted; a fail-open default written for "unknown" becomes a permanent miss once the convention makes that case the common one. When a check can only test a shape (a prefix, a date, a presence), count the compliant population before trusting it: a confirmation token present on nearly every row is a drift signal, not health.
+
+**Why:** witnessed twice 2026-10-20 (playbook repo). The prompt-log stale check (2026-10-01) classifies an absent origin that resolves nowhere as LIVE, a fail-open default for unknown moves; the covered-row rule (by 2026-10-13) made deletion the normal served shape, so a served entry sat dispatchable two days and a monitor sweep walked past it. The registry's `user-approved YYYY-MM-DD:` audit token means "the user confirmed this override" (ADR-0001); the validator checks only the prefix, and 579 of 659 completed rows carried the prefix on execution narration no user confirmed, while the five rows without it failed the moment they were parsed. Re-witnessed 2026-10-20 (seal census, playbook repo): the corrections gate's degrade-to-exact-match default, written for a certification predating the seal file, is the path most squash-landed plans take, because the squash orphans every resolvable seal's anchors; 7 of 37 seals anchored on main, and the two open plans refused that day were the two whose seals resolved (see #141).
+
+**See also:** #130 (an absence signal needs an exact probe), #135 (a warning-posture catch must be ledgered), backlog rows `docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md` and `docs/history/backlog/2026-10-20-registry-audit-note-token-drift.md`.
+
+## 137. A Readiness Verdict Is the Oracle's Exit, Never a Reading of Its Inputs
+
+**Principle:** Family H (verify the real thing: the certification oracle is `scripts/plan_readiness.py`; the seal file and the review sidecars are its inputs).
+
+**Trigger:** an exec-mode selection deciding whether an open plan is dispatchable, or any report calling a plan "not ready" or "no ready verdict".
+
+**Rule:** run the oracle once per open plan and branch on its outcome line; never infer readiness from the presence or absence of a `ready=yes` span in the seal file, whose entries are anchors and digests, not verdicts. A failing oracle names its failing leg: record that leg verbatim (a stale digest is needs-recert and stays dispatchable; an anchor-leg refusal over unchanged bytes is a filed gap, not a silent skip).
+
+**Why:** witnessed 2026-10-20 (playbook repo): the 06:35 scheduled exec run skipped two certified plans as "certs carry no ready=yes verdict"; rerun, the oracle passed one outright and failed the other only on a squash-orphaned seal anchor over byte-identical bytes. Both were dispatchable within the run's unused mandate.
+
+**See also:** the maintenance survey's Certification bullet (`agents/skills/maintenance/survey-arms.md`), #129 (re-derive state at each acting turn), #141 (the producer side: the landing ends when the oracle passes on the base), backlog row `docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md` (the anchor-leg gap).
+
+## 138. A Skill Root's Authored Set Is Its Tracked Top-Level Directories
+
+**Principle:** Family D (single source of truth: the repo-authored skill set is the tracked, one-level-deep tree under the skills root; a runtime cache nested beneath it is neither loaded by the runtime nor owned by the repo, so a checker that scans it reports on files nobody here authors).
+
+**Trigger:** a skill tree under a discovery root holds a nested or gitignored subtree (a vendor sync cache, a runtime's own synced-skills directory); a sweep checker warns about a path under it; or a nested skill fails to appear in a runtime's skill list.
+
+**Rule:** scope skill-tree checkers to the tracked set (`git ls-files` under the root, or depth one), never a bare recursive glob. Diagnose a missing skill by depth before frontmatter: the runtime discovers skills directly under each root, so a `SKILL.md` two levels down is not found however valid it is. Never hand-edit a nested externally managed cache to silence a checker; the next sync overwrites the edit.
+
+**Why:** witnessed 2026-10-20 (playbook repo): the description-length checker (`rglob("SKILL.md")`) warned at every landing about two files under the gitignored `agents/skills/synced/` cache written by an external skills sync; neither appears in the runtime's loaded skill list, while all 47 top-level skills do.
+
+**See also:** #135 (a warning nobody reads is no gate), AGENTS.md Vendored Asset Sync Rules (autonomously managed trees are never vendored or hand-edited), `how-to-write-skills` frontmatter requirements (the authoring cap).
+
+## 139. The Removal Gate's Owned Set Seeds From Header Citations; Hand It the Records and Verify the Removal
+
+**Principle:** Family H (verify the real thing: a passing removal gate is a verdict about record migration, not evidence that the worktree and branch are gone).
+
+**Trigger:** running `scripts/worktree_closeout_migrate.py gate-removal` at an authoring or execution closeout whose plan file carries no `Plan review record:` or `Plan review:` header citation (the review records sit in the primary reviews home, but the plan names none of them), or reading the gate's pass as the end of teardown.
+
+**Rule:** the gate seeds its owned set only from those header label lines plus `--claims`; with neither it refuses `empty owned set` by design, and the remedy is a claims file (one repo-relative record path per line, the plan's review records and sidecars) passed through `--claims`, never a header edit to the certified plan (that would stale the bound digest). After the pass, probe `git worktree list` and `git branch --list <branch>` before reporting teardown: the gate's pass may print the sanctioned removal step rather than perform it, and the printed step is the operator's to run.
+
+**Why:** witnessed 2026-10-16 and again 2026-10-20 (playbook repo, scheduled authoring runs): both certified plans refused `empty owned set`, passed once a claims file named their records, and left the worktree and branch in place after the pass; teardown finished by hand. The printed-step behavior is an investigated origin (`docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md`), so this lesson records the operating rule, not a fix.
+
+**See also:** #61 (acquire the merge lock at the primary checkout), #104 (the archive gate's covered-row arm), the execute-plan skill's worktree-first module (`agents/skills/execute-plan/worktree-first.md`).
+
+## 140. A Validation Pin Quotes the Prescribed Bytes, and an Absence Arm Carries a Positive Control
+
+**Principle:** Family H (verify the real thing: a plan's validation command is an oracle over the task's own prescribed text and the witnessed failure's exact shape; a paraphrase of either tests nothing the executor will produce).
+
+**Trigger:** authoring a plan's Validation Commands or acceptance criteria for a text edit or a matcher fix; a review round asks what the pin would catch, or whether a passing count could pass on unchanged bytes.
+
+**Rule:** derive each pin from the phrase a task checkbox prescribes, byte-exact, one pin per prescribing checkbox; a vacuity or absence pin (`expect: 0`, "the file is unchanged") pairs with a positive control that fails on the pre-change bytes, or it proves nothing. When the fix targets a witnessed warning or error string, copy the string from the witness record, suffix included, and match the shape the real emitter produces (a leading-token match when the witness carried a trailing redirection, never the whole span), so the regression arm reproduces the witness rather than a tidied paraphrase. Authoring these first costs one pass; a panel that catches them costs a round per defect plus the digest re-bind each fold forces.
+
+**Why:** witnessed 2026-10-20 (playbook repo, two authoring picks in one scheduled run): the first plan's pins paraphrased the prescribed sentences and its vacuity arm had no control, the second plan's regression arm matched a cleaned-up copy of the readiness warning while the witnessed line carried a redirection suffix only a leading-path-token match closes; the panels caught both, at six and five rounds. Plans: `docs/history/plans/2026-10-20-fold-verification-runs-committed-bytes.md`, `docs/history/plans/2026-10-20-readiness-files-coverage-quote-prefix.md`.
+
+**See also:** #7 (re-derive a plan's edit inventory from live bytes), #130 (an absence signal needs an exact probe), the plans skill's validation authoring rules (`agents/skills/plans/validation-authoring-rules.md`).
+
+## 141. Seal Anchors Die in the Squash: Re-Run the Oracle on the Base
+
+**Principle:** Family D (single source of truth: a record field a gate resolves through git must name an identity that exists on the base branch after the landing; #132's run-record carve-out holds only while no verifier consumes the sha).
+
+**Trigger:** closing a plan review round in an authoring worktree writes the seal's `round_start_commit` and `round_close_commit`; a rebase or squash landing follows; or a landing report declares the plan execution-ready without an oracle run on the landed base.
+
+**Rule:** both history rewrites the workflow prescribes orphan the commits a seal names. The pre-landing rebase makes the validator refuse in-branch until the anchors move to the replayed tip; the squash landing removes every branch commit from the base's ancestry. So the landing is complete only when `scripts/plan_readiness.py <plan>` passes on the base branch. On an anchor-leg refusal over byte-identical bytes, re-anchor both commit fields to the landing commit, whose plan blob re-hashes to the sealed digest. Record the move in a `landing_note:` line and leave the gate alone. Expect the refusal when the seal is correct: a seal that resolves for the record's round is verified, while one that fails to resolve (short shas, a round mismatch) degrades to the exact-match rule and passes with a warning.
+
+**Why:** witnessed 2026-10-20 (playbook repo): an authoring landing (`docs/history/plans/2026-10-20-usage-wall-probe-before-timed-resume.md`) reported complete with teardown done, and the oracle on main refused its lesson-#32-compliant seal on the anchor leg; the pre-landing rebase had already forced one in-branch re-anchor of the same fields. A seal census found 7 of 37 seals anchored on main; of twelve open plans, the two refused were the two whose seals resolved for their latest round, and the rest passed through the degradation warning or on re-anchored seals. The re-anchor passed the oracle without touching the bytes or the gate.
+
+**See also:** #137 (the consumer side: an anchor-leg refusal over unchanged bytes is a filed gap, never a silent skip), #132 (committed witness lines never cite branch-local shas), #136 (a fail-open default for the unknown case becomes the common path), #32 (the machine-resolvable seal shape), backlog row `docs/history/backlog/2026-10-07-corrections-graded-freshness-post-squash.md` (fix of record: an unorphaning anchor leg or a landing-written `landed_as` witness).

@@ -4612,6 +4612,98 @@ def _directory_task_texts_at_head(
         texts.append(show.stdout)
     return texts, notes, errors
 
+def _commit_path_state(
+    ctx: GateContext, commit: str, rel: str
+) -> tuple[Optional[bool], Optional[str], Optional[str], Optional[str]]:
+    """Presence, blob id, and mode of ``rel`` at ``commit``.
+
+    Returns ``(present, blob, mode, error)``. ``present is None`` marks a
+    lookup error, which callers never interpret as presence or absence; a
+    confirmed absence is ``(False, None, None, None)``.
+    """
+    listing = ctx.git("ls-tree", commit, "--", rel)
+    if listing.returncode != 0:
+        return None, None, None, (
+            listing.stderr.strip() or "git ls-tree failed"
+        )
+    rows = [line for line in listing.stdout.splitlines() if line]
+    if not rows:
+        return False, None, None, None
+    if len(rows) > 1:
+        return None, None, None, f"ambiguous path listing at {commit}: {rel}"
+    entry, separator, found = rows[0].partition("\t")
+    meta = entry.split()
+    mode = meta[0] if meta else ""
+    blob = meta[2] if len(meta) > 2 else ""
+    if found != rel:
+        return None, None, None, (
+            f"path listing returned {found} for {rel} at {commit}"
+        )
+    return True, (blob or None), (mode or None), None
+
+def _path_unchanged_since_snapshot(
+    ctx: GateContext, snapshot: str, rel: str
+) -> tuple[bool, Optional[str]]:
+    """Whether ``rel`` carries identical presence, content, and mode at the
+    configured-base snapshot and at HEAD.
+
+    Any lookup error returns ``(False, error)`` so the candidate stays
+    checked; only a confirmed match on all three excludes a raw diff row.
+    """
+    head_present, head_blob, head_mode, head_error = _commit_path_state(
+        ctx, "HEAD", rel
+    )
+    if head_error is not None:
+        return False, head_error
+    base_present, base_blob, base_mode, base_error = _commit_path_state(
+        ctx, snapshot, rel
+    )
+    if base_error is not None:
+        return False, base_error
+    if head_present != base_present:
+        return False, None
+    if not head_present:
+        return True, None
+    if head_blob != base_blob or head_mode != base_mode:
+        return False, None
+    return True, None
+
+def _emit_head_archive_unit(
+    ctx: GateContext,
+    unit_rel: str,
+    is_charter: bool,
+    seen: set,
+    archives: list,
+    blockers: list,
+    notes: list,
+) -> None:
+    """Surface one mapped archive unit from its HEAD bytes.
+
+    The regular-file probe and the bytes read each fail explicitly into
+    ``blockers`` (a mapped unit is never silently dropped); charter units
+    carry the HEAD task span beside the charter text.
+    """
+    mode_error = _head_regular_archive_file(ctx, unit_rel)
+    if mode_error is not None:
+        blockers.append(mode_error)
+        return
+    show = ctx.git_bytes("show", f"HEAD:{unit_rel}")
+    if show.returncode != 0:
+        blockers.append(f"committed archive unreadable at HEAD: {unit_rel}")
+        return
+    archive_bytes = show.stdout
+    text = _archive_text_for_derivation(archive_bytes, unit_rel, blockers)
+    if is_charter:
+        task_texts, task_notes, task_errors = _directory_task_texts_at_head(
+            ctx, unit_rel
+        )
+        notes.extend(task_notes)
+        blockers.extend(task_errors)
+        text = text + "".join(task_texts)
+    if unit_rel not in seen:
+        seen.add(unit_rel)
+        archives.append((unit_rel, text, archive_bytes, None, archive_bytes))
+
 def _derive_archived_plans(
     ctx: GateContext,
 ) -> tuple[list[tuple[str, str, bytes, Optional[str], Optional[bytes]]], list[str], list[str]]:
@@ -4635,7 +4727,17 @@ def _derive_archived_plans(
         precedent's ``ORIG_HEAD`` fallback when absent; when neither
         resolves, this shape surfaces nothing this run and the skip is
         noted; archive bytes come from the HEAD blob, with a rename's
-        preferred reviewed bytes recovered from the parent source blob. This
+        preferred reviewed bytes recovered from the parent source blob. On
+        the feature-only rebase path (the recorded start commit is not an
+        ancestor of the worktree's merge base with the configured base
+        branch), the diff runs with ``--no-renames`` so additions,
+        modifications, and deletions are independent path candidates, and
+        each raw path is compared with the configured-base snapshot
+        (presence, content, and mode) before it maps to its archive unit:
+        a path matching the snapshot on all three is unchanged base state
+        and excluded, every lookup error retains the candidate, and a
+        deleted member or whole unit is skipped only after HEAD confirms
+        the source unit absent; This
         is the lib's first rename-detecting name-status diff on purpose: every
         existing name-status diff uses ``--no-renames`` because its
         consumers need per-side change-type rows, while this gate needs the
@@ -4765,8 +4867,12 @@ def _derive_archived_plans(
     # manifest boundary; on the base branch itself, keep the run boundary so
     # archives created by this run remain visible. If the manifest start is
     # a feature-only commit rewritten by rebase, ancestry alone cannot map
-    # that start into the new history; keep the recorded boundary and surface
-    # any upstream archives as a blocker rather than guessing at provenance.
+    # that start into the new history: keep the recorded boundary and filter
+    # raw path rows against the configured-base snapshot instead of guessing
+    # at provenance; only the successful ancestry result 1 selects that
+    # path, and any ancestry command error retains candidates with no
+    # snapshot exclusions.
+    feature_only_snapshot: Optional[str] = None
     if manifest is not None:
         configured_base = facts_paths.resolve_toml_key_raw(
             ctx.repo_root, "base_branch"
@@ -4790,6 +4896,20 @@ def _derive_archived_plans(
                         f"{candidate} instead of older run marker {base}"
                     )
                     base = candidate
+                elif starts_before.returncode == 1:
+                    feature_only_snapshot = candidate
+                    notes.append(
+                        "archive-ceremony: feature-only run start "
+                        f"{base} is not an ancestor of the base-branch merge "
+                        f"base {candidate}; filtering committed archive paths "
+                        "against the configured-base snapshot"
+                    )
+                else:
+                    notes.append(
+                        "archive-ceremony: worktree base-branch ancestry check "
+                        f"failed (rc {starts_before.returncode}); keeping run "
+                        f"marker {base} with no snapshot filtering"
+                    )
     verify = ctx.git("rev-parse", "-q", "--verify", f"{base}^{{commit}}")
     if verify.returncode != 0:
         detail = (
@@ -4802,9 +4922,14 @@ def _derive_archived_plans(
         else:
             notes.append("archive-ceremony: " + detail)
     else:
+        diff_mode = (
+            ["--no-renames"]
+            if feature_only_snapshot is not None
+            else ["--find-renames"]
+        )
         diff = ctx.git(
             "diff",
-            "--find-renames",
+            *diff_mode,
             "--name-status",
             f"{base}..HEAD",
             "--",
@@ -4824,6 +4949,55 @@ def _derive_archived_plans(
                 "committed archive diff failed: "
                 f"{diff.stderr.strip() or 'git diff failed'}"
             )
+        elif feature_only_snapshot is not None:
+            # Feature-only rebase path: independent A/M/D rows with rename
+            # detection disabled; each raw path is snapshot-compared before
+            # it maps to its archive unit, so unchanged base state is
+            # excluded while every lookup error retains the candidate.
+            for line in diff.stdout.splitlines():
+                fields = line.split("\t")
+                if len(fields) < 2 or not fields[0]:
+                    continue
+                letter = fields[0]
+                raw = _unquote_porcelain_path(fields[-1])
+                kind, _prefix = _archive_unit(ctx, raw)
+                if kind is None:
+                    continue
+                unchanged, lookup_error = _path_unchanged_since_snapshot(
+                    ctx, feature_only_snapshot, raw
+                )
+                if lookup_error is not None:
+                    blockers.append(
+                        "archive-ceremony: configured-base snapshot lookup "
+                        f"failed for {raw}: {lookup_error}"
+                    )
+                elif unchanged:
+                    continue
+                if kind == "member":
+                    unit = (
+                        Path(raw).parents[1] / plan_shape.CHARTER_FILENAME
+                    ).as_posix()
+                    is_charter = True
+                else:
+                    unit = raw
+                    is_charter = kind == "charter"
+                if letter == "D":
+                    present, _blob, _mode, state_error = _commit_path_state(
+                        ctx, "HEAD", unit
+                    )
+                    if state_error is not None:
+                        blockers.append(
+                            "archive-ceremony: deleted-path source-unit lookup "
+                            f"failed at HEAD: {unit}: {state_error}"
+                        )
+                        continue
+                    if not present:
+                        # A deleted row is skipped only after HEAD confirmed
+                        # its source unit absent.
+                        continue
+                _emit_head_archive_unit(
+                    ctx, unit, is_charter, seen, archives, blockers, notes
+                )
         elif state_prefixes:
             for line in diff.stdout.splitlines():
                 fields = line.split("\t")

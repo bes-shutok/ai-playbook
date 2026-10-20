@@ -11,7 +11,7 @@ This repository is a skill library. Each skill under `agents/skills/` is an exec
 ## Build, Test, and Development Commands
 There is no compile/build pipeline. Main workflows are registration and execution.
 
-- Commands live as skills under `agents/skills/`. Each agent loads them from its skill registry or symlink; register or alias them per agent as needed (for example, into a local `.opencode/command/` directory) and do not commit generated copies.
+- Commands live as skills under `agents/skills/`. Each agent loads them from its skill registry or symlink; register or alias them per agent as needed.
 - Run a skill in direct mode (Codex example):
 ```bash
 codex exec "$(cat agents/skills/tdd-design/SKILL.md)
@@ -103,10 +103,10 @@ Workflow verbs resolve to their owning skill under `agents/skills/` before impro
 - In a cap-refused bound session, the ask's fallback requires the delete-own-spawner leg exhausted first, per the operator-ordered schedule surface paragraph in agents/skills/maintenance/zcode.md, which owns this clause's ordering; a fallback armed without that leg's recorded deletion attempt or a proven-absent deletion primitive is an unscheduled ask, never satisfaction. (This clause supersedes, for exactly this clause, this section's standing sibling-span fence against delete-own-spawner and cap-refusal vocabulary; the fence still governs the section's other text.)
 
 ## Commit & Pull Request Guidelines
-Git history is currently minimal (`init`, `Readme added`), so use short, clear subjects and keep each commit scoped to one logical change.
+Use short, clear subjects and keep each commit scoped to one logical change.
 
-- Preferred commit style: `<area>: <concise summary>` (example: `skills: tighten tdd-design completeness rules`).
-- When a change completes a backlog row (a landed plan or an ad-hoc landing), delete the row from `docs/history/backlog/` in the same change rather than leaving a `Status: covered` stub; name the covering commit or completed plan as the witness in the commit message, and tidy other rows' `Cluster:` pointers at removed rows in the same commit.
+- Preferred commit style: `<area>: <concise summary>`.
+- When a change completes a backlog row: an ad-hoc landing deletes the row from `docs/history/backlog/` in the same change rather than leaving a `Status: covered` stub; a landed plan instead archives its origin rows under `docs/history/backlog/completed/` with the covered flip, which the origins gate requires (see `docs/maintenance/development_lessons.md` #104). Name the covering commit or completed plan as the witness in the commit message, and tidy other rows' `Cluster:` pointers at removed or moved rows in the same commit.
 - PRs should include changed skill files and rationale.
 - PRs should call out behavior changes in skill gates/output.
 - PRs should update `README.md` when skill names, paths, or usage changes.

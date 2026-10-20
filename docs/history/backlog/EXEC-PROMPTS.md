@@ -9,6 +9,38 @@ Standing rules (by their labels in `docs/history/backlog/PLAN-PROMPTS.md`, each 
 - Entries dispatch to exec-mode sessions: the top ready entry is an ad-hoc run's context source per `agents/skills/maintenance/SKILL.md` (the Exec-mode selection rule and the Rolling prompt log duties' EXEC-PROMPTS dispatch leg); the write turn never executes or dispatches its payload.
 - Writes follow the targeted-edit drift-retry rules and the same-turn commit duty per `agents/skills/maintenance/SKILL.md` (re-read and compare before every write; targeted section edits; commit in the same turn; repo-relative-only entries carrying no personal or machine-specific data).
 
+## learn-commit-own-edit-check-mechanical-shape
+
+Added: 2026-10-20, investigate pass anchored on the learn-commit clobber row filed from the 06:35 scheduled exec run; re-witnessed and widened 2026-10-20 by the 11:00 scheduler turn session's learn pass (the row's second witness, investigate entry commit 563d2e2e)
+
+Work-type verdict: ad-hoc-able because every arm is a sentence in a tracked skill-text surface named in the origin row (`agents/skills/learn/step-1-extract.md`, the Step 1.8 commit rule, and `agents/skills/investigate/SKILL.md`, the Stage 4 write bullet), the fix is body-named with no open design choice, no guard-bearing path, state schema, dependency, or machinery is touched, and the pins suite script itself stays unchanged (the report-only arm only tells the run when to execute it and report).
+
+Origins:
+- docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md
+
+Urgency: high - every learn, investigate, and backlog commit on the base branch runs the same explicit-path staging while peers land; the witnessed clobber reverted operative maintenance text on main and the pin stood red for about a day, the same day's second witness resurrected a just-pruned dispatch entry for about twenty hours, and the same shape recurs whenever a run holds a file read from before a peer landing.
+
+Scope arms:
+- Mechanical shape for the own-edit check: in the Step 1.8 commit rule, replace the judgment sentence's bare "verify the working-tree delta for that path is this session's own edit" with the probe it means: word-diff each staged non-backlog path against HEAD; a hunk that only removes text, a pure-addition hunk the session did not write, or a path whose last landing (`git log -1 --format=%cd -- <path>`) is newer than the session's read of it, is foreign and the path is skipped and reported; cite lesson 134 in at most one line.
+- The same sentence in the investigate Stage 4 write bullet: the same-turn entry commit runs the identical own-edit check before `git commit` (the bullet today carries the write-time re-read rule only, so a stale-read resurrection reaches the commit unexamined); one sentence inside the existing bullet, no new field.
+- Report-only pins run on pinned surfaces: in the same rule, when a staged path sits under `agents/skills/maintenance/`, run `bash scripts/check_maintenance_pins.sh` before the commit and print its result in the run output; a failure is reported, never a block, and the commit still proceeds only with the session's own hunks.
+- Anti-growth: every arm is a sentence inside the existing Commit rule paragraph or Stage 4 bullet, no new section or field; pay with equivalent deletion in the same paragraph if a file grows past its cap once the byte-budget gate lands, otherwise apply the discipline at review.
+
+Orientation: the clobber mechanism is established in lesson 134 (`docs/maintenance/development_lessons.md`) and the origin row: the learn commit's direct parent was the exec landing that added the sentence, the hunk was a pure deletion, and the commit subject never named the file. Lesson 6 already names the same signature for squash landings, and the ad-hoc arm's suite-failure clause (`agents/skills/maintenance/decisions.md`) is what eventually reconciled the red pin; this entry closes the direct-commit side so the detection does not depend on an unrelated later run. Second witness (the row's Second witness line): the investigate entry commit 563d2e2e re-added a dispatch entry that a peer's direct commit 0c6a66f3f had pruned seventeen seconds earlier, as a pure-addition hunk inside the commit's own declared rolling log; neither the pure-deletion signature nor the declared-path test fires on that shape, only the path-age test does, and the investigate skill's commit carries no own-edit check at all (lesson 134's addition-direction arm).
+
+Prompt: Edit the Step 1.8 Commit rule paragraph in agents/skills/learn/step-1-extract.md: (1) give the own-edit check its mechanical shape (word-diff each staged non-backlog path against HEAD; a pure-deletion hunk, a pure-addition hunk the session did not write, or a path whose last landing date is newer than the session's read of it, is foreign: skip the path and report it; one-line lesson 134 citation); (2) add the report-only pins run for staged paths under agents/skills/maintenance/ (run bash scripts/check_maintenance_pins.sh before the commit, print the result, never block). (3) Add the same one-sentence own-edit check to the Stage 4 write bullet in agents/skills/investigate/SKILL.md, placed before its same-turn entry commit and citing lesson 134 in the same line. Keep every arm inside the existing paragraph or bullet with no new heading or field. Verify the learn router (agents/skills/learn/SKILL.md) still describes the module correctly, run the hygiene scan and the em-dash check, and run the doing-code-review panel over the branch delta per the ad-hoc arm; delete the origin row per the covered-row rule in the landing commit.
+
+Rejected alternatives:
+- Repository-wide git pre-commit hook running the pins suite: rejected because the squash landing path composes `commit-tree` plus `update-ref` and never runs hooks, and hooks install per agent rather than per repository (see scripts/land_squash.sh and docs/history/backlog/2026-10-20-ignored-audit-home-paths-force-tracked.md, Rejected)
+- A blocking pins gate on learn commits: rejected because one witnessed incident does not admit a new blocking gate under the repository guidelines' Machinery admission protocol (see AGENTS.md, Machinery admission protocol; the report-only arm is the sanctioned first landing)
+- Run the pins suite on every learn commit regardless of staged paths: rejected because the suite pins maintenance surfaces only, so commits outside `agents/skills/maintenance/` cannot break a pin and would pay the suite's cost for nothing (see scripts/check_maintenance_pins.sh)
+- Leave lesson 134 as the only fix: rejected because the lesson is recall material while the Step 1.8 Commit rule is the text that drives the staging decision, and the witnessed run passed that rule's judgment sentence by assumption (see agents/skills/learn/step-1-extract.md, Step 1.8 Commit rule, and docs/maintenance/development_lessons.md lesson 134)
+- A separate entry for the investigate skill's commit: rejected because the mechanism, the fix sentence, and the lesson are identical across both skills, so one landing covers both and a second entry would only split the same dispatch (see docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md, Second witness, and docs/maintenance/development_lessons.md lesson 134)
+
+Standing pre-authorization: every arm, uncontested on evidence (the origin row and lesson 134 record both witnesses from disk; no operator or peer correction argues against any arm).
+
+Machinery admission (report-only pins run): incident ce3a984b8 clobbering the Verify-successor sentence 19866b067 added, repaired by a42e0e1d4 (see docs/history/backlog/2026-10-20-learn-commit-foreign-reversal-hunk-pins-latency.md); expected catch frequency low (one witnessed in the corpus's history); false-positive cost a few seconds of suite runtime per learn or investigate commit that stages a maintenance path; review date 2027-01-20, retire if no second catch. The own-edit sentences add no machinery.
+
 ## memory-index-compress-and-index-pass
 
 Added: 2026-10-17, investigate pass over the memory-index-audit lane's first filing
@@ -52,27 +84,64 @@ EXEC-PROMPTS-PRUNE: fold-commit-staged-record-precondition -> landing in this co
 
 EXEC-PROMPTS-PRUNE: reviews-home-migration-collision-loudness -> landing in this commit (ad-hoc reviewed landing; panel over the branch delta, verdict PASS after one blocking fold - dangling-destination-symlink digest read made OSError-tolerant; origin row deleted per the covered-row rule; standing residual: a collision rename that fails copy verification reports via stderr ERROR, not a COLLISION line)
 
-## done-valid-document-removal-row-coverage
+## execute-plan-phase3-initial-pass-panel-selection-reference
 
-Stand-down record 2026-10-16 (run sess_67ac1556-2efe-4e92-b319-32ba30a0b40c; the entry's stop-before-deletion condition fired): the origin's witnessed shape is NOT a worktree-absent declared path. The origin's workaround ("a concise, useful boundary statement was added inside the same rewritten section") places the removal inside a file that stays present, and the disk probes split exactly on that line: a removal-only rewrite of HEAD-gained lines in a base-present worktree-existing declared path still refuses (`dirt REGRESSION`, rc 1, re-probed 2026-10-16 against scripts/dirt_regression_gate.py), while the same rewrite plus the boundary statement passes (rc 0) and a whole-file removal of a base-absent declared path passes the classifier's newly-introduced arm (rc 0, 790e02af2). The landed declared-deletion plan covers only the worktree-absent arm, so the row is NOT stale queue state and stays open; the precise uncovered case is the intentional, declared, within-file removal of HEAD-gained documentation lines, whose sanctioned exit is a machinery decision (an approval flag or classifier narrowing) that belongs to the operator under the machinery admission protocol, not to an ad-hoc pass. The row's status is untouched per the entry's own no-disposition scope arm.
+Added: 2026-10-20, investigate pass anchored on the Phase 3 cost row filed after the done-immediate-commit-single-homing closeout
 
-Work-type verdict: ad-hoc-able because current code and its completed plan already cover the reported removal case; the remaining action is a bounded evidence check and removal of the stale open backlog row.
+Work-type verdict: ad-hoc-able - a body-named single-surface skill-text fix in `agents/skills/execute-plan/SKILL.md` (Step 3.1 item 2), a tracked skill surface with no guard change, no new dependency, no state-schema change (the Ad-hoc backlog arm's eligibility test, `agents/skills/maintenance/decisions.md`); the panel-selection document is not edited, only referenced.
 
 Origins:
-- docs/history/backlog/2026-10-14-done-dirt-gate-valid-doc-removal.md
+- docs/history/backlog/2026-10-20-execute-plan-phase3-initial-pass-ignores-focused-panel.md
 
-Urgency: low - the closeout gate skips a declared path that is absent from the worktree, and the completed declared-deletion plan pins that behavior; only stale queue state remains to reconcile.
+Urgency: medium - every execution run pays the cost on its Phase 3 initial pass; the 2026-10-20 witness spent about 2.6 million sub-agent tokens on five lenses over a 12-line delta whose intermediate review was Tier L, while the same-day sibling run read the same text as permitting four lenses.
 
-Scope arms: verify the landed declared-deletion behavior and remove the now-covered origin row; retain the row and author a second guard for the same absent-path case; remove the dirt-regression gate entirely; add a new removal-only approval flag.
+Scope arms:
+- Replace the inline composition sentence in Step 3.1 item 2 ("Initial pass: fresh adversarial five-worker review ...") with a reference: the initial pass composes per `agents/skills/review-agents/review-panel-selection.md` (the default five-worker panel unless its Focused panels arm applies; a run whose every task resolved to Tier L with no cumulative risk signal is the focused docs-only or test-only case, recorded with `panel_mode: focused` and a selection reason); the fresh-adversarial framing and the gate's item 7 stay unchanged.
+- Pay growth with deletion: the reference is shorter than the sentence it replaces.
 
-Orientation: the user-visible defect was that an intentional declared documentation removal was classified as a dirt regression. The completed declared-deletion landing changed the runner's input set so worktree-absent declared paths are excluded from the dirt-regression gate, while preserving the classifier for existing paths. Verify that the existing implementation and completed-plan evidence cover this exact origin. If confirmed, delete the backlog row and cite the landing commit in the cleanup commit message. Do not change the gate, add a new approval channel, or modify any other backlog item.
+Orientation: the five-worker sentence and the Focused panels allowance were born in the same commit (760e5d812, 2026-07-27) as default and exception; the per-task tier table was added later for Step 1.2b only, so the Tier L signal a run derives never carries into Phase 3, and the execute-plan sentence is the only panel-composition prose outside the document that declares itself the single source.
 
-Prompt: Reconcile `docs/history/backlog/2026-10-14-done-dirt-gate-valid-doc-removal.md` against the completed declared-deletion fix. Read the origin, `docs/history/plans/completed/2026-10-15-done-run-declared-deletion-path.md`, the current `scripts/done_run.sh` dirt-regression input construction, and its wrapper-suite evidence. Confirm that the exact removal shape in the origin is a declared path absent from the worktree and that the runner excludes it before invoking `scripts/dirt_regression_gate.py`; confirm the existing-path gate remains unchanged. If the completed plan and current code cover the origin, delete the backlog row in the same cleanup commit and name landing commit `1a9108808` as the witness. If the origin's shape differs from the landed deletion arm, stop before deletion and report the precise uncovered case. Do not run a new test suite or modify production code for a covered row.
+Prompt: In an ad-hoc worktree, edit `agents/skills/execute-plan/SKILL.md` Step 3.1 item 2 so the initial pass's composition defers to `agents/skills/review-agents/review-panel-selection.md` (default five-worker panel; the Focused panels arm when every task resolved to Tier L and the cumulative diff adds no risk signal; `panel_mode: focused` plus selection reason recorded), keeping `Review mode: fresh-adversarial` and verification-gate item 7 unchanged. Delete at least as many bytes as added. Run the doing-code-review panel over the delta, `bash scripts/check_maintenance_pins.sh`, the hygiene scan, and `bash scripts/check-no-em-dash.sh touched`; land with the `Ad-hoc-panel-pass:` receipt and delete the origin row in the same landing.
 
 Rejected alternatives:
-- Keep the origin open and author a second removal exception: rejected because the completed plan already excludes declared worktree-absent paths from the existing dirt-regression gate (`docs/history/plans/completed/2026-10-15-done-run-declared-deletion-path.md`)
-- Remove the dirt-regression classifier: rejected because the landing preserves it for present declared paths and only narrows the input set for declared removals (`scripts/done_run.sh`)
-- Add a new approval flag or gate for the same removal: rejected because the existing declared-path contract already carries the authorization and the fix adds no new mechanism (`docs/history/plans/completed/2026-10-15-done-run-declared-deletion-path.md`)
+- Add a Phase 3 tier table to execute-plan mirroring the per-task table: rejected because the panel-selection document declares itself the single source and forbids inline duplication (`agents/skills/review-agents/review-panel-selection.md`, Shared scope and complexity policy)
+- Make the five-worker panel unconditional and accept the cost: rejected because the Focused panels arm already exists and the risk-signal floor, not worker count, is the protection (`agents/skills/review-agents/review-panel-selection.md`, Focused panels and Risk-signal floor)
+- Lower the cost by having lens workers skip re-running validators: rejected because it changes worker return rules across every orchestrator for a cost the panel-size fix removes first (`agents/skills/execute-plan/subagent-prompts.md`, Review lens worker)
+
+Standing pre-authorization: the single sentence swap.
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added or changed; the edit references an existing arm.
+
+## registry-audit-cell-empty-on-routine-completion
+
+Added: 2026-10-20, investigate pass anchored on the token-drift row filed from the operator-directed stranded-rows relocation
+
+Work-type verdict: ad-hoc-able because both arms are one sentence each in tracked skill-text surfaces the origin row names (`agents/skills/plans/SKILL.md` completion transition sentence, `agents/skills/doc-hierarchy/SKILL.md` audit column row), body-named with no open design choice (the only choice, scrubbing the existing notes, is deferred out of scope by the row itself), and no validator, guard, state schema, dependency, or machinery is touched (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
+
+Origins:
+- docs/history/backlog/2026-10-20-registry-audit-note-token-drift.md
+
+Urgency: medium - every completion pass appends a row and, absent a writer rule, keeps minting a `user-approved` token on narration (579 rows today, 5 more failed the validator when parsed this week); nothing is blocked, but the token ADR-0001 relies on loses its meaning with every landing until the writer rule exists.
+
+Scope arms:
+- Plans completion transition (`agents/skills/plans/SKILL.md`, the "append exactly one ownership-registry row" sentence): add that the `audit` cell stays empty on a routine completion and the execution summary belongs in the landing commit message, never in the registry row.
+- Doc-hierarchy audit column row (`agents/skills/doc-hierarchy/SKILL.md`): add that the cell is empty on every row except an ADR-0001 override the user confirmed, and narration is never an audit note.
+- Leave the 579 existing token notes untouched; the row records that scrub as a separate operator decision.
+- Anti-growth: one sentence inside each existing paragraph or table cell, no new section or field; pay with equivalent deletion if a file sits at its cap.
+
+Orientation: the registry and its validator landed together on 2026-09-10 (`docs/history/plans/completed/2026-09-08-doc-ownership-lifecycle.md`; `scripts/doc_registry_validator.py` `audit_note_valid`); the validator checks only the token's shape, so writers that wanted an execution note in the row learned to prefix it, and the plans completion transition names the minimum cells without saying the audit cell stays empty. The 2026-10-20 relocation pass (registry commit landing the five stranded rows with cleared audit cells) is the witness that narration without the token fails and narration with the token is self-minting.
+
+Prompt: Cover the origin row above. In `agents/skills/plans/SKILL.md`, extend the completion transition's "append exactly one ownership-registry row" sentence with one clause: the `audit` cell stays empty on a routine completion (the execution summary belongs in the landing commit message and the archived plan's disposition section, never in the row). In `agents/skills/doc-hierarchy/SKILL.md`, extend the `audit` column row with one clause: empty on every row except an ADR-0001 override the user confirmed; narration is never an audit note. Do not touch `scripts/doc_registry_validator.py`, the existing registry notes, or any other row. Run `python3 scripts/doc_registry_validator.py --selftest` (exit 0), the em-dash and public hygiene scans (exit 0), and land through the Ad-hoc backlog arm's reviewed path (panel over the branch delta, receipt line in the landing commit); delete the origin row per the covered-row rule.
+
+Rejected alternatives:
+- A validator arm refusing token notes that lack confirmation vocabulary: rejected as machinery over a wording heuristic with no witnessed incident of a false override and a high false-positive cost across 579 existing rows; no witnessed incident supports adding machinery (`docs/history/backlog/2026-10-20-registry-audit-note-token-drift.md`, Rejected)
+- Widen the contract so execution narration is a sanctioned audit-note class: rejected because it legitimizes the drift and leaves ADR-0001 with no distinguishable confirmation token (`agents/skills/doc-hierarchy/SKILL.md`, Corruption override paragraph; `docs/history/plans/completed/2026-09-08-doc-ownership-lifecycle.md`)
+- Scrub the 579 existing notes in the same change: rejected because committed registry rows sit beside the immutability contract and a bulk rewrite is an operator decision the row defers, not a writer-rule fix (`docs/maintenance/document-registry.md`; `docs/history/backlog/2026-10-20-registry-audit-note-token-drift.md`, Suggested fix 3)
+- Fix only the doc-hierarchy contract and not the plans writer sentence: rejected because the plans completion transition is the text that drives the row append and today names the minimum cells without the audit rule, so a contract-only edit leaves the writer silent (`agents/skills/plans/SKILL.md`, completion transition)
+
+Standing pre-authorization: both skill-text arms, uncontested on evidence (the registry count and the relocation witness are re-derived from disk; no operator or peer correction argues against them); the scrub is explicitly out of scope.
+
+Machinery admission: not required - two sentences of skill text, no gate, validator, lock, ledger, or ceremony; the validator arm is rejected above with the missing-incident absence named.
 
 EXEC-PROMPTS-PRUNE: placement-authoring-gloss-residual-sync -> landing in this commit (panel over the branch delta, verdict PASS; sweep found the remaining literals confined to already-conditioned sentences per the origin row's own acceptance arm; both origin rows deleted per the covered-row rule)
 
@@ -82,83 +151,41 @@ EXEC-PROMPTS-PRUNE: doc-registry-row-outside-parsed-table-refusal -> c861ee3fc (
 
 EXEC-PROMPTS-PRUNE: acrem-witness-suite-redundant-panel-residuals -> e523e1532 (landing in this commit; panel over the branch delta, verdict PASS zero blocking; residuals O3-O5 appended with all measurements intact, Driving force count adjusted, O1/O2 and the routing sentence unchanged; the origin row stays open by design, the append is its capture)
 
-## series-gate-completed-path-identity
+EXEC-PROMPTS-PRUNE: series-gate-completed-path-identity -> landing in this commit (ad-hoc reviewed landing; _plan_identity_for derives the plans-root identity for a plan directly under the completed archive, the override still winning; two witnesses plus a foreign-identity negative control, RED-sanity confirmed, suite 152 OK; origin row deleted per the covered-row rule; cluster pointer tidied in 2026-10-19-machinery-registry-witness-ref-rot.md)
 
-Added: 2026-10-19, learn-capture investigate over the fifth max-4 exec-run reviewer observation
+EXEC-PROMPTS-PRUNE: clocked-orders-stale-armed-flags-sweep -> landing in this commit (ad-hoc data pass over the gitignored clocked-order ledger, run lock-held with the ledger's own flock and atomic replace: before 20 orders / 20 terminal / 20 terminal-armed, after 20 / 20 / 0, 20 carriers disarmed, 0 jobs still loaded; each disarmed order gained one history event naming its launchd not-loaded probe as teardown evidence; no order state changed, keys unchanged, JSON parses; origin row deleted per the covered-row rule)
 
-Work-type verdict: ad-hoc-able because the action is a bounded single-function derivation correction on an existing read-only surface (derive the identity from the pre-archive plans-root path when the plan sits under the completed archive), with no gate, no behavior change for plans-root paths, and no new surface (agents/skills/maintenance/decisions.md, Ad-hoc backlog arm single-surface path).
+EXEC-PROMPTS-PRUNE: doc-registry-stranded-rows-relocation -> landing in this commit (operator-rescoped direct-commit data repair 2026-10-20: the five stranded completed rows moved into the parsed first table with their audit cells cleared instead of byte-preserved, because all five notes were untokened execution narration that the audit-note contract refuses and minting user-approved tokens on narration would be self-minting under ADR-0001; validate 0 hard, selftest exit 0; origin row deleted per the covered-row rule)
 
-Origins:
-- docs/history/backlog/2026-10-19-series-gate-completed-path-identity.md
+EXEC-PROMPTS-PRUNE: done-valid-document-removal-row-coverage -> 887d890b8 (served out of band: the plan landing "fix: prevent false dirt-regression refusals" narrowed the dirt-regression classifier so a within-file removal-only hunk that leaves base-era content passes, and deleted the origin row 2026-10-14-done-dirt-gate-valid-doc-removal.md per the covered-row rule; the entry stayed live two days because the stale check reads a deleted origin as LIVE, see docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md)
 
-Urgency: low - the defect is warning noise on one invocation shape (a direct gate or verify run against an archived plan path); the operative closeout flow is the twin runner, which already passes the correct identity and is test-pinned.
+## i-have-adhd-portable-slash-only-gate
 
-Scope arms:
-- In scripts/worktree_closeout_migrate.py, when the resolved plan path sits under the completed archive and no `--plan-identity` override is present, derive the identity from `docs/history/plans/<basename>` (the pre-archive path the records were tokened from), mirroring what `_run_gate_on_twin` passes.
-- Pin both shapes in tests: a direct run on a completed-archive plan path with a plans-root-tokened record emits no warning; the override flag still wins over the derivation.
-- No change to plans-root derivations, the diagnostic sink semantics, or the twin runner.
+Added: 2026-10-20, investigate pass anchored on the skills-review row filed after the all-skills loader review
 
-Orientation: `_plan_identity_for` (scripts/worktree_closeout_migrate.py:597, re-derived at HEAD 4fa60506c) resolves the plan path verbatim, so an archived plan's identity names the completed-archive path while its records carry tokens and sidecar identities derived from the original plans-root path; every series member then reports a spurious foreign warning on a direct run. The twin runner is the sanctioned flow and is unaffected; the reviewer of the series-token execution recorded the direct-run noise as an accepted observation (finding 6, 2026-10-19).
-
-Prompt: Cover the origin row above. Correct the identity derivation for completed-archive plan paths in scripts/worktree_closeout_migrate.py per the scope arms, pin both shapes with tests, run python3 scripts/test_worktree_closeout_migrate.py (expect OK), the em-dash and public hygiene scans (exit 0), and land through the Ad-hoc backlog arm's reviewed path. Do not touch plans-root derivation behavior, the diagnostic wording, or the twin runner.
-
-Rejected alternatives:
-- Leave it and document the twin runner as the only sanctioned flow: rejected because the direct-run shape is reachable and the fix is a two-line derivation correction; documentation does not stop the noise (docs/history/backlog/2026-10-19-series-gate-completed-path-identity.md, Expected)
-- Add a blocking refusal on the direct-completed-path run: rejected as machinery without admission - the shape produces read-only noise, never a wrong result, and no landing or lane was ever blocked by it (no witnessed incident)
-- Re-token archived records to the completed path: rejected because record tokens and sidecar identities are keyed to the original source-plan path by the review-staging contract, and rewriting evidence bytes to silence a warning inverts the ownership (agents/skills/review-staging/SKILL.md, Metadata block; scripts/review_plan_identity.py identity_token)
-
-Machinery admission: not required - the recommendation corrects an existing read-only derivation and adds no gate, validator, lock, ledger, or ceremony; the blocking-refusal arm is explicitly rejected with no witnessed incident.
-
-## doc-registry-stranded-rows-relocation
-
-Stand-down record 2026-10-19 (exec-mode ad-hoc run sess exec-2026-10-19-lciu, stood down before any landing; the run's stop-before-completion condition fired): the byte-preserving relocation is incompatible with the validator's audit-token contract. Re-derived on the run branch: two of the five rows' audit cells (plan-authoring-done-closeout, done-final-only-learn-intermediate) carry prose notes written outside the gate, and `scripts/doc_registry_validator.py` `audit_note_defects` HARD-refuses any non-empty completed-row audit note not beginning with `user-approved YYYY-MM-DD:` (ADR-0001: a self-minted token licenses nothing), so the moved rows fail `validate` hard. The entry's byte-preservation arm and its validate-green acceptance cannot both hold; minting the approval token is operator-owned and no gate or validator may be edited mid-lane. The entry stays open; a viable fix shape needs the operator's recorded approval token for the affected rows, or the entry re-scoped to relocate only rows whose notes already carry the token.
-
-Added: 2026-10-19, investigate pass anchored on the learn Step 1.9 row of the same name
-
-Work-type verdict: ad-hoc-able because the action is a one-time bounded data repair of a single tracked file (move already-written table rows into the parsed first table), with no design choice, no behavior change, and no gate touched (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm single-surface path).
+Work-type verdict: ad-hoc-able because every arm is skill or docs text on tracked surfaces the origin row names (`agents/skills/i-have-adhd/SKILL.md` frontmatter and body, `agents/skills/how-to-write-skills/SKILL.md` frontmatter requirements, the repository guidelines' Vendored Asset Sync Rules fork paragraph), with no guard, no script, and no open design choice after this investigation.
 
 Origins:
-- docs/history/backlog/2026-10-19-doc-registry-stranded-rows-relocation.md
+- docs/history/backlog/2026-10-20-i-have-adhd-slash-only-gate-runtime-specific-key.md
 
-Urgency: low - the cost is five standing unregistered-file warns on every validate run and five completed sources outside the gate's claimed-src set; no landing is currently blocked, and the validator-side diagnostic that names each stray row landed c861ee3fc.
-
-Scope arms:
-- Move the five stranded completed-state rows (plan-scope-gist-surface-1010-plan, plan-scope-gist-surface-1010-backlog, plan-authoring-done-closeout, prompt-log-deferred-origin-stale-pin, done-final-only-learn-intermediate) into the first table of docs/maintenance/document-registry.md, byte-preserving each row's cells, and delete the stray copies after the first non-table block.
-- Confirm with `python3 scripts/doc_registry_validator.py validate` (zero unregistered warns for the five sources) and `--selftest` exit 0.
-- Leave the first-table parse contract, the row-count cross-check, and every other row untouched.
-
-Orientation: the first-table-only parse contract dates to the validator's introduction (7dcdf6c5b, 2026-09-10) and is documented in its module docstring; rows after the first non-table line never parse. The misplacement is recurring: development-lessons #80 witnessed two occurrences 2026-10-17, and one of the five standing rows landed 2026-10-19. The diagnostic that names a present-but-unparsed row beside the refusal landed earlier the same day (c861ee3fc); this entry is its data-repair complement. The five-row standing state was re-derived from disk 2026-10-19 with the validator's own helpers (five unparsed table lines, five matching unregistered-file warns, present at HEAD by git probe).
-
-Prompt: Cover the origin row above. Move the five stranded registry rows into the first table of docs/maintenance/document-registry.md byte-preserving each row's cells, delete the stray copies, run `python3 scripts/doc_registry_validator.py validate` (zero unregistered warns for the five named sources required) and `--selftest` (exit 0), run the em-dash and public hygiene scans (exit 0), and land through the Ad-hoc backlog arm's reviewed path (panel over the branch delta, receipt line in the landing commit). Do not touch any other row, the validator, or its parse contract.
-
-Rejected alternatives:
-- Add a pre-write lint or hook enforcing row placement: rejected as machinery without admission - one low-severity recurring warn class, no blocked landing, and the additive diagnostic already names each stray row at refusal time (`docs/history/backlog/2026-10-19-doc-registry-stranded-rows-relocation.md`, Rejected alternatives; the pruned entry `doc-registry-row-outside-parsed-table-refusal`, landing c861ee3fc)
-- Widen the parser to read every table: rejected because first-table-only parsing is the documented contract since the validator's introduction and widening changes gate semantics beyond the witnessed cost (`scripts/doc_registry_validator.py` module docstring; introduced 7dcdf6c5b, 2026-09-10)
-- Leave the rows where they are: rejected because unregistered completed sources sit outside the immutability gate's claimed-src set and five standing warns train operators to ignore the warn tier (re-derived from disk 2026-10-19: five unparsed lines, five matching warns; docs/maintenance/document-registry.md at HEAD)
-
-Machinery admission: not required - the recommendation is a one-time data repair of an existing tracked file and adds no gate, validator, lock, ledger, or ceremony; the machinery arm (pre-write lint) is explicitly rejected with no witnessed blocking incident.
-
-## clocked-orders-stale-armed-flags-sweep
-
-Added: 2026-10-19, investigate pass over the authoring closeout's launchd liveness repair
-
-Work-type verdict: ad-hoc-able because the fix is one scripted data pass over a gitignored runtime ledger with no gate, validator, or guard-bearing surface touched (the ad-hoc eligibility test's machinery and guard exclusions both miss), and the witnessed cost is one wasted probe, not a wrong action.
-
-Origins:
-- docs/history/backlog/2026-10-19-clocked-orders-stale-armed-flags.md
+Urgency: medium - no harm witnessed this session, but the divergence is live in every session of a runtime that ignores the key (the skill is model-invocable there against the README row's opt-in promise), and the fix is three sentences.
 
 Scope arms:
-1. Re-derive from disk at run time: count the ledger's terminal orders (state discharged or cancelled) and the subset whose carrier record reads armed true; when the armed subset is empty, report the sweep as already done and stop.
-2. For each terminal order with armed true: set `carrier.armed` to false and append one history event recording that order's teardown evidence (the 2026-10-19 launchd bootouts where the job was among them, otherwise a not-loaded probe of the order's recorded job label).
-3. Verify the write is read-only at the order level: no order `state` changes, no schema change, and the ledger parses as JSON after the write.
+- `agents/skills/i-have-adhd/SKILL.md`: add a top-level `when_to_use` line stating the skill is used only when the user explicitly invokes it by name and is never invoked on the model's own judgment; keep `disable-model-invocation: true` for the runtime that honors it; leave the description unchanged.
+- Fork record: one short Local fork notice in the skill body (the `grilling` shape) naming the added line and why, and one line in the repository guidelines' Vendored Asset Sync Rules fork paragraph so an upstream sync re-applies it instead of overwriting it.
+- `agents/skills/how-to-write-skills/SKILL.md` frontmatter requirements: one sentence that a runtime-specific gating key is paired with portable `when_to_use` wording because other loaders ignore unknown top-level keys.
+- Anti-growth: three sentences in existing paragraphs, no new section; pay with deletion where a file sits at its cap.
 
-Orientation: a terminal order's carrier record still reads armed, so a ledger reader cannot distinguish an armed carrier from a consumed one without leaving the ledger; witnessed 2026-10-19 when a closeout's liveness repair had to probe launchd directly and found six jobs for discharged orders still loaded while every ledger flag said armed.
+Orientation: the skill was vendored on 2026-07-25 (c91e34db8) with the key already present; one runtime honors `disable-model-invocation`, another recognizes only `name`, `description`, `when_to_use`, `license`, and `metadata` and ignores the rest (its skill-diagnostics guide), presenting `when_to_use` to the model beside the description, which makes it the strongest portable signal available; the repository's tool-agnostic design bullet covers body text, and this is its frontmatter form.
 
-Prompt: Cover the origin row above. Sweep the clocked-order ledger per the three scope arms: re-derive the armed-terminal subset from disk first, disarm each terminal order's carrier record with a history event naming its teardown evidence, and finish with a JSON parse plus a before/after count printed in the run record. Stop and report if the runtime lock for the ledger cannot be acquired; never edit order states.
+Prompt: Cover the origin row. In `agents/skills/i-have-adhd/SKILL.md`, add the `when_to_use` frontmatter line described in the scope arms and a short Local fork notice in the body modeled on `agents/skills/grilling/SKILL.md`; add one line naming the fork to the Vendored Asset Sync Rules fork paragraph of the repository guidelines; add one sentence to the frontmatter requirements of `agents/skills/how-to-write-skills/SKILL.md` pairing runtime-specific gating keys with portable `when_to_use` wording. Run the public hygiene scan, the em-dash scan, and `python3 scripts/check_skill_description_length.py`; confirm the skill still loads by its frontmatter (`name` and `description` intact, folded description unchanged). Delete the origin row in the same change per the covered-row rule.
 
 Rejected alternatives:
-- Flip the flag inside the discharge and cancel handlers now: rejected, no second witnessed cost and the certified consult design reads state fields (next_turn_at, parent_automation_id, children[]), never carrier flags (docs/history/plans/2026-10-18-clocked-order-successor-verification.md predicate); the sweep is the smallest arm that removes the witnessed cost.
-- Leave the flags and document the reading semantics: rejected, the flags misled a witnessed read the same day they mattered (the closeout probed launchd directly); a docs note does not stop the next mislead.
-- A validator gating armed flags on terminal orders: rejected as machinery with no witnessed incident (the flag's mislead cost one probe and no wrong action followed), the missing-incident absence named per the machinery admission protocol.
+- Remove `disable-model-invocation`: rejected because it drops the hard gate on the runtime that honors it, while the fix adds a portable signal beside it (`docs/history/backlog/2026-10-20-i-have-adhd-slash-only-gate-runtime-specific-key.md`)
+- A runtime-side hook hiding the skill from the model: rejected as tool-specific machinery with no witnessed incident (`agents/skills/i-have-adhd/SKILL.md`)
+- Edit the frontmatter without a fork record: rejected because the skill is vendored and an upstream sync would silently overwrite the line, which the sync rules forbid for a deliberate fork (`agents/skills/grilling/SKILL.md`)
+- Rewrite the description to carry the gate: rejected because a description is a trigger hint the model matches on rather than a gate, and the current description already names the slash invocation (`agents/skills/how-to-write-skills/SKILL.md`)
 
-Machinery admission: not required - the recommendation is a one-time data repair of an existing runtime ledger; the machinery arm is explicitly rejected above with its missing-incident absence named.
+Standing pre-authorization: all three arms, uncontested on evidence (the recognized-key list and the README row's opt-in promise are re-derived from disk; no operator or peer correction argues against them).
+
+Machinery admission: not required - skill and docs text only, no gate, validator, lock, ledger, or ceremony; the hook arm is rejected above with the missing-incident absence named.

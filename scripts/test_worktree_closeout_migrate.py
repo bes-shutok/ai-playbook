@@ -2651,6 +2651,77 @@ class SeriesTokenIdentityTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("series-identity", out)
 
+    def _write_completed_plan(self) -> Path:
+        # The archived shape: the same basename directly under the completed
+        # archive, citing the same series; its records stay tokened to the
+        # plans-root path.
+        completed = self.worktree / "docs/history/plans/completed" / self.plan.name
+        completed.parent.mkdir(parents=True, exist_ok=True)
+        _write(completed, self.plan.read_bytes())
+        return completed
+
+    def test_completed_archive_plan_path_derives_plans_root_identity(self):
+        # A direct gate or verify run on the completed-archive path derives
+        # the plans-root identity the records carry, so the plan's own
+        # tokened record raises no foreign-identity warning.
+        completed = self._write_completed_plan()
+        self._write_record(self._record_name(self.token), sidecar_identity=self.plan_rel)
+        code, out, err = _run_cli(
+            "gate-removal",
+            "--plan", str(completed),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            cwd=self.worktree,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertNotIn("series-identity", out)
+        vcode, vout, verr = _run_cli(
+            "verify-records",
+            "--plan", str(completed),
+            "--target", str(self.primary),
+            cwd=self.worktree,
+        )
+        self.assertEqual(vcode, 0, verr)
+        self.assertNotIn("series-identity", verr)
+        self.assertEqual(json.loads(vout)["missing"], [])
+
+    def test_completed_archive_derivation_control_without_fix_shape(self):
+        # Negative control: a record tokened to a foreign plans-root plan
+        # still warns under the completed-archive derivation, so the fix
+        # narrows the derivation without silencing the diagnostic.
+        completed = self._write_completed_plan()
+        self._write_record(
+            self._record_name(self.token),
+            sidecar_identity="docs/history/plans/2026-10-01-other.md",
+        )
+        code, out, err = _run_cli(
+            "gate-removal",
+            "--plan", str(completed),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            cwd=self.worktree,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("series-identity", out)
+        self.assertIn(f"expected {self.plan_rel}", out)
+
+    def test_plan_identity_flag_overrides_completed_derivation(self):
+        # The override still wins over the completed-archive derivation.
+        completed = self._write_completed_plan()
+        self._write_record(self._record_name(self.token), sidecar_identity=self.plan_rel)
+        code, out, err = _run_cli(
+            "gate-removal",
+            "--plan", str(completed),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            "--plan-identity", "docs/history/plans/2026-10-01-other.md",
+            cwd=self.worktree,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("series-identity", out)
+        self.assertIn("expected docs/history/plans/2026-10-01-other.md", out)
+
     def test_twin_runner_passes_original_plan_identity(self):
         # _run_gate_on_twin seeds the gate child with the original
         # repository-relative plan path beside its temporary --plan file.

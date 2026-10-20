@@ -1288,6 +1288,887 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(stages.count("landing-commit"), 1)
 
 
+class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan
+    docs/history/plans/2026-10-19-done-cached-diff-authorized-reversal.md):
+    the commit subcommand's invocation-scoped --authorize-ancestor-restoration
+    binding and its guarded landing protocol: run-tuple resolution through
+    the existing loader/classifier, the cached-diff lift for exactly one
+    bound path, the recorded staged tree, the Git-order pre-update commit
+    hooks, the index-tree and HEAD-identity refusals, the pre-transaction
+    run-tuple/lock revalidation, one compare-and-swap ref transaction, the
+    fused owned-commits ledger, and post-commit on the new HEAD."""
+
+    VINTAGE = "a\nold\n"
+    GAINED = "a\nnew\n"
+
+    def restoration_fixture(self) -> tuple[dict, str, str]:
+        """work.txt history: the ancestor vintage committed, a HEAD-gained
+        vintage on top, and the staged index+worktree restored to the
+        ancestor bytes; returns (setup exports, ancestor blob, prior HEAD)."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        (self.fixture / "work.txt").write_text(self.GAINED)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain head content")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        return exports, ancestor_blob, prior_head
+
+    def install_hook(self, name: str, body: str) -> Path:
+        hooks = self.fixture / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        hook = hooks / name
+        hook.write_text("#!/bin/sh\n" + body)
+        hook.chmod(0o755)
+        return hook
+
+    def probe_path(self, name: str) -> Path:
+        return self.tmp / f"probe-{name}.txt"
+
+    def probe_snippet(self, hook: str, extra: str = "") -> str:
+        """Shell snippet appending one probe record (cwd, arg count, GIT_DIR)
+        for `hook`, plus any hook-specific extra lines."""
+        probe = str(self.probe_path(hook))
+        return (
+            f"printf '%s\\n' '{hook}' >> '{probe}'\n"
+            f"printf 'cwd=%s\\n' \"$(pwd)\" >> '{probe}'\n"
+            f"printf 'args=%s\\n' \"$#\" >> '{probe}'\n"
+            f"printf 'git_dir=%s\\n' \"${{GIT_DIR:-unset}}\" >> '{probe}'\n"
+            f"{extra}"
+        )
+
+    def authorized_env(self, exports: dict, **overrides: str) -> dict:
+        env = self.commit_env()
+        env.update(exports)
+        env.update(overrides)
+        return env
+
+    def rewrite_manifest(self, exports: dict, **changes: object) -> None:
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        record = json.loads(manifest.read_text())
+        record.update(changes)
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+
+    def assert_landed(
+        self, proc: subprocess.CompletedProcess, exports: dict,
+        prior_head: str, ancestor_blob: str,
+    ) -> str:
+        """The authorized landing witnesses shared by the positive arms."""
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, prior_head])
+        self.assertEqual(
+            self.git("rev-parse", "HEAD:work.txt").stdout.strip(), ancestor_blob,
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+        return landing
+
+    def assert_refused(self, proc: subprocess.CompletedProcess, exports: dict,
+                       prior_head: str, *fragments: str) -> None:
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, combined)
+        for fragment in fragments:
+            self.assertIn(fragment, combined)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), prior_head)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+
+    def test_matching_authorized_restoration_lands_exact_staged_tree(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "restore the ancestor bytes deliberately",
+            env=self.authorized_env(exports),
+        )
+        self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn(
+            "authorized restoration: path work.txt bound to expected blob",
+            combined,
+        )
+        self.assertIn(
+            "cached-diff guard: authorized ancestor restoration accepted "
+            "for this invocation: work.txt",
+            combined,
+        )
+        message = self.git("log", "-1", "--format=%B").stdout
+        self.assertEqual(message.splitlines()[0], "[PROJ-1234] restore the ancestor bytes deliberately")
+        # the guarded staged tree landed exactly its declared set
+        shown = self.git("show", "--name-only", "--format=", "HEAD").stdout.split()
+        self.assertEqual(shown, ["work.txt"])
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[0], "authorize-run-tuple")
+        self.assertIn("landing-commit", stages)
+
+    def test_wrong_expected_blob_refuses(self) -> None:
+        exports, _, prior_head = self.restoration_fixture()
+        head_blob = self.git("rev-parse", "HEAD:work.txt").stdout.strip()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", head_blob,
+            "--subject", "authorize the wrong blob",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "does not equal the expected blob")
+
+    def test_unbound_path_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "elsewhere.txt", ancestor_blob,
+            "--subject", "authorize a path outside the declared set",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "not in the declared --stage set: elsewhere.txt")
+
+    def test_missing_staged_file_refuses(self) -> None:
+        """An authorized path whose declared shape is the already-staged
+        deletion has no staged index entry and refuses (missing staged
+        file), never impersonating the declared-deletion passage."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "gone.txt").write_text("tracked work\n")
+        self.git("add", "gone.txt")
+        self.git("commit", "-qm", "add gone")
+        (self.fixture / "work.txt").write_text("plain work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "add work")
+        (self.fixture / "gone.txt").unlink()
+        self.git("rm", "--cached", "--quiet", "gone.txt")
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "gone.txt",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt", "--stage", "gone.txt",
+            "--authorize-ancestor-restoration", "gone.txt",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--subject", "authorize a deletion as a restoration",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "no staged index entry: gone.txt")
+
+    def test_revert_formatting_on_authorized_path_refuses(self) -> None:
+        """An authorized path also named in --revert-formatting (a
+        whitespace-only ancestor/HEAD difference makes it both guard-flagged
+        and a formatting candidate) refuses at the tree capture instead of
+        landing HEAD's blob while recording an authorized landing; a second
+        staged entry keeps the landing live so the refusal arm is reached."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        (self.fixture / "other.txt").write_text("other\n")
+        self.git("add", "work.txt", "other.txt")
+        self.git("commit", "-qm", "base work content")
+        (self.fixture / "work.txt").write_text("a\nold \n")
+        (self.fixture / "other.txt").write_text("other edit\n")
+        self.git("add", "work.txt", "other.txt")
+        self.git("commit", "-qm", "gain trailing space and edit")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        (self.fixture / "other.txt").write_text("other further\n")
+        self.git("add", "work.txt", "other.txt")
+        ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "other.txt",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--revert-formatting", "work.txt",
+            "--subject", "authorize and revert-format the same path",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "left the declared set before the tree capture",
+        )
+
+    def test_authorized_empty_staged_set_at_landing_refuses(self) -> None:
+        """A sole authorized path reverted by --revert-formatting empties the
+        staged set; the landing refuses instead of the pre-existing
+        no-staged-changes skip arm exiting 0 with the authorization inert."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        (self.fixture / "work.txt").write_text("a\nold \n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain trailing space")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        self.git("add", "work.txt")
+        ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--revert-formatting", "work.txt",
+            "--subject", "authorize and revert-format the sole path",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "the staged set is empty at the landing",
+        )
+
+    def test_detached_head_attach_during_hooks_refuses(self) -> None:
+        """A detached checkout that a pre-update commit hook re-attaches
+        refuses (the detached landing arm's negative control)."""
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.git("checkout", "--detach")
+        self.install_hook(
+            "prepare-commit-msg",
+            "git symbolic-ref HEAD refs/heads/feature/PROJ-1234-done-run\n",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--boundary-class", "per-task",
+            "--subject", "detached landing with attach hook",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "HEAD left detached during the pre-update commit hooks",
+        )
+        # the hook's re-attach side effect stands; the landing still refused
+        attached = self.git("symbolic-ref", "-q", "HEAD").stdout.strip()
+        self.assertEqual(attached, "refs/heads/feature/PROJ-1234-done-run")
+        self.assertEqual(
+            self.git("rev-parse", "HEAD").stdout.strip(), prior_head,
+        )
+
+    def test_stale_marker_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        Path(exports["DONE_RUN_MARKER"]).write_text("garbage marker content\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize over a stale marker",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "no root-confirmed run-start marker")
+
+    def test_mismatched_marker_export_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize with a foreign marker export",
+            env=self.authorized_env(
+                exports, DONE_RUN_MARKER=str(self.tmp / "elsewhere"),
+            ),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "selected DONE_RUN_MARKER export is not the "
+                            "newest root-confirmed marker")
+
+    def test_mismatched_run_id_export_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize with a foreign run id export",
+            env=self.authorized_env(exports, DONE_RUN_ID="20991231T235959Z-foreign00"),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "does not match the run manifest run_id=")
+
+    def test_mismatched_manifest_export_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        crafted = self.tmp / "crafted-manifest.json"
+        record = json.loads(Path(exports["DONE_RUN_MANIFEST"]).read_text())
+        record["marker"] = "run-start-00000000-dead"
+        crafted.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize with a foreign manifest export",
+            env=self.authorized_env(exports, DONE_RUN_MANIFEST=str(crafted)),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "not bound to the newest root-confirmed marker")
+
+    def test_root_mismatch_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.rewrite_manifest(exports, repo_root="0" * 64)
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize over a foreign root manifest",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "records a different repo root")
+
+    def test_terminal_run_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.rewrite_manifest(exports, complete=True)
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize over a finalized run",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "the run boundary is finalized")
+
+    def test_unowned_lock_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        env = self.authorized_env(exports)
+        env.pop("DONE_LOCK_TOKEN")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize without the lock exports",
+            env=env,
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "no live done-lock ownership")
+
+    def test_unrelated_reversal_still_refuses(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        for name, vintage, gained in (
+            ("work.txt", self.VINTAGE, self.GAINED),
+            ("other.txt", "o\nold\n", "o\nnew\n"),
+        ):
+            (self.fixture / name).write_text(vintage)
+            self.git("add", name)
+            self.git("commit", "-qm", f"base {name}")
+            (self.fixture / name).write_text(gained)
+            self.git("add", name)
+            self.git("commit", "-qm", f"gain {name}")
+            (self.fixture / name).write_text(vintage)
+            self.git("add", name)
+        ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "other.txt",
+        )
+        count_before = self.commit_count()
+        proc = self.run_commit(
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "authorize one restoration beside an unrelated one",
+            env=self.authorized_env(exports),
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, combined)
+        self.assertIn("leaked revert", combined)
+        self.assertIn("other.txt", combined)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), prior_head)
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "cached-diff-guard")
+
+    def test_hook_index_tree_change_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook(
+            "pre-commit",
+            "printf 'a\\nhooked\\n' > work.txt\n"
+            "git add work.txt\n",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook mutates the staged tree",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "changed the staged index tree")
+        self.assertEqual(self.commit_count(), count_before)
+
+    def test_hook_scope_change_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook(
+            "pre-commit",
+            "printf 'stranger bytes\\n' > stranger.txt\n"
+            "git add stranger.txt\n",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook stages a foreign scope change",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "changed the staged index tree")
+        self.assertEqual(self.commit_count(), count_before)
+
+    def test_worktree_bytes_never_substitute_staged_bytes(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        # a pre-update commit hook drifts the worktree bytes only; the index
+        # keeps the staged restoration, and the landing must carry exactly
+        # the staged blob (commit-tree never rereads worktree bytes)
+        self.install_hook(
+            "pre-commit",
+            "printf 'a\\nhooked worktree drift\\n' > work.txt\n",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "land the staged bytes, not the worktree",
+            env=self.authorized_env(exports),
+        )
+        self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        self.assertIn(self.VINTAGE, self.git("show", "HEAD:work.txt").stdout)
+        self.assertIn(
+            "hooked worktree drift",
+            (self.fixture / "work.txt").read_text(),
+        )
+
+    def test_same_oid_head_switch_during_hooks_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.install_hook("pre-commit", "git checkout -qb same-snap-branch\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook switches HEAD at the same OID",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "symbolic target changed")
+        # the hook's side effect stands (outside the wrapper guarantee) and
+        # nothing landed on top of it
+        self.assertEqual(
+            self.git("rev-parse", "HEAD").stdout.strip(), prior_head,
+        )
+        self.assertEqual(
+            self.git("symbolic-ref", "--short", "-q", "HEAD").stdout.strip(),
+            "same-snap-branch",
+        )
+
+    def test_branch_tip_move_during_hooks_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook(
+            "pre-commit",
+            "new=$(git commit-tree 'HEAD^{tree}' -p HEAD -m 'hook moved the tip')\n"
+            'git update-ref "refs/heads/$(git symbolic-ref --short HEAD)" "$new"\n',
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook moves the branch tip",
+            env=self.authorized_env(exports),
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, combined)
+        self.assertIn("OID moved", combined)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+        # the hook's move stands and the wrapper landed nothing on top of it:
+        # the tip is exactly the hook's sole-parent-at-prior-HEAD commit
+        self.assertEqual(self.commit_count(), count_before + 1)
+        tip = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(tip[1:], [prior_head])
+        self.assertEqual(
+            self.git("log", "-1", "--format=%s").stdout.strip(),
+            "hook moved the tip",
+        )
+
+    def test_lock_replacement_during_hooks_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.install_hook(
+            "pre-commit",
+            'sed \'s/^lock_token=.*/lock_token=tampered/\' '
+            '"$DONE_LOCK_DIR/meta.env" > "$DONE_LOCK_DIR/meta.env.t"\n'
+            'mv "$DONE_LOCK_DIR/meta.env.t" "$DONE_LOCK_DIR/meta.env"\n',
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook replaces the lock token",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "no live done-lock ownership")
+
+    def test_manifest_finalized_during_hooks_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.install_hook(
+            "pre-commit",
+            "python3 -c 'import json,sys; p=sys.argv[1];"
+            " d=json.load(open(p)); d[\"complete\"]=True;"
+            " json.dump(d, open(p, \"w\"), indent=2, sort_keys=True)'"
+            ' "$DONE_RUN_MANIFEST"\n',
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook finalizes the run manifest",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "the run boundary is finalized")
+
+    def test_hook_arguments_environment_and_message_handling(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        msg_file_record = str(self.probe_path("prepare-commit-msg-msgfile"))
+        self.install_hook(
+            "pre-commit",
+            self.probe_snippet("pre-commit"),
+        )
+        self.install_hook(
+            "prepare-commit-msg",
+            self.probe_snippet(
+                "prepare-commit-msg",
+                extra=(
+                    'printf \'msgfile=%s\\n\' "$1" >> "'
+                    + str(self.probe_path("prepare-commit-msg"))
+                    + '"\n'
+                    'printf \'source=%s\\n\' "$2" >> "'
+                    + str(self.probe_path("prepare-commit-msg"))
+                    + '"\n'
+                    'cp "$1" "' + str(msg_file_record) + '"\n'
+                ),
+            ),
+        )
+        self.install_hook(
+            "commit-msg",
+            self.probe_snippet(
+                "commit-msg",
+                extra=(
+                    'printf \'msgfile=%s\\n\' "$1" >> "'
+                    + str(self.probe_path("commit-msg"))
+                    + '"\n'
+                    'printf "commit-msg added a line\\n" >> "$1"\n'
+                ),
+            ),
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "probe the pre-update commit hooks",
+            env=self.authorized_env(exports),
+        )
+        self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        pre = self.probe_path("pre-commit").read_text().splitlines()
+        self.assertIn("args=0", pre)
+        self.assertEqual(
+            [ln for ln in pre if ln.startswith("cwd=")],
+            [f"cwd={self.fixture.resolve()}"],
+        )
+        self.assertTrue(
+            [ln for ln in pre if ln.startswith("git_dir=")
+             and not ln.endswith("=unset")],
+            pre,
+        )
+        prepare = self.probe_path("prepare-commit-msg").read_text().splitlines()
+        self.assertIn("args=2", prepare)
+        self.assertIn("source=message", prepare)
+        self.assertTrue(
+            any(ln.startswith("msgfile=") for ln in prepare), prepare,
+        )
+        # the prepare-commit-msg file carried the composed message
+        self.assertIn(
+            "[PROJ-1234] probe the pre-update commit hooks",
+            Path(msg_file_record).read_text(),
+        )
+        commit_msg = self.probe_path("commit-msg").read_text().splitlines()
+        self.assertIn("args=1", commit_msg)
+        self.assertTrue(
+            any(ln.startswith("msgfile=") for ln in commit_msg), commit_msg,
+        )
+        # the landed message is the post-commit-msg file bytes: the hook's
+        # added line rode through
+        message = self.git("log", "-1", "--format=%B").stdout
+        self.assertIn(
+            "[PROJ-1234] probe the pre-update commit hooks", message,
+        )
+        self.assertIn("commit-msg added a line", message)
+
+    def test_post_commit_no_args_sees_new_head(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.install_hook(
+            "post-commit",
+            self.probe_snippet(
+                "post-commit",
+                extra=(
+                    "printf 'head=%s\\n' \"$(git rev-parse HEAD)\" >> \""
+                    + str(self.probe_path("post-commit"))
+                    + "\"\n"
+                ),
+            ),
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "probe post-commit on the new HEAD",
+            env=self.authorized_env(exports),
+        )
+        landing = self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        probe = self.probe_path("post-commit").read_text().splitlines()
+        self.assertIn("args=0", probe)
+        self.assertIn(f"head={landing}", probe)
+
+    def test_hook_failure_refuses_and_skips_post_commit(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook("pre-commit", "exit 1\n")
+        self.install_hook(
+            "post-commit", "touch " + str(self.probe_path("post-commit")) + "\n",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "pre-commit refuses outright",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "pre-commit hook refused")
+        self.assertEqual(self.commit_count(), count_before)
+        # refusals skip post-commit
+        self.assertFalse(self.probe_path("post-commit").exists())
+
+    def test_marker_removal_during_hooks_refuses(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.install_hook("pre-commit", "rm -f \"$DONE_RUN_MARKER\"\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "a hook removes the run marker",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "no root-confirmed run-start marker")
+
+    def test_post_commit_failure_leaves_commit_landed(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook("post-commit", "exit 1\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "post-commit fails after the landing",
+            env=self.authorized_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            "post-commit hook failed; the landed commit stands",
+            proc.stderr,
+        )
+        self.assertEqual(self.commit_count(), count_before + 1)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+
+    def test_reference_transaction_phases_fired(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        probe = self.probe_path("ref-transaction")
+        self.install_hook(
+            "reference-transaction",
+            (
+                f"printf 'phase=%s\\n' \"$1\" >> '{probe}'\n"
+                f"cat >> '{probe}'\n"
+            ),
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "probe the ref transaction phases",
+            env=self.authorized_env(exports),
+        )
+        landing = self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        text = probe.read_text()
+        self.assertIn("phase=prepared", text)
+        self.assertIn("phase=committed", text)
+        self.assertIn(
+            f"{prior_head} {landing} refs/heads/feature/PROJ-1234-done-run",
+            text,
+        )
+
+    def test_reference_transaction_veto_blocks_landing(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        count_before = self.commit_count()
+        self.install_hook(
+            "reference-transaction",
+            '[ "$1" = prepared ] || exit 0\n'
+            'while read -r _old _new ref; do\n'
+            '  case "$ref" in\n'
+            '    refs/heads/feature/PROJ-1234-done-run) exit 1;;\n'
+            '  esac\n'
+            'done\n'
+            'exit 0\n',
+        )
+        self.install_hook("post-commit", "touch " + str(self.probe_path("post-commit")) + "\n")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "the ref hook vetoes the landing",
+            env=self.authorized_env(exports),
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "ref transaction refused")
+        self.assertEqual(self.commit_count(), count_before)
+        # refusals skip post-commit: the vetoed landing ran none
+        self.assertFalse(self.probe_path("post-commit").exists())
+
+    def test_detached_head_lands_direct_cas_without_branch(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        self.git("checkout", "--detach")
+        branches_before = sorted(
+            self.git(
+                "for-each-ref", "refs/heads", "--format=%(refname)",
+            ).stdout.splitlines()
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--boundary-class", "per-task",
+            "--subject", "detached authorized landing",
+            env=self.authorized_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        # direct HEAD compare-and-swapped: still detached, no branch created
+        detached = self.git("symbolic-ref", "-q", "HEAD", check=False)
+        self.assertNotEqual(detached.returncode, 0)
+        self.assertEqual(landing, self.git("rev-parse", "HEAD").stdout.strip())
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, prior_head])
+        self.assertEqual(
+            self.git("rev-parse", "HEAD:work.txt").stdout.strip(), ancestor_blob,
+        )
+        self.assertEqual(
+            sorted(
+                self.git(
+                    "for-each-ref", "refs/heads", "--format=%(refname)",
+                ).stdout.splitlines()
+            ),
+            branches_before,
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+
+    def test_landing_preserves_message_identity_and_ledger_once(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "identity and message preservation",
+            env=self.authorized_env(
+                exports,
+                GIT_AUTHOR_NAME="Auth Or", GIT_AUTHOR_EMAIL="auth@example.test",
+                GIT_COMMITTER_NAME="Comm Itter",
+                GIT_COMMITTER_EMAIL="comm@example.test",
+            ),
+        )
+        landing = self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        self.assertEqual(
+            self.git("log", "-1", "--format=%an <%ae>|%cn <%ce>").stdout.strip(),
+            "Auth Or <auth@example.test>|Comm Itter <comm@example.test>",
+        )
+        self.assertEqual(
+            self.git("log", "-1", "--format=%B").stdout.splitlines()[0],
+            "[PROJ-1234] identity and message preservation",
+        )
+        # no signing injected when the signing config is unset
+        self.assertNotIn("gpgsig", self.git("cat-file", "commit", landing).stdout)
+
+    def test_signing_config_preserved(self) -> None:
+        exports, ancestor_blob, prior_head = self.restoration_fixture()
+        key = self.tmp / "signkey"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C",
+             "fixture-signing", "-f", str(key)],
+            check=True, capture_output=True, timeout=60,
+        )
+        self.git("config", "gpg.format", "ssh")
+        self.git("config", "user.signingkey", str(key) + ".pub")
+        self.git("config", "commit.gpgsign", "true")
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "signed authorized landing",
+            env=self.authorized_env(exports),
+        )
+        landing = self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        self.assertIn(
+            "gpgsig", self.git("cat-file", "commit", landing).stdout,
+        )
+
+    def test_declared_deletion_stays_scoped_beside_authorization(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "gone.txt").write_text("tracked work\n")
+        self.git("add", "gone.txt")
+        self.git("commit", "-qm", "add gone")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        (self.fixture / "work.txt").write_text(self.GAINED)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain head content")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        (self.fixture / "gone.txt").unlink()
+        self.git("rm", "--cached", "--quiet", "gone.txt")
+        ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "gone.txt",
+        )
+        proc = self.run_commit(
+            "--stage", "work.txt", "--stage", "gone.txt",
+            "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
+            "--subject", "restoration beside the declared deletion",
+            env=self.authorized_env(exports),
+        )
+        self.assert_landed(proc, exports, prior_head, ancestor_blob)
+        shown = self.git("show", "--name-status", "--format=", "HEAD").stdout
+        self.assertIn("D\tgone.txt", shown)
+        self.assertIn("M\twork.txt", shown)
+
+    def test_option_misuse_refuses(self) -> None:
+        self.init_fixture_repo()
+        missing_value = self.run_commit(
+            "--stage", "seed.txt",
+            "--authorize-ancestor-restoration", "work.txt",
+            "--subject", "missing the blob value",
+        )
+        self.assertEqual(missing_value.returncode, 3)
+        self.assertIn(
+            "needs <repo-relative-path> <expected-blob-id>",
+            missing_value.stderr,
+        )
+        duplicate = self.run_commit(
+            "--stage", "seed.txt",
+            "--authorize-ancestor-restoration", "a.txt",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--authorize-ancestor-restoration", "b.txt",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--subject", "two authorizations",
+        )
+        self.assertEqual(duplicate.returncode, 3)
+        self.assertIn("given more than once", duplicate.stderr)
+
+
 class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     """Task 4 repository tests: the finalize subcommand's release ceremony."""
 

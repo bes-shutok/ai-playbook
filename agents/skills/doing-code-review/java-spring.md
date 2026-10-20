@@ -114,6 +114,15 @@ the complete branch diff, not only to the highlighted line:
 - `java_guidelines.md` #25: living-documentation status claims reconciled
   with implementation evidence (executable consumer, producer, or witness;
   apply when changed living docs claim an integration is active).
+- `java_guidelines.md` #27: every added or changed class, record, constructor,
+  and construction call site in the complete diff for the builder threshold
+  (strictly more than three constructor parameters), the framework-managed
+  exemption (dependency-injection and configuration-binding constructors),
+  the framework-constructed data type that keeps its required constructor,
+  and unnecessary builders on simple constructions (three or fewer
+  parameters).
+- `java_guidelines.md` #28: every added or changed interface declaration for
+  top-level placement in its own source file.
 - `jvm_guidelines.md` #18: floor `Duration.toMillis()` and every other
   truncating conversion before sinks that treat zero as unlimited or disabled;
   the rule applies to any such sink, not only the guideline's named timeout
@@ -130,16 +139,15 @@ the complete branch diff, not only to the highlighted line:
   vocabulary are the hint to check; the rule's candidate test is the
   admission shape.
 
-These four `jvm_guidelines.md` rules are applied on every Java review,
-not only after an incident.
-
 Assign findings to the normal owners: unused surface to simplification,
 boundary behavior to quality or testing, error leakage and transport security
 to risk, and dependency wiring or compatibility to implementation or risk.
 Shared-helper raise-versus-degrade tracing belongs to quality;
 the flag and configuration matrix and timeout lifecycle to risk;
 the compatibility witness to implementation;
-living-documentation reconciliation to documentation.
+living-documentation reconciliation to documentation;
+construction shape (#27, both directions) to simplification;
+interface placement (#28) to architecture.
 
 ## Message-driven handlers (Spring Kafka)
 

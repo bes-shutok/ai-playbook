@@ -1,6 +1,7 @@
 # Backlog: execution claim retry ceiling exact value unpinned by the witness suite
 
 - **Cluster:** execution-claim-reliability
+- **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same gateway: execution_claim.sh arms)
 - **Status:** open
 - **Priority:** Low
 

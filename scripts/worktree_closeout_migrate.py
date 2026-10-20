@@ -596,11 +596,20 @@ _CITATION_TOKEN_RE = re.compile(r"-p([0-9a-f]{8})$")
 
 def _plan_identity_for(plan_path: Path) -> str | None:
     """The plan file's repository-relative identity, or None when it cannot
-    be derived (a gitless target never fails on identity grounds)."""
+    be derived (a gitless target never fails on identity grounds). A plan
+    sitting directly under the completed archive derives the plans-root
+    path its records were tokened from, the same identity the completed-twin
+    runner passes through ``--plan-identity``."""
     root = review_plan_identity.repository_root(plan_path.parent)
     if root is None:
         return None
-    return review_plan_identity.normalize_plan_path(plan_path, root)
+    identity = review_plan_identity.normalize_plan_path(plan_path, root)
+    if identity is None:
+        return None
+    parent, _, basename = identity.rpartition("/")
+    if parent == _COMPLETED_DIR:
+        return f"{_PLANS_DIR}/{basename}"
+    return identity
 
 
 def _member_identity_diagnostic(member: Path, plan_identity: str) -> str | None:

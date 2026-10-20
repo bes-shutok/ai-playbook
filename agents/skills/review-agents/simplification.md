@@ -98,10 +98,10 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 ### `shrink:` unnecessary indirection and avoidable boilerplate
 
 - Pass-through wrappers: methods that only delegate to dependencies
-- Excessive method chaining: builder pattern for simple constructions
+- Excessive method chaining: a builder on a construction with three or fewer parameters; above that threshold the language guideline's construction rule governs
 - Interface wrapping primitives: custom types for standard library types
 - Middleware stacking: multiple middlewares that could be one
-- Hand-written code that Lombok can generate: builders, constructors, getters/setters, utility classes, `toString`/`equals`/`hashCode`
+- Hand-written code that a generator available in the build (Lombok, for example) can produce: builders, constructors, getters/setters, utility classes, `toString`/`equals`/`hashCode`
 - Switch/if-else dispatch: enumerate every chain in new or modified code; flag discriminators with more than 4 cases (prefer EnumMap or enum-with-behavior); flag parallel switches on the same discriminator across methods
 - Raw string literals for field names, operation names, or error keys from an API contract or enum: use constants or `.name()` on the source enum
 - Fully-qualified type names in the PR diff's added annotations, constructor calls, declaration-level type references, and method bodies when the type is already imported, or when a normal import matches the file's existing style (`simplification#shrink-fqcn-import`). Default **Low**. Do not invent language-specific import rules beyond what the overlay and local file style show, and do not rewrite pre-existing FQN style outside the PR diff just for uniformity.
@@ -119,6 +119,8 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 **Unnecessary fallbacks (`delete:` or `shrink:`):** fallback path never triggers; legacy mode always disabled; silent catch-and-fallback hiding real errors.
 
 **Premature optimization (`yagni:` or `delete:`):** cache for data read once at startup; custom structures when maps/lists work; worker pools for rare tasks.
+
+**Missing builder (`shrink:`, `simplification#shrink-missing-builder`):** a direct constructor call with more than three parameters where the language guideline's construction rule requires a builder; the `shrink:` tag's fewer-lines meaning does not cover this direction, so the sub-pattern slug names it.
 
 **Superseded code verification:** plans should include grep proving zero callers before deletion tasks.
 

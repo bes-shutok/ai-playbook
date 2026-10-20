@@ -1,7 +1,7 @@
 # A fold's mechanical verification runs the committed bytes, and folds of certification findings get a machinery check before the fold commits
 
 - **Filed:** 2026-10-19, learn Step 1.9 capture from the smme strand-recovery session
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-20-fold-verification-runs-committed-bytes.md; the title's second mandate, a per-fold machinery check before the fold commits, is dispositioned out of scope in the plan's Outcome: it is a candidate gate with no admission case, the witnessed defects being verification gaps, not classification gaps)
 - **Workflow:** backlog
 - **Priority:** high (every authoring certification fold re-bites the gap)
 - **Cluster:** docs/history/backlog/2026-10-07-archived-plan-review-records-missing.md (the review-record durability family; that row owns records surviving after landing, this row owns the fold step verifying its own new artifacts before the fold commits; both sit on the review-loop fix-and-fold batch step)

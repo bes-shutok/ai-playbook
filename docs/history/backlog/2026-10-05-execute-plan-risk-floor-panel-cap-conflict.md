@@ -19,6 +19,7 @@ Execute-plan Phase 3 can require another full five-worker review after fixes, wh
 - The targeted-follow-up risk-signal rule requires a full five-worker panel at two or more signals; the execute-plan hard cap says to stop before a sixth full-panel round.
 - The current change remains within public API and security boundary scope. No documented exception or evidence-equivalent targeted selection was found in the current execute-plan and review-panel-selection skills.
 - **Cluster:** docs/history/plans/completed/2026-10-07-review-round-cap-operator-gate.md
+- **Cluster:** docs/history/backlog/2026-10-20-execute-plan-phase3-initial-pass-ignores-focused-panel.md (same surface: Phase 3 panel composition rules in tension)
 
 ## Expected
 

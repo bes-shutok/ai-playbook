@@ -10693,6 +10693,797 @@ def test_archive_ceremony_keeps_feature_run_boundary_before_rebase(tmp_path, swe
     assert "using worktree base-branch merge base" not in " ".join(result.warnings)
 
 
+# --------------------------------------------------------------------------- #
+# Plan checkbox: feature-only rebase archive attribution
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def _seed_start_commit_manifest(root: Path, start_commit: str) -> Path:
+    """Seed the active run manifest with an explicit start_commit."""
+    marker = make_marker(root, time.time(), os.getpid())
+    manifest_path = write_run_manifest_record(root, marker)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["start_commit"] = start_commit
+    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def _feature_start_commit(root: Path, note: str = "feature run start") -> str:
+    """Commit a tracked non-docs marker file on the current branch and
+    return the new HEAD sha (the run's feature-only start commit)."""
+    (root / "RUNNOTES.md").write_text(note + "\n", encoding="utf-8")
+    git(root, "add", "RUNNOTES.md")
+    assert git(root, "commit", "-m", note, "-q").returncode == 0
+    return git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def _fail_git_calls(ctx, needles):
+    """Return the ctx with a git method reporting rc 128 for matching
+    leading-argument tuples, delegating everything else."""
+    real_git = ctx.git
+
+    def flaky(*args, **kwargs):
+        for needle in needles:
+            if tuple(args[: len(needle)]) == tuple(needle):
+                return subprocess.CompletedProcess(args, 128, "", "injected failure")
+        return real_git(*args, **kwargs)
+
+    ctx.git = flaky
+    return ctx
+
+
+def test_archive_ceremony_feature_only_rebase_filters_upstream_archives(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A feature-only rebased start keeps the
+    manifest boundary and filters raw paths against the configured-base
+    snapshot: an upstream archive identical at snapshot and HEAD is
+    excluded while the run's own archive stays checked (the upstream plan
+    carries no exec-review record, so a filtering regression would flip
+    the finding to it)."""
+    root = make_repo(tmp_path, "ceremony-feature-only-rebase", gitignore_docs=True)
+    write_facts(root)
+    live_plan = "docs/history/plans/2026-10-05-feature-only.md"
+    (root / "docs/history/plans").mkdir(parents=True, exist_ok=True)
+    (root / live_plan).write_text(
+        "# Plan: feature only\n\n- [ ] run task\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", live_plan)
+    assert git(root, "commit", "-m", "create live plan", "-q").returncode == 0
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    upstream_archive = _committed_plan_archive(
+        root,
+        "2026-10-04-feature-only-upstream.md",
+        "# Plan: upstream\n\n- [x] done\n",
+    )
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    run_archive = "docs/history/plans/completed/2026-10-05-feature-only.md"
+    assert git(root, "mv", live_plan, run_archive).returncode == 0
+    assert git(root, "commit", "-m", "archive feature plan", "-q").returncode == 0
+    _write_exec_review_record(root, "2026-10-05-feature-only.md")
+    _seed_start_commit_manifest(root, feature_start)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert run_archive in result.message
+    assert "1 unchecked task box(es)" in result.message
+    assert upstream_archive not in result.message
+
+    (root / run_archive).write_text(
+        "# Plan: feature only\n\n- [x] run task\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", run_archive)
+    assert git(root, "commit", "--amend", "-m", "archive feature plan", "-q").returncode == 0
+
+    passed = run_gate("archive-ceremony", ctx_for(root))
+
+    assert passed.rc == 0, passed.message
+    assert run_archive in passed.message
+    assert upstream_archive not in passed.message
+    warnings = " ".join(passed.warnings)
+    assert "feature-only run start" in warnings
+    assert "configured-base snapshot" in warnings
+
+
+def test_archive_ceremony_feature_only_collision_content_and_mode_retained(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Changed-content and mode-only collisions
+    with the configured-base snapshot stay checked; only the matching
+    presence-content-mode triple is excluded."""
+    root = make_repo(tmp_path, "ceremony-feature-only-collide", gitignore_docs=True)
+    write_facts(root)
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    archive_rel = _committed_plan_archive(
+        root, "2026-10-04-collide.md", "# Plan: collide\n\n- [x] done\n"
+    )
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    # Changed content in the run range: the M row must survive filtering.
+    (root / archive_rel).write_text(
+        "# Plan: collide\n\n- [x] done\n\n## Amended by the run\n",
+        encoding="utf-8",
+    )
+    git(root, "add", "-f", archive_rel)
+    assert git(root, "commit", "-m", "amend archive content", "-q").returncode == 0
+    _seed_start_commit_manifest(root, feature_start)
+
+    changed = run_gate("archive-ceremony", ctx_for(root))
+
+    assert changed.rc == 1, changed.message
+    assert archive_rel in changed.message
+
+    # Mode-only collision on a fresh geometry: same blob, mode differs.
+    root2 = make_repo(tmp_path, "ceremony-feature-only-mode", gitignore_docs=True)
+    write_facts(root2)
+    git(root2, "checkout", "-b", "feature")
+    feature_start2 = _feature_start_commit(root2)
+    git(root2, "checkout", "main")
+    archive2 = _committed_plan_archive(
+        root2, "2026-10-04-mode-only.md", "# Plan: mode only\n\n- [x] done\n"
+    )
+    git(root2, "checkout", "feature")
+    assert git(root2, "rebase", "main").returncode == 0
+    os.chmod(root2 / archive2, 0o755)
+    git(root2, "add", "-f", archive2)
+    assert git(root2, "commit", "-m", "flip archive mode", "-q").returncode == 0
+    _seed_start_commit_manifest(root2, feature_start2)
+
+    mode_only = run_gate("archive-ceremony", ctx_for(root2))
+
+    assert mode_only.rc == 1, mode_only.message
+    assert archive2 in mode_only.message
+
+    # Identical collision: the upstream archive is added after the fork, so
+    # the two-dot A row matches the snapshot on presence, content, and mode
+    # and is excluded without any run-side commit.
+    root3 = make_repo(tmp_path, "ceremony-feature-only-identical", gitignore_docs=True)
+    write_facts(root3)
+    git(root3, "checkout", "-b", "feature")
+    feature_start3 = _feature_start_commit(root3)
+    git(root3, "checkout", "main")
+    body3 = "# Plan: identical\n\n- [x] done\n"
+    archive3 = _committed_plan_archive(root3, "2026-10-04-identical.md", body3)
+    git(root3, "checkout", "feature")
+    assert git(root3, "rebase", "main").returncode == 0
+    _seed_start_commit_manifest(root3, feature_start3)
+
+    identical = run_gate("archive-ceremony", ctx_for(root3))
+
+    assert identical.rc == 0, identical.message
+    assert archive3 not in identical.message
+
+
+def test_archive_ceremony_feature_only_member_rows_map_through_parent_charter(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Added and changed member rows under an
+    unchanged charter map to the parent charter at HEAD and keep it
+    checked."""
+    root = make_repo(tmp_path, "ceremony-feature-only-members", gitignore_docs=True)
+    write_facts(root)
+    slug = "2026-10-04-feature-members"
+    plan_dir = root / "docs/history/plans" / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        "# Plan: members\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir / "tasks/01-a.md").write_text(
+        "### Task 1\n\n- [x] a\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01-a.md")
+    assert git(root, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir = root / "docs/history/plans/completed" / slug
+    git(root, "mv", f"docs/history/plans/{slug}",
+        str(archive_dir.relative_to(root)))
+    assert git(root, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    # Add a member with an unchecked box and change an existing member's
+    # content: both raw rows map to the unchanged charter at HEAD.
+    charter_rel = f"docs/history/plans/completed/{slug}/PLAN.md"
+    (archive_dir / "tasks/02-added.md").write_text(
+        "### Task 2\n\n- [ ] added\n", encoding="utf-8"
+    )
+    (archive_dir / "tasks/01-a.md").write_text(
+        "### Task 1\n\n- [x] a amended\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", f"docs/history/plans/completed/{slug}/tasks/02-added.md",
+        f"docs/history/plans/completed/{slug}/tasks/01-a.md")
+    assert git(root, "commit", "-m", "run member work", "-q").returncode == 0
+    _seed_start_commit_manifest(root, feature_start)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert charter_rel in result.message
+    assert "1 unchecked task box(es)" in result.message
+
+    # Mode-only member change also keeps the charter checked.
+    root2 = make_repo(tmp_path, "ceremony-feature-only-member-mode", gitignore_docs=True)
+    write_facts(root2)
+    slug2 = "2026-10-04-member-mode"
+    plan_dir2 = root2 / "docs/history/plans" / slug2
+    (plan_dir2 / "tasks").mkdir(parents=True)
+    (plan_dir2 / "PLAN.md").write_text(
+        "# Plan: member mode\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir2 / "tasks/01.md").write_text("### Task 1\n\n- [x] one\n", encoding="utf-8")
+    git(root2, "add", "-f", f"docs/history/plans/{slug2}/PLAN.md",
+        f"docs/history/plans/{slug2}/tasks/01.md")
+    assert git(root2, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root2 / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir2 = root2 / "docs/history/plans/completed" / slug2
+    git(root2, "mv", f"docs/history/plans/{slug2}",
+        str(archive_dir2.relative_to(root2)))
+    assert git(root2, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root2, "checkout", "-b", "feature")
+    feature_start2 = _feature_start_commit(root2)
+    git(root2, "checkout", "feature")
+    assert git(root2, "rebase", "main").returncode == 0
+    os.chmod(archive_dir2 / "tasks/01.md", 0o755)
+    git(root2, "add", "-f", f"docs/history/plans/completed/{slug2}/tasks/01.md")
+    assert git(root2, "commit", "-m", "flip member mode", "-q").returncode == 0
+    _write_exec_review_record(root2, slug2)
+    _seed_start_commit_manifest(root2, feature_start2)
+
+    mode_only = run_gate("archive-ceremony", ctx_for(root2))
+
+    charter_rel2 = f"docs/history/plans/completed/{slug2}/PLAN.md"
+    assert mode_only.rc == 0, mode_only.message
+    assert charter_rel2 in mode_only.message
+
+
+def test_archive_ceremony_feature_only_source_only_member_deletion(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Base A+B, start A, HEAD B: the D(A) row
+    checks the surviving shared charter and the unchanged B addition is
+    excluded, so exactly the charter unit surfaces."""
+    root = make_repo(tmp_path, "ceremony-feature-only-src-del", gitignore_docs=True)
+    write_facts(root)
+    slug = "2026-10-04-src-del"
+    plan_dir = root / "docs/history/plans" / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        "# Plan: src del\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir / "tasks/01-a.md").write_text("### Task 1\n\n- [x] a\n", encoding="utf-8")
+    git(root, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01-a.md")
+    assert git(root, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir = root / "docs/history/plans/completed" / slug
+    git(root, "mv", f"docs/history/plans/{slug}",
+        str(archive_dir.relative_to(root)))
+    assert git(root, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    # Upstream adds member B under the archived charter after the fork.
+    git(root, "checkout", "main")
+    (archive_dir / "tasks/02-b.md").write_text(
+        "### Task 2\n\n- [x] b\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", f"docs/history/plans/completed/{slug}/tasks/02-b.md")
+    assert git(root, "commit", "-m", "upstream adds member b", "-q").returncode == 0
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    # The run deletes member A only; the charter and B survive at HEAD.
+    git(root, "rm", "-q", f"docs/history/plans/completed/{slug}/tasks/01-a.md")
+    assert git(root, "commit", "-m", "run deletes member a", "-q").returncode == 0
+    _write_exec_review_record(root, slug)
+    _seed_start_commit_manifest(root, feature_start)
+
+    archives, notes, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    charter_rel = f"docs/history/plans/completed/{slug}/PLAN.md"
+    assert blockers == [], blockers
+    assert [row[0] for row in archives] == [charter_rel]
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert charter_rel in result.message
+
+
+def test_archive_ceremony_feature_only_move_rows_reach_base_comparison(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Same-charter and heavily rewritten
+    cross-charter moves surface their D and A rows independently of Git
+    similarity pairing and map both endpoints to their checked charters."""
+    root = make_repo(tmp_path, "ceremony-feature-only-same-move", gitignore_docs=True)
+    write_facts(root)
+    slug = "2026-10-04-same-move"
+    plan_dir = root / "docs/history/plans" / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        "# Plan: same move\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir / "tasks/01.md").write_text("### Task 1\n\n- [x] one\n", encoding="utf-8")
+    git(root, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01.md")
+    assert git(root, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir = root / "docs/history/plans/completed" / slug
+    git(root, "mv", f"docs/history/plans/{slug}",
+        str(archive_dir.relative_to(root)))
+    assert git(root, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    git(root, "mv", f"docs/history/plans/completed/{slug}/tasks/01.md",
+        f"docs/history/plans/completed/{slug}/tasks/01-renamed.md")
+    assert git(root, "commit", "-m", "same-charter member move", "-q").returncode == 0
+    _write_exec_review_record(root, slug)
+    _seed_start_commit_manifest(root, feature_start)
+
+    archives, notes, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    charter_rel = f"docs/history/plans/completed/{slug}/PLAN.md"
+    assert blockers == [], blockers
+    assert [row[0] for row in archives] == [charter_rel]
+
+    # Cross-charter move with a heavy rewrite: both charters stay checked.
+    root2 = make_repo(tmp_path, "ceremony-feature-only-cross-move", gitignore_docs=True)
+    write_facts(root2)
+    slug_a = "2026-10-04-cross-a"
+    slug_b = "2026-10-04-cross-b"
+    for cross_slug, body in (
+        (slug_a, "# Plan: cross a\n\n- [x] charter\n"),
+        (slug_b, "# Plan: cross b\n\n- [x] charter\n"),
+    ):
+        cross_dir = root2 / "docs/history/plans" / cross_slug
+        (cross_dir / "tasks").mkdir(parents=True)
+        (cross_dir / "PLAN.md").write_text(body, encoding="utf-8")
+        (cross_dir / "tasks/01.md").write_text(
+            "### Task 1\n\n- [x] one\n", encoding="utf-8"
+        )
+        git(root2, "add", "-f", f"docs/history/plans/{cross_slug}/PLAN.md",
+            f"docs/history/plans/{cross_slug}/tasks/01.md")
+    assert git(root2, "commit", "-m", "create cross plans", "-q").returncode == 0
+    (root2 / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    for cross_slug in (slug_a, slug_b):
+        cross_archive = root2 / "docs/history/plans/completed" / cross_slug
+        git(root2, "mv", f"docs/history/plans/{cross_slug}",
+            str(cross_archive.relative_to(root2)))
+    assert git(root2, "commit", "-m", "archive cross plans", "-q").returncode == 0
+    git(root2, "checkout", "-b", "feature")
+    feature_start2 = _feature_start_commit(root2)
+    git(root2, "checkout", "feature")
+    assert git(root2, "rebase", "main").returncode == 0
+    git(root2, "mv",
+        f"docs/history/plans/completed/{slug_a}/tasks/01.md",
+        f"docs/history/plans/completed/{slug_b}/tasks/01-moved.md")
+    moved = root2 / "docs/history/plans/completed" / slug_b / "tasks/01-moved.md"
+    moved.write_text(
+        "### Task 1 (fully rewritten by the run)\n\n"
+        "- [x] one; the body now carries an entirely different shape,\n"
+        "so similarity pairing could never pair these endpoints.\n",
+        encoding="utf-8",
+    )
+    git(root2, "add", "-f",
+        f"docs/history/plans/completed/{slug_b}/tasks/01-moved.md")
+    assert git(root2, "commit", "-m", "cross-charter member move", "-q").returncode == 0
+    _write_exec_review_record(root2, slug_a)
+    _write_exec_review_record(root2, slug_b)
+    _seed_start_commit_manifest(root2, feature_start2)
+
+    archives2, _notes2, blockers2 = lib._derive_archived_plans(ctx_for(root2))
+
+    assert blockers2 == [], blockers2
+    assert sorted(row[0] for row in archives2) == [
+        f"docs/history/plans/completed/{slug_a}/PLAN.md",
+        f"docs/history/plans/completed/{slug_b}/PLAN.md",
+    ]
+
+
+def test_archive_ceremony_feature_only_state_transitions_and_skips(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Whole-charter deferred-to-completed and
+    completed-to-rejected moves skip the vanished source and classify the
+    destination by HEAD state (the rejected exemption intact); whole-charter
+    deletion skips member D rows only after HEAD confirms the parent
+    absent."""
+    root = make_repo(tmp_path, "ceremony-feature-only-transitions", gitignore_docs=True)
+    write_facts(root)
+    # Upstream archives foo under deferred/ and bar under completed/.
+    deferred_dir = root / "docs/history/plans/deferred"
+    deferred_dir.mkdir(parents=True, exist_ok=True)
+    foo_rel = "docs/history/plans/deferred/2026-10-04-foo.md"
+    (deferred_dir / "2026-10-04-foo.md").write_text(
+        "# Plan: foo\n\n- [x] done\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", foo_rel)
+    assert git(root, "commit", "-m", "seed deferred plan", "-q").returncode == 0
+    bar_archive = _committed_plan_archive(
+        root, "2026-10-04-bar.md", "# Plan: bar\n\n- [x] done\n"
+    )
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    assert git(root, "commit", "--allow-empty", "-m", "main advances", "-q").returncode == 0
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    completed_rel = "docs/history/plans/completed/2026-10-04-foo.md"
+    rejected_rel = "docs/history/plans/rejected/2026-10-04-bar.md"
+    (root / "docs/history/plans/rejected").mkdir(parents=True, exist_ok=True)
+    git(root, "mv", foo_rel, completed_rel)
+    git(root, "mv", bar_archive, rejected_rel)
+    assert git(root, "commit", "-m", "transition archived plans", "-q").returncode == 0
+    _write_exec_review_record(root, "2026-10-04-foo.md")
+    _seed_start_commit_manifest(root, feature_start)
+
+    archives, notes, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert blockers == [], blockers
+    assert sorted(row[0] for row in archives) == [
+        completed_rel,
+        "docs/history/plans/rejected/2026-10-04-bar.md",
+    ]
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert completed_rel in result.message
+    assert foo_rel not in result.message
+    assert bar_archive not in result.message
+    assert "rejected-state archive(s) exempt" in result.message
+
+    # Whole-charter deletion: the D member row is skipped only after HEAD
+    # confirms the parent charter absent.
+    root2 = make_repo(tmp_path, "ceremony-feature-only-charter-del", gitignore_docs=True)
+    write_facts(root2)
+    slug = "2026-10-04-charter-del"
+    plan_dir = root2 / "docs/history/plans" / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        "# Plan: charter del\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir / "tasks/01.md").write_text("### Task 1\n\n- [x] one\n", encoding="utf-8")
+    git(root2, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01.md")
+    assert git(root2, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root2 / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir = root2 / "docs/history/plans/completed" / slug
+    git(root2, "mv", f"docs/history/plans/{slug}",
+        str(archive_dir.relative_to(root2)))
+    assert git(root2, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root2, "checkout", "-b", "feature")
+    feature_start2 = _feature_start_commit(root2)
+    git(root2, "checkout", "feature")
+    assert git(root2, "rebase", "main").returncode == 0
+    git(root2, "rm", "-rq", f"docs/history/plans/completed/{slug}")
+    assert git(root2, "commit", "-m", "run removes whole archive", "-q").returncode == 0
+    _seed_start_commit_manifest(root2, feature_start2)
+
+    archives2, notes2, blockers2 = lib._derive_archived_plans(ctx_for(root2))
+
+    assert archives2 == [], archives2
+    assert blockers2 == [], blockers2
+
+
+def test_archive_ceremony_feature_only_bare_file_rows(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Bare-file A/M/D rows map directly: changed
+    and added files stay checked, and an absent D is skipped only after a
+    successful HEAD lookup."""
+    root = make_repo(tmp_path, "ceremony-feature-only-bare", gitignore_docs=True)
+    write_facts(root)
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    archive_m = _committed_plan_archive(
+        root, "2026-10-04-bare-m.md", "# Plan: bare m\n\n- [x] done\n"
+    )
+    archive_d = _committed_plan_archive(
+        root, "2026-10-04-bare-d.md", "# Plan: bare d\n\n- [x] done\n"
+    )
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    (root / archive_m).write_text(
+        "# Plan: bare m\n\n- [ ] run-amended box\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", archive_m)
+    added = "docs/history/plans/completed/2026-10-04-bare-added.md"
+    (root / added).write_text("# Plan: bare added\n\n- [x] done\n", encoding="utf-8")
+    git(root, "add", "-f", added)
+    git(root, "rm", "-q", archive_d)
+    assert git(root, "commit", "-m", "run bare-file work", "-q").returncode == 0
+    _write_exec_review_record(root, "2026-10-04-bare-added.md")
+    _seed_start_commit_manifest(root, feature_start)
+
+    archives, notes, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert blockers == [], blockers
+    assert sorted(row[0] for row in archives) == sorted([added, archive_m])
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert archive_m in result.message
+    assert archive_d not in result.message
+
+
+def test_archive_ceremony_feature_only_missing_or_nonregular_charter_blocks(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A member row whose parent charter is absent
+    or non-regular at HEAD stays checked as an explicit blocker, and an
+    injected parent HEAD lookup error retains the failure explicitly."""
+    root = make_repo(tmp_path, "ceremony-feature-only-orphan", gitignore_docs=True)
+    write_facts(root)
+    slug = "2026-10-04-orphan"
+    plan_dir = root / "docs/history/plans" / slug
+    (plan_dir / "tasks").mkdir(parents=True)
+    (plan_dir / "PLAN.md").write_text(
+        "# Plan: orphan\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir / "tasks/01.md").write_text("### Task 1\n\n- [x] one\n", encoding="utf-8")
+    git(root, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01.md")
+    assert git(root, "commit", "-m", "create directory plan", "-q").returncode == 0
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir = root / "docs/history/plans/completed" / slug
+    git(root, "mv", f"docs/history/plans/{slug}",
+        str(archive_dir.relative_to(root)))
+    assert git(root, "commit", "-m", "archive directory plan", "-q").returncode == 0
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    # The run adds a member and deletes the parent charter: the member's A
+    # row finds no charter at HEAD and must block explicitly.
+    charter_rel = f"docs/history/plans/completed/{slug}/PLAN.md"
+    (archive_dir / "tasks/02-orphan.md").write_text(
+        "### Task 2\n\n- [x] orphan\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", f"docs/history/plans/completed/{slug}/tasks/02-orphan.md")
+    git(root, "rm", "-q", charter_rel)
+    assert git(root, "commit", "-m", "orphan the member", "-q").returncode == 0
+    _seed_start_commit_manifest(root, feature_start)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert charter_rel in result.message
+    assert "not a regular file at HEAD" in result.message or (
+        "missing or ambiguous at HEAD" in result.message
+    ), result.message
+
+    # Injected parent HEAD lookup error: the blocker carries the failure.
+    real_probe = lib._head_regular_archive_file
+
+    def failing_probe(ctx, rel):
+        if rel == charter_rel:
+            return f"injected HEAD lookup failure: {rel}"
+        return real_probe(ctx, rel)
+
+    monkeypatch.setattr(lib, "_head_regular_archive_file", failing_probe)
+    injected = run_gate("archive-ceremony", ctx_for(root))
+
+    assert injected.rc == 1, injected.message
+    assert "injected HEAD lookup failure" in injected.message
+
+    # Non-regular direct-file and charter A rows block the same way.
+    root2 = make_repo(tmp_path, "ceremony-feature-only-symlink", gitignore_docs=True)
+    write_facts(root2)
+    git(root2, "checkout", "-b", "feature")
+    feature_start2 = _feature_start_commit(root2)
+    git(root2, "checkout", "main")
+    file_archive = _committed_plan_archive(
+        root2, "2026-10-04-link.md", "# Plan: link\n\n- [x] done\n"
+    )
+    slug_c = "2026-10-04-link-charter"
+    plan_dir_c = root2 / "docs/history/plans" / slug_c
+    (plan_dir_c / "tasks").mkdir(parents=True)
+    (plan_dir_c / "PLAN.md").write_text(
+        "# Plan: link charter\n\n- [x] charter\n", encoding="utf-8"
+    )
+    (plan_dir_c / "tasks/01.md").write_text(
+        "### Task 1\n\n- [x] one\n", encoding="utf-8"
+    )
+    git(root2, "add", "-f", f"docs/history/plans/{slug_c}/PLAN.md",
+        f"docs/history/plans/{slug_c}/tasks/01.md")
+    assert git(root2, "commit", "-m", "create link charter plan", "-q").returncode == 0
+    (root2 / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    archive_dir_c = root2 / "docs/history/plans/completed" / slug_c
+    git(root2, "mv", f"docs/history/plans/{slug_c}",
+        str(archive_dir_c.relative_to(root2)))
+    assert git(root2, "commit", "-m", "archive link charter plan", "-q").returncode == 0
+    git(root2, "checkout", "feature")
+    assert git(root2, "rebase", "main").returncode == 0
+    charter_c = f"docs/history/plans/completed/{slug_c}/PLAN.md"
+    git(root2, "rm", "-q", file_archive)
+    os.symlink("../elsewhere.md", root2 / file_archive)
+    git(root2, "add", "-f", file_archive)
+    git(root2, "rm", "-q", charter_c)
+    os.symlink("../elsewhere.md", root2 / charter_c)
+    git(root2, "add", "-f", charter_c)
+    assert git(root2, "commit", "-m", "replace archives with symlinks", "-q").returncode == 0
+    _seed_start_commit_manifest(root2, feature_start2)
+
+    symlinked = run_gate("archive-ceremony", ctx_for(root2))
+
+    assert symlinked.rc == 1, symlinked.message
+    assert file_archive in symlinked.message
+    assert charter_c in symlinked.message
+    assert "not a regular file at HEAD" in symlinked.message
+
+
+def test_archive_ceremony_feature_only_error_arms_keep_candidates(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Configured-base branch lookup, merge-base
+    lookup, and ancestry-check failures never activate snapshot filtering:
+    the upstream archive candidate stays checked."""
+
+    def build(name):
+        root = make_repo(tmp_path, name, gitignore_docs=True)
+        write_facts(root)
+        live_plan = "docs/history/plans/2026-10-05-err.md"
+        (root / "docs/history/plans").mkdir(parents=True, exist_ok=True)
+        (root / live_plan).write_text(
+            "# Plan: err\n\n- [x] done\n", encoding="utf-8"
+        )
+        git(root, "add", "-f", live_plan)
+        assert git(root, "commit", "-m", "create live plan", "-q").returncode == 0
+        git(root, "checkout", "-b", "feature")
+        feature_start = _feature_start_commit(root)
+        git(root, "checkout", "main")
+        upstream = _committed_plan_archive(
+            root, "2026-10-04-err-upstream.md", "# Plan: err upstream\n\n- [ ] open\n"
+        )
+        git(root, "checkout", "feature")
+        assert git(root, "rebase", "main").returncode == 0
+        _seed_start_commit_manifest(root, feature_start)
+        return root, upstream
+
+    # Configured-base branch lookup fails: no filtering, candidate checked.
+    root, upstream = build("ceremony-err-branch-lookup")
+    ctx = ctx_for(root)
+    _fail_git_calls(ctx, [("branch", "--show-current")])
+    branch_err = run_gate("archive-ceremony", ctx)
+    branch_notes = lib._derive_archived_plans(ctx)[1]
+
+    assert branch_err.rc == 1, branch_err.message
+    assert upstream in branch_err.message
+    assert all("feature-only run start" not in n for n in branch_notes)
+
+    # Merge-base lookup fails: same conservative outcome.
+    root2, upstream2 = build("ceremony-err-merge-base")
+    ctx2 = ctx_for(root2)
+    _fail_git_calls(ctx2, [("merge-base", "HEAD")])
+    merge_err = run_gate("archive-ceremony", ctx2)
+    merge_notes = lib._derive_archived_plans(ctx2)[1]
+
+    assert merge_err.rc == 1, merge_err.message
+    assert upstream2 in merge_err.message
+    assert all("feature-only run start" not in n for n in merge_notes)
+
+    # Ancestry command error (not the successful result 1): no filtering,
+    # and the failure is noted.
+    root3, upstream3 = build("ceremony-err-ancestry")
+    ctx3 = ctx_for(root3)
+    _fail_git_calls(ctx3, [("merge-base", "--is-ancestor")])
+    ancestry_err = run_gate("archive-ceremony", ctx3)
+    ancestry_notes = lib._derive_archived_plans(ctx3)[1]
+
+    assert ancestry_err.rc == 1, ancestry_err.message
+    assert upstream3 in ancestry_err.message
+    assert any("ancestry check failed" in n for n in ancestry_notes)
+    assert all("feature-only run start" not in n for n in ancestry_notes)
+
+
+def test_archive_ceremony_feature_only_snapshot_lookup_errors_retain(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A configured-base snapshot lookup failure on
+    the feature-only path retains the candidate as an explicit blocker and
+    never silently skips it."""
+    root = make_repo(tmp_path, "ceremony-feature-only-snap-err", gitignore_docs=True)
+    write_facts(root)
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    archive_rel = _committed_plan_archive(
+        root, "2026-10-04-snap-err.md", "# Plan: snap err\n\n- [x] done\n"
+    )
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    (root / archive_rel).write_text(
+        "# Plan: snap err\n\n- [x] done\n\n## amended\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", archive_rel)
+    assert git(root, "commit", "-m", "amend archive", "-q").returncode == 0
+    _seed_start_commit_manifest(root, feature_start)
+
+    real_state = lib._commit_path_state
+
+    def failing_state(ctx, commit, rel):
+        if commit != "HEAD" and rel == archive_rel:
+            return None, None, None, "injected snapshot lookup failure"
+        return real_state(ctx, commit, rel)
+
+    monkeypatch.setattr(lib, "_commit_path_state", failing_state)
+    archives, notes, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert any("injected snapshot lookup failure" in b for b in blockers), blockers
+    assert [row[0] for row in archives] == [archive_rel]
+
+
+def test_archive_ceremony_configured_base_branch_keeps_start_boundary(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A run on the configured base branch keeps
+    the manifest start boundary: an archive created after the manifest
+    start remains checked."""
+    root = make_repo(tmp_path, "ceremony-configured-base", gitignore_docs=True)
+    write_facts(root)
+    live_plan = "docs/history/plans/2026-10-05-onbase.md"
+    (root / "docs/history/plans").mkdir(parents=True, exist_ok=True)
+    (root / live_plan).write_text("# Plan: onbase\n\n- [ ] task\n", encoding="utf-8")
+    git(root, "add", "-f", live_plan)
+    assert git(root, "commit", "-m", "create live plan", "-q").returncode == 0
+    start = git(root, "rev-parse", "HEAD").stdout.strip()
+    run_archive = "docs/history/plans/completed/2026-10-05-onbase.md"
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+    (root / live_plan).write_text("# Plan: onbase\n\n- [x] task\n", encoding="utf-8")
+    git(root, "add", "-f", live_plan)
+    git(root, "mv", live_plan, run_archive)
+    assert git(root, "commit", "-m", "archive onbase plan", "-q").returncode == 0
+    _write_exec_review_record(root, "2026-10-05-onbase.md")
+    _seed_start_commit_manifest(root, start)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert run_archive in result.message
+    assert "feature-only run start" not in " ".join(result.warnings)
+    assert "using worktree base-branch merge base" not in " ".join(result.warnings)
+
+
+def test_archive_ceremony_feature_only_preserves_stale_deliverables_and_staged(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] The feature-only derivation leaves the
+    stale plan-deliverables shape untouched: a stale deliverables entry for
+    a plan now archived still surfaces its twin."""
+    root = make_repo(tmp_path, "ceremony-feature-only-shapes", gitignore_docs=True)
+    write_facts(root)
+    plan_name = "2026-10-04-stale-shapes.md"
+    stale_rel = f"docs/history/plans/{plan_name}"
+    body = "# Plan: stale shapes\n\n- [ ] one\n"
+    twin_rel = _committed_plan_archive(root, plan_name, body)
+    git(root, "checkout", "-b", "feature")
+    feature_start = _feature_start_commit(root)
+    git(root, "checkout", "main")
+    assert git(root, "commit", "--allow-empty", "-m", "main advances", "-q").returncode == 0
+    git(root, "checkout", "feature")
+    assert git(root, "rebase", "main").returncode == 0
+    assert not (root / stale_rel).exists()
+    write_deliverables(root, [stale_rel])
+    _seed_start_commit_manifest(root, feature_start)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert twin_rel in result.message
+    assert "1 unchecked task box(es)" in result.message
+
+
 def test_archive_ceremony_checks_added_member_of_existing_directory_archive(
     tmp_path, sweep_env, monkeypatch
 ):

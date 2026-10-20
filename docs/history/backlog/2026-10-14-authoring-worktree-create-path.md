@@ -4,6 +4,8 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** normal
+- **Cluster:** docs/history/backlog/2026-10-20-authoring-worktree-landing-shape.md (shared Worktree-first authoring lifecycle; create-path arm)
+- **Cluster:** docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md (shared plan-authoring lifecycle; closeout duty)
 - **Origin class:** self-serving
 - **Class:** fix
 - **Driving force:** reliability

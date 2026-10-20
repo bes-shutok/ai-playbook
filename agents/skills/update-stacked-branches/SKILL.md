@@ -1,24 +1,24 @@
 ---
 name: update-stacked-branches
 description: >
-  Restack a stacked git branch chain when trunk gains commits: bottom-up merge or
-  explicit-base 3-way, optional squash, force-with-lease push. Use when the user asks
-  to refresh a PR stack after trunk moved, update a branch chain, restack stacked
-  branches, merge trunk into a stack, rebase on master for an open
-  stack, or restack PROJ-1234 on master then PROJ-5678 on PROJ-1234. "Rebase" in
-  user speech maps here for open stacks; post-squash-merge child reparent stays
-  github-pr-workflow (rebase --onto).
+  Refresh an open stacked branch chain after its base moves, using a merge-based
+  restack with optional squash and force-with-lease push. Use when the user asks to
+  refresh a PR stack, update a branch chain, merge trunk into a stack, or restack
+  one branch on another. An explicit request to run `git rebase` uses this skill's
+  separate bottom-up rebase procedure, never its merge-based procedure.
+  Post-squash-merge child reparenting stays in github-pr-workflow (`rebase --onto`).
 ---
 
 # Update Stacked Branches
 
-**Restack** a dependent chain onto current trunk **without reversing** trunk or parent commits. Prefer merge / explicit-base merge, not `git rebase`, for open stacks.
+**Restack** means integrating an updated base into an open dependent branch chain. When no Git strategy is specified, this skill uses merge-based methods to preserve the branch's existing commits and avoid rewriting descendants of a shared parent. `git rebase` instead replays the branch commits individually with new commit IDs. A squash is a separate history choice: after integration, `git reset --soft` and one commit replace the branch's commit series with a single commit while retaining the integrated tree. Never interpret an explicit request for one strategy as permission to use another. If the branch state makes the requested strategy unsafe or its base cannot be identified, explain the concrete risk and ask before choosing another strategy.
 
 ## Routing Boundary
 
 | User intent | Primary skill |
 | --- | --- |
-| Trunk moved; refresh open stack `A → B → C` | **This skill** (owns PR base retarget during restack) |
+| Trunk moved; refresh open stack `A → B → C` without a specified Git strategy | **This skill** (merge-based restack; owns PR base retarget) |
+| Explicit `git rebase` request for an open stack | **This skill**, Method C (bottom-up rebase; retains child commits by default unless squash is separately requested) |
 | Parent already **squash-merged** into trunk; reparent child only | `github-pr-workflow` (`rebase --onto`) |
 | One-off `-squashed` PR branch from a source tip | `github-pr-workflow` |
 | PR description, stats, split, open PRs | `github-pr-workflow` |
@@ -27,9 +27,9 @@ description: >
 
 1. **Absorb before reparent.** Never `git reset --soft <parent>` unless `merge-base --is-ancestor <parent> HEAD` is already true (check immediately before the soft-reset). Soft-reset alone reverts parent commits.
 2. **Bottom-up.** Trunk → branch[0] → branch[1] → …. Finish and verify each link before the next.
-3. **Pick Method A vs B from rewrite state**, not from "trunk advanced alone." Method B is only for a parent tip that was rewritten this session (see Phase 1). Naive `git merge <parent>` after a parent squash uses an ancient merge-base and conflicts everywhere.
+3. **Pick a method from the requested strategy and rewrite state**, not from "trunk advanced alone." Explicit rebase requests use Method C. Merge-based restacks use Method A or B; Method B is only for a parent tip that was rewritten this session (see Phase 1). Naive `git merge <parent>` after a parent squash uses an ancient merge-base and conflicts everywhere.
 4. **Backups are load-bearing.** Phase 0 creates `backup/<branch>-<YYYYMMDD>` for every chain branch **before** rewriting any tip. Method B uses those dated refs as `backup_parent` / `backup_branch`. Keep them until the full chain finishes.
-5. Squash is optional. Ask **once per restack session**; the answer applies to every link unless the user opts out per branch.
+5. For merge-based methods, squash is optional. Ask **once per restack session**; the answer applies to every link unless the user opts out per branch. For an explicit rebase request, do not squash unless the user separately asks to squash.
 6. **Push** only with explicit approval. Prefer asking once for the whole stack or per link after that link verifies. Use `--force-with-lease` after a fresh fetch of that branch. Never bare `--force`. **Never** force-push trunk / default / shared integration branch names (`main`, `master`, or the repo default).
 7. Prefer **local** tips when `origin/<branch>` is behind local. **Exception:** trunk always comes from current `origin/<trunk>`.
 8. No `git reset --hard` to discard work unless the user asks. Restore mid-restack with the **Restore from backup** commands below.
@@ -38,10 +38,11 @@ description: >
 
 ```bash
 git merge --abort 2>/dev/null || true
+git rebase --abort 2>/dev/null || true
 git checkout -B <branch> backup/<branch>-<YYYYMMDD>
 ```
 
-Use after a failed Method A/B or failed verify. Do not push the broken tip.
+Use after a failed Method A/B/C or failed verify. Do not push the broken tip.
 
 ## Inputs
 
@@ -96,6 +97,8 @@ For `i = 0 .. n-1`:
 
 ### Choose method
 
+First honor an explicit Git strategy. If the user explicitly requests `git rebase`, apply **Method C** to each link bottom-up and retain the child commits by default; squash only if separately requested. Do not use Methods A/B or squash as substitutes for the requested rebase. Otherwise use the merge-based method selected below, with squash only when requested.
+
 | Condition | Method |
 | --- | --- |
 | `i == 0` (bottom link onto trunk) | **A: naive merge** of `origin/<trunk>` |
@@ -129,7 +132,25 @@ git merge-recursive <backup_parent> -- HEAD <backup_branch>
 
 If `merge-recursive` fails or conflict count is huge versus the pre-delta, **Restore from backup** and stop.
 
-**Required finalize (squash or not):** Method B always ends with one commit on `<parent>` before verify:
+### Method C: Explicit rebase
+
+Use only when the user requests `git rebase`. Rebase each child onto its updated parent, bottom-up, so each branch replays only its own commits. When the parent was not rewritten during this session:
+
+```bash
+git checkout <branch>
+git rebase <parent_tip> <branch>
+```
+
+When the parent was rewritten during this session, use its pre-rewrite backup as the old boundary so the child's commits are replayed without replaying the parent's old commits:
+
+```bash
+git checkout <branch>
+git rebase --onto <parent_tip> <backup_parent> <branch>
+```
+
+Do not squash this result unless the user separately requested a squash. If requested, finish and verify the rebase first, then follow Method C's squash arm below before updating the next child. After each link, verify the branch diff against its new parent against the preflight delta and confirm that no parent commits were replayed into the child. On conflict or verification failure, run `git rebase --abort`, restore the branch from its Phase 0 backup, and stop. If the old parent boundary is not the child's actual base, stop and establish that boundary before rebasing.
+
+**Required finalize:** Method B reconstructs the branch delta on the rewritten parent and always records it as one commit before verify. This preserves the resulting tree after conflict resolution, not the branch's original sequence of commits; it is neither a merge commit nor a `git rebase` replay:
 
 ```bash
 git commit -m "<single message for this branch story>"
@@ -145,13 +166,14 @@ git diff --quiet && git diff --cached --quiet    # committed tip; ignore untrack
 
 ### Optional squash
 
-Only after Method A ancestry is satisfied, or after Method B's required commit if you need to reshape history (Method B's single commit is already a squash; do not soft-reset again).
+For Method A, squash only after its ancestry check. Method B already produces one commit, so do not soft-reset it again. For Method C, squash only when separately requested, after the rebase succeeds and before advancing to the next child; this preserves the rebased tree while replacing that branch's commit series with one commit.
 
 ```bash
-# Method A only; soft-reset onto parent_tip (origin/<trunk> for i==0):
+# Methods A and C only; soft-reset onto parent_tip (origin/<trunk> for i==0):
 git merge-base --is-ancestor <parent_tip> HEAD   # MUST exit 0; abort if not
 git reset --soft <parent_tip>
 git commit -m "<single message for this branch story>"
+test "$(git rev-list --count <parent_tip>..HEAD)" -eq 1
 ```
 
 ### Verify no parent reversal
@@ -213,7 +235,7 @@ Confirm ancestry for each link. Completion: every link verified; push status rep
 | Empty post-delta after Method B | Forgot required commit | Commit index; re-verify |
 | `--force-with-lease` rejected | Remote moved | Fetch branch; inspect; ask; never bare `--force` |
 | Push target is trunk/default | Misordered chain | Refuse; fix chain inputs |
-| Parent PR already MERGED | Wrong skill | Hand off to `github-pr-workflow` `rebase --onto` |
+| Parent PR already MERGED | Wrong skill for parent reparenting | Hand off to `github-pr-workflow` `rebase --onto` |
 
 ## Anti-patterns
 

@@ -1,7 +1,7 @@
 # Backlog: resolve archive gate boundary after rebasing a feature-only run start
 
 - **Filed:** 2026-10-10
-- **Status:** open
+- **Status:** done (covered by docs/history/plans/completed/2026-10-19-worktree-rebase-feature-start-boundary.md, executed and landed 2026-10-20)
 - **Workflow:** backlog
 - **Priority:** high (promoted 2026-10-19 after a witnessed closeout refusal)
 - **Origin class:** fresh review risk finding

@@ -595,6 +595,12 @@
           "date": "2026-10-16",
           "evidence": "private-internal-Atlassian-links-blocked-in-private-repo",
           "time_lost_minutes": null
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-20",
+          "evidence": "unresolved-private-report-profile",
+          "time_lost_minutes": null
         }
       ]
     },
@@ -673,6 +679,13 @@
           "evidence": "docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md",
           "time_lost_minutes": null,
           "note": "roster demotion at landing (done target-state plan docs/history/plans/2026-10-11-done-target-state-learn-commit-closeout.md): new guard entry; warning posture inside the landing roster (reports, never blocks; no ledger rows)"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-20",
+          "evidence": "agents/skills/execute-plan/SKILL.md folded description 1159 over the 1024-char loader cap firing at the 2026-10-19/20 landings",
+          "time_lost_minutes": null,
+          "note": "warning posture let the landings through; the skill was dropped from the ZCode runtime until the 2026-10-20 fix; lesson 135 and backlog row 2026-10-20-description-length-gate-true-catch-unledgered own the dossier"
         }
       ]
     },
@@ -720,6 +733,13 @@
           "evidence": "docs/history/metrics/landing-costs.jsonl",
           "time_lost_minutes": null,
           "note": "blocked intentional migration of branch-added tracked archive content to ignored storage"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-20",
+          "evidence": "valid-contract-correction-refused",
+          "time_lost_minutes": null,
+          "note": "commit-blocked-after-test-pass"
         }
       ]
     },

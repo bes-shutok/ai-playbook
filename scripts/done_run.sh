@@ -14,6 +14,7 @@
 #   done_run.sh commit --stage PATH... --subject TEXT
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
 #        [--side-commit REPO_PATH]... [--manifest PATH] [--run-id RUN_ID]
+#        [--authorize-ancestor-restoration PATH BLOB_ID]
 #   done_run.sh finalize [--manifest PATH] [--run-id RUN_ID]
 #        [--from-holder] [--session IDENTITY] [--no-landing-cost]
 #        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
@@ -85,7 +86,28 @@
 # skills_repo_path and shared_docs_dir), reports dirty paths per repo, and
 # executes one confirmed commit action per repo named by --side-commit,
 # re-running the public-hygiene scan over each staged side-repo set before
-# that repo's commit. When DONE_RUN_TRACE_FILE is set the subcommand appends
+# that repo's commit. With --authorize-ancestor-restoration PATH BLOB_ID the
+# invocation authorizes exactly one declared staged restoration to the named
+# blob, bound to the current run: the newest root-confirmed marker, the
+# manifest bound to it (selected exports, run id, and repo root must match),
+# and the live env-token done lock must all resolve before any ref update,
+# the authorized path must sit in the declared set with a staged blob equal
+# to BLOB_ID, and the cached-diff guard lifts only that path (every other
+# ancestor-matching path still refuses). That landing then records the
+# guarded staged tree, captures HEAD's symbolic target and OID (or detached
+# state and direct HEAD OID) before the hooks, runs pre-commit,
+# prepare-commit-msg, and commit-msg in Git order with normal
+# args/env/message-file handling, refuses any hook failure or index-tree
+# change, revalidates the exact run tuple and lock immediately before the
+# ref update, and lands the unchanged tree with sole parent at captured
+# HEAD through one compare-and-swap ref transaction (git update-ref --stdin;
+# direct HEAD with no-deref when detached, never creating a branch), the
+# owned-commits ledger append fused after the swap, and post-commit run
+# last (its failure cannot undo the commit). Reference-transaction hooks
+# keep their standard phases and veto power; their side effects are outside
+# the wrapper guarantee. Nothing about the authorization is persisted to
+# the manifest, staging, message, or classifier. When DONE_RUN_TRACE_FILE
+# is set the subcommand appends
 # one `stage <name>` line per composed stage, so a run's trace shows the
 # order the plan fixes.
 #
@@ -423,6 +445,235 @@ resolve_run_id() { # --run-id arg, then the manifest, then the setup export
   printf '%s\n' "${DONE_RUN_ID:-}"
 }
 
+repo_root_digest() { # -> the 64-hex identity digest of the CWD repo root
+  local repo_top
+  repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  printf '%s' "${repo_top%/}" | (shasum -a 256 2>/dev/null || sha256sum) | awk '{print $1}'
+}
+
+newest_confirmed_marker() { # -> path of the newest root-confirmed marker
+  local session f newest=""
+  session="$(session_dir)" || return 1
+  for f in "$session"/run-start-*; do
+    [ -f "$f" ] || continue
+    if marker_confirms "$f"; then
+      if [ -z "$newest" ] || [ "$f" \> "$newest" ]; then newest="$f"; fi
+    fi
+  done
+  [ -n "$newest" ] && printf '%s\n' "$newest"
+  return 0
+}
+
+lock_owned_by_this_run() { # rc: live env-token done-lock ownership of this repo
+  local meta lock_token lock_root
+  [ -n "${DONE_LOCK_DIR:-}" ] && [ -n "${DONE_LOCK_TOKEN:-}" ] || return 1
+  [ -d "$DONE_LOCK_DIR" ] || return 1
+  meta="$DONE_LOCK_DIR/meta.env"
+  [ -f "$meta" ] || return 1
+  lock_token="$(sed -n 's/^lock_token=//p' "$meta" | head -n 1)"
+  lock_root="$(sed -n 's/^repo_root=//p' "$meta" | head -n 1)"
+  [ -n "$lock_token" ] && [ "$lock_token" = "$DONE_LOCK_TOKEN" ] || return 1
+  [ "$lock_root" = "$(git rev-parse --show-toplevel 2>/dev/null)" ] || return 1
+  return 0
+}
+
+# Resolve and validate the current-run tuple an authorized restoration binds
+# to, through the existing loader/classifier: the newest root-confirmed
+# marker, the manifest bound to it, the matching selected exports, the
+# canonical nonterminal verdict, the manifest's repo root, and the live
+# env-token done lock. Refuses (exit) on any stale/terminal/mismatched
+# member; on success stashes the tuple for the pre-transaction revalidation.
+resolve_authorized_run_tuple() {
+  local newest_marker manifest marker_field lib verdict_out verdict tuple_run_id \
+    manifest_root root_digest
+  newest_marker="$(newest_confirmed_marker)" || \
+    landing_die 3 "authorized restoration: cannot resolve the repo root"
+  [ -n "$newest_marker" ] || \
+    landing_die 1 "authorized restoration: no root-confirmed run-start marker for the current run; nothing committed"
+  if [ -n "${DONE_RUN_MARKER:-}" ] && [ "$DONE_RUN_MARKER" != "$newest_marker" ]; then
+    landing_die 1 "authorized restoration: the selected DONE_RUN_MARKER export is not the newest root-confirmed marker; nothing committed"
+  fi
+  manifest="$(resolve_manifest_path)" || \
+    landing_die 3 "authorized restoration: cannot resolve the repo root"
+  if [ -z "$manifest" ] || [ ! -f "$manifest" ]; then
+    landing_die 1 "authorized restoration: no run manifest resolved for the current run; nothing committed"
+  fi
+  marker_field="$(manifest_scalar "$manifest" marker)"
+  [ "$marker_field" = "$(basename "$newest_marker")" ] || \
+    landing_die 1 "authorized restoration: the selected run manifest is not bound to the newest root-confirmed marker; nothing committed"
+  lib="$(resolve_helper done_sweep_gates_lib.py)"
+  [ -n "$lib" ] || \
+    landing_die 3 "authorized restoration: no done_sweep_gates_lib.py resolved (repo-local scripts/ or deployed home)"
+  verdict_out="$(python3 "$lib" classify-run-boundary --session-dir "$(session_dir)" --manifest "$manifest" 2>&1)" || \
+    { printf '%s\n' "$verdict_out" >&2; landing_die 2 "authorized restoration: the run-manifest classifier failed; nothing committed"; }
+  verdict="$(printf '%s\n' "$verdict_out" | sed -n 's/^verdict: //p')"
+  tuple_run_id="$(printf '%s\n' "$verdict_out" | sed -n 's/^run_id: //p')"
+  case "$verdict" in
+    orphan) ;;  # the live current boundary: unadopted and nonterminal
+    unreadable)
+      landing_die 2 "authorized restoration: the run manifest record is unreadable (fail-closed); nothing committed";;
+    *)
+      landing_die 1 "authorized restoration: the run boundary is $verdict (terminal, not the live current run); nothing committed";;
+  esac
+  if [ -n "${DONE_RUN_ID:-}" ] && [ "$DONE_RUN_ID" != "$tuple_run_id" ]; then
+    landing_die 1 "authorized restoration: the selected DONE_RUN_ID export does not match the run manifest run_id=$tuple_run_id; nothing committed"
+  fi
+  if [ -n "${RUN_ID_ARG:-}" ] && [ "$RUN_ID_ARG" != "$tuple_run_id" ]; then
+    landing_die 1 "authorized restoration: --run-id $RUN_ID_ARG does not match the run manifest run_id=$tuple_run_id; nothing committed"
+  fi
+  manifest_root="$(manifest_scalar "$manifest" repo_root)"
+  root_digest="$(repo_root_digest)" || \
+    landing_die 3 "authorized restoration: cannot resolve the repo root"
+  [ "$manifest_root" = "$root_digest" ] || \
+    landing_die 1 "authorized restoration: the run manifest records a different repo root; nothing committed"
+  lock_owned_by_this_run || \
+    landing_die 1 "authorized restoration: no live done-lock ownership for this run (lock dir, token, or recorded repo root mismatch); nothing committed"
+  AUTH_MARKER="$newest_marker"
+  AUTH_MANIFEST="$manifest"
+  AUTH_RUN_ID="$tuple_run_id"
+  AUTH_MANIFEST_DIGEST="$( (shasum -a 256 2>/dev/null || sha256sum) < "$manifest" | awk '{print $1}')"
+}
+
+# Run one Git commit hook the way git runs it: hooksPath resolution, cwd at
+# the repository root, GIT_DIR exported, the given arguments passed through.
+# A missing or non-executable hook is the pass-through skip; the rc is the
+# hook's own.
+run_commit_hook() { # hook-name [args...] -> rc
+  local hook="$1"; shift
+  local hook_path
+  hook_path="$(git rev-parse --git-path hooks)/$hook"
+  [ -x "$hook_path" ] || return 0
+  GIT_DIR="${GIT_DIR:-$(git rev-parse --absolute-git-dir)}" "$hook_path" "$@"
+}
+
+landing_die() { # rc message...: an authorized-landing refusal (cleans the commit scratch first)
+  local rc="$1"
+  shift
+  rm -rf "${tmpd:-}" 2>/dev/null || true
+  commit_die "$rc" "$@"
+}
+
+# The authorized landing: one commit from the guarded staged tree with sole
+# parent at captured HEAD, landed through one compare-and-swap ref
+# transaction. Caller globals: FULL_SUBJECT, DRIFT_WITNESS, LEDGER_PATH,
+# and the validated AUTH_* tuple. Every refusal here happens before the ref
+# update and before the ledger append.
+authorized_landing() {
+  local tree_accepted head_target="" head_detached=0 head_oid \
+    git_dir msg_file tree_after new_oid gpgsign \
+    auth_declared_now staged_blob_now declared_path
+  local -a sign_args=()
+  # 0. The authorized binding must still hold at the tree-capture moment:
+  #    the path is still in the declared set and its staged blob still
+  #    equals the expected blob. A mutation between the guard lift and this
+  #    function (the --revert-formatting arm among them) refuses here
+  #    instead of landing a blob different from the authorized one.
+  auth_declared_now=0
+  for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
+    [ "$declared_path" = "$AUTH_PATH" ] && auth_declared_now=1
+  done
+  [ "$auth_declared_now" -eq 1 ] || \
+    landing_die 1 "authorized landing: the authorized path left the declared set before the tree capture: $AUTH_PATH; refusing before the ref update; nothing committed"
+  staged_blob_now="$(git ls-files -s -- "$AUTH_PATH" | awk '{print $2}')"
+  [ "$staged_blob_now" = "$AUTH_BLOB" ] || \
+    landing_die 1 "authorized landing: the authorized path's staged blob changed before the tree capture ($staged_blob_now, expected $AUTH_BLOB for $AUTH_PATH); refusing before the ref update; nothing committed"
+  # 1. Record the accepted staged tree (the guards' declared-set tree).
+  tree_accepted="$(git write-tree)" || \
+    landing_die 2 "authorized landing: cannot record the accepted staged tree (write-tree failed)"
+  # 2. Capture HEAD identity before the hooks run.
+  if head_target="$(git symbolic-ref -q HEAD)"; then
+    head_detached=0
+  else
+    head_detached=1
+  fi
+  head_oid="$(git rev-parse --verify HEAD)" || \
+    landing_die 3 "authorized landing: cannot resolve HEAD"
+  # 3. The message file, composed the way git commit -m <s> -m <w> renders it.
+  git_dir="$(git rev-parse --git-dir)"
+  msg_file="$git_dir/COMMIT_EDITMSG"
+  { printf '%s\n' "$FULL_SUBJECT"
+    if [ -n "$DRIFT_WITNESS" ]; then printf '\n%s\n' "$DRIFT_WITNESS"; fi
+  } > "$msg_file" || landing_die 3 "authorized landing: cannot write the commit message file"
+  # 4. The pre-update commit hooks in Git order, normal args/env/message
+  #    handling; a hook failure refuses before any ref or ledger update.
+  run_commit_hook pre-commit || \
+    landing_die 1 "authorized landing: pre-commit hook refused; nothing committed"
+  run_commit_hook prepare-commit-msg "$msg_file" message || \
+    landing_die 1 "authorized landing: prepare-commit-msg hook refused; nothing committed"
+  run_commit_hook commit-msg "$msg_file" || \
+    landing_die 1 "authorized landing: commit-msg hook refused; nothing committed"
+  # 5. Any index-tree change during the hooks refuses before the ref update.
+  tree_after="$(git write-tree)" || \
+    landing_die 2 "authorized landing: cannot re-read the staged tree after the pre-update commit hooks"
+  [ "$tree_after" = "$tree_accepted" ] || \
+    landing_die 1 "authorized landing: a pre-update commit hook changed the staged index tree ($tree_accepted -> $tree_after); refusing before the ref update; nothing committed"
+  # 6. The captured HEAD identity must still hold.
+  if [ "$head_detached" -eq 0 ]; then
+    [ "$(git symbolic-ref -q HEAD)" = "$head_target" ] || \
+      landing_die 1 "authorized landing: HEAD's symbolic target changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
+  else
+    git symbolic-ref -q HEAD >/dev/null 2>&1 && \
+      landing_die 1 "authorized landing: HEAD left detached during the pre-update commit hooks; refusing before the ref update; nothing committed"
+  fi
+  [ "$(git rev-parse --verify HEAD)" = "$head_oid" ] || \
+    landing_die 1 "authorized landing: HEAD's OID moved during the pre-update commit hooks; refusing before the ref update; nothing committed"
+  # 7. One commit from the unchanged tree, sole parent at captured HEAD,
+  #    message exactly the post-commit-msg file bytes; the worktree is never
+  #    reread. The configured signing is preserved through commit-tree -S.
+  gpgsign="$(git config --bool --get commit.gpgsign 2>/dev/null || true)"
+  [ "$gpgsign" = "true" ] && sign_args=(-S)
+  new_oid="$(git commit-tree "$tree_accepted" -p "$head_oid" -F "$msg_file" ${sign_args+"${sign_args[@]}"})" || \
+    landing_die 2 "authorized landing: git commit-tree refused; nothing committed"
+  # 8. Revalidate the exact current-run tuple and the same live token-owned
+  #    lock directory/token, immediately before the ref transaction.
+  local r_marker="$AUTH_MARKER" r_manifest="$AUTH_MANIFEST" \
+    r_run_id="$AUTH_RUN_ID" r_digest="$AUTH_MANIFEST_DIGEST"
+  resolve_authorized_run_tuple
+  if [ "$AUTH_MARKER" != "$r_marker" ] || [ "$AUTH_MANIFEST" != "$r_manifest" ] || \
+     [ "$AUTH_RUN_ID" != "$r_run_id" ] || [ "$AUTH_MANIFEST_DIGEST" != "$r_digest" ]; then
+    landing_die 1 "authorized landing: the current-run tuple changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
+  fi
+  # 8b. Last-instant HEAD identity re-check, immediately before the ref
+  #     transaction: the tuple revalidation subprocesses above sit in the
+  #     window the pre-hook check (step 6) cannot cover.
+  if [ "$head_detached" -eq 0 ]; then
+    [ "$(git symbolic-ref -q HEAD)" = "$head_target" ] || \
+      landing_die 1 "authorized landing: HEAD's symbolic target changed before the ref transaction; refusing; nothing committed"
+  else
+    git symbolic-ref -q HEAD >/dev/null 2>&1 && \
+      landing_die 1 "authorized landing: HEAD left detached before the ref transaction; refusing; nothing committed"
+  fi
+  [ "$(git rev-parse --verify HEAD)" = "$head_oid" ] || \
+    landing_die 1 "authorized landing: HEAD's OID moved before the ref transaction; refusing; nothing committed"
+  # 9. One ref transaction: atomically verify the captured identity and
+  #    compare-and-swap the captured branch ref (or direct HEAD when
+  #    detached; no branch is created). Reference-transaction hooks keep
+  #    their standard phases and veto power.
+  if [ "$head_detached" -eq 0 ]; then
+    printf 'start\nupdate %s %s %s\nprepare\ncommit\n' \
+      "$head_target" "$new_oid" "$head_oid" \
+      | git update-ref --stdin || \
+      landing_die 1 "authorized landing: the ref transaction refused the captured branch ref compare-and-swap (a reference-transaction hook may have vetoed, or the ref moved); nothing committed"
+  else
+    printf 'start\noption no-deref\nupdate HEAD %s %s\nprepare\ncommit\n' \
+      "$new_oid" "$head_oid" \
+      | git update-ref --stdin || \
+      landing_die 1 "authorized landing: the ref transaction refused the detached HEAD compare-and-swap (a reference-transaction hook may have vetoed, or HEAD moved); nothing committed"
+  fi
+  # 10. The owned-commits ledger append fused after the swap; recorded once.
+  #     A failed append refuses loudly naming the landed commit that stands
+  #     (the same posture the non-authorized path's fused append has).
+  AUTH_LANDED_OID="$new_oid"
+  if [ -n "$LEDGER_PATH" ]; then
+    printf '%s\n' "$new_oid" >> "$LEDGER_PATH" || \
+      landing_die 1 "authorized landing: the owned-commits ledger append failed; the landed commit stands ($new_oid)"
+  fi
+  # 11. post-commit after success on the new HEAD; its failure cannot undo
+  #     the commit.
+  run_commit_hook post-commit || \
+    echo "done_run commit: authorized landing: post-commit hook failed; the landed commit stands" >&2
+}
+
 remove_from_declared() { # path: drop one reverted path from DECLARED
   local path="$1" kept=()
   for p in ${DECLARED+"${DECLARED[@]}"}; do
@@ -472,6 +723,9 @@ cmd_commit() {
   local subject="" receipts_file="" path row
   STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=()
   COMMIT_MANIFEST=""; RUN_ID_ARG=""; BOUNDARY_CLASS="final-closeout"
+  AUTH_PATH=""; AUTH_BLOB=""
+  AUTH_MARKER=""; AUTH_MANIFEST=""; AUTH_RUN_ID=""; AUTH_MANIFEST_DIGEST=""
+  AUTH_LANDED_OID=""
   shift # subcommand
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -483,6 +737,20 @@ cmd_commit() {
       --learn-receipts-from) receipts_file="$2"; shift 2;;
       --manifest) COMMIT_MANIFEST="$2"; shift 2;;
       --run-id) RUN_ID_ARG="$2"; shift 2;;
+      --authorize-ancestor-restoration)
+        if [ -n "$AUTH_PATH" ]; then
+          echo "done_run commit: --authorize-ancestor-restoration given more than once; one authorized path per invocation" >&2
+          exit 3
+        fi
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --authorize-ancestor-restoration needs <repo-relative-path> <expected-blob-id>" >&2
+          exit 3;;
+        esac
+        case "${3:-}" in ""|--*)
+          echo "done_run commit: --authorize-ancestor-restoration needs <repo-relative-path> <expected-blob-id>" >&2
+          exit 3;;
+        esac
+        AUTH_PATH="$2"; AUTH_BLOB="$3"; shift 3;;
       *) echo "done_run commit: unknown argument: $1" >&2; exit 3;;
     esac
   done
@@ -493,6 +761,15 @@ cmd_commit() {
     commit_die 3 "not inside a git repository"
   cd "$repo_top" || commit_die 3 "cannot enter the repository root"
   session="$(session_dir)" || commit_die 3 "cannot resolve the repo root"
+
+  # 0. An authorized restoration binds to the current run before anything
+  #    else mutates: resolve the run tuple through the existing
+  #    loader/classifier and refuse every stale/terminal/mismatched member
+  #    before any staging, ref, or ledger update.
+  if [ -n "$AUTH_PATH" ]; then
+    trace_stage authorize-run-tuple
+    resolve_authorized_run_tuple
+  fi
 
   # 1. Stage by explicit pathspec from the run's owned set (the declared
   #    --stage paths). Gitignored paths are reported and never staged.
@@ -522,6 +799,25 @@ cmd_commit() {
   if [ "${#STAGE_LIST[@]}" -gt 0 ]; then
     git add -- ${STAGE_LIST+"${STAGE_LIST[@]}"} || \
       commit_die 3 "git add refused the declared pathspec; stage the surviving paths in their own invocation and re-run"
+  fi
+
+  # 1b. Bind the authorized restoration to this invocation's declared set
+  #     and its exact staged blob: the path must have been declared via
+  #     --stage here, and its staged blob must equal the operator-supplied
+  #     expected blob. Both refusals happen before any ref or ledger update.
+  if [ -n "$AUTH_PATH" ]; then
+    AUTH_DECLARED=0
+    for path in ${DECLARED+"${DECLARED[@]}"}; do
+      [ "$path" = "$AUTH_PATH" ] && AUTH_DECLARED=1
+    done
+    [ "$AUTH_DECLARED" -eq 1 ] || \
+      commit_die 3 "authorized restoration: the authorized path is not in the declared --stage set: $AUTH_PATH"
+    AUTH_STAGED_BLOB="$(git ls-files -s -- "$AUTH_PATH" | awk '{print $2}')"
+    [ -n "$AUTH_STAGED_BLOB" ] || \
+      commit_die 1 "authorized restoration: the authorized path has no staged index entry: $AUTH_PATH; nothing committed"
+    [ "$AUTH_STAGED_BLOB" = "$AUTH_BLOB" ] || \
+      commit_die 1 "authorized restoration: the staged blob $AUTH_STAGED_BLOB does not equal the expected blob $AUTH_BLOB for $AUTH_PATH; nothing committed"
+    echo "done_run commit: authorized restoration: path $AUTH_PATH bound to expected blob $AUTH_BLOB for this invocation"
   fi
 
   # 2. Append staged plans-root paths to the deliverables file.
@@ -604,6 +900,16 @@ cmd_commit() {
       0) ;;
       1)
         LEAKED="$(printf '%s\n' "$CD_OUT" | grep '^reversal: ' | grep ' dirty state equals ancestor ' | awk '{print $2}')"
+        # The invocation-scoped authorization lifts exactly the authorized
+        # path, and only while its staged blob still equals the expected
+        # blob bound above; every other ancestor-matching path still refuses.
+        if [ -n "$AUTH_PATH" ] && [ -n "$LEAKED" ]; then
+          AUTH_GUARD_BLOB="$(git ls-files -s -- "$AUTH_PATH" | awk '{print $2}')"
+          if [ "$AUTH_GUARD_BLOB" = "$AUTH_BLOB" ]; then
+            LEAKED="$(printf '%s\n' "$LEAKED" | grep -vxF -- "$AUTH_PATH" || true)"
+            echo "done_run commit: cached-diff guard: authorized ancestor restoration accepted for this invocation: $AUTH_PATH (expected blob $AUTH_BLOB)"
+          fi
+        fi
         if [ -n "$LEAKED" ]; then
           echo "done_run commit: cached-diff guard: a leaked revert is staged across: $(printf '%s' "$LEAKED" | tr '\n' ' ')" >&2
           echo "done_run commit: cached-diff guard: reset the leaked paths and restage only the intended edits, then re-run; nothing committed" >&2
@@ -948,6 +1254,13 @@ cmd_commit() {
   trace_stage landing-commit
   STAGED_NOW="$(git diff --cached --name-only HEAD)"
   if [ -z "$STAGED_NOW" ]; then
+    if [ -n "$AUTH_PATH" ]; then
+      # An authorized invocation whose staged set emptied before the landing
+      # (the --revert-formatting arm among the causes) is a silent-inert
+      # authorization if skipped: refuse naming the missing staged content.
+      rm -rf "$tmpd"
+      commit_die 1 "authorized landing: the staged set is empty at the landing (the authorized path's content left the index: $AUTH_PATH); nothing committed"
+    fi
     echo "done_run commit: no staged changes; landing commit skipped"
   elif [ "${#DECLARED[@]}" -eq 0 ]; then
     FOREIGN_SET="$(printf '%s\n' "$STAGED_NOW" | tr '\n' ' ')"
@@ -967,20 +1280,28 @@ cmd_commit() {
     else
       echo "done_run commit: owned-commits ledger skipped (no run manifest from Step 0)"
     fi
-    COMMIT_ARGS=(-m "$FULL_SUBJECT")
-    if [ -n "$DRIFT_WITNESS" ]; then COMMIT_ARGS+=(-m "$DRIFT_WITNESS"); fi
-    COMMIT_ARGS+=(-- ${DECLARED+"${DECLARED[@]}"})
-    COMMIT_OK=0
-    if [ -n "$LEDGER_PATH" ]; then
-      git commit "${COMMIT_ARGS[@]}" && git rev-parse HEAD >> "$LEDGER_PATH" || COMMIT_OK=1
+    if [ -n "$AUTH_PATH" ]; then
+      # The authorized landing keys its ledger to the validated run tuple
+      # and runs the guarded tree / ref-transaction protocol.
+      LEDGER_PATH="$session/owned-commits-$AUTH_RUN_ID.txt"
+      mkdir -p "$session"
+      authorized_landing
     else
-      git commit "${COMMIT_ARGS[@]}" || COMMIT_OK=1
+      COMMIT_ARGS=(-m "$FULL_SUBJECT")
+      if [ -n "$DRIFT_WITNESS" ]; then COMMIT_ARGS+=(-m "$DRIFT_WITNESS"); fi
+      COMMIT_ARGS+=(-- ${DECLARED+"${DECLARED[@]}"})
+      COMMIT_OK=0
+      if [ -n "$LEDGER_PATH" ]; then
+        git commit "${COMMIT_ARGS[@]}" && git rev-parse HEAD >> "$LEDGER_PATH" || COMMIT_OK=1
+      else
+        git commit "${COMMIT_ARGS[@]}" || COMMIT_OK=1
+      fi
+      if [ "$COMMIT_OK" -ne 0 ]; then
+        rm -rf "$tmpd"
+        commit_die 1 "the landing commit refused; nothing appended to the owned-commits ledger"
+      fi
     fi
-    if [ "$COMMIT_OK" -ne 0 ]; then
-      rm -rf "$tmpd"
-      commit_die 1 "the landing commit refused; nothing appended to the owned-commits ledger"
-    fi
-    echo "done_run commit: landed $(git rev-parse HEAD)"
+    echo "done_run commit: landed ${AUTH_LANDED_OID:-$(git rev-parse HEAD)}"
   fi
 
   # 17. The facts-resolved side repos: dirty paths reported per repo; one
@@ -1374,7 +1695,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,85p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,123p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

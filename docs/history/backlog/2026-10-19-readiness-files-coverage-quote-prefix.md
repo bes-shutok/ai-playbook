@@ -1,7 +1,7 @@
 # The readiness FILES-COVERAGE matcher misses commands quoted with a leading interpreter word
 
 - **Filed:** 2026-10-19, learn Step 1.9 capture from the smme strand-recovery session
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-20-readiness-files-coverage-quote-prefix.md)
 - **Workflow:** backlog
 - **Priority:** moderate (warning-only today, but it fires on every pre-round whose capture command quotes the interpreter word, training authors to ignore readiness warnings)
 - **Origin class:** validator false positive witnessed at certification

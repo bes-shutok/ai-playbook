@@ -4,6 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** medium
+- **Cluster:** docs/history/backlog/2026-10-20-execute-plan-phase3-initial-pass-ignores-focused-panel.md (same surface: Phase 3 panel composition cost)
 - **Origin class:** execute-plan closeout blocker
 - **Class:** review workflow recoverability
 - **Driving force:** continuity + review integrity

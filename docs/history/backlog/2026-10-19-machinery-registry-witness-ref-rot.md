@@ -10,7 +10,6 @@
 - **Driving force:** correctness
 
 Cluster: docs/history/backlog/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md (same defect class: a living record citing a backlog path that moved)
-Cluster: docs/history/backlog/2026-10-19-series-gate-completed-path-identity.md (same defect class: a citation surface keyed to a pre-archive path)
 
 ## Problem
 

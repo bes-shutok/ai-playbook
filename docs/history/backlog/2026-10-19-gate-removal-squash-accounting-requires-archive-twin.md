@@ -1,7 +1,7 @@
 # Backlog: gate-removal retains squash-landed branches when the plan is not archived
 
 - **Filed:** 2026-10-19 (current closeout investigation)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-19-gate-removal-closeout-accounting.md)
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** witnessed defect (closeout preserves a branch whose content is already in destination history)

@@ -44,3 +44,22 @@ Lower bound over the scheduler state file's last-20 children[] retention window:
 - Evidenced outcomes: complete (including complete-authoring-pending-landing and executed-landed-in-session) 10; progress 2; stood-down (evidenced stop) 1; pending 1 (this turn's in-session authoring entry).
 - Failure/park proxy: 0 failed entries in the window; standing state at report time: turn_error=interrupted-manifest-census-growth (drain alarm, 5 dispositions executed this turn), pending_dispatch=memory-index-audit (retained per D-5), pending_rearm null. Proxy decision: the state file keeps no per-turn error ledger, so the retention-window failure and park entries stand in for the manual-interventions measure.
 - Queue depth: ready prompt-log entries 15 (12 PLAN-PROMPTS + 3 EXEC-PROMPTS), plan-uncovered open backlog items 163, open top-level plans 1 (live reads, no retention bound).
+
+## 20261020T121209 run (weekly rider)
+
+- Window: 31 active day(s) through 2026-10-20; report docs/tmp/tool-runtime-stats/tool-runtime-stats-20261020T121209.md
+- Time ranking top row: Agent total=3,479,804 s (6,007 calls, 193.8 calls/day, 112,251.7 s/day, error rate 9.9 percent; judgment required, not scriptable)
+- Token ranking: Bash/other 5.32B, Read 2.94B, Edit 1.77B, Bash/SKILL.md 1.40B, Agent 1.15B (estimated no-judgment share per day summaries).
+- Error ranking (calls >= 50): CronCreate 13.7 percent (48/351), Agent 9.9 percent (596/6007), Edit 6.8 percent (991/14499), Skill 3.9 percent (38/982), TaskOutput 2.5 percent (15/600).
+- Scriptable candidates: none cleared the filing threshold (total >= 300 s/day, or mean >= 10 s at >= 50 calls/day).
+- no-action: below threshold; top row Agent measured at 3,479,804 s across the 31-day window (about 112,252 s/day, 9.9 percent error rate, judgment required), so no replacement backlog item is filed from this run.
+- Review-metrics pass: report review-metrics-20261020T121209.md under ~/.ai-playbook/review-telemetry/reports/; 1,270 loops, 1,532 legacy-bucket sidecars, 41 malformed-finding skips.
+
+### Throughput
+
+Lower bound over the scheduler state file's children[] retention window (the documented bound is the last 20 entries; the array currently holds 46 entries, so the counts below are over the retained window and remain a lower bound over the true period total):
+
+- By kind: author 24, exec 14, authoring 1, adhoc 2, scheduler 1, untyped legacy status-only entries 4 (LANDED x3, HELD x1).
+- Evidenced outcomes: authoring completions 15 (14 evidenced by the certification oracle over landed plan bytes, 1 close-origins completion evidenced by its adjudication review ready=yes with no landed plan); execution completions 11 (target plan archived); legacy status-only LANDED entries 3; adhoc landing 1; scheduler restart sweep 1; unevidenced complete entries 4; evidenced stops (stood-down/superseded/retired) 5; failure 1; progress 1; pending/in-flight 2 (live peer entries at report time); empty entry 1; legacy HELD 1.
+- Failure and park entries: entries whose outcome records failed 1 (headless model-creation failure at fire; mandate discharged in-session by the operator); entries recording a parked recovery 3 (two gate-removal teardown parks standing on the series-token gap row, one ad-hoc run stood down before landing with its entry reopened); standing state at report time: turn_error null, pending_dispatch null, pending_rearm null, alert null, consecutive_failures 0. Proxy decision: the state file keeps no per-turn error ledger, so the retention-window failure and park entries stand in for the origin's manual-interventions measure.
+- Queue depth at report time: ready prompt-log entries 12 (7 PLAN-PROMPTS of 8 with 1 frozen + 5 EXEC-PROMPTS), plan-uncovered open backlog items 84 (90 open top-level, 6 covered by open plans), open top-level plans 13 (live counts, no retention bound).
