@@ -99,12 +99,12 @@ Also validate both skill edits with realistic sample contexts: use the selected 
 Files:
 - `agents/skills/plans/SKILL.md`
 
-- [ ] Given a fully specified prompt, selected-item context, and repository evidence supporting a simpler viable design within the authorized scope, expects Phase 1 to record the comparison and evidence-backed choice, then proceed without confirmation. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a direct interactive request with a low-impact, source-supported simpler viable option, expects Phase 1 to record the comparison and basis in the requirements and present it in the normal assumption confirmation without adding an unnecessary question. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given an unrequested extension, expects the child to exclude it from the selected plan and report `omit-extension`; when the selected item's remaining scope is implementable, the payload proceeds with that scope and the next normal D2 turn selects the next eligible item after landing. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the active maintenance authoring payload's selected item and scope, expects the no-confirmation path to apply only to that item and scope; a plans invocation without that payload uses ordinary confirmation. Given a direct interactive unresolved operator-owned decision, expects the existing question and grilling path to remain. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The later design-simplicity review remains unchanged and independent; the update adds no approval mechanism or review duty. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `plans: honor maintenance authorization during plan authoring`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a fully specified prompt, selected-item context, and repository evidence supporting a simpler viable design within the authorized scope, expects Phase 1 to record the comparison and evidence-backed choice, then proceed without confirmation. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a direct interactive request with a low-impact, source-supported simpler viable option, expects Phase 1 to record the comparison and basis in the requirements and present it in the normal assumption confirmation without adding an unnecessary question. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given an unrequested extension, expects the child to exclude it from the selected plan and report `omit-extension`; when the selected item's remaining scope is implementable, the payload proceeds with that scope and the next normal D2 turn selects the next eligible item after landing. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the active maintenance authoring payload's selected item and scope, expects the no-confirmation path to apply only to that item and scope; a plans invocation without that payload uses ordinary confirmation. Given a direct interactive unresolved operator-owned decision, expects the existing question and grilling path to remain. [class: IMPLEMENTATION_REQUIRED]
+- [x] The later design-simplicity review remains unchanged and independent; the update adds no approval mechanism or review duty. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `plans: honor maintenance authorization during plan authoring`. [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Pass authorization context from the maintenance authoring payload
 
@@ -112,10 +112,10 @@ Files:
 - `agents/skills/maintenance/template-authoring.md`
 - `docs/history/backlog/`
 
-- [ ] Given a live maintenance selection and prompt, expects the payload to pass explicit standing authorization and selected-item context to plans authoring; choices within scope proceed with the evidence recorded. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given `omit-extension`, expects the payload to keep the extension outside the selected plan and create no separate backlog row; when the selected goal remains implementable, it proceeds, then normal D2 selects the next eligible item after landing. Omission leaves unrequested scope outside the selected plan. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a plans invocation without the maintenance authoring payload, expects the plans skill's existing confirmation path; given an unresolved direct interactive choice or extension, expects the existing user-question path to remain intact. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `maintenance: pass standing authorization to plans authoring`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a live maintenance selection and prompt, expects the payload to pass explicit standing authorization and selected-item context to plans authoring; choices within scope proceed with the evidence recorded. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given `omit-extension`, expects the payload to keep the extension outside the selected plan and create no separate backlog row; when the selected goal remains implementable, it proceeds, then normal D2 selects the next eligible item after landing. Omission leaves unrequested scope outside the selected plan. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a plans invocation without the maintenance authoring payload, expects the plans skill's existing confirmation path; given an unresolved direct interactive choice or extension, expects the existing user-question path to remain intact. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `maintenance: pass standing authorization to plans authoring`. [class: IMPLEMENTATION_REQUIRED]
 
 ## Residual findings (cap closure)
 

@@ -7,6 +7,7 @@
 - **Origin class:** certification-residual overflow (two non-blocking Low findings routed to overflow with durable capture per the certification-residual routing)
 - **Class:** fix-class
 - **Cluster:** docs/history/plans/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the certified plan; its landing serves the parent rows)
+- **Cluster:** docs/history/backlog/2026-10-23-pending-rearm-undischargeable-across-automation-born-carriers.md (same re-arm surface: this row's ladder-guard residuals orbit the restore-actor gap that row names)
 
 ## Residuals
 

@@ -1598,6 +1598,126 @@ class CanonicalStatsSkipWaiverTest(unittest.TestCase):
         self.assertIn("missing stats sidecar", reason)
 
 
+class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
+    """The shared gate's FIRST error keeps its routed reason when several
+    routed diagnostics coexist (review-staging hard-validator fail-fast
+    iteration plan, Task 2).
+
+    The hard-mode validation result carries multiple independently
+    evaluable defects across distinct reason families (source_kind,
+    stale digest, schema wrap), and plan readiness classifies
+    ``errors[0]`` -- never a later error -- into its family. The fixture
+    uses the same clean-state pair the waiver witnesses use, then makes
+    the sidecar wrong in three families at once.
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="first-error-routing-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        # digest_override corrupts the sidecar's declared digest against the
+        # plan bytes (the stale-digest family) while source_kind corrupts the
+        # declared kind against the gate's "plan" (the source_kind family).
+        self.plan, self.review = _write_clean_state(
+            self.plans,
+            self.reviews,
+            digest_override="a" * 64,
+            source_kind="code",
+        )
+        sidecar = self.review.with_suffix(".stats.json")
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        # A third family: two schema-wrap diagnostics (invalid per-finding
+        # enums) coexisting with the families above.
+        payload["findings"] = [
+            {
+                "id": 1,
+                "severity": "Medium",
+                "blocking": False,
+                "consequence": "contract gap",
+                "reachability": "maybe",
+                "blast_radius": "whole-world",
+                "confidence": "strong-evidence",
+                "pattern": "quality#edge-case",
+                "workers": ["correctness-completeness"],
+            }
+        ]
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        self.payload = payload
+
+    def _gate_result(self):
+        """The shared sidecar gate result, called exactly as
+        ``evaluate_readiness`` step 3 calls it."""
+        result = vrs.ValidationResult(path=self.review)
+        vrs.validate_stats_sidecar(
+            self.review,
+            self.review.read_text(encoding="utf-8"),
+            result,
+            expected_digest=vrs.compute_source_digest(
+                "plan", self.plan.read_bytes()
+            ),
+            source_kind="plan",
+        )
+        return result
+
+    def test_first_error_reason_is_stable_under_coexistence(self):
+        result = self._gate_result()
+        errors = result.errors
+        # Several routed diagnostics coexist across at least three distinct
+        # reason families.
+        self.assertGreaterEqual(len(errors), 3)
+        self.assertTrue(
+            any("source_kind mismatch" in error for error in errors), errors
+        )
+        self.assertTrue(
+            any("source_digest is stale" in error for error in errors), errors
+        )
+        self.assertTrue(
+            any("finding conservation" in error for error in errors), errors
+        )
+        # The established first error is the source_kind mismatch, and the
+        # readiness router maps exactly that error into its family.
+        first = errors[0]
+        self.assertEqual(
+            first,
+            "source_kind mismatch: validator got 'plan' but sidecar "
+            "declares 'code'",
+        )
+        expected_reason = (
+            "sidecar source_kind is 'code', expected 'plan' (round r1)"
+        )
+        self.assertEqual(
+            plan_readiness._first_gate_error_reason(first, self.payload, 1),
+            expected_reason,
+        )
+        # End-to-end: evaluate_readiness returns exactly the errors[0]
+        # family, unchanged by the coexisting digest/schema/conservation
+        # diagnostics.
+        ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
+        self.assertFalse(ok)
+        self.assertEqual(reason, expected_reason)
+        # The picked reason names no later error's family or text.
+        self.assertNotIn("stale", expected_reason)
+        self.assertNotIn("finding conservation", expected_reason)
+        self.assertNotIn("invalid reachability", expected_reason)
+        # Discriminator: a later error routes to a DIFFERENT family, so the
+        # first-error pick is load-bearing, not family-convergent.
+        digest_reason = plan_readiness._first_gate_error_reason(
+            next(
+                error for error in errors if "source_digest is stale" in error
+            ),
+            self.payload,
+            1,
+        )
+        self.assertIn("sidecar source_digest is stale", digest_reason)
+        self.assertNotEqual(digest_reason, expected_reason)
+
+
 class _SidecarRepairFixture:
     """Shared temp-git-home fixture for the repair-tool witness classes.
 

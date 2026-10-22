@@ -5,7 +5,7 @@
 - **Priority:** medium
 - **Class:** fix-class
 - **Origin class:** session-witnessed (exec-run closeout), learn Step 1.9
-- **Cluster:** docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md, docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md
+- **Cluster:** docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md, docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md
 
 ## Observed
 

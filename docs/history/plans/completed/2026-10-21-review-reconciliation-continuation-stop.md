@@ -65,12 +65,12 @@ Files:
 - `.ai-playbook/reviews/2026-10-21-plan-review-dead-run-resume-claim-conversion-p65513e2d-r28.md`
 - `.ai-playbook/reviews/2026-10-21-plan-review-dead-run-resume-claim-conversion-p65513e2d-r28-reconciliation.md`
 
-- [ ] Given a fresh review reopens the same root, keep the existing recurrence chain and require fresh direction before another review; reset the recurrence counter after that review completes, unless the same root recurs and the stop applies again. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the removal gate refuses because review artifacts are missing from the primary home, state that an explicitly authorized review may continue in the retained worktree, while removal still waits for artifact migration and a passing gate. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the change within the existing handoff paragraph, make the edited skill file byte-neutral or smaller, and add no new gate or authorization state. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Confirm the historical R27/R28 sequence and teardown refusal from the backlog origin and the gate implementation/refusal coverage; do not claim that the current primary checkout still reproduces the historical missing-artifact refusal. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the public-hygiene and em-dash checks on the changed skill text; leave the existing closeout gate and its tests unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Delete the backlog origin in the landing rider and prune this plan's dispatch entry with the plan-file witness. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a fresh review reopens the same root, keep the existing recurrence chain and require fresh direction before another review; reset the recurrence counter after that review completes, unless the same root recurs and the stop applies again. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the removal gate refuses because review artifacts are missing from the primary home, state that an explicitly authorized review may continue in the retained worktree, while removal still waits for artifact migration and a passing gate. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the change within the existing handoff paragraph, make the edited skill file byte-neutral or smaller, and add no new gate or authorization state. [class: IMPLEMENTATION_REQUIRED]
+- [x] Confirm the historical R27/R28 sequence and teardown refusal from the backlog origin and the gate implementation/refusal coverage; do not claim that the current primary checkout still reproduces the historical missing-artifact refusal. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the public-hygiene and em-dash checks on the changed skill text; leave the existing closeout gate and its tests unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Delete the backlog origin in the landing rider and prune this plan's dispatch entry with the plan-file witness. [class: IMPLEMENTATION_REQUIRED]
 
 ## Evaluation Criteria
 

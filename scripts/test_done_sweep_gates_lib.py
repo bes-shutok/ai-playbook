@@ -2107,6 +2107,124 @@ def test_write_manifest_enforces_claim_or_foreign(
     assert payload["foreign_review_paths"] == [review_rel]
 
 
+def test_write_manifest_foreign_by_default_primary_reviews_home(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a gitignored historical reviews home in
+    the primary checkout holding staging candidates the run did not stage
+    (the shared run-artifact surface every run migrates records into), expects
+    the writer to classify those candidates foreign by default - the setup
+    succeeds where it refused before (witnessed 2026-10-23, origin row
+    landing commit b3025de59) -
+    and the manifest to record them under the foreign-review list for audit."""
+    root = mktemp_repo("fbdefault")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    now = time.time()
+    make_marker(root, now, os.getpid())
+    home_a = ".ai-playbook/reviews/2026-07-lessons-recall-hook-plan-review-r1.md"
+    home_b = ".ai-playbook/reviews/2026-08-sibling-run-review-r2.md"
+    for rel in (home_a, home_b):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("historical record\n", encoding="utf-8")
+    old_t = now - 86400
+    os.utime(root / home_a, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-10-23-x.md"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "foreign-by-default" in out
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["foreign_review_paths"] == [home_a, home_b]
+    assert payload["owned_review_paths"] == []
+
+
+def test_write_manifest_foreign_by_default_owned_arm_unchanged(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a run that DID stage its own review
+    record in the primary checkout's gitignored reviews home, with a second
+    unclaimed home candidate on disk, expects the owned arm exactly as before:
+    the writer refuses with the claim-or-foreign error naming the unclaimed
+    candidate (own staged record classifies owned once passed via
+    --owned-review), and no manifest is written on the refusal."""
+    root = mktemp_repo("fbowned")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    make_marker(root, time.time(), os.getpid())
+    own_rel = ".ai-playbook/reviews/2026-10-23-own-run-review-r1.md"
+    peer_rel = ".ai-playbook/reviews/2026-07-historical-review-r1.md"
+    for rel in (own_rel, peer_rel):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("staging record\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        [
+            "write-manifest",
+            "--owned-plan",
+            "docs/history/plans/2026-10-23-x.md",
+            "--owned-review",
+            own_rel,
+        ]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert peer_rel in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_default_linked_worktree_still_refuses(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a run-owned linked worktree (not the
+    primary checkout) whose own gitignored reviews home holds an unclaimed
+    candidate, expects the refuse arm to survive unchanged: the foreign-by-
+    default split never fires outside the primary checkout, so the writer
+    exits non-zero naming the candidate and no manifest is written."""
+    root = mktemp_repo("fbworktree")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbworktree-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-side")
+    make_marker(linked, time.time(), os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    home_rel = ".ai-playbook/reviews/2026-10-23-worktree-review-r1.md"
+    (linked / home_rel).parent.mkdir(parents=True, exist_ok=True)
+    (linked / home_rel).write_text("historical record\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-10-23-x.md"]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert home_rel in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
 def test_write_manifest_run_ids_unique(
     tmp_path, sweep_env, monkeypatch, mktemp_repo
 ):

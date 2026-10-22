@@ -2085,6 +2085,68 @@ def _all_staging_review_paths(ctx: GateContext) -> list[Path]:
     return sorted(candidates)
 
 
+def _foreign_by_default_split(
+    ctx: GateContext, uncovered: list[str], owned_review_paths: list[str]
+) -> tuple[list[str], list[str]]:
+    """Split the write-manifest claim-or-foreign uncovered set into
+    (auto-foreign, still-refused).
+
+    The gitignored primary reviews home is by design the shared run-artifact
+    surface every run migrates records INTO, so its historical contents are
+    structurally foreign to any single run; refusing on them is a false
+    positive (witnessed 2026-10-23, the parked done setup in the primary
+    checkout; landing commit b3025de59).
+    A candidate qualifies for the foreign-by-default arm only when ALL hold:
+
+    - the gate context's repo root IS the primary checkout (first
+      ``git worktree list --porcelain`` entry); a run-owned linked worktree
+      keeps the refuse arm, and an unresolvable worktree list fails closed
+      to refuse;
+    - the candidate is gitignored (``!!``-class under the reviews pathspec),
+      the shared-home marker;
+    - the candidate sits under the resolved reviews dir;
+    - the run staged NONE of its own review records there (a run that did
+      keeps the owned arm exactly as before).
+
+    Everything else - candidates outside the reviews home, in a non-primary
+    checkout, tracked-but-unclaimed, or any candidate at all when the run
+    staged in the home - stays in the refuse set unchanged, so the witnessed
+    2026-10-16 silent-claiming catch keeps its coverage.
+    """
+    primary, _primary_err = _resolve_primary_checkout(ctx)
+    if primary is None:
+        return [], list(uncovered)
+    if os.path.realpath(str(primary)) != os.path.realpath(str(ctx.repo_root)):
+        return [], list(uncovered)
+    if not _is_relative_to(ctx.reviews_dir, ctx.repo_root):
+        return [], list(uncovered)
+    reviews_rel = ctx.reviews_dir.relative_to(ctx.repo_root).as_posix()
+    if any(
+        _is_relative_to(ctx.reviews_dir / p, ctx.reviews_dir)
+        for p in owned_review_paths
+    ):
+        return [], list(uncovered)
+    ignored = set(_ignored_paths(ctx, reviews_rel))
+    auto: list[str] = []
+    refused: list[str] = []
+    for path in uncovered:
+        rel = (
+            Path(path)
+            .resolve()
+            .relative_to(ctx.repo_root.resolve())
+            .as_posix()
+            if _is_relative_to(ctx.repo_root / path, ctx.repo_root)
+            else path
+        )
+        if rel in ignored and _is_relative_to(
+            ctx.repo_root / rel, ctx.reviews_dir
+        ):
+            auto.append(rel)
+        else:
+            refused.append(path)
+    return auto, refused
+
+
 # --------------------------------------------------------------------------- #
 # Bounded report emission: a gate report listing of more than SAMPLE_LIMIT
 # entries reduces to the count plus at most SAMPLE_LIMIT sample entries
@@ -6767,6 +6829,21 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         if real(str(candidate)) not in owned_real
         and real(str(candidate)) not in foreign_real
     ]
+    if uncovered and not args.claim_none:
+        auto_foreign, uncovered = _foreign_by_default_split(
+            ctx, uncovered, owned_review_paths
+        )
+        if auto_foreign:
+            foreign_review_paths = _dedup_preserving_order(
+                foreign_review_paths + auto_foreign
+            )
+            print(
+                "write-manifest: foreign-by-default: "
+                f"{len(auto_foreign)} gitignored historical staging "
+                "candidate(s) under the primary checkout's reviews home "
+                "classified foreign (shared run-artifact home; origin row "
+                "landing commit b3025de59)"
+            )
     if uncovered:
         if args.claim_none:
             # F13: the run owns no staging doc, so every unclaimed candidate

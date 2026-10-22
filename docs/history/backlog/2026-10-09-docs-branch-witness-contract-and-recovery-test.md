@@ -1,7 +1,7 @@
 # Backlog: finish the shared docs-branch witness contract
 
 - **Filed:** 2026-10-09, execute-plan code review r6
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-23-docs-branch-witness-contract-and-recovery-test.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Consuming projects that run the shared docs-branch skill need the generic witness contract and its failure-path test; the skills-repo personal priority profile must not defer this as formal-hardening for this repository alone.

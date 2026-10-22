@@ -86,6 +86,19 @@ class TestExecutionClaim(unittest.TestCase):
         self.claim = self.claims_dir / f"{SLUG}.md"
         self.wt_parent = self.scratch / "wt"
         self.branch = "fixture/feature-branch"
+        # Hermetic by construction (the review r1 B1 fold): the trusted
+        # lock-root seam points every test's gateway invocations at a
+        # scratch lock home, and the scratch primary carries the facts
+        # document the preservation scan and provider resolution read.
+        lock_home = self.scratch / "lock-home"
+        lock_home.mkdir()
+        os.environ["EXECUTION_CLAIM_LOCK_HOME"] = str(lock_home)
+        self.addCleanup(os.environ.pop, "EXECUTION_CLAIM_LOCK_HOME", None)
+        facts_dir = self.repo / ".ai-playbook"
+        facts_dir.mkdir(exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+        )
 
     # -- helpers -------------------------------------------------------- #
 
@@ -97,10 +110,12 @@ class TestExecutionClaim(unittest.TestCase):
             timeout=60,
         )
 
-    def _run(self, *args, cwd=None, path_prepend=None):
+    def _run(self, *args, cwd=None, path_prepend=None, extra_env=None):
         env = os.environ.copy()
         if path_prepend is not None:
             env["PATH"] = str(path_prepend) + os.pathsep + env["PATH"]
+        if extra_env:
+            env.update({k: str(v) for k, v in extra_env.items()})
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
             cwd=str(cwd or self.repo),
@@ -207,14 +222,29 @@ class TestExecutionClaim(unittest.TestCase):
         bin_dir.mkdir(exist_ok=True)
         marker = self.scratch / "lost-then-won-planted"
         shim = bin_dir / "date"
+        # The plant keys on the STAMP-FORM date calls (the ISO stamp the
+        # claim writer and the lock meta both draw), not the global call
+        # index: the merge-lock discipline added stamp-form consumers, and
+        # the contender's contract is "the first stamp consumer loses, the
+        # rest release", whatever command issues them.
         shim.write_text(
             "#!/bin/sh\n"
-            f'if [ ! -f "{marker}" ]; then\n'
-            f'  : > "{marker}"\n'
-            f'  ln -s "{self.claim}.planted-target" "{self.claim}"\n'
-            "  exit 1\n"
-            "fi\n"
-            f'rm -f "{self.claim}"\n'
+            'case "$* " in\n'
+            '  *" +%Y-%m-%dT%H:%M:%SZ "*)\n'
+            "    n=0\n"
+            f'    [ -f "{marker}.count" ] && n=$(cat "{marker}.count")\n'
+            "    n=$((n + 1))\n"
+            f'    printf %s "$n" > "{marker}.count"\n'
+            '    if [ "$n" -eq 1 ]; then\n'
+            f'      : > "{marker}"\n'
+            f'      ln -s "{self.claim}.planted-target" "{self.claim}"\n'
+            "      exit 1\n"
+            "    fi\n"
+            '    if [ "$n" -eq 2 ]; then\n'
+            f'      rm -f "{self.claim}"\n'
+            "    fi\n"
+            "    ;;\n"
+            "esac\n"
             f'exec "{real_date}" "$@"\n',
             encoding="utf-8",
         )
@@ -387,6 +417,14 @@ class TestExecutionClaim(unittest.TestCase):
     def _seed_worktree(self, branch, name, parent=None):
         path = (parent or self.scratch) / name
         self._git("worktree", "add", "-b", branch, str(path))
+        # Registered worktrees carry a facts document: the preservation
+        # scan refuses discovery (and preserves every claim) when any
+        # registered worktree's facts are unreadable, so the fixtures that
+        # mean to exercise the deletion/takeover legs write the file.
+        (path / ".ai-playbook").mkdir(exist_ok=True)
+        (path / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+        )
         return path
 
     def _claim_session(self):
@@ -471,37 +509,179 @@ class TestExecutionClaim(unittest.TestCase):
         )
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
 
-    # -- arm 3: restored-worktree takeover (plan
-    # 2026-10-10-coordination-single-writer-ttl, Task 2) ---------------------
+    # -- dead-run conversion (plan 2026-10-21-dead-run-resume-claim-
+    # conversion; the restored-worktree recognition arm's successor) --------
+
+    def _conversion_fixture(self, holder="session-holder", status="terminal",
+                            form="canonical"):
+        """The full dead-run conversion fixture: a registered worktree at
+        the take target carrying a facts-resolved run manifest (the chosen
+        identity form), a terminal-shaped runtime state with a well-formed
+        pre_archive_receipt whose plan_digest hashes the plan bytes, the
+        task implement log at its contract path, a fixture provider
+        executable answering the chosen status, and the primary facts file
+        naming the provider. Returns (worktree_path, manifest_path)."""
+        import hashlib
+        import json
+
+        wt = self._seed_worktree(self.branch, os.path.join("wt", self.branch))
+        (wt / ".ai-playbook").mkdir(exist_ok=True)
+        (wt / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "run-tmp"\n', encoding="utf-8"
+        )
+        run_dir = wt / "run-tmp" / "execute-plan" / SLUG
+        run_dir.mkdir(parents=True)
+        manifest = run_dir / "manifest.md"
+        if form == "canonical":
+            manifest.write_text(
+                "# Execute-plan session: " + SLUG + "\n"
+                "\n"
+                "workflow_state: terminal\n"
+                f"session_id: {holder}\n"
+                f"plan_path: {self.plan}\n"
+                f"run_worktree: {wt}\n"
+                f"run_branch: {self.branch}\n"
+                "\n"
+                "task_boundary: task=1 commit=fixture validation=pass\n",
+                encoding="utf-8",
+            )
+        elif form == "legacy-full":
+            manifest.write_text(
+                "# Execute-plan session: " + SLUG + "\n"
+                "\n"
+                "workflow_state: terminal\n"
+                f"Session: {holder}\n"
+                f"Plan: {self.plan}\n"
+                "\n"
+                "task_boundary: task=1 commit=fixture validation=pass\n",
+                encoding="utf-8",
+            )
+        elif form == "legacy-session":
+            manifest.write_text(
+                "# Execute-plan session: " + SLUG + "\n"
+                "\n"
+                "workflow_state: terminal\n"
+                f"session_id: {holder}\n"
+                "\n"
+                "task_boundary: task=1 commit=fixture validation=pass\n",
+                encoding="utf-8",
+            )
+        evidence_file = self.scratch / "phase3-exit-record.md"
+        evidence_file.write_text("phase 3 exit: zero blocking\n", encoding="utf-8")
+        digest = hashlib.sha256(self.plan.read_bytes()).hexdigest()
+        (run_dir / "task-1-implement.log.md").write_text(
+            "task 1 implement log\n", encoding="utf-8"
+        )
+        (run_dir / "runtime_state.json").write_text(
+            json.dumps({
+                "plan_slug": SLUG,
+                "workflow_state": "terminal",
+                "tasks": {"1": "complete"},
+                "pre_archive_receipt": {
+                    "declared_paths": [str(self.plan)],
+                    "archived_plan_path": str(
+                        self.repo / "docs" / "history" / "plans" / "completed" / PLAN_NAME
+                    ),
+                    "plan_digest": digest,
+                    "evidence": [str(evidence_file)],
+                    "recorded_at": "2026-10-23T00:00:00Z",
+                },
+                "terminal_receipt": {
+                    "exit": "phase3-zero-blocking",
+                    "recorded_at": "2026-10-23T00:10:00Z",
+                },
+            }),
+            encoding="utf-8",
+        )
+        provider = self.scratch / "status-provider.sh"
+        if status == "terminal":
+            body = 'printf \'{"session_id": "%s", "status": "terminal"}\\n\' "$1"\n'
+        elif status in ("live", "paused", "unresolved"):
+            body = (
+                "printf '{\"session_id\": \"%s\", \"status\": \"" + status + "\"}\\n' \"$1\"\n"
+            )
+        elif status == "slow":
+            body = "sleep 12\nprintf '{\"session_id\": \"%s\", \"status\": \"terminal\"}\\n' \"$1\"\n"
+        elif status == "malformed":
+            body = "printf 'not-json-at-all\\n'\n"
+        elif status == "overflow":
+            body = (
+                "printf '{\"session_id\": \"%s\", \"status\": \"terminal\"}' \"$1\"\n"
+                "i=0\nwhile [ \"$i\" -lt 70000 ]; do printf 'x'; i=$((i + 1)); done\n"
+                "printf '\\n'\n"
+            )
+        elif status == "mismatched-id":
+            body = 'printf \'{"session_id": "someone-else", "status": "terminal"}\\n\' "$1"\n'
+        else:
+            body = 'printf \'{"session_id": "%s", "status": "bogus"}\\n\' "$1"\n'
+        provider.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        provider.chmod(0o755)
+        facts_dir = self.repo / ".ai-playbook"
+        facts_dir.mkdir(exist_ok=True)
+        with open(facts_dir / "facts.md", "a", encoding="utf-8") as fh:
+            fh.write(f'session_status_command = "{provider}"\n')
+        return wt, manifest
+
+    def _conversion_take(self, session, branch=None, plan=None, parent=None):
+        return self._run(
+            "take",
+            str(plan or self.plan),
+            "--session", session,
+            "--branch", branch or self.branch,
+            "--worktree-parent", str(parent or self.wt_parent),
+            extra_env={
+                "CLAUDE_CODE_SESSION_ID": session,
+                "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+            },
+        )
 
     def test_restored_worktree_takeover_on_verifiable_same_run_state(self):
-        # The worktree exists and its session manifest row names the foreign
-        # claim's holder session as its Session and this plan as its Plan:
-        # the same run resuming after a restore takes over the claim.
-        self._seed_worktree(self.branch, "restored-wt")
-        manifest_dir = self.wt_parent / self.branch / "docs" / "tmp" / "execute-plan" / SLUG
-        manifest_dir.mkdir(parents=True)
-        (manifest_dir / "manifest.md").write_text(
-            f"Session: session-holder\nPlan: {self.plan}\n", encoding="utf-8"
+        # The registered worktree at the take path carries the canonical
+        # run manifest naming the foreign claim's holder and this exact
+        # plan, the provider answers the prior owner terminal, and the
+        # completed-run boundary holds: the claim converts to the resumer
+        # (atomic replacement, no worktree add, no occupant refusal), and
+        # the manifest canonicalizes to the resumer's identity.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        prior_created = next(
+            line for line in self.claim.read_text(encoding="utf-8").splitlines()
+            if line.startswith("created: ")
         )
-        self._seed_claim("session-holder", FRESH_AGE)
-        proc = self._take("session-b")
-        # the claim is re-derived to session-b (no collision), and the
-        # pre-existing worktree takes the adopt-instead-of-recreate refusal
-        # with the re-derived claim kept (never cleaned up as a foreign one)
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("arm-3 restored-worktree takeover", proc.stdout + proc.stderr)
-        self.assertIn("adopts the existing worktree", proc.stdout + proc.stderr)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
         self.assertEqual(self._claim_session(), "session-b")
-        # the resume completes on the next take: own claim + adopt guidance
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("adopts the existing worktree", proc.stdout + proc.stderr)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        # The replacement shape: prior created preserved, branch preserved,
+        # updated refreshed; nothing synthesized.
+        self.assertIn(prior_created, claim_text)
+        self.assertIn(f"branch: {self.branch}", claim_text)
+        self.assertIn("session: session-b", claim_text)
+        self.assertTrue(
+            (self.wt_parent / self.branch).is_dir(), "worktree must be adopted, not recreated"
+        )
+        # Manifest canonicalized: resumer identity, legacy aliases gone,
+        # unrelated content preserved.
+        canonical = manifest.read_text(encoding="utf-8")
+        self.assertIn("session_id: session-b", canonical)
+        self.assertIn(f"plan_path: {self.plan}", canonical)
+        self.assertIn(f"run_worktree: {wt}", canonical)
+        self.assertIn(f"run_branch: {self.branch}", canonical)
+        self.assertNotIn("Session:", canonical)
+        self.assertNotIn("Plan:", canonical)
+        self.assertIn("workflow_state: terminal", canonical)
+        self.assertIn("task_boundary:", canonical)
+        # The converted claim survives the exit path (TAKE_OK disarmed the
+        # cleanup): a second read after the process exited is the proof.
         self.assertEqual(self._claim_session(), "session-b")
 
     def test_restored_worktree_refusal_on_unprovable_state(self):
-        # The manifest is missing (or does not name the holder + plan): the
-        # verification failure defaults to today's fresh-foreign refusal.
+        # No run manifest at the take target (the seeded worktree sits at a
+        # different path, so the target is not even registered): the
+        # conversion has no context and the historical fresh-foreign
+        # refusal judges.
         self._seed_worktree(self.branch, "restored-wt-none")
         (self.wt_parent / self.branch / "docs" / "tmp" / "execute-plan" / SLUG).mkdir(parents=True)
         self._seed_claim("session-holder", FRESH_AGE)
@@ -511,6 +691,423 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         self.assertIn("fresh foreign claim", proc.stdout + proc.stderr)
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_nonterminal_provider_status(self):
+        # The provider answers live: only a terminal prior owner proceeds;
+        # the claim is preserved byte-identically.
+        self._conversion_fixture(status="live")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("prior owner session-holder is live, not terminal", proc.stdout + proc.stderr)
+        self.assertIn("live", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_without_provider_configuration(self):
+        # No session_status_command in the primary facts: the provider
+        # refuses and the conversion refuses unchanged (the Ship gate's
+        # default: the existing refusal remains active without valid
+        # configuration and verified evidence).
+        self._conversion_fixture()
+        (self.repo / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "docs/tmp"\nother_key = "x"\n', encoding="utf-8"
+        )
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_incomplete_run_boundary(self):
+        # The runtime state names task 2 in progress: the completed-run
+        # boundary refuses and the claim is preserved.
+        import json
+        wt, manifest = self._conversion_fixture()
+        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["tasks"] = {"1": "complete", "2": "in-progress"}
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("not in a sanctioned terminal state", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_mismatched_plan_digest(self):
+        # The receipt's plan_digest does not hash the active plan bytes:
+        # refuse unchanged.
+        import json
+        wt, manifest = self._conversion_fixture()
+        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["pre_archive_receipt"]["plan_digest"] = "0" * 64
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not hash the active plan bytes", proc.stdout + proc.stderr)
+
+    def test_conversion_legacy_full_and_session_forms_convert(self):
+        # The two legacy identity forms convert identically: the manifest's
+        # legacy aliases are removed on canonicalization and the canonical
+        # identity fields are written.
+        for form in ("legacy-full", "legacy-session"):
+            with self.subTest(form=form):
+                wt, manifest = self._conversion_fixture(form=form)
+                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+                proc = self._conversion_take("session-b")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                canonical = manifest.read_text(encoding="utf-8")
+                self.assertIn("session_id: session-b", canonical)
+                self.assertIn(f"plan_path: {self.plan}", canonical)
+                self.assertNotIn("Session:", canonical)
+                self.assertNotIn("Plan:", canonical)
+                # Reset the fixture state the next iteration rebuilds.
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                # Restore the facts baseline: the fixture appends the
+                # provider line, so a stale duplicate key would refuse the
+                # next iteration's provider resolution.
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
+
+    def test_conversion_session_channel_mismatch_refuses(self):
+        # The session channel derives a different active id than --session:
+        # the trusted-channel boundary refuses before any mutation.
+        self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._run(
+            "take", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--worktree-parent", str(self.wt_parent),
+            extra_env={
+                "CLAUDE_CODE_SESSION_ID": "session-someone-else",
+                "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+            },
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not equal --session session-b", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_stale_claim_at_registered_manifest_preserved(self):
+        # Stale take preservation: the manifest remains at its registered
+        # worktree, but the boundary fails (provider live), so the stale
+        # claim is preserved — never taken over by the historical unlink.
+        self._conversion_fixture(status="live")
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_sweep_preserves_claim_with_registered_manifest(self):
+        # Sweep-side preservation: a spent-looking claim (landed plan, no
+        # branch occupant) whose run manifest remains at its registered
+        # worktree is skipped untouched, naming the registered worktree.
+        wt, manifest = self._conversion_fixture()
+        completed = self.repo / "docs" / "history" / "plans" / "completed"
+        completed.mkdir(parents=True)
+        shutil.copy(self.plan, completed / PLAN_NAME)
+        self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
+        proc = self._run("sweep", "--session", "session-sweeper")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertTrue(self.claim.exists(), "preserved claim was deleted by sweep")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("run manifest remains at its registered worktree", combined)
+        self.assertIn("deleted 0", combined)
+
+    def test_conversion_refuses_symlinked_manifest(self):
+        # A symlinked run manifest is never followed: the conversion
+        # refuses unchanged.
+        wt, manifest = self._conversion_fixture()
+        target = self.scratch / "elsewhere-manifest.md"
+        target.write_text("not the manifest\n", encoding="utf-8")
+        manifest.unlink()
+        os.symlink(str(target), str(manifest))
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("symlink", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self.assertTrue(manifest.is_symlink())
+
+    def test_conversion_refuses_ambiguous_manifests(self):
+        # The manifest exists at the take target AND at another registered
+        # worktree (two worktrees ran the same slug): the ambiguity
+        # preserves the claim for operator reconciliation.
+        wt, manifest = self._conversion_fixture()
+        other_branch = "fixture/other-branch"
+        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
+        (other / ".ai-playbook").mkdir(exist_ok=True)
+        (other / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "run-tmp"\n', encoding="utf-8"
+        )
+        other_run = other / "run-tmp" / "execute-plan" / SLUG
+        other_run.mkdir(parents=True)
+        (other_run / "manifest.md").write_text(
+            f"# Execute-plan session: {SLUG}\n\nSession: session-holder\nPlan: {self.plan}\n",
+            encoding="utf-8",
+        )
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_run_base_conflict(self):
+        # The manifest's run_base branch token disagrees with the claim's
+        # base line: refuse before the replacement.
+        wt, manifest = self._conversion_fixture()
+        mtext = manifest.read_text(encoding="utf-8")
+        manifest.write_text(
+            mtext + "run_base: some-other-branch @ 0123456789abcdef\n",
+            encoding="utf-8",
+        )
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.claim.write_text(claim_text + "base: main\n", encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("conflicts with the claim's base", proc.stdout + proc.stderr)
+
+    def test_conversion_refuses_split_owner_state(self):
+        # H-claim/R-manifest split owners: the manifest names a different
+        # owner than the claim (the interrupted-replacement shape) — the
+        # conversion refuses byte-identically without inferring lineage.
+        wt, manifest = self._conversion_fixture(holder="session-first")
+        self._seed_claim("session-second", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        manifest_before = manifest.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not verify against the claim", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self.assertEqual(manifest.read_text(encoding="utf-8"), manifest_before)
+
+    def test_conversion_refuses_claim_manifest_branch_conflict(self):
+        # The manifest's run_branch disagrees with the claim's recorded
+        # branch: refuse before the replacement; nothing mutates.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", STALE_AGE, branch="fixture/other-branch")
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("conflicts with the claim's branch", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_on_slow_provider_timeout(self):
+        # A provider exceeding the 10-second bound refuses the conversion
+        # unchanged, and both gateway-owned locks are released (a later
+        # command's merge-acquire must not see a stranded hold).
+        wt, manifest = self._conversion_fixture(status="slow")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_malformed_overflow_and_mismatched_provider(self):
+        # Malformed JSON, a 64 KiB stream overflow, and a mismatched
+        # session id each refuse the conversion unchanged (the provider
+        # contract's closed vocabulary; the gateway never proceeds on a
+        # response outside the exact shape).
+        for status, needle in (
+            ("malformed", "not valid JSON"),
+            ("overflow", "byte cap"),
+            ("mismatched-id", "did not return prior owner"),
+        ):
+            with self.subTest(status=status):
+                wt, manifest = self._conversion_fixture(status=status)
+                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+                before = self.claim.read_text(encoding="utf-8")
+                proc = self._conversion_take("session-b")
+                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+                self.assertIn(needle, proc.stdout + proc.stderr)
+                self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+                # Reset the fixture state the next iteration rebuilds.
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                # Restore the facts baseline: the fixture appends the
+                # provider line, so a stale duplicate key would refuse the
+                # next iteration's provider resolution.
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
+
+    def test_conversion_r_then_s_second_conversion_succeeds(self):
+        # R-to-S: a second conversion on the already-converted run transfers
+        # the claim again; the artifacts the first conversion wrote (the
+        # manifest's canonical identity block, the old logs) keep their
+        # bytes apart from the ownership fields.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        first = self._conversion_take("session-b")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        manifest_after_first = manifest.read_text(encoding="utf-8")
+        run_log = wt / "run-tmp" / "execute-plan" / SLUG / "task-1-implement.log.md"
+        log_before = run_log.read_bytes()
+        # The claim now names session-b with a fresh updated stamp; make it
+        # stale so the second conversion takes the same gated path.
+        self._seed_claim("session-b", STALE_AGE, branch=self.branch)
+        second = self._conversion_take("session-c")
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(self._claim_session(), "session-c")
+        canonical = manifest.read_text(encoding="utf-8")
+        self.assertIn("session_id: session-c", canonical)
+        self.assertIn("run_session_id: session-holder", canonical)
+        self.assertEqual(run_log.read_bytes(), log_before)
+
+    def test_conversion_same_owner_resumes_through_own_claim_arm(self):
+        # The claim and manifest name the invoking session: the verified
+        # live same-session resume hands back to the own-claim arm (the
+        # adopt-instead-of-recreate refusal keeping the claim), never the
+        # conversion.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._run(
+            "take", str(self.plan),
+            "--session", "session-holder",
+            "--branch", self.branch,
+            "--worktree-parent", str(self.wt_parent),
+            extra_env={
+                "CLAUDE_CODE_SESSION_ID": "session-holder",
+                "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+            },
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("already exists", proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-holder")
+
+    def test_conversion_preserves_all_optional_claim_lines(self):
+        # The replacement shape: created, branch, start-commit, and base
+        # survive; updated refreshes; a later take on another branch still
+        # sees the saved branch occupancy.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        text = self.claim.read_text(encoding="utf-8")
+        text += "start-commit: 0123456789abcdef0123456789abcdef01234567\nbase: main\n"
+        self.claim.write_text(text, encoding="utf-8")
+        updated_before = self._updated_stamp()
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("start-commit: 0123456789abcdef0123456789abcdef01234567", claim_text)
+        self.assertIn("base: main", claim_text)
+        self.assertNotEqual(self._updated_stamp(), updated_before)
+        # The saved branch occupancy: the sweep's branch leg still sees the
+        # saved branch held by the registered worktree, so the spent-looking
+        # claim is skipped whatever the plan's state.
+        proc = self._run("sweep", "--session", "session-z")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(self.claim.exists(), "the converted claim was swept")
+        combined = proc.stdout + proc.stderr
+        self.assertTrue(
+            "run manifest remains at its registered worktree" in combined
+            or f"branch {self.branch} is held by worktree" in combined,
+            f"neither preservation witness fired: {combined}",
+        )
+
+    def test_conversion_poisoned_lock_environment_cannot_redirect_roots(self):
+        # Poisoned caller HOME and lock-root variables cannot change the
+        # roots: the conversion succeeds with decoys set and the decoy
+        # directories stay empty (the OS-account/seam derivation wins).
+        wt, manifest = self._conversion_fixture()
+        decoy = self.scratch / "decoy-home"
+        decoy.mkdir()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._run(
+            "take", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--worktree-parent", str(self.wt_parent),
+            extra_env={
+                "CLAUDE_CODE_SESSION_ID": "session-b",
+                "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+                "HOME": str(decoy),
+                "DONE_LOCK_ROOT": str(decoy / "done-redirect"),
+                "MERGE_LOCK_ROOT": str(decoy / "merge-redirect"),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-b")
+        self.assertFalse(
+            (decoy / "done-redirect").exists(), "caller DONE_LOCK_ROOT was honored"
+        )
+        self.assertFalse(
+            (decoy / "merge-redirect").exists(), "caller MERGE_LOCK_ROOT was honored"
+        )
+        self.assertEqual(list(decoy.iterdir()), [], "caller HOME was used as the lock root")
+
+    def test_merge_lock_contention_refuses_claim_commands_once(self):
+        # With a live merge-lock held by another session, each claim
+        # command refuses once naming the holder and preserves the claim
+        # (the one-shot contention refusal; no second acquire attempt).
+        wt = self._seed_worktree(self.branch, os.path.join("wt", self.branch))
+        lock_home = self.scratch / "lock-home"
+        holder_dir = lock_home / ".ai-playbook" / "locks" / "merge"
+        acq = subprocess.run(
+            ["env", f"MERGE_LOCK_ROOT={holder_dir}", "bash",
+             str(SCRIPT.parent / "done-lock.sh"), "merge-acquire", "--label", "external-holder"],
+            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(acq.returncode, 0, acq.stderr)
+        lock_dir = ""
+        token = ""
+        for line in acq.stdout.splitlines():
+            if line.startswith("export MERGE_LOCK_DIR="):
+                lock_dir = line.split("=", 1)[1]
+            if line.startswith("export MERGE_LOCK_TOKEN="):
+                token = line.split("=", 1)[1]
+        self.assertTrue(lock_dir and token)
+        try:
+            self._seed_claim("session-a", FRESH_AGE)
+            before = self.claim.read_text(encoding="utf-8")
+            for mode_args in (
+                ("claim", str(self.plan), "--session", "session-b"),
+                ("release", str(self.plan), "--session", "session-a"),
+                ("sweep", "--session", "session-b"),
+                ("refresh", str(self.plan), "--session", "session-a"),
+                ("take", str(self.plan), "--session", "session-b",
+                 "--branch", "fixture/contended", "--worktree-parent", str(self.scratch / "wt-c")),
+            ):
+                with self.subTest(mode=mode_args[0]):
+                    proc = self._run(
+                        *mode_args,
+                        extra_env={"EXECUTION_CLAIM_LOCK_HOME": str(lock_home)},
+                    )
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+                    self.assertIn("merge-lock is held", proc.stdout + proc.stderr)
+            self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        finally:
+            subprocess.run(
+                ["env", f"MERGE_LOCK_ROOT={holder_dir}",
+                 f"MERGE_LOCK_DIR={lock_dir}", f"MERGE_LOCK_TOKEN={token}",
+                 "bash", str(SCRIPT.parent / "done-lock.sh"), "merge-release"],
+                cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+            )
 
     def test_restored_worktree_claim_mutation_serialized(self):
         # The compare-and-delete seam: the takeover and release mutations
@@ -982,10 +1579,11 @@ class TestExecutionClaim(unittest.TestCase):
         completed.mkdir(parents=True)
         (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
         facts_dir = self.repo / ".ai-playbook"
-        facts_dir.mkdir()
+        facts_dir.mkdir(exist_ok=True)
         (facts_dir / "facts.md").write_text(
             "```toml\n"
             f'plans_dir = "{plans_root}"\n'
+            'tmp_dir = "docs/tmp"\n'
             "```\n",
             encoding="utf-8",
         )

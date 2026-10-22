@@ -138,25 +138,25 @@ Primary class anchors:
 - `query_session_status` in `scripts/session_status.py`
 - `Live-session discovery ladder` in `agents/skills/execute-plan/SKILL.md`
 
-- [ ] Parse only manifest identity forms in Terms; resolve `tmp_dir` from each target worktree's facts; bind prior owner, stable run ID, exact plan, and registered worktree; refuse conflicts; canonicalize successful conversions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Before lock acquisition or mutation, derive the active ID through `scripts/session_channel.py` and require exact `--session` equality; empty or mismatched IDs refuse unchanged within the trusted session-channel boundary in Terms. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify one exact registered run worktree; recover only verified-dead holders. Derive roots from the OS account, clear caller lock variables, and verify tokens and paths. [class: IMPLEMENTATION_REQUIRED]
-- [ ] After active-session validation, acquire target done-lock then repository merge-lock before claim reads; hold through provider lookup, replacement, and manifest refresh. [class: IMPLEMENTATION_REQUIRED]
-- [ ] All five claim commands acquire merge-lock before claim access. Pin it to the command PID; reuse only this session's verified token, else try once and refuse with holder. [class: IMPLEMENTATION_REQUIRED]
-- [ ] On handled success or refusal, release every owned lock in reverse acquisition order: merge-lock for all commands and target done-lock for conversion. Only abrupt death leaves locks for verified-dead recovery. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pin locks to the live gateway PID; verify records and never use a command-substitution parent. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Bound provider to 10 seconds and each output stream to 65,536 bytes; on timeout or overflow terminate and reap the process group, then refuse unchanged and release only owned locks. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify exact worktree registration, contained plan/manifest paths, and non-symlink evidence; a recorded branch must match the attached target. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Read provider config only from primary facts; require an absolute executable and controlled environment. Enforce Terms' exact JSON: only matching-ID terminal proceeds; all other results refuse unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Enforce the stable evidence tuple in Terms across runtime state, task/review boundaries, logs, Phase 2/3 records, and receipt; validate current owner separately and accept legacy artifacts only through the bounded legacy binding. Refuse incomplete or ambiguous evidence unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add no claim lineage for interrupted replacement. If claim and manifest owners differ after a crash, refuse unchanged for operator reconciliation. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Under both locks, re-read the claim; if owner or bytes changed, refuse. Otherwise atomically replace it and canonicalize the manifest per Terms. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Build the replacement per Terms: preserve prior branch, start commit, and base; refuse before replacement if any recorded value conflicts with the manifest. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pre-register recovery removal in `scripts/gate_liveness_ledger.json` with 2026-10-19/20 incidents and R21 race, two catches per two days, one delayed retry, 2027-04-21 review, and restore prior refusals if no further catch occurs. [class: IMPLEMENTATION_REQUIRED]
-- [ ] For stale `take`/`sweep`, resolve each worktree's `tmp_dir` from its facts and preserve a claim whenever either supported manifest form remains at its exact registered-worktree path, regardless of owner/plan mismatch or branch state. Never follow symlinks; ambiguity or missing facts refuses unchanged, with no default-path fallback. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Conversion requires one exact registered, attached target; detached, missing, or ambiguous targets refuse unchanged, even when a legacy manifest has no `run_branch:`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] After replacement and manifest refresh, verify the registered target, report success, disarm cleanup, and return before the occupant refusal or `git worktree add`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `fix: recover dead-run claim ownership safely` [class: IMPLEMENTATION_REQUIRED]
+- [x] Parse only manifest identity forms in Terms; resolve `tmp_dir` from each target worktree's facts; bind prior owner, stable run ID, exact plan, and registered worktree; refuse conflicts; canonicalize successful conversions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Before lock acquisition or mutation, derive the active ID through `scripts/session_channel.py` and require exact `--session` equality; empty or mismatched IDs refuse unchanged within the trusted session-channel boundary in Terms. [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify one exact registered run worktree; recover only verified-dead holders. Derive roots from the OS account, clear caller lock variables, and verify tokens and paths. [class: IMPLEMENTATION_REQUIRED]
+- [x] After active-session validation, acquire target done-lock then repository merge-lock before claim reads; hold through provider lookup, replacement, and manifest refresh. [class: IMPLEMENTATION_REQUIRED]
+- [x] All five claim commands acquire merge-lock before claim access. Pin it to the command PID; reuse only this session's verified token, else try once and refuse with holder. [class: IMPLEMENTATION_REQUIRED]
+- [x] On handled success or refusal, release every owned lock in reverse acquisition order: merge-lock for all commands and target done-lock for conversion. Only abrupt death leaves locks for verified-dead recovery. [class: IMPLEMENTATION_REQUIRED]
+- [x] Pin locks to the live gateway PID; verify records and never use a command-substitution parent. [class: IMPLEMENTATION_REQUIRED]
+- [x] Bound provider to 10 seconds and each output stream to 65,536 bytes; on timeout or overflow terminate and reap the process group, then refuse unchanged and release only owned locks. [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify exact worktree registration, contained plan/manifest paths, and non-symlink evidence; a recorded branch must match the attached target. [class: IMPLEMENTATION_REQUIRED]
+- [x] Read provider config only from primary facts; require an absolute executable and controlled environment. Enforce Terms' exact JSON: only matching-ID terminal proceeds; all other results refuse unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Enforce the stable evidence tuple in Terms across runtime state, task/review boundaries, logs, Phase 2/3 records, and receipt; validate current owner separately and accept legacy artifacts only through the bounded legacy binding. Refuse incomplete or ambiguous evidence unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add no claim lineage for interrupted replacement. If claim and manifest owners differ after a crash, refuse unchanged for operator reconciliation. [class: IMPLEMENTATION_REQUIRED]
+- [x] Under both locks, re-read the claim; if owner or bytes changed, refuse. Otherwise atomically replace it and canonicalize the manifest per Terms. [class: IMPLEMENTATION_REQUIRED]
+- [x] Build the replacement per Terms: preserve prior branch, start commit, and base; refuse before replacement if any recorded value conflicts with the manifest. [class: IMPLEMENTATION_REQUIRED]
+- [x] Pre-register recovery removal in `scripts/gate_liveness_ledger.json` with 2026-10-19/20 incidents and R21 race, two catches per two days, one delayed retry, 2027-04-21 review, and restore prior refusals if no further catch occurs. [class: IMPLEMENTATION_REQUIRED]
+- [x] For stale `take`/`sweep`, resolve each worktree's `tmp_dir` from its facts and preserve a claim whenever either supported manifest form remains at its exact registered-worktree path, regardless of owner/plan mismatch or branch state. Never follow symlinks; ambiguity or missing facts refuses unchanged, with no default-path fallback. [class: IMPLEMENTATION_REQUIRED]
+- [x] Conversion requires one exact registered, attached target; detached, missing, or ambiguous targets refuse unchanged, even when a legacy manifest has no `run_branch:`. [class: IMPLEMENTATION_REQUIRED]
+- [x] After replacement and manifest refresh, verify the registered target, report success, disarm cleanup, and return before the occupant refusal or `git worktree add`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `fix: recover dead-run claim ownership safely` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Exercise claim conversion and gateway-lock ordering
 
@@ -166,25 +166,25 @@ Files:
 Primary class anchors:
 - `test_restored_worktree_takeover_on_verifiable_same_run_state` in `scripts/test_execution_claim.py`
 
-- [ ] Across canonical and legacy forms, verify exact identity, conflicts, symlink/copy cases, and active-owner match/refusal; successful conversions preserve unrelated fields, canonicalize, and pass later stale-take. [class: REPOSITORY_TEST]
-- [ ] Across H-to-R-to-S with tupleless legacy evidence, validate it on both conversions: invalid R-to-S binding after migration refuses byte-identically; valid R-to-S succeeds, leaves old logs/Phase 2 bytes unchanged, and keeps new records tuple-bound. [class: REPOSITORY_TEST]
-- [ ] Convert H/claim H to R only with matching owner/worktree; interrupted owner mismatch refuses byte-identically. [class: REPOSITORY_TEST]
-- [ ] Provider schema/ID errors, malformed output, timeout, and 65,536-byte stream overflow refuse closed; timeout, overflow, and interruption reap the process group and release only gateway-owned locks. [class: REPOSITORY_TEST]
-- [ ] Bind every completion artifact to the stable tuple: mismatched, incomplete, duplicate, copied, or ambiguous evidence refuses byte-identically; valid legacy evidence migrates only after all checks. Require a valid Phase 3/receipt; missing `recorded_at` or mismatched archive paths, digest, or pointers refuse unchanged. [class: REPOSITORY_TEST]
-- [ ] Preserve `created`, `branch`, `start-commit`, and `base`; refresh `updated`; refuse recorded claim/manifest conflicts; a later `take` on another branch still sees the saved branch occupancy. [class: REPOSITORY_TEST]
-- [ ] Acquire target done-lock then repository merge-lock before claim access; interleave `claim`, `take`, `refresh`, `release`, and `sweep` across worktrees to verify serialization. [class: REPOSITORY_TEST]
-- [ ] With a live merge-lock held by another session, each claim command refuses once, names the holder, and preserves claim and manifest. [class: REPOSITORY_TEST]
-- [ ] During a long provider call, both locks identify the live gateway process; another worktree cannot reclaim them through ordinary acquire or dead-holder recovery. [class: REPOSITORY_TEST]
-- [ ] Exercise both serialized release/conversion orders; neither reads ownership before locking or unlinks R's claim from a pre-lock read. [class: REPOSITORY_TEST]
-- [ ] Stale `take`/`sweep` preserve canonical/legacy claims byte-identically across branch switch/detach and default/overridden `tmp_dir`, including H-claim/R-manifest split owners. Missing/ambiguous facts or conflicts refuse; absent manifests use branch occupancy; foreign refresh/release refuse. [class: REPOSITORY_TEST]
-- [ ] A mismatched active `--session` refuses before recovery, acquisition, or provider call; assert lock, claim, and manifest unchanged. [class: REPOSITORY_TEST]
-- [ ] Provider invocation requires the gateway's verified token and exact worktree path; wrong or foreign tokens refuse before invocation and are never released. [class: REPOSITORY_TEST]
-- [ ] Use fixture account-home resolution; poisoned caller `HOME` and `DONE_LOCK_*` cannot redirect lock roots. [class: REPOSITORY_TEST]
-- [ ] Run subprocesses in a clean environment; poison caller HOME, lock variables, PATH, status, and worktree facts; verify trusted roots/provider and session-channel matching. [class: REPOSITORY_TEST]
-- [ ] Successful conversion adopts the exact registered worktree without `git worktree add` or post-acquisition occupant refusal. [class: REPOSITORY_TEST]
-- [ ] Live, ambiguous, unknown, and too-young foreign holders preserve lock, claim, and manifest. [class: REPOSITORY_TEST]
-- [ ] Inject rename/refresh failures and pre/post-write interrupts; files stay complete and retries refuse owner mismatch. Success/refusal release owned locks, foreign locks remain, and abrupt death requires verified recovery. [class: REPOSITORY_TEST]
-- [ ] Commit: `test: cover dead-run claim recovery evidence` [class: IMPLEMENTATION_REQUIRED]
+- [x] Across canonical and legacy forms, verify exact identity, conflicts, symlink/copy cases, and active-owner match/refusal; successful conversions preserve unrelated fields, canonicalize, and pass later stale-take. [class: REPOSITORY_TEST]
+- [x] Across H-to-R-to-S with tupleless legacy evidence, validate it on both conversions: invalid R-to-S binding after migration refuses byte-identically; valid R-to-S succeeds, leaves old logs/Phase 2 bytes unchanged, and keeps new records tuple-bound. [class: REPOSITORY_TEST]
+- [x] Convert H/claim H to R only with matching owner/worktree; interrupted owner mismatch refuses byte-identically. [class: REPOSITORY_TEST]
+- [x] Provider schema/ID errors, malformed output, timeout, and 65,536-byte stream overflow refuse closed; timeout, overflow, and interruption reap the process group and release only gateway-owned locks. [class: REPOSITORY_TEST]
+- [x] Bind every completion artifact to the stable tuple: mismatched, incomplete, duplicate, copied, or ambiguous evidence refuses byte-identically; valid legacy evidence migrates only after all checks. Require a valid Phase 3/receipt; missing `recorded_at` or mismatched archive paths, digest, or pointers refuse unchanged. [class: REPOSITORY_TEST]
+- [x] Preserve `created`, `branch`, `start-commit`, and `base`; refresh `updated`; refuse recorded claim/manifest conflicts; a later `take` on another branch still sees the saved branch occupancy. [class: REPOSITORY_TEST]
+- [x] Acquire target done-lock then repository merge-lock before claim access; interleave `claim`, `take`, `refresh`, `release`, and `sweep` across worktrees to verify serialization. [class: REPOSITORY_TEST]
+- [x] With a live merge-lock held by another session, each claim command refuses once, names the holder, and preserves claim and manifest. [class: REPOSITORY_TEST]
+- [x] During a long provider call, both locks identify the live gateway process; another worktree cannot reclaim them through ordinary acquire or dead-holder recovery. [class: REPOSITORY_TEST]
+- [x] Exercise both serialized release/conversion orders; neither reads ownership before locking or unlinks R's claim from a pre-lock read. [class: REPOSITORY_TEST]
+- [x] Stale `take`/`sweep` preserve canonical/legacy claims byte-identically across branch switch/detach and default/overridden `tmp_dir`, including H-claim/R-manifest split owners. Missing/ambiguous facts or conflicts refuse; absent manifests use branch occupancy; foreign refresh/release refuse. [class: REPOSITORY_TEST]
+- [x] A mismatched active `--session` refuses before recovery, acquisition, or provider call; assert lock, claim, and manifest unchanged. [class: REPOSITORY_TEST]
+- [x] Provider invocation requires the gateway's verified token and exact worktree path; wrong or foreign tokens refuse before invocation and are never released. [class: REPOSITORY_TEST]
+- [x] Use fixture account-home resolution; poisoned caller `HOME` and `DONE_LOCK_*` cannot redirect lock roots. [class: REPOSITORY_TEST]
+- [x] Run subprocesses in a clean environment; poison caller HOME, lock variables, PATH, status, and worktree facts; verify trusted roots/provider and session-channel matching. [class: REPOSITORY_TEST]
+- [x] Successful conversion adopts the exact registered worktree without `git worktree add` or post-acquisition occupant refusal. [class: REPOSITORY_TEST]
+- [x] Live, ambiguous, unknown, and too-young foreign holders preserve lock, claim, and manifest. [class: REPOSITORY_TEST]
+- [x] Inject rename/refresh failures and pre/post-write interrupts; files stay complete and retries refuse owner mismatch. Success/refusal release owned locks, foreign locks remain, and abrupt death requires verified recovery. [class: REPOSITORY_TEST]
+- [x] Commit: `test: cover dead-run claim recovery evidence` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Document the recovery procedure
 
@@ -195,19 +195,23 @@ Files:
 - `agents/skills/execute-plan/worktree-first.md`
 - `agents/skills/maintenance/template-execution.md`
 
-- [ ] Make `agents/skills/maintenance/template-execution.md` the sole recovery procedure for H/claim H to R; other listed documents link here. Resolve live-resume and dead-run manifests from the relevant worktree's facts-based `tmp_dir`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] During Phase 0, invoke `take` before saved-manifest refresh, other run mutation, work, or closeout, with `--session` equal to the active ID returned by the shared session-channel helper. Verified live same-session resume still refreshes first. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Document the worktree done-lock and repository merge-lock lifetimes: token-release after every handled success/refusal, reverse acquisition order, and abrupt-death recovery only after verified holder death. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep live same-session resume behavior unchanged, route dead-run conversion through the gateway once, and remove duplicated route-level liveness checks. The run log records the exact owner transition and gateway-owned lock disposition but never authorizes conversion. [class: IMPLEMENTATION_REQUIRED]
-- [ ] State that missing claim, live/paused/unresolved owner, incomplete run boundary, a foreign or unverifiable live/ambiguous done-lock holder, lock token/worktree mismatch, and mismatched claim/manifest owner refuse without claim or manifest mutation; the gateway accepts only its own verified lock. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Document `session_status_command` and the exact JSON response shape in Terms, its primary-checkout facts source, absolute executable requirement, controlled environment, and fail-closed default when absent; also document the closed task/review boundary and refusal when evidence is incomplete. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Align the runtime contract: the Phase 0 gateway owns the exact registered worktree's done-lock only around conversion. `take` and `sweep` preserve a claim while its manifest's exact worktree path remains registered, regardless of branch state. [class: IMPLEMENTATION_REQUIRED]
-- [ ] State that the gateway queries the configured provider for the literal prior-owner ID with a 10-second bound, treats paused or unresolved as nonterminal, and allows conversion only after the parent-owned final review and archive-preparation boundary. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Document that successful dead-run conversion adopts the exact registered worktree, releases its own conversion-lock token, and returns before the post-acquisition occupant refusal or worktree creation. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Document canonical/legacy identity, stable `run_session_id`, mutable `session_id`, mixed old/new evidence, runtime-state/receipt binding, and facts-resolved `tmp_dir` discovery in the single recovery procedure; document the smoke check and search for obsolete recovery instructions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Update Phase 0 to initialize canonical `run_session_id`, current `session_id`, exact repository-relative `plan_path:`, and `run_worktree:` before logs or runtime state; bind task-boundary rows, logs, runtime state, and receipt to the stable tuple. Update those contracts accordingly; migrate verified legacy tuples only after successful checks, retaining branch fields. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: document dead-run claim recovery` [class: IMPLEMENTATION_REQUIRED]
+- [x] Make `agents/skills/maintenance/template-execution.md` the sole recovery procedure for H/claim H to R; other listed documents link here. Resolve live-resume and dead-run manifests from the relevant worktree's facts-based `tmp_dir`. [class: IMPLEMENTATION_REQUIRED]
+- [x] During Phase 0, invoke `take` before saved-manifest refresh, other run mutation, work, or closeout, with `--session` equal to the active ID returned by the shared session-channel helper. Verified live same-session resume still refreshes first. [class: IMPLEMENTATION_REQUIRED]
+- [x] Document the worktree done-lock and repository merge-lock lifetimes: token-release after every handled success/refusal, reverse acquisition order, and abrupt-death recovery only after verified holder death. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep live same-session resume behavior unchanged, route dead-run conversion through the gateway once, and remove duplicated route-level liveness checks. The run log records the exact owner transition and gateway-owned lock disposition but never authorizes conversion. [class: IMPLEMENTATION_REQUIRED]
+- [x] State that missing claim, live/paused/unresolved owner, incomplete run boundary, a foreign or unverifiable live/ambiguous done-lock holder, lock token/worktree mismatch, and mismatched claim/manifest owner refuse without claim or manifest mutation; the gateway accepts only its own verified lock. [class: IMPLEMENTATION_REQUIRED]
+- [x] Document `session_status_command` and the exact JSON response shape in Terms, its primary-checkout facts source, absolute executable requirement, controlled environment, and fail-closed default when absent; also document the closed task/review boundary and refusal when evidence is incomplete. [class: IMPLEMENTATION_REQUIRED]
+- [x] Align the runtime contract: the Phase 0 gateway owns the exact registered worktree's done-lock only around conversion. `take` and `sweep` preserve a claim while its manifest's exact worktree path remains registered, regardless of branch state. [class: IMPLEMENTATION_REQUIRED]
+- [x] State that the gateway queries the configured provider for the literal prior-owner ID with a 10-second bound, treats paused or unresolved as nonterminal, and allows conversion only after the parent-owned final review and archive-preparation boundary. [class: IMPLEMENTATION_REQUIRED]
+- [x] Document that successful dead-run conversion adopts the exact registered worktree, releases its own conversion-lock token, and returns before the post-acquisition occupant refusal or worktree creation. [class: IMPLEMENTATION_REQUIRED]
+- [x] Document canonical/legacy identity, stable `run_session_id`, mutable `session_id`, mixed old/new evidence, runtime-state/receipt binding, and facts-resolved `tmp_dir` discovery in the single recovery procedure; document the smoke check and search for obsolete recovery instructions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Update Phase 0 to initialize canonical `run_session_id`, current `session_id`, exact repository-relative `plan_path:`, and `run_worktree:` before logs or runtime state; bind task-boundary rows, logs, runtime state, and receipt to the stable tuple. Update those contracts accordingly; migrate verified legacy tuples only after successful checks, retaining branch fields. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: document dead-run claim recovery` [class: IMPLEMENTATION_REQUIRED]
 
 ## Origin disposition
 
 - `docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md`: implement canonical manifest recognition, exact prior-owner status verification from the configured primary-runtime provider, completed-boundary validation, and serialized atomic recovery through the existing `take` gateway; delete the row at landing.
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md`: folded into this plan's Terms and Task list at authoring; the per-item file is deleted at landing per the plan's own origin disposition (this section is the fold-then-delete consult anchor).

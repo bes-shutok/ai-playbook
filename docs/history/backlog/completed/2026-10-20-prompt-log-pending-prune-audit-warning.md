@@ -1,7 +1,7 @@
 # Backlog: warn when pending prompt-log changes remove a foreign prune receipt
 
-- **Filed:** 2026-10-20, split from `docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md`
-- **Status:** open
+- **Filed:** 2026-10-20, split from `docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md`
+- **Status:** covered (docs/history/plans/2026-10-23-warn-pending-prompt-log-receipt-removals.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** execution-run finding
@@ -9,11 +9,11 @@
 
 ## Problem
 
-The existing prune audit examines committed log-touching changes and misses receipt removals still in the index or working tree. The 2026-10-19 executor-landing-helper-routing-gap review caught a neighboring landing receipt inside an otherwise correctly anchored prune range while the audit stayed green. The originating incident and detailed evidence remain in `docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md` and development lesson 111.
+The existing prune audit examines committed log-touching changes and misses receipt removals still in the index or working tree. The 2026-10-19 executor-landing-helper-routing-gap review caught a neighboring landing receipt inside an otherwise correctly anchored prune range while the audit stayed green. The originating incident and detailed evidence remain in `docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md` and development lesson 111.
 
 ## Admission and promotion boundary
 
-- Incident: the 2026-10-19 neighboring-receipt loss at a correctly anchored range tail, detailed in `docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md`.
+- Incident: the 2026-10-19 neighboring-receipt loss at a correctly anchored range tail, detailed in `docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md`.
 - Expected catch frequency: uncommon; a pending prune only catches when a selected range contains a foreign receipt, though every landing or monitor prune can expose the condition.
 - False-positive cost: one report line and operator ownership review; the warning-only detector changes no exit outcome or log bytes.
 - Review date: 2027-01-20.

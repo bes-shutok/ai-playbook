@@ -383,6 +383,13 @@
           "evidence": "docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md",
           "time_lost_minutes": null,
           "note": "boundary-class split (plan worktree-done-boundary-gate-roster-split, r4-certified): gate_post_landing_staging no longer runs at per-task done boundaries (--boundary-class per-task); incident witnessed 2026-10-16 (one live execution run stalled a full peer authoring cycle); final-closeout catch frequency unchanged (the gate keeps the full roster at the landing owner); per-task false-positive cost accepted (a per-task boundary forfeits early warning of primary residue); sunset review at first misuse or beside the placement-awareness lineage"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-22",
+          "evidence": "906d3460fc71456cc1b5530b3fdc162485d2f4e3",
+          "time_lost_minutes": null,
+          "note": "main advanced while the primary index remained at its parent tree; refresh followed exact tree verification"
         }
       ]
     },
@@ -464,6 +471,20 @@
           "evidence": "EXEC-PROMPTS.md closeout-gate-demotion-continuation",
           "time_lost_minutes": null,
           "note": "verify-only demotion record (change 3 of 5, no code change): the ledger incident (2026-10-07 duplicate execution, about 130 lane-minutes) is the gateway's founding harm class, not a post-wiring misfire - the take refusal was wired the same day by the execution-claim-write-enforcement plan precisely to stop it, the refusal is a near-zero-cost claim-freshness check, and the design is self-healing (freshness decay, stale takeover, occupying-worktree naming, user-directed override route), so a warning-posture flip would re-open the witnessed harm for no recovered cost; posture stands"
+        },
+        {
+          "kind": "change",
+          "date": "2026-10-23",
+          "evidence": "docs/history/plans/2026-10-21-dead-run-resume-claim-conversion.md (Gate delta; R21 catch record .ai-playbook/reviews/2026-10-21-plan-review-dead-run-resume-claim-conversion-p65513e2d-r21.md)",
+          "time_lost_minutes": null,
+          "note": "dead-run recovery pre-registration (the plan's Gate delta): the restored arm-3 conversion and its claim-mutation locking are admitted at the gateway's 0:1 ratio with the named removal route - the 2026-10-19 and 2026-10-20 dead-owner incidents and the R21 review catch (reachable cross-worktree release race) are the admission witnesses; expected catches two in two days of resume activity; false-positive cost one bounded retry for a claim operation overlapping repository merge work; review date 2027-04-21 - if no further true catch occurs by review, restore the prior stale-claim refusal and claim-mutation behavior"
+        },
+        {
+          "kind": "catch",
+          "date": "2026-10-23",
+          "evidence": "cc8d2e12f",
+          "time_lost_minutes": null,
+          "note": "stale-snapshot retry-and-refuse guard landed by the gate-liveness-ledger-stale-snapshot-clobber plan; delayed ledger writers no longer replace completed peer appends, second conflict exits 3 preserving latest bytes"
         }
       ]
     },

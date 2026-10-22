@@ -13,8 +13,8 @@ Execution budget: 1.0h total, largest task 1.0h
 - **Multi-plan directive:** The user’s instruction to process multiple targets in sequence, one at a time.
 - **Continuation summary:** The context carried into a resumed turn after compaction.
 - **D2:** The maintenance decision that selects one backlog item for authoring after its guards pass.
-- **Rolling prompt-log selection:** The maintenance decision that scans unfrozen PLAN-PROMPTS entries and selects at most one eligible target.
-- **Next-distinct scan:** The rolling prompt-log rule that evaluates a later unfrozen entry when the leading entry has a live claim on the same target.
+- **Rolling prompt-log selection (the Rolling prompt log duties):** The maintenance decision that scans unfrozen PLAN-PROMPTS entries and selects at most one eligible target.
+- **Next-distinct-entry scan:** The rolling prompt-log rule that evaluates a later unfrozen entry when the leading entry has a live claim on the same target.
 
 ## Why
 
@@ -97,10 +97,10 @@ Files:
 - `agents/skills/maintenance/decisions.md`
 - `agents/skills/maintenance/SKILL.md`
 
-- [ ] Replace or tighten the current D2 skip sentence so it explicitly says to record the occupied skip, continue in the same priority order, and hold only after no eligible candidate remains or another named guard applies; include the compact A-then-B example. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Tighten the next-distinct-entry clause with a compact top-entry/later-distinct-entry example and its exhausted-scan hold outcome; retain the existing same-target test and all current guards. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Update context-load guidance so the continuation summary carries the active multi-plan directive, completed target, and next target through compaction, then the resumed turn follows the same ordering and guards. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Extend the Mode visibility closing-report clause to name the selected next target path. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Remove equivalent instruction bytes in the same file so operative skill text has no net growth; do not add incident dates or witness narrative to skill text. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Confirm the examples select at most one target, preserve every foreign claim, and record the scan's skip or hold reason. [class: REPOSITORY_TEST]
-- [ ] Commit: `maintenance: make occupied-target scan exhaustion explicit`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Replace or tighten the current D2 skip sentence so it explicitly says to record the occupied skip, continue in the same priority order, and hold only after no eligible candidate remains or another named guard applies; include the compact A-then-B example. [class: IMPLEMENTATION_REQUIRED]
+- [x] Tighten the next-distinct-entry clause with a compact top-entry/later-distinct-entry example and its exhausted-scan hold outcome; retain the existing same-target test and all current guards. [class: IMPLEMENTATION_REQUIRED]
+- [x] Update context-load guidance so the continuation summary carries the active multi-plan directive, completed target, and next target through compaction, then the resumed turn follows the same ordering and guards. [class: IMPLEMENTATION_REQUIRED]
+- [x] Extend the Mode visibility closing-report clause to name the selected next target path. [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove equivalent instruction bytes in the same file so operative skill text has no net growth; do not add incident dates or witness narrative to skill text. [class: IMPLEMENTATION_REQUIRED]
+- [x] Confirm the examples select at most one target, preserve every foreign claim, and record the scan's skip or hold reason. [class: REPOSITORY_TEST]
+- [x] Commit: `maintenance: make occupied-target scan exhaustion explicit`. [class: IMPLEMENTATION_REQUIRED]

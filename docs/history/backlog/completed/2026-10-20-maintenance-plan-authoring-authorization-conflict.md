@@ -1,7 +1,7 @@
 # Backlog: Honor maintenance authorization during plan authoring
 
 - **Filed:** 2026-10-20
-- **Status:** covered (docs/history/plans/2026-10-20-maintenance-plan-authoring-authorization.md)
+- **Status:** done (covered by docs/history/plans/completed/2026-10-20-maintenance-plan-authoring-authorization.md, executed and landed 2026-10-23)
 - **Priority:** high
 - **Consumer urgency:** Users who delegate plan selection and authoring to the maintenance workflow need it to resolve supported choices and continue without an interactive confirmation pause.
 - **Origin class:** consumer-pet

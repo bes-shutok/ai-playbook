@@ -3,6 +3,7 @@
 [github: https://github.com/admitriev/ai-playbook] Origin: docs/history/backlog/2026-09-30-java-review-misses-fully-qualified-types.md
 
 Plan review: docs/reviews/2026-09-30-plan-review-java-review-fqcn-coverage-r1.md (r1 verdict ready=yes, zero blocking) (the highest round of the staging series is the authoritative record)
+Missing-record note (2026-10-23): the cited review record was never committed (the reviews corpus is a gitignored run-artifact surface) and no surviving source was found in git history, branch refs, or sibling checkouts (restore-or-annotate reconciliation, restore-or-annotate reconciliation, landing commit appended the same day); treat the recorded verdict as unverifiable from the corpus.
 
 ## Gist TLDR
 

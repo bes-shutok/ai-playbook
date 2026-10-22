@@ -2,7 +2,7 @@
 - **Cluster:** docs/history/backlog/2026-10-22-prune-audit-landing-token-never-resolves.md (same prune-audit surface: receipt-ledger line preservation is the sibling invariant to this row's inventory arm)
 
 - **Filed:** 2026-10-15, discovered while building the corrective commit 9a7a71689
-- **Status:** open
+- **Status:** done
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** execution-run finding
@@ -37,3 +37,7 @@ The procedural fix also requires a no-edit refusal when authorization evidence d
 - **Simplify the flow:** full-range inventory and receipt preservation cannot decide which duplicate heading is authorized. Choosing the first/last occurrence, deleting all occurrences, or selecting by slug alone is simpler but can delete a neighboring valid entry; adding persistent occurrence IDs or a new selector schema would be new state/machinery. Resolve with the existing provenance and witness evidence, and refuse without edits when that evidence still cannot identify one exact target.
 
 This analysis prices only the narrow target-identity refusal in the procedural arm; it adds no checker stop, persistent state, or lock. The separate pending-audit arm remains warning-only.
+
+## Disposition
+
+- **Done:** 2026-10-23, executed by docs/history/plans/completed/2026-10-20-plan-prompts-prune-range-content-inventory.md (execution landing of the 04:00 exec carrier, session sess-automation-714fc4a1, resuming the 22:07 carrier's run by stale-claim takeover). The procedural arm landed: full next-heading prune-range inventory, per-origin coverage classes, receipt preservation byte-for-byte and in order, and the write boundary in the two rolling logs with consumers citing by label, plus the warning-only prune-range pin family. The separate pending-change audit arm stays open under docs/history/backlog/2026-10-20-prompt-log-pending-prune-audit-warning.md.

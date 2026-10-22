@@ -1,7 +1,7 @@
 # Backlog: surface the staging-record closed vocabularies in the review-loop dispatch recipe
 
 - **Filed:** 2026-10-10, learn Step 1.8 capture
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-23-review-loop-staging-vocabularies.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** repeated staging-validator refusals across one authoring session

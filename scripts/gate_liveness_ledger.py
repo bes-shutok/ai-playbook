@@ -26,7 +26,8 @@ Outcome contract (scripts/OUTCOME_CONTRACT.md, register row added by the
 2026-10-05 review fold): every run ends with a final OUTCOME: line on
 stdout. Exit 0 pass; exit 3 tool_error (missing or corrupt ledger, usage
 violation through the parser override, unexpected failure through the
-catch-all, invalid row input). This is a recorder, not a gate: it has no
+catch-all, invalid row input, a ledger conflict that survives the one
+bounded retry). This is a recorder, not a gate: it has no
 modeled fail or indeterminate class. --help stays a metadata exit.
 
 Stdlib only; repo-relative paths only; no PII.
@@ -64,7 +65,13 @@ class ContractParser(argparse.ArgumentParser):
         raise SystemExit(3)
 
 
-def load_ledger(path: Path) -> dict:
+def load_ledger(path: Path) -> tuple[dict, str]:
+    """Return the parsed ledger document with the exact bytes it was read from.
+
+    Callers that replace the file must keep the returned bytes and compare
+    them against the file just before the replacement, so a snapshot another
+    writer already staled is never saved over fresher content.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -77,7 +84,7 @@ def load_ledger(path: Path) -> dict:
         raise ToolError(f"ledger schema mismatch at {path}: expected schema {SCHEMA_VERSION}")
     if not isinstance(data.get("guards"), dict):
         raise ToolError(f"ledger guards table missing at {path}")
-    return data
+    return data, raw
 
 
 def save_ledger(path: Path, data: dict) -> None:
@@ -95,6 +102,14 @@ def save_ledger(path: Path, data: dict) -> None:
         except OSError:
             pass
         raise ToolError(f"ledger write failed at {path}: {exc}")
+
+
+def snapshot_is_current(path: Path, loaded_bytes: str) -> bool:
+    """True when the file still holds exactly the bytes a load returned."""
+    try:
+        return path.read_text(encoding="utf-8") == loaded_bytes
+    except OSError:
+        return False
 
 
 def guard_tally(guard: dict) -> dict:
@@ -146,10 +161,32 @@ def print_report(data: dict, only_guard: str | None) -> int:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
-    data = load_ledger(Path(args.ledger))
+    data, _ = load_ledger(Path(args.ledger))
     code = print_report(data, args.guard)
     print("OUTCOME: pass")
     return code
+
+
+def build_row(args: argparse.Namespace) -> dict:
+    row = {
+        "kind": args.kind,
+        "date": args.date,
+        "evidence": args.evidence,
+        "time_lost_minutes": args.time_lost_minutes,
+    }
+    if args.kind == "basis":
+        row["harm_cases"] = args.harm_cases
+    if args.note:
+        row["note"] = args.note
+    return row
+
+
+def append_row(data: dict, guard_name: str, row: dict) -> dict:
+    guard = data["guards"].setdefault(guard_name, {"notes": "", "rows": []})
+    if not isinstance(guard.get("rows"), list):
+        raise ToolError(f"guard rows corrupted for {guard_name}")
+    guard["rows"].append(row)
+    return guard
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -164,21 +201,26 @@ def cmd_record(args: argparse.Namespace) -> int:
     if args.kind == "basis" and (args.harm_cases is None or args.time_lost_minutes is None):
         raise ToolError("basis rows require --harm-cases and --time-lost-minutes")
     path = Path(args.ledger)
-    data = load_ledger(path)
-    guard = data["guards"].setdefault(args.guard, {"notes": "", "rows": []})
-    if not isinstance(guard.get("rows"), list):
-        raise ToolError(f"guard rows corrupted for {args.guard}")
-    row = {
-        "kind": args.kind,
-        "date": args.date,
-        "evidence": args.evidence,
-        "time_lost_minutes": args.time_lost_minutes,
-    }
-    if args.kind == "basis":
-        row["harm_cases"] = args.harm_cases
-    if args.note:
-        row["note"] = args.note
-    guard["rows"].append(row)
+    row = build_row(args)
+    # Stale-snapshot guard: a peer append that is already on disk when an
+    # attempt reaches its freshness check must not be replaced away (the
+    # window between a passing check and the replacement itself stays out of
+    # scope; see the plan's no-lock-file boundary). Each attempt compares the
+    # exact bytes it loaded against the file before replacing; the first
+    # mismatch gets one re-read and replay of the same row, and a second
+    # mismatch refuses the append (bounded retry) and leaves the latest bytes
+    # on disk for a rerun.
+    data, loaded_bytes = load_ledger(path)
+    guard = append_row(data, args.guard, row)
+    if not snapshot_is_current(path, loaded_bytes):
+        data, loaded_bytes = load_ledger(path)
+        guard = append_row(data, args.guard, row)
+        if not snapshot_is_current(path, loaded_bytes):
+            raise ToolError(
+                "ledger changed again while the append was retried; "
+                "latest ledger bytes were left unchanged; "
+                "rerun the same record command to append the row"
+            )
     save_ledger(path, data)
     t = guard_tally(guard)
     print(

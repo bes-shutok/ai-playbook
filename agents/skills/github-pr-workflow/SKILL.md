@@ -268,18 +268,21 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 1. Resolve `<base>` (trunk or immediate parent feature branch). For a personal or pet project, use only the checked-out local `<base>` and stop if it is unavailable; leave remote refresh to the operator. For other project scopes, fetch remotes, then prefer the **local** tip when a just-restacked parent has not been pushed yet; otherwise use `origin/<base>`. Confirm `git merge-base --is-ancestor <base> HEAD` before soft-reset.
    - **Stacked PRs:** soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not trunk alone when the PR targets a parent. Before committing, verify scope: `git diff --stat <base>..HEAD` matches the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
    - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p <base>` instead.
-2. Detect format-only files; exclude them from the commit to avoid cluttering the PR:
+2. Classify each candidate file from its **final tree diff against `<base>`**, not from the commit that touched it. Treat the whitespace-insensitive diff as a filter, not proof: inspect the full per-file diff and verify that behavior, types, contracts, and callers are unchanged before labeling a file format-only. If formatting and semantic edits are mixed, keep semantic changes in the feature PR and transfer only formatting that can be separated without changing behavior to the designated follow-up PR. Rebuild and test each resulting PR branch after splitting. GitHub's “Files changed” count is based on the final PR diff; squashing commits changes history, not that count.
+
    ```bash
    git diff -w --ignore-blank-lines <base>..HEAD -- <file>
-   # empty output = formatting only; non-empty = real change
+   # Empty output is only a candidate for formatting-only; inspect the full diff.
    ```
-3. Identify gitignored LLM artifacts (`docs/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`): must NOT be committed; restore to working tree after branch creation.
-4. Create the new branch from the base: `git checkout -b <new-branch> <base>`.
-5. Cherry-pick only real-change files: `git checkout <source-branch> -- <file1> <file2> ...`.
-6. Apply any `.gitignore` updates (e.g. add `### LLM Agent Artifacts ###` block) and stage them.
-7. Commit everything in a single squashed commit with a clean, feature-focused message.
-8. Push and open a PR against the base branch with `gh pr create --base <base>` (use the branch name, not a raw SHA).
-9. When the user names teammates for a PR, default to **`gh pr edit --add-reviewer`** (or `--reviewer` on create). Use `--assignee` only when they explicitly say assignee/owner.
+
+3. Exclude verified format-only files from the feature commit. When the split goal is to move formatting, transfer those changes to the designated follow-up PR; otherwise, discard them intentionally:
+4. Identify gitignored LLM artifacts (`docs/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`): must NOT be committed; restore to working tree after branch creation.
+5. Create the new branch from the base: `git checkout -b <new-branch> <base>`.
+6. Cherry-pick only real-change files: `git checkout <source-branch> -- <file1> <file2> ...`.
+7. Apply any `.gitignore` updates (e.g. add `### LLM Agent Artifacts ###` block) and stage them.
+8. Commit everything in a single squashed commit with a clean, feature-focused message.
+9. Push and open a PR against the base branch with `gh pr create --base <base>` (use the branch name, not a raw SHA).
+10. When the user names teammates for a PR, default to **`gh pr edit --add-reviewer`** (or `--reviewer` on create). Use `--assignee` only when they explicitly say assignee/owner.
 
 ### Gitignore block for LLM artifacts
 ```

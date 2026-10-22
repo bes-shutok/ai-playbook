@@ -58,6 +58,30 @@ prevent conflicting plan runs. Keep the claim current at the documented phase,
 task, and review boundaries, and remove it at closeout or an owned stand-down.
 A claim conflict stops the run without modifying another run's state.
 
+Dead-run conversion contract (recovery routing lives in the sole recovery
+procedure, agents/skills/maintenance/template-execution.md): the Phase 0
+gateway owns the exact registered worktree's done-lock only around the
+conversion, releasing its own token after every handled success or refusal in
+reverse acquisition order (the merge-lock before the done-lock) beside the
+repository-wide merge-lock that serializes claim commands from every linked
+worktree; abrupt process death leaves a gateway lock in place for the
+existing verified-dead-holder recovery only. `sweep` preserves a
+claim while a manifest file remains at its exact registered-worktree path,
+whatever the branch state, and `take` preserves it through the conversion
+arm's evidence-gated refusals: a take whose target is not the manifest's
+registered worktree (branch switched, unregistered target) refuses with the
+claim preserved instead of reaching the historical stale takeover. With no
+registered manifest anywhere — every registered worktree's facts resolved
+and no manifest file present — the branch-occupant rule stands, and an
+unreadable facts document makes the preservation scan inconclusive (the
+claim is preserved, never deleted or taken over). The gateway queries the configured
+session status provider for the literal prior-owner ID under a 10-second
+bound (paused and unresolved are nonterminal) and converts only after the
+parent-owned final review and archive-preparation boundary; every refusal
+arm leaves the claim and manifest bytes unchanged, and the gateway accepts
+only its own verified lock records. The run log records the owner transition
+and the gateway-owned lock disposition but never authorizes conversion.
+
 Preserve the Worktree-first standard: a fresh run uses its provisioned ad-hoc
 worktree and branch. Honor the supported `primary` placement when project
 policy selects it, including branch verification and serialization. Recovery

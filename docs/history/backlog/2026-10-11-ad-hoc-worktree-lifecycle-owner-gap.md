@@ -8,7 +8,7 @@
 - **Class:** worktree lifecycle ownership gap
 - **Driving force:** reliability + operator time
 - **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
-- **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same artifact class: a run's worktree and claim outliving their session; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/plans/completed/2026-10-21-dead-run-resume-claim-conversion.md (same artifact class: a run's worktree and claim outliving their session; the origin row landed covered and was deleted at landing per the plan's disposition)
 - **Skill/step:** `agents/skills/plans/SKILL.md`, Final Step authoring closeout; `agents/skills/execute-plan/SKILL.md`, Step 0.1 and Phase 5; `agents/skills/done/SKILL.md`, worktree transfer-out and removal
 
 ## Problem
@@ -45,3 +45,7 @@ No new gate or hook is admitted by this backlog. The expected catch frequency is
 ## Witness 2026-10-20 (learn capture, scheduled authoring run)
 
 Two certified authoring plans closed out in one run: `gate-removal` refused `empty owned set` for both (the plans cite no `Plan review record:` header) until a `--claims` file named their records, then passed and left the worktree and branch registered; both removals ran by hand. Operating rule recorded as lesson 139 in `docs/maintenance/development_lessons.md`; this row still owns the terminal-ownership fix.
+
+## Witness 2026-10-23 (operator-directed investigation, pre-landing authoring husk)
+
+The authoring worktree and same-named branch for the still-open reviewer-sized plan parts origin (`docs/history/backlog/2026-10-22-reviewer-sized-dependent-plan-parts.md`) were found registered a day after the session that froze its PLAN-PROMPTS entry ended, with no durable record naming the worktree as the reserved authoring surface or its cleanup owner; the operator had to ask whether the pair was removable. New angle inside this row's remaining interrupted-and-abandoned gap: because landings squash onto `main`, a pre-landing authoring branch never advances — the ref is a husk from birth, so `git merge-base --is-ancestor` emptiness proves nothing about whether the lane is done. Removed only after re-deriving that the tip was a `main` commit and the worktree was clean. No new machinery: this witness strengthens the existing ownership-record disposition (a frozen entry or pause report naming the reserved worktree, its owner, and the removal step). Durability of the authored artifacts themselves was the sibling row's record-durability arm (same session-death shape), covered by the plans skill's certification-time checkpoint duty in the authoring round-close (the sibling row deleted as covered by this landing).

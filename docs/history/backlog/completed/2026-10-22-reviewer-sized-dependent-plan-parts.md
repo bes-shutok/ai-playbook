@@ -1,12 +1,13 @@
 # Backlog: offer reviewer-sized dependent plan parts for one outcome
 
 - **Filed:** 2026-10-22, operator request
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-23-reviewer-sized-dependent-plan-parts.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** projects using the shared `plans` and `execute-plan` skills need a clear way to request bounded, independently reviewable dependent parts; do not defer this solely under the skills repository's personal priority profile.
 - **Origin class:** consumer-feedback (company)
 - **Class:** fix-class (authoring affordance for an operator-requested split; no refusal or gate change is implied)
+- **Cluster:** docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md (same artifact class: this origin's reserved authoring worktree and same-named branch outlived their session and were removed only on operator direction; see that row's Witness 2026-10-23)
 - **Skill/step:** `agents/skills/plans/SKILL.md`, sizing and splitting rules; `agents/skills/execute-plan/SKILL.md`, task and plan execution boundaries
 - **Severity:** low; operator-requested usability improvement, with no demonstrated integrity failure or measured review-cost baseline.
 - **Source reference:** operator request in the 2026-10-22 session; capture hygiene: `scan-public-hygiene --files` pass.

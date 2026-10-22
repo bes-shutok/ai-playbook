@@ -1,6 +1,6 @@
 # Backlog: rule 27's Lombok placement sentence does not say which constructor carries `@Builder` on a multi-constructor class
 
-Status: open
+Status: covered (docs/history/plans/2026-10-23-java-guideline-builder-placement-multi-constructor.md)
 Priority: high
 Class: fix-class (ambiguous instruction in a shared guideline; the fix is one clarifying clause, no new gate)
 Origin class: self-serving

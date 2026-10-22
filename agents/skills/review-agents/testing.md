@@ -80,13 +80,9 @@ Pattern: `testing#cross-surface-policy-witness`
 
 ## Fake Test Detection
 
-Watch for tests that do not actually verify code:
-- Tests that always pass regardless of code changes
-- Tests checking hardcoded values instead of actual output
-- Tests verifying mock behavior instead of code using the mock
-- Ignored errors with `_` or empty error checks
-- Conditional assertions that always pass
-- Commented out failing test cases
+Watch for tests that do not verify code:
+- Vacuous checks (hardcoded outputs, conditions, ignored errors, or commented tests).
+- Fakes that omit collaborator behavior the code consumes (wrapper shape or lifecycle), or tests asserting only the fake. Inspect the real contract; test the real object or a faithful fake.
 
 A `testing#always-passes` finding on a shared production path must stage the family checklist (sibling tests needing the same witness) or the shared-helper migration plan with the finding; the closure rule in `receiving-review` owns the fix side.
 

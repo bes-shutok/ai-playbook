@@ -4,6 +4,7 @@
 Driving force: reliability (privacy integrity); secondary simplicity
 
 Plan review: docs/reviews/2026-09-30-plan-review-hygiene-residue-masked-ticket-sweep-r2.md (the highest round of the r1-r2 staging series; r2 verdict ready=yes, zero blocking)
+Missing-record note (2026-10-23): the cited review record was never committed (the reviews corpus is a gitignored run-artifact surface) and no surviving source was found in git history, branch refs, or sibling checkouts (restore-or-annotate reconciliation, restore-or-annotate reconciliation, landing commit appended the same day); treat the recorded verdict as unverifiable from the corpus.
 
 ## Gist TLDR
 

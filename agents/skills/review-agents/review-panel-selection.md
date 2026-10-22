@@ -4,7 +4,7 @@
 
 This document is the single source of truth for selecting focused or broader review panels. Use scope and complexity evidenced by the plan and changed work: affected components and contracts, interactions, behavioral and state-transition complexity, concurrency and safety boundaries, and reasoning effort. Task and file counts are useful signals, but plan size alone does not determine the panel. Project ownership, type, and visibility never change review strictness. Use the shared default five-worker panel when evidence does not justify an adjustment; use a focused panel when work is demonstrably narrow and the risk-signal floor below permits it. Scope and complexity can raise panel breadth; the risk-signal floor remains a minimum and overrides narrower selection.
 
-Single source for which review workers launch, which lenses they load, and when a focused or escalated panel is valid. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`, and `execute-plan` for per-task intermediate selection) reference this file; do not duplicate panel policy inline.
+All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`, and `execute-plan` for per-task intermediate selection) reference this file for worker launch, lens load, and focused or escalated panel validity; do not duplicate panel policy inline.
 
 ## Recommended five-worker panel
 
@@ -36,7 +36,7 @@ An execute-plan run record claiming backlog filings whose tree leaves them uncom
 
 A narrow review may launch fewer than five workers when the artifact and user request do not need a full panel. Record `panel_mode: focused` and `selection_reason`.
 
-Before launching a focused code round, check for a changed-code readability signal: a changed callback or nested block with substantial cognitive load or an observable side effect, a method-local type, or a changed method meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. When a signal exists and the selected panel does not load the `quality` lens, issue a warning-only recommendation to include the existing `correctness-completeness` worker, which owns that lens. If there is no signal or the lens is already loaded, keep the selection unchanged. The recommendation adds no worker role or review round; omitting it never blocks launch or readiness.
+Before launching a focused code round, check for a changed-code readability signal: a changed callback or nested block with substantial cognitive load or an observable side effect, a method-local type, or a changed method meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. Also check for a semantic-naming signal: the diff changes a type's responsibility in a way that conflicts with its name, or changes, introduces, or renames a type in an evidenced analogous pair when the changed scope exposes inconsistent names for the shared role. When either signal exists and the selected panel does not load the `quality` lens, issue a warning-only recommendation to include the existing `correctness-completeness` worker, which owns that lens. If neither signal applies or the lens is already loaded, keep the selection unchanged. The recommendation adds no worker role or review round; omitting it never blocks launch or readiness.
 
 Common focused panels:
 
@@ -52,9 +52,9 @@ Do not label a focused panel as a full review.
 When `review-loop` or an `execute-plan` Phase 3 round runs a targeted round after fixes:
 
 - Always include `correctness-completeness` plus every worker that owned a staged finding or whose domain the fixes touched.
-- Prefer a focused targeted round over a full-panel round when verifying narrowly scoped fixes (additive guards, single-component edits), especially late in a regenerating loop; reserve full panels for fresh full-digest rounds. The preference applies only when the final selected set (ownership plus soften-watchlist additions) is fewer than five workers.
+- Prefer a focused targeted round over a full-panel round when verifying narrowly scoped fixes (additive guards, single-component edits), especially late in a loop; reserve full panels for fresh full-digest rounds. The preference applies only when the final selected set (ownership plus soften-watchlist additions) has fewer than five workers.
 - Exit-coverage rules still apply before declaring exit on a focused clear round: `review-loop` exit criteria (including the design-simplicity hybrid) for loop runs; for Phase 3, exit is governed by the Step 3.4/3.5 clear-round quality bar plus the one-fresh-clean-review condition; exit coverage additionally follows the once-only allowance of the at-most-one exit hybrid rule in this section.
-- Before loop **exit**, if the clear-candidate round would omit `design-simplicity`, include it in a hybrid pass (see `review-loop` exit criteria); this coverage is the same single exit hybrid the once-only allowance permits, never an additional pass. Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier on the branch.
+- Before loop **exit**, if the clear-candidate round would omit `design-simplicity`, include it in a hybrid pass (see `review-loop` exit criteria); this coverage is the once-only allowance's single exit hybrid, never an additional pass. Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier on the branch.
 - When the plan has production paths and a prior round was blocking-clean on them under the risk and correctness lenses, schedule at most one exit hybrid (the missing quality-bar lenses, typically design-simplicity) for clear-round coverage; when the plan has no production paths, any blocking-clean round satisfies that precondition; in both branches the exit hybrid is still required before execute-plan Step 3.5's clean-review row may exit, unless the prior blocking-clean round was a full panel (it already carried every quality-bar lens, so exit coverage is satisfied). Do not resume docs/test-only focused rounds after it, and a blocking finding in the exit hybrid re-enters the normal address path. The exit-hybrid once-only allowance resets when any address pass after the hybrid mutates the digest, so the post-fix exit attempt again requires coverage.
 - When a soften watchlist has `open` rows, include the lead worker for each open pattern (tiered ownership table above).
 - Paired-surface renumber and dual-entry policy changes: after a migration renumber, force the `contract-docs` and `correctness-completeness` workers on the paired surfaces even in a focused round; after a dual-entry validation-policy change, additionally force the `design-simplicity` and `testing` workers so the architecture and testing lenses load the new doors (`architecture#dual-surface-policy-parity`, `testing#cross-surface-policy-witness`).
@@ -71,18 +71,18 @@ Precedence: when the floor is triggered, it overrides both the focused-round pre
 
 Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`'s worker escalation, so docs-only focused panels stay valid; a living-documentation status claim on such a diff still requires the `doing-code-review` Step 2.5 guideline checks for the changed files' overlay, without adding a `risk` worker. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
 
-Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay per those mandatory-evidence rules; which stacks those overlays enumerate belongs to the consuming orchestrator's mandatory-evidence rules, not this shared catalog.
+Treat changed dependency coordinates, outbound service URL configuration, downstream error-response mapping, and the shared changed-scope trigger surfaces of the `doing-code-review` Step 2.5 mandatory-evidence rules as risk signals even when the diff is small. They require the `risk` worker and the changed files' language-overlay guideline checks per those rules; the consuming orchestrator owns which stacks those overlays enumerate.
 
 ### Boundary-contract coverage floor
 
 When changed scope touches an asynchronous lifecycle, transaction manager,
 database mapper, configuration provenance or security setting, logging filter,
 migration, dependency coordinate, or test runner/manifest, review metadata must
-include a boundary-contract checklist. It names the applicable witness layer
-for lifecycle ownership, effective configuration source and value, persistence
-state and representation, fail-closed logging render surfaces,
-framework/dependency availability, migration/runner parity, packaged deployment artifact parity, and an enabled
-assertion-bearing safety-boundary test.
+include a boundary-contract checklist naming the applicable witness layer for
+lifecycle ownership, effective configuration source and value, persistence state
+and representation, fail-closed logging render surfaces, framework/dependency
+availability, migration/runner parity, packaged deployment artifact parity, and
+an enabled assertion-bearing safety-boundary test.
 
 A changed public contract invariant is a boundary-contract family: the checklist names the directly dependent example and source-reference surfaces (the contract-impact closure read-set, `documentation.md` phase 1), and an unnamed dependent surface degrades coverage like any other family.
 

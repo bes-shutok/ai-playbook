@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -12,6 +15,10 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "gate_liveness_ledger.py"
 COMMITTED_LEDGER = Path(__file__).resolve().parent / "gate_liveness_ledger.json"
+
+_spec = importlib.util.spec_from_file_location("gate_liveness_ledger_under_test", SCRIPT)
+MODULE = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(MODULE)
 SEED = {
     "schema": 1,
     "window": {"started": "2026-10-05"},
@@ -35,6 +42,65 @@ def run_cli(*argv: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *argv], capture_output=True, text=True, check=False
     )
+
+
+def peer_append(path: Path, evidence: str) -> str:
+    """Simulate a concurrent writer appending one peer row, whole file rewrite.
+
+    Returns the exact bytes the peer left on disk.
+    """
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    guard = doc["guards"].setdefault("peer-writer", {"notes": "", "rows": []})
+    guard["rows"].append(
+        {
+            "kind": "incident",
+            "date": "2026-10-23",
+            "evidence": evidence,
+            "time_lost_minutes": 5,
+        }
+    )
+    raw = json.dumps(doc, indent=2, sort_keys=False) + "\n"
+    path.write_text(raw, encoding="utf-8")
+    return raw
+
+
+def run_record_with_peer_writes(evidences: list[str], argv: list[str]) -> tuple[int, str, str, str | None]:
+    """Run main() in-process with a peer writer racing the record command.
+
+    After each of the first len(evidences) ledger loads, a peer writer appends
+    a row to the file, so the peer write lands after the command has loaded its
+    snapshot but before its save check. Returns (exit code, stdout, stderr, and
+    the exact bytes of the last peer write, or None when no peer write fired).
+    """
+    original_load = MODULE.load_ledger
+    fired = {"n": 0}
+    last_peer_raw = {"raw": None}
+
+    def stale_loader(target):
+        result = original_load(target)
+        if fired["n"] < len(evidences):
+            last_peer_raw["raw"] = peer_append(Path(target), evidences[fired["n"]])
+            fired["n"] += 1
+        return result
+
+    MODULE.load_ledger = stale_loader
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = MODULE.main(argv)
+    finally:
+        MODULE.load_ledger = original_load
+    return code, out.getvalue(), err.getvalue(), last_peer_raw["raw"]
+
+
+def rows_with_evidence(ledger_path: str, evidence: str) -> list[dict]:
+    doc = json.loads(Path(ledger_path).read_text(encoding="utf-8"))
+    return [
+        row
+        for guard in doc["guards"].values()
+        for row in guard["rows"]
+        if row.get("evidence") == evidence
+    ]
 
 
 class GateLivenessLedgerTest(unittest.TestCase):
@@ -88,6 +154,55 @@ class GateLivenessLedgerTest(unittest.TestCase):
         # would silently drop the stack-wide override count).
         self.assertRegex(shown.stdout, r"TOTAL: catches=1 incidents=0 ratio=1:0 overrides=1")
         self.assertIn("OUTCOME: pass", shown.stdout.strip().splitlines()[-1])
+
+    def test_record_retries_once_when_snapshot_goes_stale(self) -> None:
+        # A peer append lands after this command loaded its snapshot but
+        # before its save check: the recorder must not replace the peer row
+        # away; it re-reads once, replays the requested row, and both rows
+        # stay present exactly once.
+        peer_evidence = "docs/history/plans/2026-10-23-peer-append.md"
+        requested_evidence = "docs/history/plans/2026-10-23-stale-snapshot-retry.md"
+        argv = [
+            "--ledger", self.ledger, "record", "--guard", "example-guard",
+            "--kind", "incident", "--date", "2026-10-23",
+            "--evidence", requested_evidence,
+            "--time-lost-minutes", "10",
+        ]
+        code, out, err, _ = run_record_with_peer_writes([peer_evidence], argv)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        peer_rows = rows_with_evidence(self.ledger, peer_evidence)
+        self.assertEqual(len(peer_rows), 1, "the peer row that landed before the check was lost")
+        requested_rows = rows_with_evidence(self.ledger, requested_evidence)
+        self.assertEqual(len(requested_rows), 1, "the requested row must appear exactly once after the retry")
+        self.assertEqual(requested_rows[0]["kind"], "incident")
+
+    def test_record_second_conflict_refuses_and_preserves_latest_bytes(self) -> None:
+        # The file changes again before the retry can save: the append is
+        # refused with exit 3 tool_error, the error tells the caller to rerun,
+        # and the latest on-disk bytes stay exactly what the last peer write
+        # left; the refused attempt never replaces them.
+        peer_evidences = [
+            "docs/history/plans/2026-10-23-peer-a.md",
+            "docs/history/plans/2026-10-23-peer-b.md",
+        ]
+        requested_evidence = "docs/history/plans/2026-10-23-persistent-conflict.md"
+        argv = [
+            "--ledger", self.ledger, "record", "--guard", "example-guard",
+            "--kind", "incident", "--date", "2026-10-23",
+            "--evidence", requested_evidence,
+            "--time-lost-minutes", "10",
+        ]
+        code, out, err, last_peer_raw = run_record_with_peer_writes(peer_evidences, argv)
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("rerun", err)
+        self.assertIsNotNone(last_peer_raw)
+        latest = Path(self.ledger).read_text(encoding="utf-8")
+        self.assertEqual(latest, last_peer_raw, "a refused attempt must not replace the latest bytes")
+        self.assertEqual(rows_with_evidence(self.ledger, requested_evidence), [])
+        self.assertEqual(len(rows_with_evidence(self.ledger, peer_evidences[0])), 1)
+        self.assertEqual(len(rows_with_evidence(self.ledger, peer_evidences[1])), 1)
 
     def test_committed_ledger_seeds_execution_claim_gateway_incident(self) -> None:
         # Read-only fixture test over the committed ledger: the gateway

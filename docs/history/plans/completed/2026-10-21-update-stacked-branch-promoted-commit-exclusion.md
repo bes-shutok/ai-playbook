@@ -92,9 +92,9 @@ Context surface: the plan's Terms, this task, and the existing Method C backup a
 Files:
 - `agents/skills/update-stacked-branches/SKILL.md`
 
-- [ ] Add a Method C subcase that compares interactive todo omission with rebuilding the child on the updated parent and replaying only child-owned commits, then uses the interactive todo route for exact-equivalent promoted commits. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Require evidence beyond patch-id equality before dropping a commit; retain a partially overlapping commit and resolve it against the updated parent rather than dropping child-only work. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Define the continuation boundary: proceed only when the resolved tree preserves the parent's version and the final parent-relative diff and ancestry prove the expected child-only delta; otherwise abort and restore the Phase 0 backup. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Preserve Method C's bottom-up order, no-squash default, push approval rule, and existing backup lifetime; leave the `github-pr-workflow` route unchanged unless its current wording contradicts the open-stack boundary. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the Validation Commands and review the Method C wording against the routing table and the origin's exact-equivalence versus partial-overlap distinction. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: handle promoted commits in stacked rebases` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add a Method C subcase that compares interactive todo omission with rebuilding the child on the updated parent and replaying only child-owned commits, then uses the interactive todo route for exact-equivalent promoted commits. [class: IMPLEMENTATION_REQUIRED]
+- [x] Require evidence beyond patch-id equality before dropping a commit; retain a partially overlapping commit and resolve it against the updated parent rather than dropping child-only work. [class: IMPLEMENTATION_REQUIRED]
+- [x] Define the continuation boundary: proceed only when the resolved tree preserves the parent's version and the final parent-relative diff and ancestry prove the expected child-only delta; otherwise abort and restore the Phase 0 backup. [class: IMPLEMENTATION_REQUIRED]
+- [x] Preserve Method C's bottom-up order, no-squash default, push approval rule, and existing backup lifetime; leave the `github-pr-workflow` route unchanged unless its current wording contradicts the open-stack boundary. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the Validation Commands and review the Method C wording against the routing table and the origin's exact-equivalence versus partial-overlap distinction. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: handle promoted commits in stacked rebases` [class: IMPLEMENTATION_REQUIRED]

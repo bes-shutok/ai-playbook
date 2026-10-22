@@ -21,6 +21,11 @@ evidence; `--help`, `--selftest`, and `--scaffold` are metadata exits with
 no `OUTCOME:` line (--scaffold prints a mode-scaffold JSON envelope and
 writes no file). Declared placement deviation: a `--json` run carries the
 outcome as the JSON `outcome` field and emits no stdout `OUTCOME:` line.
+Hard mode reports every independently evaluable defect in one actionable
+pass: each validation `ERROR` line appends the print-layer-only clause
+pointer defined beside `SKILL_CLAUSE_POINTERS`, while a diagnostic whose
+prerequisite data is malformed stays suppressed as a cascade behind the
+gate owning the malformed prerequisite (the single-reporter rule).
 Library surfaces sit outside this CLI contract and keep their function-level
 behavior: `validate_staging_file`, the `is_staging_review_path` scope helper
 consumed by the done-sweep lib, and the module imports in
@@ -6121,7 +6126,18 @@ def validate_finding_conservation(
         # hard via the duplicate-id error itself.
         if isinstance(sid, int) and sid in duplicate_flagged_ids:
             continue
-        if not isinstance(sid, int) or sid not in md_by_id:
+        if not (isinstance(sid, int) and not isinstance(sid, bool)):
+            # Malformed-prerequisite cascade suppression (review-staging
+            # fail-fast iteration plan, Task 1; r1 C4): the predicate is the
+            # id-shape gate's exact id_ok shape negated — non-integer or
+            # bool (bool is an int subclass, rejected by the same gate) —
+            # so the gate stays the single reporter for a malformed id, and
+            # the 1:1 Markdown block reconciliation, a dependent of that
+            # well-formedness prerequisite, never fires its
+            # no-matching-block error for this row as a cascade (same
+            # single-reporter rule as duplicate_flagged_ids).
+            continue
+        if sid not in md_by_id:
             result.add_error(
                 f"finding conservation: sidecar finding id {sid!r} has no "
                 f"matching Markdown #### F block"
@@ -19356,7 +19372,18 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
     # Arm 3: the --hard posture is unchanged (characterization over the
     # pre-change engine, green before the mode exists; the frozen error
     # sets below are the witnessed pre-change behavior of these exact
-    # fixtures, including the witnessed one-error cascade state).
+    # fixtures, including the witnessed one-error cascade state). The
+    # hard-mode clause pointer (review-staging fail-fast iteration plan,
+    # Task 1) is a print-layer suffix, so these arms strip it before the
+    # exact-set comparison and a companion check pins the pointer itself.
+    def unpointed(line: str) -> str:
+        return re.sub(r" \(review-staging SKILL\.md(, .+)?\)$", "", line)
+
+    def pointed(line: str) -> bool:
+        return bool(
+            re.search(r" \(review-staging SKILL\.md(, .+)?\)$", line)
+        )
+
     rc, out, err = call(["--hard", str(staging_a)])
     check("hard missing-sidecar run exits 1", rc == 1)
     check(
@@ -19365,9 +19392,13 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
     )
     check(
         "hard missing-sidecar run keeps the pre-change error set exactly",
-        error_lines(err) == [
+        [unpointed(line) for line in error_lines(err)] == [
             f"missing required stats sidecar: {sidecar_name}",
         ],
+    )
+    check(
+        "hard missing-sidecar run points every error line at the skill",
+        bool(error_lines(err)) and all(pointed(line) for line in error_lines(err)),
     )
     rc, out, err = call(["--hard", str(staging_b)])
     check("hard multi-stage run exits 1", rc == 1)
@@ -19377,7 +19408,7 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
     )
     check(
         "hard multi-stage run keeps the pre-change error set exactly",
-        error_lines(err) == [
+        [unpointed(line) for line in error_lines(err)] == [
             "current sidecar source_digest must be a lowercase 64-char hex "
             "SHA-256; got an invalid or placeholder digest",
             "missing ## Metadata",
@@ -19403,6 +19434,10 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
             "field 'last_fix_commit'",
             "version-1 sidecar field 'verdict' must be 'yes' or 'no'",
         ],
+    )
+    check(
+        "hard multi-stage run points every error line at the skill",
+        bool(error_lines(err)) and all(pointed(line) for line in error_lines(err)),
     )
 
     # Arm 4: the report-only exit contract. Findings never move the exit
@@ -19450,6 +19485,595 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
     check(
         "preflight usage violation exits 3 as tool_error",
         rc == 3 and "OUTCOME: tool_error" in err,
+    )
+
+
+def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
+    """Hard-mode report pins (review-staging fail-fast iteration plan,
+    Task 2): the origin row's twelve failure families fire in one pass on a
+    multiply-invalid record whose prerequisites stay well-formed, every ERROR
+    line carries its clause pointer, the emission order is frozen with the
+    established first error on top, and malformed-prerequisite cascades stay
+    suppressed. Fixture builders mirror the plan's regression fixtures; the
+    preflight_inventory arm's ten-error case remains the pre-change
+    characterization witness."""
+    @contextlib.contextmanager
+    def _captured():
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            yield out_buf, err_buf
+
+    def call(argv: list[str]):
+        with _captured() as (out_buf, err_buf):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def emitted(err: str) -> list[str]:
+        """Hard-mode ERROR lines in EMISSION order (never sorted), pointer
+        suffix included."""
+        return [
+            line[len("ERROR: "):]
+            for line in err.splitlines()
+            if line.startswith("ERROR: ")
+        ]
+
+    digest = hashlib.sha256(b"fixture reviewed plan bytes v1").hexdigest()
+    run_id = "a" * 32
+    panel_rows = [
+        ("correctness-completeness", "quality, implementation"),
+        ("testing", "testing"),
+        ("design-simplicity", "architecture, simplification"),
+        ("contract-docs", "documentation"),
+        ("risk", "security"),
+    ]
+    lens_set = [
+        "architecture", "documentation", "implementation", "quality",
+        "security", "simplification", "testing",
+    ]
+
+    def finding(fid, *, workers=("correctness-completeness",),
+                pattern=None, **overrides):
+        row = {
+            "id": fid,
+            "severity": "Medium",
+            "blocking": False,
+            "consequence": (
+                "Concrete harmful outcome: the reviewed change leaves a "
+                "reachable contract gap on a normal path."
+            ),
+            "reachability": "common",
+            "blast_radius": "single-service",
+            "confidence": "verified",
+            "pattern": pattern or f"quality#fixture-candidate-{fid}",
+            "workers": list(workers),
+            "triage": "pending",
+        }
+        row.update(overrides)
+        return row
+
+    def md_block(fid: int, pattern: str, blocking: bool) -> str:
+        return "\n".join([
+            f"#### F{fid}. Sample finding {fid}",
+            "- **Severity**: Medium",
+            f"- **Blocking**: {'true' if blocking else 'false'}",
+            f"- **Pattern**: {pattern}",
+            "- **Triage**: pending",
+            "#### Comment",
+            (
+                f"Concrete claim for finding {fid}: the reviewed change "
+                "introduces a reachable condition where the stated contract "
+                "and observed behavior diverge. Fix: align the code with the "
+                "contract, or update the contract and every caller that "
+                "depends on the prior shape."
+            ),
+            "#### Analysis",
+            (
+                "Verified against the reviewed artifact at the cited anchor. "
+                "Reachability confirmed on a normal path under stated inputs. "
+                "Severity reflects tangible consequence, not effort."
+            ),
+        ])
+
+    # The multiply-invalid sidecar: one deliberate defect per origin failure
+    # family, every prerequisite well-formed (ids integer where the family is
+    # not the id shape itself, digests real where the family is not the hex
+    # shape itself).
+    rows = [
+        finding(1, blocking=True, pattern="quality#stale-digest-rebind"),
+        finding(2, workers=("testing",), pattern="testing#weak-assertion",
+                reachability="maybe"),
+        finding(3, workers=("risk",), pattern="security#injection",
+                blast_radius="whole-world"),
+        finding(4, workers=("contract-docs",),
+                pattern="prose-clarity#verbose-comment"),
+    ]
+    rows += [finding(fid) for fid in range(5, 12)]  # per-worker budget arm
+    rows.append(finding("12", workers=("design-simplicity",),
+                        pattern="architecture#layering-drift"))
+    payload = {
+        "schema_version": 1,
+        "review_type": "Branch Review",
+        "date": "2026-10-20",
+        "artifact_slug": "fixture-multi-invalid",
+        "round": "r1",
+        "depth": "full",
+        "domains": ["telemetry"],
+        "panel_mode": "full",
+        "selection_reason": None,
+        "source_kind": "plan",
+        "source_digest": digest,
+        "escalation_reason": None,
+        "review_mode": "fresh-adversarial",
+        "risk_signals": ["not-a-tag"],
+        "prior_findings_filter": False,
+        "last_fix_commit": "abc123def456",
+        "record_kind": "canonical",
+        "coverage": {
+            "outcome": "clean",
+            "material_lens_set": lens_set,
+            "completed": lens_set,
+            "missing": [],
+            "attempts": [{
+                "attempt_id": "a1",
+                "worker": "testing",
+                "lenses": ["testing"],
+                "started_at": "2026-10-20T10:00:00Z",
+                "deadline": "2026-10-20T10:15:00Z",
+                "elapsed": 30,
+                "outcome": "complete",
+                "attempt_number": 1,
+                "contributed_coverage": True,
+            }],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 15,
+                "per_worker_max": 2,
+                "wall_clock_ceiling_minutes": 90,
+                "exhausted": False,
+            },
+        },
+        "counts": {
+            "workers_launched": 5,
+            "raw_findings": 12,
+            "staged_findings": 7,
+            "discarded": 0,
+            "solo_staged": 12,
+            "echo_staged": 0,
+        },
+        "panel": [
+            {
+                "worker": worker,
+                "lenses": [l.strip() for l in lens_list.split(",")],
+                "parent_worker": None,
+                "descendant_launches": [],
+                "status": "complete",
+                "raw": 12 if idx == 0 else 0,
+                "solo": 12 if idx == 0 else 0,
+                "echo": 0,
+                "relaunch": False,
+            }
+            for idx, (worker, lens_list) in enumerate(panel_rows)
+        ],
+        "deduplication_groups": [],
+        "discarded": [],
+        "severity_calibration": [],
+        "triage_outcomes": [
+            {"worker": "correctness-completeness", "lens": "quality",
+             "staged": 8, "fixed": 0, "dropped": 0, "deferred": 0,
+             "pending": 8},
+            {"worker": "testing", "lens": "testing",
+             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+             "pending": 1},
+            {"worker": "design-simplicity", "lens": "architecture",
+             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+             "pending": 1},
+            {"worker": "contract-docs", "lens": "documentation",
+             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+             "pending": 1},
+            {"worker": "risk", "lens": "security",
+             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+             "pending": 1},
+        ],
+        "findings": rows,
+        "overflow": [],
+        "soften_watchlist": [],
+        "verdict": "no",
+        "extensions": {
+            "convergence": {
+                "self_heal_attempt": {"status": "unused",
+                                      "run_id": "deadbeef"},
+            },
+            "certified_range": {"base": "nothex", "head": "b" * 40},
+        },
+    }
+    by_id = {f["id"]: f for f in rows}
+    # F5 is missing from the Markdown (F-id 1:1 block match arm); the string
+    # id '12' has no block either, but its reconciliation arm is the
+    # malformed-prerequisite cascade and must stay suppressed.
+    md_ids = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]
+    counts_rows = "\n".join(
+        f"| {worker} | {lens_list} | none | complete | "
+        f"{12 if idx == 0 else 0} | {12 if idx == 0 else 0} | 0 | no |"
+        for idx, (worker, lens_list) in enumerate(panel_rows)
+    )
+    triage_rows = "\n".join([
+        "| correctness-completeness | quality | 8 | 0 | 0 | 0 | 8 |",
+        "| testing | testing | 1 | 0 | 0 | 0 | 1 |",
+        "| design-simplicity | architecture | 1 | 0 | 0 | 0 | 1 |",
+        "| contract-docs | documentation | 1 | 0 | 0 | 0 | 1 |",
+        "| risk | security | 1 | 0 | 0 | 0 | 1 |",
+    ])
+    md = "\n".join([
+        "# Branch Review: fixture record",
+        "## Metadata",
+        "- Type: Branch Review",
+        "- Record kind: canonical",
+        "- Date: 2026-10-20",
+        "- URL or Artifact: docs/plans/fixture.md",
+        "- Depth: full",
+        "- Domains: telemetry",
+        "- Round: r1",
+        "- Review mode: fresh-adversarial",
+        "- Changed-risk signals: none",
+        "- Boundary-contract checklist: not applicable (no boundary families)",
+        "- Prior findings supplied as filter: no",
+        "- Last fix commit: none",
+        "",
+        "- Coverage: clean",
+        "- Release-gate ledger: none",
+        "- Panel mode: full",
+        f"- Source digest: {digest}",
+        f"- review-run-id: {run_id}",
+        "- review-started-at-ms: 1791476234267",
+        "- Findings: 8",
+        "- Status: STAGED",
+        "## Review Statistics",
+        "### Panel",
+        "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |",
+        "|--------|--------|---------------|--------|-----|------|------|----------|",
+        counts_rows,
+        "### Counts",
+        "- Workers launched: 5",
+        "- Staged findings: 8",
+        "### Deduplication groups",
+        "None (each staged finding had a single agent origin).",
+        "### Discarded findings",
+        "None.",
+        "### Severity calibration",
+        "None (agent severities matched staged severities).",
+        "### Triage outcomes",
+        "| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |",
+        "|--------|------|--------|-------|---------|----------|---------|",
+        triage_rows,
+        "### Attempt ledger",
+        "| attempt | worker | outcome | contributed_coverage |",
+        "|--------|--------|---------|----------------------|",
+        "| a1 | testing | complete | yes |",
+        "## Findings",
+        "### Critical",
+        "None.",
+        "### High",
+        "None.",
+        "### Medium",
+        "\n\n".join(
+            md_block(fid, by_id[fid]["pattern"],
+                     bool(by_id[fid].get("blocking")))
+            for fid in md_ids
+        ),
+        "### Low",
+        "None.",
+        "### Overflow manifest",
+        "None.",
+        "### Soften watchlist",
+        "None.",
+        "## Verdict for this round (before fixes)",
+        "10 Medium+ findings accepted for fix",
+        "",
+    ])
+    staging = _write_staging(
+        root,
+        "2026-10-20-branch-review-fixture-multi-invalid-r1.md",
+        md,
+        payload,
+    )
+
+    # The frozen emission order: the engine's deterministic sequence over the
+    # twelve origin failure families, ending at the witness-ledger shape. The
+    # first line is the routing input (plan_readiness errors[0]); the '12'
+    # reconciliation cascade is deliberately absent (suppressed behind the
+    # id-shape gate, the single reporter).
+    hard_invalid_raw = [
+        "extensions.convergence.self_heal_attempt run_id must be a "
+        "32-character lowercase hexadecimal id",
+        "coverage attempt record 'a1' elapsed 30 exceeds retry_budget "
+        "per_attempt_timeout_minutes 15 (no silent deadline extension)",
+        "version-1 sidecar risk_signals tag 'not-a-tag' must be one of the "
+        "documented kebab-case signal tags: ['cross-service-call', "
+        "'generated-or-nullable-model', 'public-api', "
+        "'security-or-rollout-boundary', 'serializer']",
+        "version-1 finding 4: pattern owner 'prose-clarity' is not a "
+        "declared shared lens owner (allowed: ['architecture', "
+        "'consistency', 'documentation', 'implementation', 'quality', "
+        "'security', 'simplification', 'testing', 'unknown']); legacy-only "
+        "owners such as 'prose-clarity' are invalid in version-1 sidecars "
+        "(the owning producer is review-plan)",
+        "extensions.certified_range 'base' must be a 40-character hex "
+        "commit sha",
+        "last fix commit disagreement: Metadata 'Last fix commit: 'none'' "
+        "and sidecar last_fix_commit 'abc123def456' disagree (the Metadata "
+        "'Last fix commit' line carries the no-fix spelling while the "
+        "sidecar sha is real); the two surfaces must agree",
+        "current finding 2 has invalid reachability (expected one of "
+        "['common', 'expected', 'plausible-edge', 'theoretical'])",
+        "current finding 3 has invalid blast_radius (expected one of "
+        "['global', 'local', 'multi-service', 'single-service'])",
+        "current finding '12' id must be an integer",
+        "finding budget exceeded: worker 'correctness-completeness' has 7 "
+        "non-blocking High/Medium findings (max 5); move extras to overflow",
+        "finding conservation: Markdown lists 10 finding(s) but sidecar "
+        "lists 12",
+        "finding conservation: counts.staged_findings=7 but sidecar has 12 "
+        "finding(s)",
+        "finding conservation: sidecar finding id 5 has no matching "
+        "Markdown #### F block",
+        "counts parity: the record Counts Staged findings line declares 8 "
+        "but sidecar counts.staged_findings is 7",
+        "post-fix round (sidecar last fix commit 'abc123def456') has "
+        "neither a populated '### Witness ledger' nor the Metadata "
+        "'Witness ledger: N/A (no public mutators)' empty shape",
+    ]
+    hard_invalid_pointed = [
+        f"{error} {_skill_clause_pointer(error)}"
+        for error in hard_invalid_raw
+    ]
+    families = [
+        ("finding conservation", "finding conservation"),
+        ("counts parity", "counts parity:"),
+        ("witness-ledger shape", "post-fix round"),
+        ("per-worker budget", "finding budget exceeded:"),
+        ("F-id 1:1 block match", "sidecar finding id 5 has no matching"),
+        ("reachability enum", "has invalid reachability"),
+        ("blast_radius enum", "has invalid blast_radius"),
+        ("pattern-owner set", "is not a declared shared lens owner"),
+        ("risk-signal tag", "risk_signals tag"),
+        ("last-fix-commit agreement", "last fix commit disagreement:"),
+        ("id hex shape", "id must be an integer"),
+        ("base hex shape", "'base' must be a 40-character hex commit sha"),
+        ("run-id hex shape", "run_id must be a 32-character lowercase"),
+        ("attempt deadlines", "exceeds retry_budget per_attempt_timeout"),
+    ]
+    for family, marker in families:
+        check(
+            f"hard invalid fixture reports the {family} family",
+            any(marker in error for error in hard_invalid_raw),
+        )
+
+    rc, out, err = call(["--hard", str(staging)])
+    check("hard invalid fixture exits 1", rc == 1)
+    check(
+        "hard invalid fixture ends with OUTCOME: fail",
+        out.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "hard invalid fixture emission order is frozen (pointer-suffixed)",
+        emitted(err) == hard_invalid_pointed,
+    )
+    check(
+        "hard invalid fixture keeps the established first error on top",
+        emitted(err)[:1] == [hard_invalid_pointed[0]],
+    )
+    check(
+        "hard invalid fixture reports exactly the fifteen independent "
+        "diagnostics",
+        len(emitted(err)) == 15,
+    )
+    check(
+        "hard invalid fixture suppresses the string-id reconciliation "
+        "cascade",
+        all(
+            "sidecar finding id '12' has no matching" not in error
+            for error in emitted(err)
+        )
+        and any("current finding '12' id must be an integer" in error
+                for error in emitted(err)),
+    )
+    check(
+        "hard invalid fixture points every error line at the skill",
+        all(
+            re.search(r" \(review-staging SKILL\.md(, .+)?\)$", line)
+            for line in emitted(err)
+        ),
+    )
+    rc, out, err = call(["--hard", "--json", str(staging)])
+    json_payload: dict = json.loads(out) if out.strip() else {}
+    check("hard invalid fixture json run exits 1", rc == 1)
+    check(
+        "hard invalid fixture json carries outcome fail",
+        json_payload.get("outcome") == "fail",
+    )
+    check(
+        "hard invalid fixture json errors stay raw (no pointer suffix)",
+        json_payload.get("errors") == hard_invalid_raw,
+    )
+    check(
+        "hard invalid fixture json first error matches the text emission",
+        (json_payload.get("errors") or [""])[0] == hard_invalid_raw[0],
+    )
+
+    # Print-layer-only pin (r1 T2/T3): the clause pointer is a hard-mode
+    # print augmentation, so soft, preflight, and tool_error emissions stay
+    # pointer-free. The soft-mode check is the discriminating one: deleting
+    # the `if args.hard:` gate at the plain-run print site fails it.
+    pointer_suffix_re = re.compile(r"\(review-staging SKILL\.md(, [^)]*)?\)$")
+
+    def warn_error_lines(err: str) -> list[str]:
+        return [
+            line for line in err.splitlines()
+            if line.startswith("ERROR: ") or line.startswith("WARN: ")
+        ]
+
+    # Fresh rc/out/err names: the later mapping checks read the ambient
+    # `err` from the json run above and must keep that input.
+    rc_soft, out_soft, err_soft = call([str(staging)])
+    check(
+        "soft invalid fixture exits 0 (soft runs report, never gate)",
+        rc_soft == 0 and out_soft.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "soft invalid fixture emits no pointer-suffixed ERROR/WARN line",
+        all(
+            not pointer_suffix_re.search(line)
+            for line in warn_error_lines(err_soft)
+        ),
+    )
+    rc_pf, out_pf, err_pf = call(["--preflight", str(staging)])
+    check(
+        "preflight invalid fixture exits 0 (report-only posture)",
+        rc_pf == 0 and out_pf.rstrip().endswith("OUTCOME: pass"),
+    )
+    check(
+        "preflight invalid fixture emits no pointer-suffixed ERROR/WARN line",
+        all(
+            not pointer_suffix_re.search(line)
+            for line in warn_error_lines(err_pf)
+        ),
+    )
+    rc_te, out_te, err_te = call(
+        [str(root / "2026-10-20-branch-review-fixture-absent-r1.md")]
+    )
+    tool_error_lines = warn_error_lines(err_te)
+    check(
+        "missing staging path is the tool_error class with one ERROR line",
+        rc_te == 3
+        and out_te.rstrip().endswith("OUTCOME: tool_error")
+        and len(tool_error_lines) == 1
+        and tool_error_lines[0].startswith(
+            "ERROR: cannot read staging file: "
+        ),
+    )
+    check(
+        "tool_error ERROR line carries no clause pointer",
+        all(not pointer_suffix_re.search(line) for line in tool_error_lines),
+    )
+
+    # Clause-pointer mapping: every table row resolves to its own section,
+    # prefix-shadowed markers keep their precedence, an unmatched message
+    # falls back to the bare skill pointer, and the emitted suffixes equal
+    # the mapping recomputed from the raw lines.
+    check(
+        "clause pointer table maps every marker to its own section",
+        all(
+            _skill_clause_pointer(marker)
+            == f"(review-staging SKILL.md, {section})"
+            for marker, section in SKILL_CLAUSE_POINTERS
+        ),
+    )
+    check(
+        "clause pointer precedence: counts arm outranks generic conservation",
+        _skill_clause_pointer(
+            "finding conservation: counts.staged_findings=7 but sidecar "
+            "has 12 finding(s)"
+        )
+        == "(review-staging SKILL.md, Version-1 sidecar contract)",
+    )
+    check(
+        "clause pointer precedence: per-finding enum outranks current-finding"
+        " schema marker",
+        _skill_clause_pointer(
+            "current finding 2 has invalid reachability (expected one of "
+            "['common', 'expected', 'plausible-edge', 'theoretical'])"
+        )
+        == (
+            "(review-staging SKILL.md, Finding-construction recipe "
+            "(scaffold before drafting))"
+        ),
+    )
+    check(
+        "clause pointer fallback routes an unmatched message at the skill",
+        _skill_clause_pointer("totally unmapped diagnostic text")
+        == "(review-staging SKILL.md)",
+    )
+    check(
+        "emitted pointer suffixes equal the mapping recomputed from the "
+        "emitted text",
+        all(
+            line.endswith(f" {_skill_clause_pointer(line_stripped)}")
+            for line, line_stripped in zip(
+                emitted(err),
+                [re.sub(r" \(review-staging SKILL\.md(, .+)?\)$", "", line)
+                 for line in emitted(err)],
+            )
+        ),
+    )
+
+    # Malformed prerequisite: the truncated sidecar JSON is the only
+    # malformation, so every sidecar-dependent gate stays a suppressed
+    # cascade behind the JSON gate, and the doc-level independent
+    # diagnostic still reports first.
+    md_malformed = md.replace(
+        "### Panel\n"
+        "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |\n"
+        "|--------|--------|---------------|--------|-----|------|------|----------|\n"
+        "| correctness-completeness | quality, implementation | none | "
+        "complete | 12 | 12 | 0 | no |\n"
+        "| testing | testing | none | complete | 0 | 0 | 0 | no |\n"
+        "| design-simplicity | architecture, simplification | none | "
+        "complete | 0 | 0 | 0 | no |\n"
+        "| contract-docs | documentation | none | complete | 0 | 0 | 0 | "
+        "no |\n"
+        "| risk | security | none | complete | 0 | 0 | 0 | no |\n",
+        "",
+    )
+    assert "### Panel" not in md_malformed
+    staging_malformed = _write_staging(
+        root,
+        "2026-10-20-branch-review-fixture-malformed-r1.md",
+        md_malformed,
+        '{"schema_version": 1, "revie',
+    )
+    rc, out, err = call(["--hard", str(staging_malformed)])
+    check("hard malformed fixture exits 1", rc == 1)
+    check(
+        "hard malformed fixture ends with OUTCOME: fail",
+        out.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "hard malformed fixture reports the independent doc-level "
+        "diagnostic first",
+        emitted(err)[:1] == [
+            "missing ### Panel under Review Statistics "
+            "(review-staging SKILL.md, Output discipline)",
+        ],
+    )
+    check(
+        "hard malformed fixture reports exactly two diagnostics (JSON gate "
+        "plus the doc-level one)",
+        len(emitted(err)) == 2
+        and emitted(err)[1].startswith("invalid stats sidecar JSON: ")
+        and emitted(err)[1].endswith(
+            " (review-staging SKILL.md, "
+            "JSON sidecar (required for aggregation))"
+        ),
+    )
+    check(
+        "hard malformed fixture suppresses every sidecar-dependent cascade",
+        all(
+            "finding conservation" not in line
+            and "counts parity" not in line
+            and "witness ledger" not in line.lower()
+            for line in emitted(err)
+        ),
+    )
+    rc, out, err = call(["--hard", "--json", str(staging_malformed)])
+    json_payload = json.loads(out) if out.strip() else {}
+    check(
+        "hard malformed fixture json first error matches the text emission",
+        rc == 1
+        and json_payload.get("outcome") == "fail"
+        and (json_payload.get("errors") or [""])[0]
+        == "missing ### Panel under Review Statistics",
     )
 
 
@@ -19554,6 +20178,10 @@ def _run_selftest_body() -> int:
             (
                 "preflight_inventory",
                 _selftest_preflight_inventory,
+            ),
+            (
+                "hard_mode_diagnostics",
+                _selftest_hard_mode_diagnostics,
             ),
         ):
             fn(root, check)
@@ -19684,6 +20312,52 @@ def cmd_preflight(
             print(line, file=sys.stderr)
         print("OUTCOME: %s" % OUTCOME_LABELS[exit_code])
     return exit_code
+
+
+# Hard-mode clause pointers (review-staging fail-fast iteration plan, Task 1):
+# every hard-mode ERROR line names the review-staging skill section owning the
+# failed clause, so one failing record routes each of its failures to its
+# fixing rule in a single pass instead of one gate per round. The pointer is a
+# print-layer augmentation only: ValidationResult.errors keeps its raw
+# messages (errors[0] is the plan_readiness routing input and must stay
+# byte-identical), soft and preflight runs keep today's lines. First matching
+# marker wins; an unmatched message falls back to the bare skill pointer, so
+# every hard-mode error line still routes to the skill.
+SKILL_CLAUSE_POINTERS: tuple[tuple[str, str], ...] = (
+    # Marker order matters where one marker is a prefix of another: the
+    # counts.staged_findings conservation arm (sidecar-internal parity,
+    # "Version-1 sidecar contract") precedes the generic conservation marker
+    # (Markdown F-block reconciliation), and the per-finding enum markers
+    # precede the generic "current finding" schema marker.
+    ("coverage attempt record", "Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)"),
+    ("finding conservation: counts.staged_findings=", "Version-1 sidecar contract"),
+    ("finding conservation", "Staged Markdown hierarchy (required)"),
+    ("counts parity", "JSON sidecar (required for aggregation)"),
+    ("finding budget exceeded", "Synthesis-time hard gates"),
+    ("last fix commit disagreement", "Synthesis-time hard gates"),
+    ("version-1 sidecar risk_signals", "Synthesis-time hard gates"),
+    ("version-1 finding", "Pattern id format"),
+    ("version-1 overflow item", "Pattern id format"),
+    ("version-1 discarded finding", "Pattern id format"),
+    ("has invalid reachability", "Finding-construction recipe (scaffold before drafting)"),
+    ("has invalid blast_radius", "Finding-construction recipe (scaffold before drafting)"),
+    ("has invalid confidence", "Finding-construction recipe (scaffold before drafting)"),
+    ("current finding", "JSON sidecar (required for aggregation)"),
+    ("extensions.certified_range", "Corrections sidecar extension (declared-when-present)"),
+    ("extensions.convergence.self_heal_attempt", "Version-1 sidecar contract"),
+    ("post-fix round", "Synthesis-time hard gates"),
+    ("witness ledger", "Synthesis-time hard gates"),
+    ("missing ### Panel", "Output discipline"),
+    ("invalid stats sidecar JSON", "JSON sidecar (required for aggregation)"),
+)
+
+
+def _skill_clause_pointer(error: str) -> str:
+    """Return the hard-mode clause pointer appended to one ERROR line."""
+    for marker, section in SKILL_CLAUSE_POINTERS:
+        if marker in error:
+            return f"(review-staging SKILL.md, {section})"
+    return "(review-staging SKILL.md)"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20352,6 +21026,9 @@ def _main(argv: list[str] | None = None) -> int:
                     f"{error}; or {source_flag_name} points at the wrong file "
                     f"(hashed: {_SOURCE_PATH_FOR_ERROR})"
                 )
+            if args.hard:
+                # Print-layer-only pointer; errors stay raw (SKILL_CLAUSE_POINTERS).
+                error = f"{error} {_skill_clause_pointer(error)}"
             print(f"ERROR: {error}", file=sys.stderr)
         if result.ok:
             print(f"OK: {target}")

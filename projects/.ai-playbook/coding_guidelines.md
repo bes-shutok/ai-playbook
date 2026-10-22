@@ -690,3 +690,12 @@ Not commentary (out of scope of this rule): license and copyright headers; chang
 **Rule:** The trap deletes only while every gate holds: this process created the artifact (a flag set only at the creation site) and the operation has not passed its irreversible success step (a flag set immediately after it). Refusal arms that delete the artifact themselves do so under the same gates, so cleanup never double-deletes and never touches an artifact this process did not create. Disarm at the irreversible step, not at exit: a failure after that step must leave the artifact and its resource paired, not delete one and strand the other.
 
 **Example:** A take-style operation created its claim file, then the resource-creation step failed on an uncreatable parent directory: the run exited with the fresh claim stranded, and a signal mid-creation had no handler at all. The fix armed the trap at claim creation, set the done flag right after the resource was secured, and had the explicit refusal arms clean their own state. Four independent reviewers converged on the same hole in one round; treat that convergence as the shape's recurrence signal. See also #37 (sibling-script state passing) and #38 (trap string quoting).
+
+## 43. An Invocation Is Not an Inspection: Never Probe a State-Changing CLI by Running It Bare
+
+**Principle:** Family H (verify the real thing, not the abstraction: reading a command's contract is a read operation; invoking it is the operation).
+
+**Shape trigger:** you want a script's usage text, or to confirm it is wired and reachable, and the script sits in an operational family (setup, acquire, release, migrate, deploy) whose arguments are optional.
+
+**Rule:** inspect with `--help` or by reading the argument-parsing source; never invoke the command bare to "see what it does". A command with no required arguments executes its full effect the moment it runs: locks are acquired, markers and manifests are written, and when the invoking shell dies the partial state strands for recovery. If a probe already ran, verify the side effects with the tool's own read-only status surface before any recovery, and release a stranded hold only with the token that invocation itself printed.
+

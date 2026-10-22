@@ -16,7 +16,9 @@
 # the origin-independent eligibility and privacy-emission contract across the
 # investigate and maintenance skills (the section's fixture fail-arm joins the
 # witnessed-fail-arm family under the same per-section fixture seam), and the
-# warning-only placement-pins family over the placement doctrine spans in the four placement-decision owners.
+# warning-only placement-pins family over the placement doctrine spans in the four placement-decision owners,
+# and the warning-only prompt-log prune-range pin family over the landed prune-range, receipt-preservation,
+# write-boundary, and audit-separation clauses across the two rolling logs and the five operative procedures.
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 = all pins hold
 # (`OUTCOME: pass`) or every standing red is an unexpired recorded red named
 # in the run summary line, exit 1 = a failing pin (`OUTCOME: fail` after the PIN
@@ -115,7 +117,10 @@ repo="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git 
 # an unexpired recorded red named in the summary line; a missing
 # `check_maintenance_pins` guard key means zero recorded reds (normal
 # first-run state); a missing or unparseable register is a loud tool_error
-# (exit 3, naming the path) with one bounded re-read on failure.
+# (exit 3, naming the path) with one bounded re-read on failure. The expiry
+# comparison runs against the system date in production; selftests may pin
+# that clock through PINS_RECORDED_RED_AS_OF (an explicit calendar date), and
+# a set but non-calendar value is a tool error, never a silent fallback.
 # Placement guidance for new pin rows: land a new row BEFORE the earliest
 # `[ "$fail" -eq 1 ]` checkpoint that fires in the current baseline posture
 # (while the baseline is green any placement executes; dormancy returns
@@ -138,7 +143,7 @@ load_recorded_reds() { # sets RECORDED_REDS / EXPIRED_REDS (tab-separated name, 
   local attempt out rc line state name rest rec rev
   for attempt in 1 2; do
     out="$(python3 - "$PINS_RECORDED_RED_REGISTER" <<'PY_READER'
-import sys, json, re
+import sys, json, re, os
 from datetime import date
 
 def clean(value):
@@ -158,7 +163,23 @@ guard = guards.get("check_maintenance_pins")
 rows = guard.get("rows") if isinstance(guard, dict) else None
 if not isinstance(rows, list):
     rows = []
-today = date.today()
+# Expiry clock: the system date in production; selftests pin it through
+# PINS_RECORDED_RED_AS_OF. The empty string reads as unset (the scenario shell
+# forwards an unset variable as empty); any other set value must be a
+# YYYY-MM-DD calendar date, whitespace-only included, or the reader
+# tool-errors instead of silently falling back.
+as_of_raw = os.environ.get("PINS_RECORDED_RED_AS_OF")
+if as_of_raw is None or as_of_raw == "":
+    today = date.today()
+else:
+    as_of = as_of_raw.strip()
+    try:
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", as_of):
+            raise ValueError(as_of)
+        today = date.fromisoformat(as_of)
+    except ValueError:
+        print("AS-OF-OVERRIDE-ERROR\tPINS_RECORDED_RED_AS_OF is not a calendar date: %s" % clean(as_of), file=sys.stderr)
+        sys.exit(3)
 for row in rows:
     if not isinstance(row, dict) or row.get("kind") != "override":
         continue
@@ -204,7 +225,11 @@ PY_READER_LINES
     fi
     # the loop is the one bounded re-read on reader failure (bounded-repair menu)
   done
-  echo "recorded-red register unreadable or unparseable at $PINS_RECORDED_RED_REGISTER" >&2
+  if [ -n "${PINS_RECORDED_RED_AS_OF:-}" ]; then
+    echo "recorded-red reader failed with PINS_RECORDED_RED_AS_OF set (see the AS-OF-OVERRIDE-ERROR line above) or the register unreadable or unparseable at $PINS_RECORDED_RED_REGISTER" >&2
+  else
+    echo "recorded-red register unreadable or unparseable at $PINS_RECORDED_RED_REGISTER" >&2
+  fi
   return 3
 }
 recorded_red_lookup() { # recorded_red_lookup <map-var-name> <pin name>; prints "<recorded> <review-by>" of the LAST matching row, or nothing
@@ -2973,8 +2998,9 @@ pin "primary resolution resume branch-mismatch stand-down" test "$(grep -cF 'sta
 # sentence (lifecycle step 1) and the claim-registration paragraph's grant
 # sentence; count-gated exactly 1 each on the post-edit tree.
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
-pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "per the claim gateway's arm-3 restored-worktree takeover (the receipt-to-row evidence shape, never process enumeration; verification failure defaults to the refusal)" "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
-pin "execute-plan claim-registration sentence names arms 3 and 4" test "$(grep -cF "the restored-worktree resume whose state verifies as the same run takes over its claim instead of colliding per the gateway's arm-3, verification failure defaulting to this refusal, and the gateway's claim mutations are last-instant compare-and-delete serialized per its arm-4 with a lost race refusing naming the racing holder" "$E" | tr -d ' ')" -eq 1
+# Re-aimed 2026-10-23 (plan docs/history/plans/2026-10-21-dead-run-resume-claim-conversion.md Task 3): the arm-3 matcher semantic is retired by the dead-run conversion arm; both resumed-lane needles route to the recovery procedure in agents/skills/maintenance/template-execution.md, the arm-4 compare-and-delete needle unchanged.
+pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "converts through the claim gateway's dead-run conversion arm per the recovery procedure in agents/skills/maintenance/template-execution.md (the sole recovery procedure; the gateway refuses unchanged when the evidence does not verify" "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
+pin "execute-plan claim-registration sentence names arms 3 and 4" test "$(grep -cF "the restored-worktree resume routes through the claim gateway's dead-run conversion arm per the recovery procedure in agents/skills/maintenance/template-execution.md, the sole recovery procedure, and the gateway's claim mutations are last-instant compare-and-delete serialized per its arm-4 with a lost race refusing naming the racing holder" "$E" | tr -d ' ')" -eq 1
 pin "execution-claim take-refusal clause named in the user-directed-override rule" grep -qF 'the execution-claim take refusal (the run-worktree creation gateway refusing over a fresh foreign claim; its refusal names this rule as the override route)' "$GU"
 expect_absent_flat "retired execution-claim hand-write noclobber clause must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-07 by the execution-claim gateway wiring)" 'the write is create-if-absent noclobber, the redirection failure being the refusal path' "$P"
 expect_absent_flat "retired execution-claim hand-write registration duty must be absent from the execute-plan skill (wrap-tolerant; superseded 2026-10-07 by the execution-claim gateway wiring)" 'the run writes and thereafter honors the claim file' "$E"
@@ -3359,6 +3385,35 @@ pin "review-plan self-heal allowance is run-wide" grep -qF 'for the entire revie
 pin "review-staging requires post-fence self-heal state" grep -qF 'filename and sidecar `date` are on or after `SELF_HEAL_STATE_MIN_DATE`' "$RS"
 pin "review-staging records legacy resume disposition" grep -qF 'A missing, malformed, or legacy prior record on resume requires' "$RS"
 pin "validator validates run-wide attempt carry-forward" grep -qF 'consumed or unknown self-heal state must carry forward unchanged within a run' "$repo/scripts/validate_review_staging.py"
+# Hard-mode error count/order re-derivation (review-staging fail-fast
+# iteration plan, Task 2): NONE found. Every validator pin below is a
+# message-presence grep; no pin asserts exactly one hard-mode error, a
+# pinned error count, or a pinned error order for validate_review_staging,
+# and this script never invokes the validator CLI. The multi-error report
+# order stays pinned by the validator's own embedded selftest
+# (hard_mode_diagnostics arm), not here.
+# Drift guard (Task 2 review fold; witness: the r1 pointer mapping that
+# named a section not owning its field): every SKILL_CLAUSE_POINTERS section
+# string, read from the live table, must remain a heading or inline mention
+# in the review-staging skill, so a renamed section or a new mapping cannot
+# silently leave hard-mode pointers aiming at nothing. Presence-grep pin
+# class; review alongside the pointer table.
+ptr_sections="$(python3 - "$repo/scripts/validate_review_staging.py" <<'PYEOF_PTR'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+start = src.index("SKILL_CLAUSE_POINTERS: tuple")
+end = src.index("\n)\n", start)
+seen = []
+for _marker, section in re.findall(r'\(\s*"([^"]+)",\s*"([^"]+)"\s*\)', src[start:end]):
+    if section not in seen:
+        seen.append(section)
+print("\n".join(seen))
+PYEOF_PTR
+)"
+[ -n "$ptr_sections" ] || { echo "PIN FAIL: clause-pointer table yielded no sections (parse drift)" >&2; exit 1; }
+printf '%s\n' "$ptr_sections" | while IFS= read -r ptr_section; do
+  grep -qF "$ptr_section" "$RS" || { echo "PIN FAIL: clause-pointer section missing from review-staging skill: $ptr_section" >&2; exit 1; }
+done || exit 1
 pin "validator binds consumption to current round and digest" grep -qF 'unused-to-consumed transition must bind to this round and its sidecar source_digest' "$repo/scripts/validate_review_staging.py"
 pin "validator requires new r1 identity" grep -qF 'r1 must start a new run with unused or consumed state bound to its review-run-id' "$repo/scripts/validate_review_staging.py"
 pin "validator rejects later-round allowance reset" grep -qF 'run_id cannot change after r1 in the same artifact chain' "$repo/scripts/validate_review_staging.py"
@@ -3715,15 +3770,17 @@ heredoc_settle "${PIPESTATUS[0]}"
 # the guard key), summary at a checkpoint-style funnel exit, malformed
 # review-by, corrupt register (tool_error exit 3), strict-prefix collision
 # exact-equality, duplicates last-row-wins with an expired row shadowed,
-# control-character stripping, and the heredoc router's
-# all-suppressed-settles-clean arm. No mid-suite checkpoint is added; the
+# control-character stripping, the heredoc router's
+# all-suppressed-settles-clean arm, and the as-of clock override (a review-by
+# equal to the as-of date stays live, the day before expires, and a
+# non-calendar override tool-errors). No mid-suite checkpoint is added; the
 # assertions set fail=1 and the suite's final gate funnels them.
 CONSULT_SELFTEST_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/pins-recorded-red-selftest.XXXXXX")"
 CONSULT_BLOCK="$(sed -n '/^SUPPRESSED_NAMES=""$/,/^# --- recorded-red consult end/p' "$0")"
 [ -n "$CONSULT_BLOCK" ] || { echo "PIN FAIL: recorded-red consult selftest could not extract the live consult block"; fail=1; }
 printf '%s\n' "$CONSULT_BLOCK" > "$CONSULT_SELFTEST_FIXTURE/consult-block.sh"
 consult_scenario() { # consult_scenario <fixture-register> <scenario body>; prints the scenario's combined output
-  SCENARIO_BODY="$2" SCENARIO_BLOCK="$CONSULT_SELFTEST_FIXTURE/consult-block.sh" PINS_RECORDED_RED_REGISTER="$1" bash -c '
+  SCENARIO_BODY="$2" SCENARIO_BLOCK="$CONSULT_SELFTEST_FIXTURE/consult-block.sh" PINS_RECORDED_RED_REGISTER="$1" PINS_RECORDED_RED_AS_OF="${PINS_RECORDED_RED_AS_OF:-}" bash -c '
 set -u
 . "$SCENARIO_BLOCK"
 eval "$SCENARIO_BODY"
@@ -3884,6 +3941,35 @@ exit 0
      || ! printf '%s\n' "$SC_OUT" | grep -q '^PIN RECORDED REDS SUPPRESSED THIS RUN: stub-ctrl; stub-ctrl$'; then
     echo "PIN FAIL: recorded-red consult selftest: heredoc router arm"; fail=1
   fi
+  # as-of clock arm (plan docs/history/plans/2026-10-20-plan-prompts-prune-range-content-inventory.md, Task 2):
+  # an explicit PINS_RECORDED_RED_AS_OF pins the evaluation clock for selftests
+  # while production keeps the system date; with as-of 2026-10-20 a review-by
+  # of 2026-10-20 stays live (expired means strictly before the as-of date) and
+  # a review-by of 2026-10-19 is expired; both outcomes asserted
+  printf '%s' '{"schema":1,"window":{},"guards":{"check_maintenance_pins":{"notes":"","rows":[{"kind":"override","date":"2026-09-20","evidence":"selftest","note":"pin: stub-asof-live review-by: 2026-10-20 witness selftest"},{"kind":"override","date":"2026-09-20","evidence":"selftest","note":"pin: stub-asof-expired review-by: 2026-10-19 witness selftest"}]}}}' > "$CONSULT_SELFTEST_FIXTURE/reg.json"
+  SC_OUT="$(PINS_RECORDED_RED_AS_OF=2026-10-20 consult_scenario "$CONSULT_SELFTEST_FIXTURE/reg.json" "
+load_recorded_reds || { emit_outcome tool_error; exit 3; }
+fail=0
+recorded_red_check \"stub-asof-live\" \"PIN FAIL: stub-asof-live\" || fail=9
+recorded_red_check \"stub-asof-expired\" \"PIN FAIL: stub-asof-expired\" && fail=9
+emit_outcome fail
+exit 0
+")"
+  if ! printf '%s\n' "$SC_OUT" | grep -q '^PIN RECORDED RED (recorded 2026-09-20, review-by 2026-10-20): stub-asof-live$' \
+     || ! printf '%s\n' "$SC_OUT" | grep -q '^PIN RECORDED RED EXPIRED (recorded 2026-09-20, review-by 2026-10-19): stub-asof-expired$' \
+     || ! printf '%s\n' "$SC_OUT" | grep -q '^PIN FAIL: stub-asof-expired$' \
+     || [ "$(printf '%s\n' "$SC_OUT" | tail -n 1)" != "OUTCOME: fail" ]; then
+    echo "PIN FAIL: recorded-red consult selftest: as-of clock override arm"; fail=1
+  fi
+  # malformed as-of arm: a set but non-calendar override tool-errors instead of
+  # silently falling back to the system date
+  SC_OUT="$(PINS_RECORDED_RED_AS_OF=not-a-calendar-date consult_scenario "$CONSULT_SELFTEST_FIXTURE/reg.json" "
+load_recorded_reds || { emit_outcome tool_error; exit 3; }
+exit 0
+")"
+  if [ "$(printf '%s\n' "$SC_OUT" | tail -n 1)" != "OUTCOME: tool_error" ]; then
+    echo "PIN FAIL: recorded-red consult selftest: malformed as-of override arm"; fail=1
+  fi
 fi
 rm -rf "$CONSULT_SELFTEST_FIXTURE"
 
@@ -3894,6 +3980,100 @@ rm -rf "$CONSULT_SELFTEST_FIXTURE"
 # (12 sites shipped that way before this guard). The searched literal is
 # split across two strings so this guard line cannot match itself.
 [ "$(grep -c "^[^#].*#.*| route_""heredoc_stream" "$0" | tr -d ' ')" -eq 0 ] || { recorded_red_check "routed heredoc pipe dead-wired after a trailing comment" "PIN FAIL: routed heredoc pipe dead-wired after a trailing comment" || fail=1; }
+
+# --- prompt-log prune-range pins (plan docs/history/plans/2026-10-20-plan-prompts-prune-range-content-inventory.md, Task 2) ---
+# WARNING-ONLY pin family over the landed prune-range clauses: full-range
+# inventory, slug and origin binding, per-origin coverage, target refusal,
+# partial scope, freeze retention, one final receipt, lock lifecycle, receipt
+# preservation, and audit separation, across the two rolling logs and the five
+# operative procedures. One dedicated fixed-string grep per clause span; a
+# missing clause prints one PIN WARN line naming it and the first missing
+# clause is named in the summary. The section never sets fail and never moves
+# the suite's exit code (machinery admission protocol: warning-only landing).
+# Admission: incident docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md
+# (the 2026-10-19 neighboring-receipt loss at a correctly anchored range tail);
+# expected catch frequency: uncommon (the family evaluates on every pins run over a log-rule or procedure edit);
+# false-positive cost: one non-blocking warning until the pin list is updated
+# in the same change; review due 2027-01-20; promotion requires a production
+# true catch and a pre-registered registry-removal row naming sunset and
+# promotion criteria.
+PRUNE_RANGE_MISSING=""
+prune_range_pin() { # prune_range_pin <file> <span>: warning-only presence grep, never touches fail
+  local f="$1" span="$2" disp
+  disp="${f#"$repo"/}" # repo-relative display path; the grep still runs on the absolute path
+  if ! grep -qF -- "$span" "$f"; then
+    echo "PIN WARN: prune-range pin: $span ($disp)"
+    if [ -z "$PRUNE_RANGE_MISSING" ]; then PRUNE_RANGE_MISSING="$span ($disp)"; fi
+  fi
+}
+# PLAN-PROMPTS.md owns the shared Prune, Coverage and removal, Freeze, and Write boundary rules.
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Every prune first reads the target entry through its actual next heading (never assumed adjacency) and inventories every receipt line in that range before any deletion'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'every pre-existing receipt line stays byte-for-byte and in its original order regardless of slug'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'so a landing or monitor prune removes only covered origin bullets and their explicitly paired scope arms'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" "The separate pending-change audit (warning-only detection of prompt-log changes no landing has recorded) is out of this rule's scope: it stays report-only under its own backlog row."
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'exactly one heading whose `Frozen:` witness names the plan'\''s authoring claim, whose `Origins:` includes the plan'\''s source backlog origin, and whose slug equals the canonical feature slug (the plan filename minus its leading date prefix)'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" "a collateral entry is covered only where the closeout's read-only origin discovery reports an origin removed inside the landing range"
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'an ordinary monitor origin is covered only when a plan in the plans root or its `completed/` twin carries a `Backlog origin:` line exactly equal to that origin path, entry-slug discovery covering only the origin that plan itself names and never any other `Origins:` bullet'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'an ad-hoc origin (either log) is covered only when its entry was frozen before its recorded ad-hoc landing commit'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'A partial removal (origins remain) deletes only covered origin bullets and their paired scope arms, keeps the unresolved origins dispatchable, and adds no receipt'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'the `Frozen:` mark stays while any retained origin has a live claim or worktree (a fresh check over the retained origins, never the landing plan'\''s own authoring claim) and clears only after landing when that check finds none'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Full removal (the heading empties) writes exactly one receipt using the last removed origin'\''s class and witness in the original `Origins:` order'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Ambiguous origin-to-scope pairing or missing, duplicate, or shared binding evidence (duplicate own-entry headings included) leaves that target byte-identical with the reason reported; other independent targets stay eligible, and the log stays unchanged when no target qualifies.'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'a landing that removes only some of the entry'\''s origins keeps or clears the mark per the `Coverage and removal rule`'\''s freeze-retention clause'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'acquires or reuses the primary done lock, then the repo-wide merge lock (the repository'\''s `scripts/done-lock.sh` lock families), before any staging or index write and before the final log read, holding both through the commit and failure recovery'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'the write refuses when a pre-staged delta already exists on its owned paths, stages and commits only those owned paths, and on commit failure unstages and verifies only its own staged delta before release'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Done-lock acquisition failure does no work'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'merge-lock acquisition failure releases the done lock token-fenced and does no work'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Release is merge then done on every exit, attempting the done release even when the merge release fails'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'A session working from a worktree keys the primary done lock from primary-checkout context (the Phase 0 freeze included)'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'worktree branch commits stay isolated under the existing merge-lock guard, and no new lock is added'
+# EXEC-PROMPTS.md carries the ad-hoc log's operation-specific deltas.
+prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'receipt line per fully removed entry, a partial removal adding none'
+prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'every pre-existing `EXEC-PROMPTS-PRUNE` receipt line stays byte-for-byte and in order'
+prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'an EXEC-PROMPTS origin is covered only when its entry was frozen before its recorded ad-hoc landing commit, a full removal cites that commit as the witness'
+prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'the `Coverage and removal rule`'\''s freeze-retention clause applies by label'
+# plans/SKILL.md: the landing closeout prune clause (by label) and the Phase 0 freeze write.
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'the landing pruning only its own dispatch entry plus discovery-listed collateral served entries under the log'\''s `Coverage and removal rule` label'
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'the prune evaluated per the log'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal are that rule'\''s, not restated here)'
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'The freeze write is a primary-checkout log write under the log'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md` (lock order, owned-path staging, and recovery live there), the primary done lock keyed from primary-checkout context per that rule'
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'on any lock refusal the session releases each acquired lock, removes only this session'\''s claim file through the AUTHORING CLAIM procedure'\''s ownership-checked delete, and stands down before any plan-file work'
+# template-authoring.md: the authoring landing closeout prune clause (by label) and its collateral delta.
+prune_range_pin "$repo/agents/skills/maintenance/template-authoring.md" 'the prune evaluated per the log'\''s `Coverage and removal rule` label, this run'\''s own entry being the one whose `Frozen:` witness names this plan'\''s authoring claim'
+prune_range_pin "$repo/agents/skills/maintenance/template-authoring.md" 'this closeout'\''s collateral delta being that a collateral entry retaining a served origin is a partial removal that keeps that origin'\''s scope arm and adds no receipt'
+# decisions.md: the monitor's rolling prompt log duties (by label) and the monitor's lock-refusal delta.
+prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each monitor prune is evaluated per the log'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage including the ordinary-monitor exact `Backlog origin:` match, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal live there)'
+prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'the same `Coverage and removal rule` applying to EXEC-PROMPTS.md by label'
+prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each write that commits runs under the log'\''s `Write boundary rule` label, this monitor'\''s delta being that a lock refusal leaves both logs byte-identical with the write deferred and the reason recorded'
+# zcode.md: the monitor lock primitives, their primary-checkout keying, and the token-fenced release order.
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run under the log'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md`; the concrete primitives'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run from primary-checkout context so the done key resolves to the primary worktree'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'a worktree session addresses the primary checkout through an explicit-rooted form, never its own worktree'\''s key'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'release token-fenced as `merge-release-repo`, then `release-repo`'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'an acquisition refusal defers the write per the monitor duty (the monitor never rewrites a log to recover a refused write)'
+# worktree-first.md: the primary-placement commit class, its lock refusal, and the landing closeout prune (by label).
+prune_range_pin "$repo/agents/skills/execute-plan/worktree-first.md" 'a primary-placement commit that writes a rolling prompt log, the Phase 0 freeze included, is the log'\''s `Write boundary rule` write'
+prune_range_pin "$repo/agents/skills/execute-plan/worktree-first.md" 'a lock refusal standing the write down with the log unchanged'
+prune_range_pin "$repo/agents/skills/execute-plan/worktree-first.md" 'evaluated per the log'\''s shared `Coverage and removal rule` label'
+prune_range_pin "$repo/agents/skills/execute-plan/worktree-first.md" 'that receipt counting fully removed entries only'
+# Missing-clause probe, the family's own warning path run in this shell so fail is observed directly:
+# a scratch file lacking the probed span must draw exactly one PIN WARN line while fail stays untouched,
+# and the probe's warn never enters the family summary (PRUNE_RANGE_MISSING is restored). A probe that
+# does not warn is a broken warner, a suite defect, hence the PIN FAIL (machinery selftest, never clause content).
+prune_range_probe_file="$(mktemp "${TMPDIR:-/tmp}/prune-range-probe.XXXXXX")"
+prune_range_probe_out="$(mktemp "${TMPDIR:-/tmp}/prune-range-probe-out.XXXXXX")"
+printf '%s\n' 'unrelated text only' > "$prune_range_probe_file"
+prune_range_missing_saved="$PRUNE_RANGE_MISSING"; prune_range_fail_before="$fail"
+prune_range_pin "$prune_range_probe_file" 'clause deliberately absent from the probe file' > "$prune_range_probe_out"
+PRUNE_RANGE_MISSING="$prune_range_missing_saved"
+if [ "$(grep -c '^PIN WARN: prune-range pin: clause deliberately absent from the probe file' "$prune_range_probe_out" | tr -d ' ')" -ne 1 ] || [ "$fail" != "$prune_range_fail_before" ]; then
+  echo "PIN FAIL: prune-range pins selftest: missing-clause probe did not warn exactly once with fail untouched"; fail=1
+fi
+rm -f "$prune_range_probe_file" "$prune_range_probe_out"
+if [ -z "$PRUNE_RANGE_MISSING" ]; then
+  echo "prune-range pins: all hold"
+else
+  echo "prune-range pins: first missing clause: $PRUNE_RANGE_MISSING"
+fi
 
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
 

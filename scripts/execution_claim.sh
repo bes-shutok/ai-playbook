@@ -101,6 +101,7 @@ CLAIM_PATH=""
 # State machine results (set by acquire_claim)
 CREATED_HERE=0
 OWN_CLAIM_HOOK=""
+CONVERSION_DONE=0
 # Per-mode pre-takeover gate: when set, it runs inside acquire_claim after
 # the fresh-foreign refusal and before the stale takeover (take mode's
 # branch-occupant check lives here, so a stale foreign claim with an
@@ -115,10 +116,7 @@ PRE_TAKEOVER_HOOK=""
 # is attempted until TAKE_OK; the WT_PRE_REGISTERED witness (captured
 # before the add) scopes the removal to worktrees this invocation's own
 # add may have brought into existence, and the BRANCH_PRE_EXISTED witness
-# scopes the rollback to branches absent just before the add: the cleanup
-# CAN be reached with a pre-registered path (the add fails over the
-# occupied path and the refusal exits), and the witness gates, not the
-# arm point alone, keep each half off that pre-existing occupant.
+# scopes the rollback to branches absent just before the add.
 TAKE_GATE=0
 TAKE_OK=0
 WT_AT_RISK=0
@@ -234,7 +232,7 @@ cleanup_fresh_claim() {
   # answers no OUTCOME line and is classified tool error by the contract's
   # no-final-line rule.
   if (( TAKE_GATE && ! TAKE_OK )); then
-    if (( CREATED_HERE && ! ARM3_RESUME )) \
+    if (( CREATED_HERE )) \
       && [[ -e "$CLAIM_PATH" ]] \
       && [[ "$(claim_field "$CLAIM_PATH" session)" == "$SESSION" ]]; then
       rm -f "$CLAIM_PATH"
@@ -254,10 +252,16 @@ cleanup_fresh_claim() {
     fi
   fi
 }
-trap cleanup_fresh_claim EXIT
-trap 'cleanup_fresh_claim; exit 130' INT
-trap 'cleanup_fresh_claim; exit 143' TERM
-
+run_exit_cleanup() {
+  # The combined exit-path cleanup: gateway-owned lock release first (a
+  # handled exit never strands the conversion locks), then the atomic-take
+  # claim/worktree cleanup.
+  gateway_cleanup_trap
+  cleanup_fresh_claim
+}
+trap run_exit_cleanup EXIT
+trap 'run_exit_cleanup; exit 130' INT
+trap 'run_exit_cleanup; exit 143' TERM
 iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
@@ -506,6 +510,195 @@ refuse_fresh_foreign_claim() {
   die_fail
 }
 
+# --- Dead-run conversion: lock roots, facts resolution, discovery ---------- #
+
+os_account_home() {
+  # The OS account record's home directory, the lock roots' derivation
+  # source (the plan Terms: the gateway derives both lock roots from the OS
+  # account record and clears caller HOME and lock variables, so a poisoned
+  # caller environment cannot select the root). The trusted lock-root
+  # resolver seam: EXECUTION_CLAIM_LOCK_HOME overrides the resolved home for
+  # the test harness only — the same same-account trust class as the
+  # session channel (it is not an authentication boundary); production
+  # callers never set it, and it sits outside the cleared HOME/DONE_LOCK_*/
+  # MERGE_LOCK_* namespaces.
+  if [[ -n "${EXECUTION_CLAIM_LOCK_HOME:-}" ]]; then
+    printf '%s\n' "$EXECUTION_CLAIM_LOCK_HOME"
+    return 0
+  fi
+  "$PYTHON" -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)'
+}
+
+facts_tmp_dir_for() {
+  # The worktree's facts-resolved tmp_dir (the Run manifest term: resolve
+  # {tmp_dir} from the facts document in the specific registered worktree
+  # being inspected; missing or unreadable facts refuse discovery; never
+  # substitute docs/tmp). Prints the directory with any trailing slash
+  # stripped; a relative value resolves against the worktree root. Returns
+  # 1 when discovery is refused.
+  local wt="$1" facts value
+  facts="$wt/.ai-playbook/facts.md"
+  [[ -r "$facts" ]] || return 1
+  value="$(sed -n -E "s/^[[:space:]]*tmp_dir[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" "$facts" 2>/dev/null | head -n 1)" || return 1
+  [[ -n "$value" ]] || return 1
+  value="${value%/}"
+  if [[ "$value" == /* ]]; then
+    :
+  else
+    value="$wt/$value"
+  fi
+  printf '%s\n' "$value"
+}
+
+manifest_path_for() {
+  # The canonical run-manifest path for a worktree and plan slug; returns 1
+  # when the worktree's facts refuse discovery.
+  local wt="$1" slug="$2" tmp_dir
+  tmp_dir="$(facts_tmp_dir_for "$wt")" || return 1
+  printf '%s\n' "$tmp_dir/execute-plan/$slug/manifest.md"
+}
+
+scan_registered_manifest() {
+  # The stale-preservation discovery (the Manifest identity term: stale
+  # take and sweep preserve a claim whenever either supported manifest form
+  # remains at its exact registered-worktree path; multiple matches or
+  # missing facts refuse unchanged). Emits one tab-separated verdict line:
+  #   found<tab><manifest-path><tab><worktree-path>  exactly one registered
+  #                  worktree carries a non-symlink manifest file at the
+  #                  exact facts-resolved path (form recognition is the
+  #                  classification helper's job; this scan's preservation
+  #                  predicate is file presence)
+  #   multiple      two or more registered worktrees carry one (ambiguous)
+  #   none          no manifest file exists at any resolvable path
+  #   inconclusive  a manifest path holds a symlink (never followed)
+  # A worktree whose facts refuse discovery makes the scan inconclusive
+  # (the Terms: missing facts refuse unchanged — the claim is preserved,
+  # never taken over or swept, because a manifest could hide behind the
+  # unreadable facts). No default-path fallback exists.
+  local slug="$1" line cur manifest count=0 found_mf="" found_wt=""
+  while IFS= read -r line; do
+    cur="${line#worktree }"
+    if manifest="$(manifest_path_for "$cur" "$slug")"; then
+      if [[ -L "$manifest" ]]; then
+        printf 'inconclusive\n'
+        return 0
+      fi
+      if [[ -f "$manifest" ]]; then
+        count=$((count + 1))
+        found_mf="$manifest"
+        found_wt="$cur"
+        if (( count > 1 )); then
+          printf 'multiple\n'
+          return 0
+        fi
+      fi
+    else
+      printf 'inconclusive\n'
+      return 0
+    fi
+  done < <(git -C "$ANCHOR" worktree list --porcelain 2>/dev/null | grep '^worktree ')
+  if (( count == 1 )); then
+    printf 'found\t%s\t%s\n' "$found_mf" "$found_wt"
+  else
+    printf 'none\n'
+  fi
+  return 0
+}
+
+worktree_registered_branch() {
+  # The attached branch of the registered worktree at the given path
+  # (physical-normalized comparison against the porcelain entries); empty
+  # output when the path is not a registered worktree or is detached. The
+  # verdict resolves per entry: the branch/detached lines follow their own
+  # worktree line, so the match prints and returns immediately.
+  local target="$1" cur="" line target_norm entry_norm=""
+  target_norm="$(norm_path "$target")"
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)
+        cur="${line#worktree }"
+        entry_norm="$(norm_path "$cur")"
+        ;;
+      "branch refs/heads/"*)
+        if [[ "$entry_norm" == "$target_norm" ]]; then
+          printf '%s\n' "${line#branch refs/heads/}"
+          return 0
+        fi
+        ;;
+      "detached")
+        if [[ "$entry_norm" == "$target_norm" ]]; then
+          return 0
+        fi
+        ;;
+    esac
+  done < <(git -C "$ANCHOR" worktree list --porcelain 2>/dev/null)
+  return 0
+}
+
+# --- Dead-run claim conversion: manifest identity classification (pure) ---
+# resume_manifest_identity MANIFEST CLAIM PLAN_OPERAND
+# Emits one classification line on stdout and returns 0 when the manifest's
+# owner and plan match the claim's owner and the exact plan operand per the
+# plan Terms' three supported identity forms:
+#   canonical: manifest session_id: + exact plan_path:
+#   legacy-full: manifest Session: + Plan:
+#   legacy-session: manifest session_id: alone, claim supplies exact plan:
+# Returns 1 (named reason on stderr) on unreadable manifest, symlinked
+# manifest, unrecognized form, or owner/plan mismatch. Never mutates either
+# file; a symlinked manifest is a refusal, never followed.
+resume_manifest_identity() {
+  local manifest="$1" claim="$2" plan_operand="$3"
+  if [[ -L "$manifest" ]]; then
+    echo "resume-evidence: manifest is a symlink: $manifest" >&2
+    return 1
+  fi
+  if [[ ! -r "$manifest" ]]; then
+    echo "resume-evidence: manifest unreadable: $manifest" >&2
+    return 1
+  fi
+  local claim_owner claim_plan
+  claim_owner="$(claim_field "$claim" session)" || return 1
+  claim_plan="$(claim_field "$claim" plan)" || return 1
+  local parsed
+  parsed="$(MANIFEST="$manifest" python3 - <<'PYPARSE'
+import os, re, sys
+path = os.environ["MANIFEST"]
+text = open(path, encoding="utf-8", errors="replace").read()
+def field(name):
+    m = re.search(rf"^{name}:(.*)$", text, re.M)
+    return m.group(1).strip() if m else None
+sid, plan_path = field("session_id"), field("plan_path")
+legacy_session, legacy_plan = field("Session"), field("Plan")
+run_worktree, run_branch = field("run_worktree"), field("run_branch")
+if sid and plan_path:
+    form, owner, plan = "canonical", sid, plan_path
+elif legacy_session and legacy_plan:
+    form, owner, plan = "legacy-full", legacy_session, legacy_plan
+elif sid:
+    form, owner, plan = "legacy-session", sid, None
+else:
+    sys.exit(1)
+print(f"{form}\t{owner}\t{plan or ''}\t{run_worktree or ''}\t{run_branch or ''}")
+PYPARSE
+)" || {
+    echo "resume-evidence: manifest identity unrecognized: $manifest" >&2
+    return 1
+  }
+  local form owner plan run_worktree run_branch
+  IFS=$'\t' read -r form owner plan run_worktree run_branch <<<"$parsed"
+  [[ -z "$plan" ]] && plan="$claim_plan"
+  if [[ "$owner" != "$claim_owner" ]]; then
+    echo "resume-evidence: manifest owner $owner != claim owner $claim_owner" >&2
+    return 1
+  fi
+  if [[ "$plan" != "$plan_operand" ]]; then
+    echo "resume-evidence: manifest plan $plan != operand $plan_operand" >&2
+    return 1
+  fi
+  echo "identity=$form owner=$owner plan=$plan run_worktree=${run_worktree:--} run_branch=${run_branch:--}"
+  return 0
+}
+
 takeover_stale_claim() {
   # Re-read the claim immediately before the unlink and unlink it only
   # while it still names the same foreign session with a stale updated
@@ -539,25 +732,703 @@ takeover_stale_claim() {
   return 0
 }
 
-resume_evidence_matches() {
-  # Arm 3 (plan 2026-10-10-coordination-single-writer-ttl, Task 2): a
-  # restored worktree whose state verifies as the same run resuming takes
-  # over or re-derives its claim instead of colliding with the fresh-foreign
-  # refusal. Evidence shape: receipt-to-row - the run worktree's session
-  # manifest row (docs/tmp/execute-plan/<slug>/manifest.md) names the foreign
-  # claim's holder session as its Session and this invocation's plan operand
-  # as its Plan; the manifest is the durable receipt the pre-restart run
-  # wrote, and no process enumeration is consulted. Verification failure
-  # defaults to the refusal (the caller falls through to
-  # refuse_fresh_foreign_claim).
-  local holder="$1" wt manifest
-  [[ -n "$BRANCH" && -n "$SLUG" && -n "$WT_PARENT" ]] || return 1
+# --- Dead-run conversion: gateway-owned locks ------------------------------ #
+
+GATEWAY_DONE_LOCK_DIR=""
+GATEWAY_DONE_LOCK_TOKEN=""
+GATEWAY_MERGE_LOCK_DIR=""
+GATEWAY_MERGE_LOCK_TOKEN=""
+GATEWAY_TMP=""
+
+gateway_lock_env_prefix() {
+  # The env prefix for every lock-helper invocation: the roots derive from
+  # the OS account record (or the trusted harness seam) and the caller's
+  # HOME and lock variables are cleared, so a poisoned caller environment
+  # can neither select the root nor appear as a verified hold. The
+  # holder-pin variables mark the hold as deliberately pinned to the live
+  # gateway PID (never a command-substitution parent: the helper is invoked
+  # directly from the gateway shell, with output redirected to files).
+  local root
+  root="$(os_account_home)" || return 1
+  [[ -n "$root" ]] || return 1
+  GATEWAY_LOCK_ENV=(
+    env -u HOME -u DONE_LOCK_DIR -u DONE_LOCK_TOKEN -u MERGE_LOCK_DIR
+    -u MERGE_LOCK_TOKEN -u DONE_LOCK_ROOT -u MERGE_LOCK_ROOT
+    -u DONE_LOCK_HOLDER_PID -u MERGE_LOCK_HOLDER_PID
+    -u DONE_LOCK_HOLD_PIN -u MERGE_LOCK_HOLD_PIN
+    "DONE_LOCK_ROOT=$root/.ai-playbook/locks/done"
+    "MERGE_LOCK_ROOT=$root/.ai-playbook/locks/merge"
+    "DONE_LOCK_HOLDER_PID=$$" "DONE_LOCK_HOLD_PIN=1"
+    "MERGE_LOCK_HOLDER_PID=$$" "MERGE_LOCK_HOLD_PIN=1"
+  )
+  return 0
+}
+
+gateway_lock_helper() {
+  # The lock helper invocation form: bash done-lock.sh, executed directly
+  # (never inside a command substitution), stdout to $1, stderr to $2, with
+  # the gateway's lock env prefix. The caller supplies the working
+  # directory (the per-worktree done lock keys on the cwd's toplevel).
+  local out="$1" errfile="$2"; shift 2
+  "${GATEWAY_LOCK_ENV[@]}" bash "$SCRIPT_DIR/done-lock.sh" "$@" >"$out" 2>"$errfile"
+}
+
+gateway_parse_exports() {
+  # Parse one acquire output file for the helper's two export lines and
+  # set the GATEWAY_-prefixed variables from the helper's eval-safe %q
+  # form. $2 selects the pair: "done" (DONE_LOCK_DIR/TOKEN) or "merge"
+  # (MERGE_LOCK_DIR/TOKEN). Returns 1 on any missing line.
+  local file="$1" kind="$2" dir_var tok_var line
+  if [[ "$kind" == "done" ]]; then
+    dir_var=DONE_LOCK_DIR; tok_var=DONE_LOCK_TOKEN
+  else
+    dir_var=MERGE_LOCK_DIR; tok_var=MERGE_LOCK_TOKEN
+  fi
+  local dir_line tok_line
+  dir_line="$(grep -m1 "^export ${dir_var}=" "$file" 2>/dev/null)" || return 1
+  tok_line="$(grep -m1 "^export ${tok_var}=" "$file" 2>/dev/null)" || return 1
+  eval "GATEWAY_${dir_var}=${dir_line#export ${dir_var}=}"
+  eval "GATEWAY_${tok_var}=${tok_line#export ${tok_var}=}"
+  return 0
+}
+
+gateway_meta_field() {
+  sed -n "s/^$2=//p" "$1/meta.env" 2>/dev/null | head -n 1
+}
+
+gateway_verify_done_lock_meta() {
+  # Verify the acquired done-lock records: our pinned holder PID, our
+  # token, and the target worktree as the repo root (the Terms: verify both
+  # tokens and paths before provider invocation). Any mismatch is a
+  # refuse-with-release, never a proceed.
+  local wt="$1" holder token repo_root
+  [[ -r "$GATEWAY_DONE_LOCK_DIR/meta.env" ]] || { refuse "gateway lock: done-lock meta unreadable: $GATEWAY_DONE_LOCK_DIR/meta.env"; return 1; }
+  holder="$(gateway_meta_field "$GATEWAY_DONE_LOCK_DIR" holder_pid)"
+  token="$(gateway_meta_field "$GATEWAY_DONE_LOCK_DIR" lock_token)"
+  repo_root="$(gateway_meta_field "$GATEWAY_DONE_LOCK_DIR" repo_root)"
+  if [[ "$holder" != "$$" ]]; then
+    refuse "gateway lock: done-lock holder_pid record is $holder, want the gateway pid $$"
+    return 1
+  fi
+  if [[ "$token" != "$GATEWAY_DONE_LOCK_TOKEN" ]]; then
+    refuse "gateway lock: done-lock token record does not match the acquired token"
+    return 1
+  fi
+  if [[ -n "$repo_root" && "$(norm_path "$repo_root")" != "$(norm_path "$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null)")" ]]; then
+    refuse "gateway lock: done-lock repo_root record is $repo_root, want the target worktree $wt"
+    return 1
+  fi
+  return 0
+}
+
+gateway_release_all() {
+  # Release every owned lock in reverse acquisition order (merge, then
+  # done); release runs directly from the gateway shell with the acquired
+  # exports re-exported, never through a command substitution. A failed
+  # release is retried once; a still-stranded hold is named loudly (a
+  # stranded hold blocks the next conversion's merge-acquire, which is the
+  # designed visibility).
+  local rc=0
+  if [[ -n "$GATEWAY_MERGE_LOCK_DIR" ]]; then
+    local mdir="$GATEWAY_MERGE_LOCK_DIR" mtok="$GATEWAY_MERGE_LOCK_TOKEN"
+    GATEWAY_MERGE_LOCK_DIR=""
+    GATEWAY_MERGE_LOCK_TOKEN=""
+    if ! "${GATEWAY_LOCK_ENV[@]}" MERGE_LOCK_DIR="$mdir" MERGE_LOCK_TOKEN="$mtok" \
+        bash "$SCRIPT_DIR/done-lock.sh" merge-release >/dev/null 2>&1; then
+      if ! "${GATEWAY_LOCK_ENV[@]}" MERGE_LOCK_DIR="$mdir" MERGE_LOCK_TOKEN="$mtok" \
+          bash "$SCRIPT_DIR/done-lock.sh" merge-release >/dev/null 2>&1; then
+        refuse "gateway lock: MERGE_LOCK_DIR=$mdir release failed twice; stranded hold label execution-claim-conversion"
+        rc=1
+      fi
+    fi
+  fi
+  if [[ -n "$GATEWAY_DONE_LOCK_DIR" ]]; then
+    local ddir="$GATEWAY_DONE_LOCK_DIR" dtok="$GATEWAY_DONE_LOCK_TOKEN"
+    GATEWAY_DONE_LOCK_DIR=""
+    GATEWAY_DONE_LOCK_TOKEN=""
+    if ! "${GATEWAY_LOCK_ENV[@]}" DONE_LOCK_DIR="$ddir" DONE_LOCK_TOKEN="$dtok" \
+        bash "$SCRIPT_DIR/done-lock.sh" release >/dev/null 2>&1; then
+      if ! "${GATEWAY_LOCK_ENV[@]}" DONE_LOCK_DIR="$ddir" DONE_LOCK_TOKEN="$dtok" \
+          bash "$SCRIPT_DIR/done-lock.sh" release >/dev/null 2>&1; then
+        refuse "gateway lock: DONE_LOCK_DIR=$ddir release failed twice; stranded hold label execution-claim-conversion"
+        rc=1
+      fi
+    fi
+  fi
+  return "$rc"
+}
+
+gateway_cleanup_trap() {
+  # The exit-path arm for gateway-owned lock state: every handled exit
+  # releases through gateway_release_all; abrupt death leaves the locks for
+  # the verified-dead-holder recovery. A signal landing between an acquire
+  # and its export parse is covered by the recovery arm below: the acquire
+  # output files in the scratch dir carry the exports, so the trap adopts
+  # them and releases the just-acquired holds (the handled-interruption
+  # contract: only the gateway's own tokens are ever released).
+  if [[ -n "$GATEWAY_TMP" && -d "$GATEWAY_TMP" ]]; then
+    if [[ -z "$GATEWAY_DONE_LOCK_DIR" && -f "$GATEWAY_TMP/done-acquire.out" ]] \
+        && grep -q '^export DONE_LOCK_DIR=' "$GATEWAY_TMP/done-acquire.out" 2>/dev/null \
+        && grep -q '^export DONE_LOCK_TOKEN=' "$GATEWAY_TMP/done-acquire.out" 2>/dev/null; then
+      gateway_parse_exports "$GATEWAY_TMP/done-acquire.out" done || true
+    fi
+    if [[ -z "$GATEWAY_MERGE_LOCK_DIR" && -f "$GATEWAY_TMP/merge-acquire.out" ]] \
+        && grep -q '^export MERGE_LOCK_DIR=' "$GATEWAY_TMP/merge-acquire.out" 2>/dev/null \
+        && grep -q '^export MERGE_LOCK_TOKEN=' "$GATEWAY_TMP/merge-acquire.out" 2>/dev/null; then
+      gateway_parse_exports "$GATEWAY_TMP/merge-acquire.out" merge || true
+    fi
+    local tmp_claim="$CLAIM_PATH.conversion.$$"
+    [[ -e "$tmp_claim" ]] && rm -f "$tmp_claim"
+  fi
+  if [[ -n "$GATEWAY_DONE_LOCK_DIR" || -n "$GATEWAY_MERGE_LOCK_DIR" ]]; then
+    gateway_release_all || true
+  fi
+  if [[ -n "$GATEWAY_TMP" && -d "$GATEWAY_TMP" ]]; then
+    rm -rf "$GATEWAY_TMP"
+  fi
+}
+
+merge_lock_hold_or_reuse() {
+  # The five-command merge-lock discipline (the plan Task 1 box: all five
+  # claim commands acquire the repository merge-lock before claim access,
+  # pinned to the command PID; reuse only this session's verified token,
+  # else try once and refuse with the holder). When this invocation already
+  # holds a verified merge lock (the conversion arm acquired it after its
+  # done-lock), the hold is reused; otherwise one merge-acquire runs, a
+  # refusal names the holder and refuses (OUTCOME: fail) with nothing
+  # mutated. Release runs through gateway_release_all on every path (the
+  # exit trap is the backstop); the caller releases when its claim access
+  # ends. Requires gateway_lock_env_prefix to have run.
+  if [[ -n "$GATEWAY_MERGE_LOCK_DIR" ]]; then
+    local holder token
+    holder="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" holder_pid)"
+    token="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" lock_token)"
+    if [[ "$holder" == "$$" && "$token" == "$GATEWAY_MERGE_LOCK_TOKEN" ]]; then
+      return 0
+    fi
+    refuse "gateway lock: the recorded merge-lock hold does not verify as this command's; refusing"
+    return 1
+  fi
+  local out="$GATEWAY_TMP/merge-acquire.out" err="$GATEWAY_TMP/merge-acquire.err"
+  if ! gateway_lock_helper "$out" "$err" merge-acquire --label "execution-claim pid=$$"; then
+    refuse "claim access refused: the repository merge-lock is held (one-shot contention refusal)"
+    sed 's/^/  /' "$err" >&2 2>/dev/null || true
+    return 1
+  fi
+  if ! gateway_parse_exports "$out" merge; then
+    refuse "gateway lock: merge-lock acquire output unparseable at $out"
+    return 1
+  fi
+  local holder token
+  holder="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" holder_pid)"
+  token="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" lock_token)"
+  if [[ "$holder" != "$$" || "$token" != "$GATEWAY_MERGE_LOCK_TOKEN" ]]; then
+    refuse "gateway lock: the acquired merge-lock records do not verify (holder $holder, want $$)"
+    return 1
+  fi
+  return 0
+}
+
+verify_completed_run_boundary() {
+  # The completed-run boundary over the stable evidence tuple (the plan
+  # Terms), with the bounded legacy binding applied to pre-tuple artifacts.
+  # Refuses (returns 1, findings on stderr) on any missing, duplicate,
+  # incomplete, conflicting, unreferenced, or ambiguous evidence; never
+  # rewrites any byte.
+  #   $1 manifest path   $2 run worktree   $3 primary checkout
+  #   $4 prior owner     $5 plan slug      $6 run tmp dir
+  #   $7 plan operand path
+  local manifest="$1" wt="$2" primary="$3" prior_owner="$4" slug="$5" \
+    tmp_dir="$6" plan_operand="$7"
+  local run_dir="$tmp_dir/execute-plan/$slug"
+  [[ -d "$run_dir" ]] || {
+    refuse "boundary: run directory missing: $run_dir"; return 1; }
+  local state="$run_dir/runtime_state.json"
+  [[ -f "$state" && ! -L "$state" ]] || {
+    refuse "boundary: runtime state missing or symlinked: $state"; return 1; }
+  manifest_run_session_id="$(sed -n 's/^run_session_id:[[:space:]]*//p' "$manifest" | head -n 1)"
+  manifest_session_id="$(sed -n 's/^session_id:[[:space:]]*//p' "$manifest" | head -n 1)"
+  MANIFEST_RUN_SESSION_ID="$manifest_run_session_id" MANIFEST_SESSION_ID="$manifest_session_id" \
+  "$PYTHON" - "$state" "$slug" "$prior_owner" "$manifest" "$wt" "$primary" \
+    "$plan_operand" "$tmp_dir" <<'PYBOUNDARY'
+import hashlib, json, os, re, sys
+
+state_path, slug, prior_owner, manifest_path, wt, primary, plan_operand, tmp_dir = sys.argv[1:9]
+manifest_run_session_id = os.environ.get("MANIFEST_RUN_SESSION_ID") or None
+manifest_session_id = os.environ.get("MANIFEST_SESSION_ID") or None
+
+def refuse(msg):
+    print(f"boundary: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    with open(state_path, encoding="utf-8") as fh:
+        state = json.load(fh)
+except (OSError, ValueError) as exc:
+    refuse(f"runtime state unparseable: {exc}")
+if not isinstance(state, dict):
+    refuse("runtime state is not a JSON object")
+if state.get("plan_slug") != slug:
+    refuse(f"runtime state plan_slug {state.get('plan_slug')!r} != slug {slug!r}")
+if state.get("workflow_state") != "terminal":
+    refuse(f"runtime state workflow_state {state.get('workflow_state')!r} is not terminal")
+tasks = state.get("tasks")
+if not isinstance(tasks, dict) or not tasks:
+    refuse("runtime state carries no completed task map")
+sanctioned = ("complete", "checkpointed", "deferred")
+bad = {k: v for k, v in tasks.items()
+       if not (isinstance(v, str) and v in sanctioned)}
+if bad:
+    refuse(f"tasks not in a sanctioned terminal state {list(sanctioned)}: {sorted(bad)}")
+receipt = state.get("pre_archive_receipt")
+if not isinstance(receipt, dict):
+    refuse("pre_archive_receipt missing or not an object")
+declared = receipt.get("declared_paths")
+if not isinstance(declared, list) or not declared or \
+        not all(isinstance(p, str) and p for p in declared):
+    refuse("receipt declared_paths must be a non-empty list of paths")
+digest = receipt.get("plan_digest")
+if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    refuse("receipt plan_digest must be a 64-hex sha256")
+evidence = receipt.get("evidence")
+if not isinstance(evidence, list) or not evidence or \
+        not all(isinstance(p, str) and p for p in evidence):
+    refuse("receipt evidence must be a non-empty list of record paths")
+if not isinstance(receipt.get("recorded_at"), str) or not receipt["recorded_at"]:
+    refuse("receipt recorded_at must be present")
+
+# Stable tuple: run_session_id is the IMMUTABLE origin identity — it binds
+# the run's artifacts to each other and carries through conversions
+# unchanged (an R-to-S conversion legitimately differs from the current
+# prior owner); the mutable session_id binds the owner and is verified by
+# the identity classification. The split-owner shape (an origin equal to
+# the mutable owner yet different from the verified prior owner) is
+# unverifiable from here and fails closed.
+for t in (manifest_run_session_id, state.get("run_session_id")):
+    if isinstance(t, str) and t and manifest_session_id and t == manifest_session_id and t != prior_owner:
+        refuse(f"stable tuple origin {t!r} equals the mutable owner but not the prior owner {prior_owner!r}")
+
+def readable(path):
+    for base in (wt, primary, None):
+        if base is None:
+            if not os.path.isabs(path):
+                continue
+            candidate = path
+        else:
+            candidate = os.path.join(base, path)
+        if os.path.isfile(candidate) and not os.path.islink(candidate):
+            return candidate
+    return None
+
+# Plan digest: the active plan bytes before the move; when the plan file
+# has moved (archived), the receipt's archived copy carries the same bytes.
+actual = None
+for source in (plan_operand, receipt.get("archived_plan_path")):
+    if isinstance(source, str) and source:
+        found = readable(source)
+        if found:
+            with open(found, "rb") as fh:
+                actual = hashlib.sha256(fh.read()).hexdigest()
+            break
+if actual is None:
+    refuse("plan digest unverifiable: neither the plan operand nor the archived copy is readable")
+if actual != digest:
+    refuse(f"receipt plan_digest {digest} does not hash the active plan bytes ({actual})")
+
+for record in evidence:
+    if readable(record) is None:
+        refuse(f"evidence record not found: {record}")
+
+# One parent-owned boundary record per completed task, and each task's
+# implement log at its unique contract path.
+try:
+    with open(manifest_path, encoding="utf-8", errors="replace") as fh:
+        manifest_text = fh.read()
+except OSError as exc:
+    refuse(f"manifest unreadable during boundary check: {exc}")
+boundary_rows = len(re.findall(r"^task_boundary:", manifest_text, re.M))
+if boundary_rows < len(tasks):
+    refuse(f"manifest carries {boundary_rows} task_boundary rows, want at least {len(tasks)}")
+task_tokens = re.findall(r"^task_boundary:.*?[Tt]ask[=_ ](\w+)", manifest_text, re.M)
+for task_id in tasks:
+    if task_tokens.count(task_id) != 1:
+        refuse(f"task {task_id} has {task_tokens.count(task_id)} boundary rows naming it, want exactly one parent-owned record")
+for task_id in tasks:
+    rel = f"execute-plan/{slug}/task-{task_id}-implement.log.md"
+    if readable(os.path.join(tmp_dir, rel)) is None:
+        refuse(f"task {task_id} implement log missing at its contract path: {rel}")
+
+# Phase 3 exit binding: the run's exit report (terminal_receipt) or a
+# recorded residual policy must exist — a terminal-shaped runtime state
+# without either never passed the review boundary.
+terminal_receipt = state.get("terminal_receipt")
+residual = re.search(r"^residual_policy:[^\s]", manifest_text, re.M)
+if not (isinstance(terminal_receipt, dict) and terminal_receipt) and not residual:
+    refuse("no Phase 3 exit binding: runtime state carries no terminal_receipt and the manifest records no residual_policy")
+PYBOUNDARY
+}
+
+try_dead_run_conversion() {
+  # The dead-run claim conversion arm (plan 2026-10-21-dead-run-resume-
+  # claim-conversion): take mode only, invoked from acquire_claim when a
+  # foreign claim exists. Verdicts:
+  #   0 and CONVERSION_DONE=1  converted: the claim was atomically replaced
+  #                            and the manifest canonicalized under both
+  #                            gateway-owned locks; the caller reports
+  #                            success and returns before the occupant gate
+  #                            and the worktree add
+  #   2                        no conversion context (no registered target
+  #                            at the take path, or no manifest at its
+  #                            facts-resolved path): the caller falls
+  #                            through to the historical fresh-refusal /
+  #                            takeover flow
+  #   3                        the claim changed under the locks; the
+  #                            caller re-evaluates from the loop top
+  #   1 (via die_fail)         refused: the evidence lines name the reason;
+  #                            the claim and manifest bytes are untouched
+  #                            and every owned lock is released
+  local holder="$1" wt manifest rc
+  CONVERSION_DONE=0
+  [[ -n "$BRANCH" && -n "$WT_PARENT" && -n "$SLUG" ]] || return 2
   wt="$WT_PARENT/$BRANCH"
-  [[ -d "$wt" ]] || return 1
-  manifest="$wt/docs/tmp/execute-plan/$SLUG/manifest.md"
-  [[ -f "$manifest" ]] || return 1
-  grep -q "^Session: ${holder}\$" "$manifest" 2>/dev/null || return 1
-  grep -q "^Plan: .*${PLAN_ARG##*/}" "$manifest" 2>/dev/null || return 1
+
+  # The preservation scan runs BEFORE any fall-through: a surviving
+  # manifest anywhere in the registered worktrees protects the claim, so a
+  # take whose target is not the manifest's worktree (branch switched,
+  # unregistered target path) refuses with the claim preserved instead of
+  # reaching the historical unlink takeover. Only a scan that resolves
+  # every registered worktree and finds no manifest returns no-context —
+  # and a found manifest at the take path is itself the registration
+  # witness (the scan walks registered worktrees only).
+  local scan verdict scan_mf scan_wt
+  scan="$(scan_registered_manifest "$SLUG")"
+  verdict="${scan%%$'\t'*}"
+  case "$verdict" in
+    multiple)
+      refuse "conversion refused: run manifests for slug $SLUG exist in more than one registered worktree (ambiguous)"
+      refuse "  ambiguity preserves the claim for operator reconciliation"
+      die_fail
+      ;;
+    inconclusive)
+      refuse "conversion refused: the registered-manifest scan is inconclusive (facts refuse discovery, or a symlinked manifest path)"
+      refuse "  the claim is preserved for operator reconciliation"
+      die_fail
+      ;;
+    found)
+      IFS=$'\t' read -r verdict scan_mf scan_wt <<<"$scan"
+      if [[ "$(norm_path "$scan_wt")" != "$(norm_path "$wt")" ]]; then
+        refuse "conversion refused: the run manifest is registered to another worktree: $scan_wt"
+        refuse "  conversion runs only through a take of the exact registered run worktree; the claim is preserved"
+        die_fail
+      fi
+      manifest="$scan_mf"
+      ;;
+    none)
+      return 2
+      ;;
+  esac
+
+  # Trusted session channel: the active ID must equal --session exactly,
+  # before any lock acquisition or mutation (empty or mismatched refuses).
+  # It sits behind the scan gate: a take with no conversion context falls
+  # through to the historical flow without consulting the channel.
+  local active
+  active="$("$PYTHON" "$SCRIPT_DIR/session_channel.py" 2>/dev/null || true)"
+  if [[ -z "$active" || "$active" != "$SESSION" ]]; then
+    refuse "conversion refused: the session channel's active id (${active:-empty}) does not equal --session $SESSION"
+    refuse "  the trusted session channel boundary refuses before lock acquisition or mutation"
+    die_fail
+  fi
+
+  # Attached exact registered target: a detached target refuses conversion
+  # (a detached entry cannot hold the manifest's recorded branch).
+  local registered_branch
+  registered_branch="$(worktree_registered_branch "$wt")"
+  if [[ -z "$registered_branch" ]]; then
+    refuse "conversion refused: the registered target worktree is detached: $wt"
+    refuse "  every detached target refuses conversion unchanged; the claim is preserved"
+    die_fail
+  fi
+
+  if [[ -L "$manifest" ]]; then
+    refuse "conversion refused: the run manifest is a symlink: $manifest"
+    refuse "  symlinks are never followed; the claim and manifest are untouched"
+    die_fail
+  fi
+  if [[ ! -r "$manifest" ]]; then
+    refuse "conversion refused: the run manifest is unreadable: $manifest"
+    die_fail
+  fi
+
+  # Identity classification: manifest owner/plan against the claim and the
+  # exact plan operand (all three supported identity forms).
+  local identity_line form m_owner m_run_wt m_run_branch
+  if ! identity_line="$(resume_manifest_identity "$manifest" "$CLAIM_PATH" "$PLAN_ARG")"; then
+    refuse "conversion refused: the manifest identity does not verify against the claim and operand"
+    refuse "  mismatched or interrupted owner state refuses unchanged for operator reconciliation"
+    die_fail
+  fi
+  form="$(sed -n 's/^identity=\([^ ]*\).*/\1/p' <<<"$identity_line")"
+  m_run_wt="$(sed -n 's/.* run_worktree=\([^ ]*\).*/\1/p' <<<"$identity_line")"
+  m_run_branch="$(sed -n 's/.* run_branch=\([^ ]*\).*/\1/p' <<<"$identity_line")"
+  if [[ "$m_run_wt" != "-" && "$(norm_path "$m_run_wt")" != "$(norm_path "$wt")" ]]; then
+    refuse "conversion refused: the manifest records run_worktree $m_run_wt, want the attached target $wt"
+    die_fail
+  fi
+  if [[ "$m_run_branch" != "-" && "$m_run_branch" != "$registered_branch" ]]; then
+    refuse "conversion refused: the manifest records run_branch $m_run_branch, want the target's branch $registered_branch"
+    die_fail
+  fi
+
+  # Snapshot the claim bytes: the authoritative re-read under both locks
+  # must match them byte-for-byte before the replacement. The scratch dir
+  # and lock env come from the caller (acquire_claim created both).
+  [[ -n "$GATEWAY_TMP" && -d "$GATEWAY_TMP" ]] || die_tool "conversion: gateway scratch directory missing"
+  if ! cp "$CLAIM_PATH" "$GATEWAY_TMP/claim.before" 2>/dev/null; then
+    die_tool "conversion: claim snapshot failed at $CLAIM_PATH"
+  fi
+
+  # Lock roots from the OS account record; caller lock variables cleared.
+  if ! gateway_lock_env_prefix; then
+    die_tool "conversion: lock roots unresolvable from the OS account record"
+  fi
+
+  # Target done-lock, with the orphaned-holder recovery arm first: a
+  # verified-dead past-grace holder is released; live, ambiguous, unknown,
+  # and too-young holders refuse the conversion unchanged. The status word
+  # is the output's first line ("free" when free; the held shape is
+  # "done-lock: held (...)" naming the holder).
+  local status_out="$GATEWAY_TMP/status.out" status_err="$GATEWAY_TMP/status.err"
+  if ( cd "$wt" && gateway_lock_helper "$status_out" "$status_err" status ) && \
+      ! grep -q "^free$" "$status_out" 2>/dev/null; then
+    if ! ( cd "$wt" && gateway_lock_helper "$status_out" "$status_err" release-orphaned ); then
+      refuse "conversion refused: the target worktree holds a live or ambiguous done-lock that release-orphaned would not clear: $wt"
+      sed 's/^/  /' "$status_err" >&2 2>/dev/null || true
+        die_fail
+    fi
+  fi
+
+  local acq_out="$GATEWAY_TMP/done-acquire.out" acq_err="$GATEWAY_TMP/done-acquire.err"
+  if ! ( cd "$wt" && gateway_lock_helper "$acq_out" "$acq_err" acquire --label "execution-claim-conversion pid=$$" ); then
+    refuse "conversion refused: the target worktree's done-lock is held (acquire refused)"
+    sed 's/^/  /' "$acq_err" >&2 2>/dev/null || true
+    die_fail
+  fi
+  if ! gateway_parse_exports "$acq_out" done; then
+    sed 's/^/  acquire-stderr: /' "$acq_err" >&2 2>/dev/null || true
+    gateway_release_all || true
+    die_tool "conversion: done-lock acquire output unparseable at $acq_out"
+  fi
+  if ! gateway_verify_done_lock_meta "$wt"; then
+    gateway_release_all || true
+    die_fail
+  fi
+
+  # Repository merge-lock second (one-shot contention refusal naming the
+  # holder); both locks hold through provider lookup, replacement, and
+  # manifest refresh.
+  local macq_out="$GATEWAY_TMP/merge-acquire.out" macq_err="$GATEWAY_TMP/merge-acquire.err"
+  if ! gateway_lock_helper "$macq_out" "$macq_err" merge-acquire --label "execution-claim-conversion pid=$$"; then
+    refuse "conversion refused: the repository merge-lock is held (one-shot contention refusal)"
+    sed 's/^/  /' "$macq_err" >&2 2>/dev/null || true
+    gateway_release_all || true
+    die_fail
+  fi
+  if ! gateway_parse_exports "$macq_out" merge; then
+    gateway_release_all || true
+    die_tool "conversion: merge-lock acquire output unparseable at $macq_out"
+  fi
+  # The merge hold verifies like the done hold: our pinned PID and token,
+  # the repository as the recorded root (the Terms: verify both tokens and
+  # paths before provider invocation).
+  local m_holder m_token
+  m_holder="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" holder_pid)"
+  m_token="$(gateway_meta_field "$GATEWAY_MERGE_LOCK_DIR" lock_token)"
+  if [[ "$m_holder" != "$$" || "$m_token" != "$GATEWAY_MERGE_LOCK_TOKEN" ]]; then
+    refuse "gateway lock: merge-lock records do not verify (holder ${m_holder:-none}, want $$)"
+    gateway_release_all || true
+    die_fail
+  fi
+
+  # Session status provider: only a terminal prior owner proceeds; the
+  # provider's own contract (10s bound, stream caps, exact JSON) refuses
+  # everything else unchanged.
+  local prov_out="$GATEWAY_TMP/provider.out" prov_err="$GATEWAY_TMP/provider.err"
+  if ! "$PYTHON" "$SCRIPT_DIR/session_status.py" "$PRIMARY/.ai-playbook/facts.md" "$holder" \
+      >"$prov_out" 2>"$prov_err"; then
+    refuse "conversion refused: the session status provider did not return prior owner $holder terminal"
+    sed 's/^/  provider: /' "$prov_err" >&2 2>/dev/null || true
+    gateway_release_all || true
+    die_fail
+  fi
+  # Exit 0 names a matching live session in the closed vocabulary; only
+  # the terminal status proceeds (live, paused, and unresolved refuse).
+  # The JSON object is the output's first line (a final OUTCOME: line
+  # follows per the outcome contract).
+  local prov_status
+  prov_status="$(head -n 1 "$prov_out" | "$PYTHON" -c 'import json, sys; print(json.load(sys.stdin).get("status", ""))' 2>/dev/null)" \
+    || prov_status=""
+  if [[ "$prov_status" != "terminal" ]]; then
+    refuse "conversion refused: prior owner $holder is ${prov_status:-unresolved}, not terminal"
+    gateway_release_all || true
+    die_fail
+  fi
+
+  # Completed-run boundary over the stable evidence tuple.
+  if ! verify_completed_run_boundary "$manifest" "$wt" "$PRIMARY" "$holder" "$SLUG" \
+      "$(facts_tmp_dir_for "$wt")" "$PLAN_ARG"; then
+    gateway_release_all || true
+    die_fail
+  fi
+
+  # Authoritative re-read under both locks: owner or byte change refuses
+  # (nothing was mutated; the caller re-evaluates).
+  if ! cmp -s "$CLAIM_PATH" "$GATEWAY_TMP/claim.before"; then
+    gateway_release_all || true
+    refuse "conversion: the claim changed under the gateway locks"
+    return 3
+  fi
+  if [[ "$(claim_field "$CLAIM_PATH" session)" != "$holder" ]]; then
+    gateway_release_all || true
+    refuse "conversion: the claim's owner changed under the gateway locks"
+    return 3
+  fi
+  # The manifest is re-verified under both locks: a swap or rewrite between
+  # the pre-lock checks and the canonicalization refuses (fail closed).
+  if [[ -L "$manifest" || ! -r "$manifest" ]]; then
+    gateway_release_all || true
+    refuse "conversion: the run manifest changed identity under the gateway locks"
+    return 3
+  fi
+  if ! resume_manifest_identity "$manifest" "$CLAIM_PATH" "$PLAN_ARG" >/dev/null; then
+    gateway_release_all || true
+    refuse "conversion: the manifest identity no longer verifies under the gateway locks"
+    return 3
+  fi
+
+  # Replacement claim shape (the Terms): the resumer's session and the
+  # exact operand, the prior created stamp, a fresh updated stamp, and the
+  # prior branch/start-commit/base values; a recorded manifest conflict
+  # with any of them refuses before the replacement; missing optional
+  # fields are never synthesized.
+  local prior_created prior_branch prior_base prior_start
+  local m_start m_base_branch
+  prior_created="$(claim_field "$CLAIM_PATH" created)"
+  prior_branch="$(claim_field "$CLAIM_PATH" branch)"
+  prior_base="$(claim_field "$CLAIM_PATH" base)"
+  prior_start="$(claim_field "$CLAIM_PATH" start-commit)"
+  m_start="$(sed -n 's/^session_start_commit:[[:space:]]*//p' "$manifest" | head -n 1)"
+  m_base_branch="$(sed -n 's/^run_base:[[:space:]]*//p' "$manifest" | head -n 1 | sed 's/[[:space:]].*//')"
+  if [[ -n "$prior_branch" && "$m_run_branch" != "-" && "$m_run_branch" != "$prior_branch" ]]; then
+    gateway_release_all || true
+    refuse "conversion refused: manifest run_branch $m_run_branch conflicts with the claim's branch $prior_branch"
+    die_fail
+  fi
+  if [[ -n "$prior_start" && -n "$m_start" && "$m_start" != "$prior_start" ]]; then
+    gateway_release_all || true
+    refuse "conversion refused: manifest session_start_commit $m_start conflicts with the claim's start-commit $prior_start"
+    die_fail
+  fi
+  if [[ -n "$prior_base" && -n "$m_base_branch" && "$m_base_branch" != "$prior_base" ]]; then
+    gateway_release_all || true
+    refuse "conversion refused: manifest run_base branch $m_base_branch conflicts with the claim's base $prior_base"
+    die_fail
+  fi
+  local tmp_claim="$CLAIM_PATH.conversion.$$"
+  {
+    printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\n' \
+      "$SESSION" "$PLAN_ARG" "${prior_created:-$(iso_now)}" "$(iso_now)"
+    [[ -n "$prior_branch" ]] && printf 'branch: %s\n' "$prior_branch"
+    [[ -n "$prior_start" ]] && printf 'start-commit: %s\n' "$prior_start"
+    [[ -n "$prior_base" ]] && printf 'base: %s\n' "$prior_base"
+    true
+  } >"$tmp_claim"
+  # The atomic replacement: one rename over the verified prior claim, no
+  # unlink gap (a crash leaves either the old complete claim or the new).
+  if ! mv -f "$tmp_claim" "$CLAIM_PATH"; then
+    rm -f "$tmp_claim"
+    gateway_release_all || true
+    die_tool "conversion: claim replacement rename failed at $CLAIM_PATH"
+  fi
+
+  # Manifest canonicalization (the Canonicalized manifest term): the
+  # resumer, the exact operand, the registered target and its branch;
+  # legacy Session:/Plan: aliases removed; unrelated content preserved;
+  # written atomically. An interruption here leaves the claim naming the
+  # resumer and the manifest naming the prior owner: the next attempt
+  # refuses unchanged (no lineage is inferred, no automatic recovery).
+  MANIFEST="$manifest" NEW_SESSION="$SESSION" NEW_PLAN="$PLAN_ARG" \
+    NEW_WT="$wt" NEW_BRANCH="$registered_branch" PRIOR_OWNER="$holder" "$PYTHON" <<'PYCANON'
+import os, re, sys
+
+path = os.environ["MANIFEST"]
+with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+    lines = fh.read().splitlines()
+
+values = {
+    "session_id": os.environ["NEW_SESSION"],
+    "plan_path": os.environ["NEW_PLAN"],
+    "run_worktree": os.environ["NEW_WT"],
+    "run_branch": os.environ["NEW_BRANCH"],
+}
+prior_owner = os.environ["PRIOR_OWNER"]
+seen = set()
+out = []
+for line in lines:
+    if re.match(r"^(Session|Plan):", line):
+        continue  # legacy aliases removed on canonicalization
+    m = re.match(r"^(session_id|plan_path|run_worktree|run_branch):(.*)$", line)
+    if m:
+        key = m.group(1)
+        seen.add(key)
+        out.append(f"{key}: {values[key]}")
+    else:
+        out.append(line)
+missing = [k for k in ("session_id", "plan_path", "run_worktree", "run_branch") if k not in seen]
+if "run_session_id" not in seen and not any(
+    line.startswith("run_session_id:") for line in out
+):
+    # The stable identity materializes at conversion: the verified prior
+    # owner is the immutable origin identity (the Terms' recovery arm).
+    insert_at = 0
+    for line in out:
+        if line.startswith("#"):
+            insert_at += 1
+        else:
+            break
+    out.insert(insert_at, f"run_session_id: {prior_owner}")
+if missing:
+    insert_at = 0
+    for line in out:
+        if line.startswith("#"):
+            insert_at += 1
+        else:
+            break
+    for key in reversed(missing):
+        out.insert(insert_at, f"{key}: {values[key]}")
+tmp = path + ".canonicalize.tmp"
+with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
+    fh.write("\n".join(out) + "\n")
+os.replace(tmp, path)
+PYCANON
+  rc=$?
+  if (( rc != 0 )); then
+    gateway_release_all || true
+    die_tool "conversion: manifest canonicalization failed at $manifest"
+  fi
+
+  # Post-replacement verification, then the success report; the caller
+  # returns before the occupant refusal and the worktree add.
+  if [[ "$(claim_field "$CLAIM_PATH" session)" != "$SESSION" ]]; then
+    gateway_release_all || true
+    die_tool "conversion: the replaced claim does not read back under session $SESSION"
+  fi
+  evidence "conversion: claim $CLAIM_PATH transferred from prior owner $holder to $SESSION (identity form: $form)"
+  evidence "conversion: manifest canonicalized: $manifest"
+  gateway_release_all || true
+  CONVERSION_DONE=1
+  TAKE_OK=1
+  WT_PRE_REGISTERED=1
   return 0
 }
 
@@ -587,9 +1458,15 @@ acquire_claim() {
   # 0 the session holds its own live claim and CREATED_HERE says whether
   # this invocation created it. An own live claim is handed to
   # $OWN_CLAIM_HOOK (per-mode disposition) without re-creation.
-  local attempt=0 holder
+  local attempt=0 holder rc
   CREATED_HERE=0
-  ARM3_RESUME="${ARM3_RESUME:-0}"
+  # The lock env and scratch dir serve every claim-access path (the
+  # conversion arm and the merge-lock discipline both need them).
+  GATEWAY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-gateway.XXXXXX")"
+  if ! gateway_lock_env_prefix; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_tool "lock roots unresolvable from the OS account record"
+  fi
   while :; do
     claim_retry_gate attempt
     if [[ ! -e "$CLAIM_PATH" ]]; then
@@ -598,45 +1475,73 @@ acquire_claim() {
       # must still see the fresh claim as this invocation's own. The flag
       # clears again when a concurrent writer wins the noclobber create,
       # because the winner's claim is not ours to clean.
+      if ! merge_lock_hold_or_reuse; then
+        rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+        die_fail
+      fi
       CREATED_HERE=1
       if ! create_claim_noclobber "$CLAIM_PATH" "$SESSION" "$PLAN_ARG"; then
         CREATED_HERE=0
+        gateway_release_all || true
         continue  # a concurrent writer won the create; re-evaluate its claim
       fi
+      gateway_release_all || true
+      rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
       return 0
     fi
     holder="$(claim_session "$CLAIM_PATH")" \
       || die_tool "claim $CLAIM_PATH carries no session: line (unsupported record shape)"
     if [[ "$holder" == "$SESSION" ]]; then
+      if ! merge_lock_hold_or_reuse; then
+        rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+        die_fail
+      fi
       "$OWN_CLAIM_HOOK"
+      gateway_release_all || true
+      rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
       return 0
     fi
-    # Arm 3 runs beside the fresh-foreign refusal: a restored worktree whose
-    # state verifies as the same run resuming takes over the claim instead of
-    # colliding; verification failure defaults to the refusal below.
-    if resume_evidence_matches "$holder"; then
-      evidence "arm-3 restored-worktree takeover: verified same-run resume of session $holder"
-      if grep -q "^session: ${holder}\$" "$CLAIM_PATH" 2>/dev/null && rm -f "$CLAIM_PATH"; then
-        CREATED_HERE=1
-        ARM3_RESUME=1
-        if create_claim_noclobber "$CLAIM_PATH" "$SESSION" "$PLAN_ARG"; then
-          return 0
-        fi
-        CREATED_HERE=0
+    # Dead-run conversion (take mode): a foreign claim whose run manifest
+    # remains at the registered target worktree converts only through the
+    # gateway's evidence-gated arm (identity forms, session channel,
+    # provider terminal status, completed-run boundary, both gateway-owned
+    # locks, atomic replacement, canonicalization). A refusal preserves the
+    # claim and exits; no conversion context falls through to the
+    # historical fresh-refusal / takeover flow below.
+    if [[ "$MODE" == "take" ]]; then
+      # The if-context keeps the arm's nonzero verdicts off set -e's exit.
+      rc=0
+      if try_dead_run_conversion "$holder"; then
+        rc=0
+      else
+        rc=$?
       fi
-      continue  # the claim changed under us; re-evaluate from the top
+      case "$rc" in
+        0) return 0 ;;   # converted: CONVERSION_DONE=1, TAKE_OK=1 set
+        2) : ;;          # no conversion context: the historical flow judges
+        3) continue ;;   # the claim changed under the locks; re-evaluate
+        *) die_fail ;;   # a refusal exits inside the arm; safety net
+      esac
     fi
     # A fresh foreign claim refuses inside the helper (die_fail); a stale
     # one reaches the mode's pre-takeover gate (take mode's branch-occupant
     # check refuses here, preserving the foreign claim) and then the
-    # takeover.
+    # takeover. The merge-lock discipline covers this claim access; the
+    # conversion arm above runs its own done-then-merge ordering instead.
+    if ! merge_lock_hold_or_reuse; then
+      rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+      die_fail
+    fi
     refuse_fresh_foreign_claim "$holder" || true
     if [[ -n "$PRE_TAKEOVER_HOOK" ]]; then
       "$PRE_TAKEOVER_HOOK" "$holder"
     fi
     if ! takeover_stale_claim "$holder"; then
+      gateway_release_all || true
       continue  # the claim changed under us; re-evaluate from the top
     fi
+    gateway_release_all || true
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
     return 0
   done
 }
@@ -728,6 +1633,27 @@ cmd_take() {
 
   acquire_claim
 
+  # Conversion success returns before the occupant refusal and the worktree
+  # add (the adopted worktree is the run's own; the plan Terms: after
+  # replacement and manifest refresh, verify the registered target, report
+  # success, disarm cleanup, and return).
+  if (( CONVERSION_DONE )); then
+    evidence "claim: $CLAIM_PATH (session: $SESSION, slug: $SLUG)"
+    evidence "worktree adopted: $WT_PARENT/$BRANCH (branch: $(worktree_registered_branch "$WT_PARENT/$BRANCH"))"
+    printf 'OUTCOME: pass\n'
+    return 0
+  fi
+
+  # The post-acquire claim mutations (the refusal arms' self-cleanup and
+  # the success restamp) sit inside the merge-lock discipline: acquire_claim
+  # released its hold at return, so this command re-takes it here.
+  GATEWAY_TMP="${GATEWAY_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-gateway.XXXXXX")}"
+  [[ -n "${GATEWAY_LOCK_ENV+x}" ]] || { gateway_lock_env_prefix || { rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""; die_tool "lock roots unresolvable from the OS account record"; }; }
+  if ! merge_lock_hold_or_reuse; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_fail
+  fi
+
   # Branch occupation refused before any worktree creation, with the fresh
   # claim this invocation created cleaned up (an unclaimed leftover
   # worktree lands here, and so does an occupant that appeared after the
@@ -738,13 +1664,12 @@ cmd_take() {
     refuse "take refused: branch $BRANCH is held by an existing worktree"
     refuse "  occupying worktree: $occupant"
     refuse "  remedies: adopt the existing worktree per the recognition arm, or remove it deliberately, then take again"
-    if (( CREATED_HERE && ! ARM3_RESUME )); then
+    if (( CREATED_HERE )); then
       rm -f "$CLAIM_PATH"
       refuse "  cleanup: removed this invocation's fresh claim $CLAIM_PATH"
     fi
-    if (( ARM3_RESUME )); then
-      refuse "  the re-derived claim is kept (arm-3 same-run resume): the next take adopts the existing worktree"
-    fi
+    gateway_release_all || true
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
     die_fail
   fi
 
@@ -778,12 +1703,9 @@ cmd_take() {
         refuse "cleanup: removed this invocation's stranded branch $BRANCH"
       fi
     fi
-    if (( CREATED_HERE && ! ARM3_RESUME )); then
+    if (( CREATED_HERE )); then
       rm -f "$CLAIM_PATH"
       refuse "cleanup: removed this invocation's fresh claim $CLAIM_PATH"
-    fi
-    if (( ARM3_RESUME )); then
-      refuse "the re-derived claim is kept (arm-3 same-run resume): the next take adopts the existing worktree"
     fi
     die_fail
   fi
@@ -803,6 +1725,8 @@ cmd_take() {
   else
     evidence "worktree: $wt_path (branch: $BRANCH)"
   fi
+  gateway_release_all || true
+  rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
   printf 'OUTCOME: pass\n'
 }
 
@@ -818,6 +1742,15 @@ cmd_claim() {
 cmd_refresh() {
   require_session
   resolve_context
+  GATEWAY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-gateway.XXXXXX")"
+  if ! gateway_lock_env_prefix; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_tool "lock roots unresolvable from the OS account record"
+  fi
+  if ! merge_lock_hold_or_reuse; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_fail
+  fi
   local attempt=0 holder
   while :; do
     claim_retry_gate attempt
@@ -831,6 +1764,8 @@ cmd_refresh() {
       fi
       restamp_claim "$CLAIM_PATH" "$BASE" "$BRANCH" "$START_COMMIT"
       evidence "refreshed: $CLAIM_PATH (session: $SESSION, slug: $SLUG)"
+      gateway_release_all || true
+      rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
       printf 'OUTCOME: pass\n'
       return 0
     fi
@@ -844,6 +1779,8 @@ cmd_refresh() {
       restamp_claim "$CLAIM_PATH" "$BASE" "$BRANCH" "$START_COMMIT"
     fi
     evidence "recreated: $CLAIM_PATH (session: $SESSION, slug: $SLUG)"
+    gateway_release_all || true
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
     printf 'OUTCOME: pass\n'
     return 0
   done
@@ -852,6 +1789,15 @@ cmd_refresh() {
 cmd_release() {
   require_session
   resolve_context
+  GATEWAY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-gateway.XXXXXX")"
+  if ! gateway_lock_env_prefix; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_tool "lock roots unresolvable from the OS account record"
+  fi
+  if ! merge_lock_hold_or_reuse; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_fail
+  fi
   local holder
   if [[ ! -e "$CLAIM_PATH" ]]; then
     refuse "release refused: no execution claim found at $CLAIM_PATH"
@@ -874,6 +1820,8 @@ cmd_release() {
     die_fail
   fi
   evidence "released: $CLAIM_PATH (session: $SESSION, slug: $SLUG)"
+  gateway_release_all || true
+  rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
   printf 'OUTCOME: pass\n'
 }
 
@@ -953,12 +1901,47 @@ cmd_sweep() {
   if [[ -z "$main_ref" ]]; then
     main_ref="$(git -C "$PRIMARY" symbolic-ref --short HEAD 2>/dev/null)" || true
   fi
+  # The merge-lock discipline covers the walk (claim access for every
+  # claim); the lock env and scratch dir back it.
+  GATEWAY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-gateway.XXXXXX")"
+  if ! gateway_lock_env_prefix; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_tool "lock roots unresolvable from the OS account record"
+  fi
+  if ! merge_lock_hold_or_reuse; then
+    rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
+    die_fail
+  fi
   local deleted=0 skipped=0 claim_file plan_val branch_val slug occupant reason landed parked
   for claim_file in "$CLAIMS_DIR"/*.md; do
     [[ -e "$claim_file" ]] || break  # the claims directory holds no claim
     reason=""
     if [[ ! -f "$claim_file" ]]; then
       reason="not a regular file"
+    fi
+    if [[ -z "$reason" ]]; then
+      # The stale-preservation leg (the plan Terms: stale take and sweep
+      # preserve a claim whenever either supported manifest form remains at
+      # its exact registered-worktree path, regardless of branch, owner, or
+      # plan mismatch; multiple matches or an unresolvable scan preserve
+      # too). The claim's own file name is the plan's canonical artifact
+      # slug, so the scan needs no claim fields.
+      slug="$(basename "$claim_file" .md)"
+      local scan verdict scan_wt
+      scan="$(scan_registered_manifest "$slug")"
+      verdict="${scan%%$'\t'*}"
+      case "$verdict" in
+        found)
+          IFS=$'\t' read -r verdict scan_mf scan_wt <<<"$scan"
+          reason="run manifest remains at its registered worktree: $scan_wt"
+          ;;
+        multiple)
+          reason="run manifests for this slug exist in more than one registered worktree (ambiguous)"
+          ;;
+        inconclusive)
+          reason="preservation scan inconclusive (a manifest path holds a symlink)"
+          ;;
+      esac
     fi
     if [[ -z "$reason" ]]; then
       # The branch leg first (one porcelain read): a recorded branch still
@@ -1012,6 +1995,8 @@ cmd_sweep() {
     deleted=$((deleted + 1))
   done
   evidence "sweep: scanned $CLAIMS_DIR (session: $SESSION): deleted $deleted, skipped $skipped"
+  gateway_release_all || true
+  rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
   printf 'OUTCOME: pass\n'
 }
 

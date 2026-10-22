@@ -3,6 +3,7 @@
 Driving force: simplicity
 Secondary driving force: maintainability
 Date filed: 2026-10-08
+Status: done (covered by docs/history/plans/completed/2026-10-20-maintenance-plan-authoring-authorization.md, executed and landed 2026-10-23)
 Origin: operator feedback during ai-playbook plan authoring
 Severity: medium; authoring can settle on extra classifications or derivations before anyone checks whether a direct setting or smaller design would meet the goal.
 Source reference: operator feedback in the 2026-10-08 ai-playbook plan-authoring session; the initial proposal treated project ownership as a reason to derive review and base-branch behavior, and the operator identified explicit settings as a simpler design. Capture hygiene: `scan-public-hygiene --files` passed.

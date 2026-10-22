@@ -81,9 +81,9 @@ This skill does not implement production code, commit, push, post review comment
 
 ### 4. Return control to the original orchestrator
 
-After any artifact, catalog, or rule change, the original caller must launch a new review using its normal worker selection, staging format, source-digest gate, and exit criteria. The reconciliation pass cannot approve its own refactor, convert its own findings to a clean result, or replace the caller's review panel.
+After any artifact, catalog, or rule change, the original caller must launch a fresh review with its normal worker selection, staging, digest gate, and exit criteria.
 
-The caller must reset the recurrence counter only after that fresh review is complete. If the fresh review reopens the same root group, retain the previous recurrence chain and escalate to the user or the caller's configured stop condition instead of looping silently.
+Reset the recurrence counter only after that review completes; if it reopens the same root group, retain the recurrence chain and require fresh user direction before another review, never looping silently. A separate teardown refusal (review records missing from the primary reviews home) delays worktree removal, not an explicitly authorized review in the retained worktree; removal awaits migration and a passing gate.
 
 ## Output contract
 

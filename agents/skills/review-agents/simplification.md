@@ -71,7 +71,6 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 
 ### `yagni:` excessive abstraction and premature generalization
 
-- Wrapper adds nothing: method just calls another method with same signature
 - Factory for single implementation: factory pattern when only one concrete type exists
 - Interface on producer side: interface defined where implemented, not where consumed
 - Layer cake anti-pattern: handler → service → repository when each just passes through
@@ -97,7 +96,7 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 
 ### `shrink:` unnecessary indirection and avoidable boilerplate
 
-- Pass-through wrappers: methods that only delegate to dependencies
+- Pass-through wrappers or moved blocks: flag extra navigation unless extraction improves cohesion, reduces duplication, or eases reasoning.
 - Excessive method chaining: a builder on a construction with three or fewer parameters; above that threshold the language guideline's construction rule governs
 - Interface wrapping primitives: custom types for standard library types
 - Middleware stacking: multiple middlewares that could be one

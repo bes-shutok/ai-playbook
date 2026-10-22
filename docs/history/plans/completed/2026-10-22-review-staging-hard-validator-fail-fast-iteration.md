@@ -95,12 +95,12 @@ Primary class anchors:
 - `ValidationResult` in `scripts/validate_review_staging.py`
 - `validate_staging_file` in `scripts/validate_review_staging.py`
 
-- [ ] Given a fixture with valid prerequisites and the origin's listed failure families, expects every applicable diagnostic missing today, with a pointer to its existing review-staging clause. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given malformed prerequisite data, expects independent diagnostics to remain visible while dependent cascade messages stay suppressed. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a multiply-invalid sidecar, expects the existing first error used by readiness routing to stay unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Update the existing synthesis-time hard-gates rule with the output contract; keep clause locations and avoid net operative text growth. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a passing record, soft run, or preflight run, expects the current verdict and output behavior. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `scripts: report actionable review staging failures`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a fixture with valid prerequisites and the origin's listed failure families, expects every applicable diagnostic missing today, with a pointer to its existing review-staging clause. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given malformed prerequisite data, expects independent diagnostics to remain visible while dependent cascade messages stay suppressed. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a multiply-invalid sidecar, expects the existing first error used by readiness routing to stay unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Update the existing synthesis-time hard-gates rule with the output contract; keep clause locations and avoid net operative text growth. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a passing record, soft run, or preflight run, expects the current verdict and output behavior. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `scripts: report actionable review staging failures`. [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Pin diagnostics and shared routing
 
@@ -114,8 +114,8 @@ Primary class anchors:
 - `ValidationResult` in `scripts/validate_review_staging.py`
 - `_first_gate_error_reason()` in `scripts/plan_readiness.py`
 
-- [ ] Embedded self-tests pin the origin-listed diagnostics, clause pointers, stable emission order, and cascade suppression; preserve the existing ten-error case. [class: IMPLEMENTATION_REQUIRED]
-- [ ] A plan-readiness regression pins the same first-error reason when multiple routed diagnostics coexist. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Re-derive hard-mode pins; update any one-error assertion with its rationale, and add none when no such assertion exists. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The CLI fixture rehearsal preserves exit, text/JSON, passing, soft, and preflight outcomes. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `scripts: pin review staging diagnostics and routing`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Embedded self-tests pin the origin-listed diagnostics, clause pointers, stable emission order, and cascade suppression; preserve the existing ten-error case. [class: IMPLEMENTATION_REQUIRED]
+- [x] A plan-readiness regression pins the same first-error reason when multiple routed diagnostics coexist. [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-derive hard-mode pins; update any one-error assertion with its rationale, and add none when no such assertion exists. [class: IMPLEMENTATION_REQUIRED]
+- [x] The CLI fixture rehearsal preserves exit, text/JSON, passing, soft, and preflight outcomes. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `scripts: pin review staging diagnostics and routing`. [class: IMPLEMENTATION_REQUIRED]

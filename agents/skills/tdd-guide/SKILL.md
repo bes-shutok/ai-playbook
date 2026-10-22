@@ -85,9 +85,8 @@ Use small, frequent commits rather than large, infrequent ones.
 
 ## Test Execution Rules
 
-- Automatically run tests at each TDD phase (Red → Green → Refactor) without waiting for user request
-- Run ALL tests each time, except long-running integration tests
-- Use the project's test runner (see language-specific files in this skill directory)
+- Automatically run the full project test suite at each TDD phase with the project's runner (see language-specific files in this skill directory), excluding only long-running integration tests.
+- After a test or fixture edit, rerun the affected tests; a prior pass verifies only the exact state it ran.
 
 ## Common Rationalizations (resist all of these)
 
