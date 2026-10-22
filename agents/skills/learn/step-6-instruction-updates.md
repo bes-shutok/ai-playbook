@@ -73,7 +73,7 @@ Two corpora, two gates:
 
 The project corpus IS skill-gate gated: absent or stale `learn.<project>.<session>.marker` blocks Write/Edit to `development_lessons.md` with `Invoke the learn skill before editing the project lessons corpus.` The user-level corpus is NOT skill-gate gated; it remains opt-in strict via the script gate in this step only.
 
-**Commit ownership:** `learn` writes the corpora and commits only its own learn-authored skills-repo artifacts (Step 1.8; the skill-placement commit workflow); the project lessons corpus itself is committed by `done` Step 3 item 4b when it is not gitignored; do not treat orphan `docs` sync as a substitute for that commit.
+**Commit ownership:** `learn` writes the corpora and commits only its own learn-authored skills-repo artifacts (Step 1.8; the skill-placement commit workflow); the project lessons corpus itself is committed by `done` Step 3 when it is not gitignored; that commit must stage the corpus by own-edit hunk after the Step 1.8 word-diff own-edit check, never whole-file, so a peer's uncommitted lesson is skipped and reported rather than swept into the committer's commit (lesson 134 is the class); do not treat orphan `docs` sync as a substitute for that commit.
 
 ### User-level lessons-corpus gate (script)
 
@@ -98,7 +98,7 @@ Guards, in order:
 
 **Strictness trade:** a `learn` in any project blocks on a user-corpus violation because the user chose strict user-level. The corpus is single-user-local, so a block means "fix the user corpus", not "fix this repo". This is intentional: one strict corpus enforces the tag invariant across every project's `learn` run.
 
-**Project-tier dup check (warn-only, no script):** project `development_lessons.md`: optional `grep -oE '^## [0-9]+' <project_corpus> | sort | uniq -d` (warn-only). Project corpus writes are enforced by the skill-gate learn class at edit time, not by this script step.
+**Project-tier dup check (warn-only):** project `development_lessons.md`: optional `grep -oE '^## [0-9]+' <project_corpus> | sort | uniq -d` (warn-only; the user-corpus validator's `duplicate` category via `lessons.py index` is the blocking shape a later project-tier promotion would reuse). Project corpus writes are enforced by the skill-gate learn class at edit time, not by this script step.
 
 ### Lesson concision gate (required before finishing learn)
 

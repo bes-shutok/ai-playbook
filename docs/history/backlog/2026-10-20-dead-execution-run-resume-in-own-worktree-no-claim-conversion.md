@@ -7,7 +7,6 @@
 - **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (same artifact class: claim files outliving their session)
 - **Cluster:** docs/history/backlog/2026-10-13-execution-claim-retry-ceiling-unpinned.md (same gateway: `scripts/execution_claim.sh` arms)
 - **Cluster:** docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md (same artifact class: a run's worktree and claim outliving their session; investigate 2026-10-20 roster)
-- **Cluster:** docs/history/backlog/2026-10-21-execution-claim-release-archived-plan-operand.md (same artifact class: the execution claim file's lifecycle end)
 - **Origin class:** observed recovery gap
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/maintenance/template-execution.md` (EXECUTION CLAIM paragraph: stale-foreign takeover arm); `agents/skills/execute-plan/SKILL.md` (Execution claim registration; Recovery section); `scripts/execution_claim.sh` (branch-occupant pre-takeover gate)

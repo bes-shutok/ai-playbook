@@ -1,13 +1,13 @@
 # Backlog: authoring-claim closeout delete duty never runs; closed claims accumulate on the consult surface
 
 - **Filed:** 2026-10-19, operator-directed registry cleanup + same-session investigate pass
-- **Status:** covered (docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md)
+- **Status:** covered (docs/history/plans/completed/2026-10-20-authoring-worktree-landing-shape.md for the worktree-placement arm; the reopened primary-placement gap is covered by docs/history/plans/2026-10-22-authoring-claim-marker-and-closeout-lifecycle.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Cluster:** docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md (same defect class: terminal-state artifacts the closing boundary leaves behind)
-- **Cluster:** docs/history/backlog/2026-10-20-authoring-worktree-landing-shape.md (shared plans Final Step closeout surface; a different omitted terminal duty)
-- **Cluster:** docs/history/backlog/2026-10-21-plans-authoring-claim-marker-contract.md (shared plans/template authoring-claim lifecycle; marker lifetime and registry-file closeout are distinct duties)
-- **Cluster:** docs/history/backlog/2026-10-14-authoring-worktree-create-path.md (shared plan-authoring lifecycle; worktree creation duty)
+- **Cluster:** docs/history/backlog/completed/2026-10-20-authoring-worktree-landing-shape.md (shared plans Final Step closeout surface; a different omitted terminal duty)
+- **Cluster:** docs/history/plans/2026-10-22-authoring-claim-marker-and-closeout-lifecycle.md (the covering plan for the reopened primary-placement gap; per its frozen two-stage disposition, its header origin row and this row's top-level live copy are deleted at that plan's implementation completion, and this archive copy is the surviving disposition record for the closeout row)
+- **Cluster:** docs/history/backlog/completed/2026-10-14-authoring-worktree-create-path.md (shared plan-authoring lifecycle; worktree creation duty)
 - **Cluster:** docs/history/backlog/2026-10-20-dead-execution-run-resume-in-own-worktree-no-claim-conversion.md (same artifact class: claim files outliving their session)
 - **Cluster:** docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md (same defect class: terminal-state artifacts the closing boundary leaves behind; investigate 2026-10-20 roster)
 - **Origin class:** observed recovery gap
@@ -34,3 +34,7 @@ The text fix spans three skill files plus a consult-semantics decision (which st
 ## Source
 
 - Observed 2026-10-19 while cleaning the registry per operator direction; the in-place-closed claim of the 2026-10-18 done-final-only-learn-intermediate authoring is the named witness.
+
+## Reopened primary-placement gap (2026-10-22)
+
+The worktree-placement witness landed the deletion boundary for worktree placement only; a primary-placement closeout still left its claim file behind. Commit f48799e02 restored the top-level row as open for that remaining boundary. docs/history/plans/2026-10-22-authoring-claim-marker-and-closeout-lifecycle.md covers the reopened gap: the AUTHORING CLAIM procedure in `agents/skills/maintenance/template-authoring.md` now owns placement-specific deletion boundaries (primary placement: verified done commits, plan and review artifact state, tracked-freeze evidence, with no worktree-only gates), the refusal retention rules and their duplicate-origin carve-out, and the ownership-checked stand-down. This archive copy is the disposition record; the top-level row is deleted at that plan's implementation completion.

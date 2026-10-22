@@ -11,6 +11,7 @@
 - **Severity:** low; current runner preserves a failed witness commit, but the public contract remains over-specific and the recovery arm lacks a regression witness.
 - **Source:** `docs/history/reviews/2026-10-09-docs-branch-scope-and-tmp-retention-code-review-r6.md`, findings F1 and F2; capture hygiene: scan-public-hygiene --files pass.
 Cluster: docs/history/backlog/2026-10-09-docs-branch-step2-selector-test.md (same surface: the docs-branch skill and its runner tests)
+Cluster: docs/history/backlog/2026-10-22-done-docs-restore-untracked-record-loss.md (same surface: the docs-branch sync runner; that row investigates an unattributed mid-run record deletion near the sync pass)
 
 ## Problem
 

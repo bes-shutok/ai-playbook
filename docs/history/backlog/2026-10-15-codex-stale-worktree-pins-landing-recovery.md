@@ -15,6 +15,7 @@
 - **False-positive cost:** authorized work remains stranded and its worktree/branch remain allocated until someone notices that the baseline moved
 - **Review date:** 2026-11-15
 
+Cluster: docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md (same surface: the squash-landing route and its helper)
 ## Problem
 
 The ad-hoc execution branch started at `c52d57d`. The two skill spans were already present there, but `scripts/check_maintenance_pins.sh` still searched for retired literals: `runs dual and records the ambiguity in its decision channels` and `classifies exec, execute, execution wording as exec mode`. A later local `main` revision updated those pin expectations to the current skill text. Rebasing the unchanged task delta onto that tip made the pins suite pass. The original refusal treated stale pin expectations on the branch base as a task blocker and left the branch and worktree allocated.

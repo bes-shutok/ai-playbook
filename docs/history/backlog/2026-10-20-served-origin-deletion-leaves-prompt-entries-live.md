@@ -8,8 +8,10 @@
 - **Class:** fix-class
 - **Driving force:** correctness (a served entry stays dispatchable for days and invites a duplicate run)
 - **Skill/step:** `scripts/check_prompt_log_origins.py` stale check (`LIVE` classification for "an absent file that resolves nowhere", the module docstring's fail-open line); the `--collateral-served` discovery mode (does not enumerate the sibling log the way `--prune-audit` does); the rolling logs' prune rule in `docs/history/backlog/PLAN-PROMPTS.md` line 8 and its EXEC-PROMPTS delta
+- **Cluster:** docs/history/backlog/2026-10-22-prune-audit-landing-token-never-resolves.md (same checker, the ledger-witness token class: the standard "landing in this commit" receipt can never resolve as a removal witness)
 - **Cluster:** docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md (the deletion rule's hygiene side; this row is its checker counterpart)
 - **Cluster:** docs/history/backlog/2026-10-16-collateral-mixed-fixture-composition-pin.md (same checker surface, a collateral-mode fixture residual)
+- **Cluster:** EXEC-PROMPTS.md entry prompt-log-payload-targets-and-verdict-test-statement (companion row, covered 2026-10-22: the duty sentences landed and the origin row deleted per the covered-row rule; this row's checker arm remains the live coverage for the deleted-origin class)
 - **Capture hygiene:** repo-relative paths only; no personal or machine-specific data.
 - **Dedup probe:** searched open backlog filenames and text for `prune`, `collateral`, `served`, `covered-row`, `prompt log`; nearest: `docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md` (the deletion rule's hygiene side; this row is its checker counterpart), `docs/history/backlog/2026-10-16-collateral-mixed-fixture-composition-pin.md` (same checker surface, a fixture residual), `docs/history/backlog/2026-10-15-plan-prompts-prune-end-anchor-overreach.md` (removals audit, covered by the `plan-prompts-prune-range-content-inventory` entry). No open row owns the deleted-origin classification.
 

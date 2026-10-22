@@ -269,7 +269,12 @@ class PlansLivenessProbeTest(unittest.TestCase):
 
 
 class LivenessDeclarationTest(unittest.TestCase):
-    """Declaration group: fixed-string spans against the four skill files."""
+    """Declaration group: fixed-string spans against the four skill files.
+
+    Pinned surface: the operative body paragraphs of the target files. The
+    scheduled-payload mirror paragraph in template-authoring.md is out of the
+    pinned contract; only the body AUTHORING CLAIM paragraph is asserted.
+    """
 
     @staticmethod
     def read(path: Path) -> str:
@@ -280,6 +285,10 @@ class LivenessDeclarationTest(unittest.TestCase):
         # assertTrue with a short label: the four skill files are large, and
         # assertIn's failure message would echo the whole file into the log.
         testcase.assertTrue(span in text, f"missing span in {where}: {span}")
+
+    @staticmethod
+    def assert_absent(testcase: unittest.TestCase, span: str, text: str, where: str) -> None:
+        testcase.assertTrue(span not in text, f"forbidden span in {where}: {span}")
 
     def test_heartbeat_milestones_declared(self) -> None:
         text = self.read(MAINTENANCE_TEMPLATE_AUTHORING)
@@ -292,9 +301,29 @@ class LivenessDeclarationTest(unittest.TestCase):
         )
 
     def test_marker_and_reconciliation_declared(self) -> None:
+        # Re-aimed 2026-10-22 (the marker-lifetime reconciliation plan,
+        # Task 1): the header marker is permanent provenance through
+        # certification, landing, and archival; the contract rejects
+        # certification-time removal wording and any claim that the probe
+        # reads the plan header (it matches fresh claim-file text instead).
         plans = self.read(PLANS_SKILL)
         self.assert_span(self, "Authoring claim: <claim path> (session <session id>)", plans, "plans/SKILL.md")
-        self.assert_span(self, "dropped at the certification commit", plans, "plans/SKILL.md")
+        self.assert_span(self, "permanent provenance once written", plans, "plans/SKILL.md")
+        self.assert_span(self, "remains unchanged through certification, landing, and archival", plans, "plans/SKILL.md")
+        self.assert_span(self, "never reads the plan header", plans, "plans/SKILL.md")
+        self.assert_span(self, "fresh claim-file text", plans, "plans/SKILL.md")
+        for forbidden in (
+            "dropped at the certification commit",
+            "The line is dropped",
+            "probe reads the marker",
+            "probe reads the plan header",
+        ):
+            self.assert_absent(self, forbidden, plans, "plans/SKILL.md")
+        # The canonical marker-lifetime rule lives in the template's AUTHORING
+        # CLAIM procedure; this span pins that home so the plans skill's
+        # pointer cannot silently dangle.
+        template = self.read(MAINTENANCE_TEMPLATE_AUTHORING)
+        self.assert_span(self, "remaining unchanged through certification, landing, and archival", template, "template-authoring.md")
         # the spans re-keyed to their post-split modules (the
         # maintenance-skill-size-refactor split; the router no longer carries
         # the Step 1/Step 2 operative text)
@@ -302,6 +331,141 @@ class LivenessDeclarationTest(unittest.TestCase):
         self.assert_span(self, "(mid-round fold landings included, each through the same lock)", guards, "maintenance/guards.md")
         survey = self.read(MAINTENANCE_SURVEY_ARMS)
         self.assert_span(self, "Plans-root liveness probe", survey, "maintenance/survey-arms.md")
+
+    def test_claim_deletion_boundaries_declared(self) -> None:
+        # Added 2026-10-22 (the closeout-lifecycle plan, Task 2): the
+        # template's AUTHORING CLAIM procedure owns the placement-specific
+        # deletion boundaries, refusal retention with its duplicate-origin
+        # carve-out, and the ownership-checked stand-down; the plans skill
+        # invokes that procedure and scopes its completion evidence per
+        # placement. Fixed-string text-contract pins, not runtime deletion
+        # proof.
+        template = self.read(MAINTENANCE_TEMPLATE_AUTHORING)
+        # Separate worktree and primary success boundaries.
+        self.assert_span(
+            self,
+            "under worktree placement the delete fires only after the closeout's verified done migration, the owned-files-clean preflight passing, a passing gate-removal result, and the authoring-branch removal",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "under primary-checkout placement the delete fires after the verified done commits and the plan and review artifact state at their primary homes",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "with no worktree-only landing, owned-files-clean, gate-removal, or branch-removal gate in that placement",
+            template,
+            "template-authoring.md",
+        )
+        # Ordinary refusal retention, the unverifiable-primary arm, and the
+        # duplicate-origin carve-out that deletes the claim while the branch
+        # and worktree stay standing.
+        self.assert_span(
+            self,
+            "an ordinary worktree landing or artifact-migration refusal keeps the claim standing beside the worktree and branch",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "an unverifiable primary-placement closeout keeps the claim standing until its done commits and artifact state verify",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "the duplicate-origin coverage-gate refusal (the duplicate-origin coverage gate's exit 1 naming the covering plan): that specific refusal deletes this session's owned claim while the worktree and branch stay standing for recovery",
+            template,
+            "template-authoring.md",
+        )
+        # Owned stand-down: the current-session identity check, its required
+        # read-before-delete order, and preservation of foreign, missing, or
+        # unreadable identities observed at that read.
+        self.assert_span(
+            self,
+            "before every updated: refresh and before each delete ordered below, re-read the claim file and mutate it only while its session: line still names this session's id",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "a session: line that is absent or unparseable at that read is treated as foreign, left in place and reported",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "a claim file missing or unreadable at a delete's final identity read is preserved and reported the same way",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "a foreign id means another session took the item mid-run: leave the file untouched and report it",
+            template,
+            "template-authoring.md",
+        )
+        # The non-atomicity statement: the check-then-unlink is best-effort
+        # against stale takeover and gives no ownership guarantee after the
+        # read.
+        self.assert_span(
+            self,
+            "best-effort and not atomic with stale takeover",
+            template,
+            "template-authoring.md",
+        )
+        self.assert_span(
+            self,
+            "no ownership guarantee extends past it",
+            template,
+            "template-authoring.md",
+        )
+        # The plans skill: placement-scoped completion evidence, tracked
+        # freeze retained for both placements, and the closeout sequence
+        # invoking the template-owned procedure without restating claim
+        # policy.
+        plans = self.read(PLANS_SKILL)
+        self.assert_span(
+            self,
+            "the boundary evidence for the session's placement",
+            plans,
+            "plans/SKILL.md",
+        )
+        self.assert_span(
+            self,
+            "Worktree placement: the owned-files-clean preflight, the gate-removal invocation ending `OUTCOME: pass`, the authoring branch removed with no live worktree or run naming it",
+            plans,
+            "plans/SKILL.md",
+        )
+        self.assert_span(
+            self,
+            "Primary-checkout placement: the verified `done` commits and the plan and review artifact state at their primary homes, with no owned-files-clean, gate-removal, or branch-removal evidence",
+            plans,
+            "plans/SKILL.md",
+        )
+        self.assert_span(
+            self,
+            "Both placements also verify the tracked freeze",
+            plans,
+            "plans/SKILL.md",
+        )
+        # Primary-placement freeze arm: a non-default-branch primary run reads
+        # the freeze on its own branch per the Entry freeze placement clause.
+        self.assert_span(
+            self,
+            "on a primary-placement run whose current branch is not the default branch, the freeze reads on that run's branch per the Entry freeze paragraph's placement clause",
+            plans,
+            "plans/SKILL.md",
+        )
+        self.assert_span(
+            self,
+            "run the AUTHORING CLAIM procedure's placement-matched deletion from `agents/skills/maintenance/template-authoring.md` as the closeout's claim step",
+            plans,
+            "plans/SKILL.md",
+        )
 
     def test_done_gate_declared(self) -> None:
         text = self.read(DONE_SKILL)

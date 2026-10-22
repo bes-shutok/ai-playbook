@@ -1,7 +1,7 @@
 # gate-removal task 2 review residues (deferred)
 
 Cluster: gate-removal-closeout-accounting
-Cluster: docs/history/backlog/2026-10-21-guard-signal-gates-authorized-action-lesson.md
+Cluster: docs/maintenance/development_lessons.md lesson 177 (the covered origin row's capture; same plan cluster gate-removal-closeout-accounting)
 Status: open
 Origin: plan 2026-10-19-gate-removal-closeout-accounting Task 2 tier-M review (non-blocking findings deferred at the light boundary, 2026-10-21).
 

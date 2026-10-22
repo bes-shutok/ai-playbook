@@ -7,7 +7,7 @@
 - **Class:** worktree-first lifecycle safety
 - **Driving force:** reliability
 Cluster: docs/history/backlog/2026-10-08-worktree-closeout-baseline-fallback.md (same surface: the closeout baseline's digest matching in worktree_closeout_migrate.py)
-Cluster: docs/history/backlog/2026-10-21-closeout-baseline-dirs-omit-review-certs.md (same surface: baseline capture semantics)
+Cluster: (sibling row removed 2026-10-22, covered by the facts-resolved capture landing) (same surface: baseline capture semantics)
 
 ## Problem
 

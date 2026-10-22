@@ -93,9 +93,13 @@ Files:
 - `docs/history/backlog/2026-10-21-maintenance-exec-bootstrap-blocker.md`
 - `docs/maintenance/document-registry.md`
 
-- [ ] Recheck that transfer-in precedes readiness and run setup, and that review candidates are classified before done setup writes the manifest. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify plan landing marked this origin covered and pruned only this plan's dispatch entry with its receipt; do not repeat that prune. [class: IMPLEMENTATION_REQUIRED]
-- [ ] At plan completion, fold the origin disposition into the archived plan, append the ownership-registry row, and delete only this backlog file. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the independent test-scope origin open and leave the cited runtime contracts unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the prompt-log origin audit and public-hygiene scan. [class: REPOSITORY_TEST]
-- [ ] Commit the origin disposition with the completed plan archive. [class: IMPLEMENTATION_REQUIRED]
+- [x] Recheck that transfer-in precedes readiness and run setup, and that review candidates are classified before done setup writes the manifest. [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify plan landing marked this origin covered and pruned only this plan's dispatch entry with its receipt; do not repeat that prune. [class: IMPLEMENTATION_REQUIRED]
+- [x] At plan completion, fold the origin disposition into the archived plan, append the ownership-registry row, and delete only this backlog file. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the independent test-scope origin open and leave the cited runtime contracts unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the prompt-log origin audit and public-hygiene scan. [class: REPOSITORY_TEST]
+- [x] Commit the origin disposition with the completed plan archive. [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-10-21-maintenance-exec-bootstrap-blocker.md: covered by this plan; the execution rechecked the source contract order (the Worktree-first standard owns transfer-in before readiness and run setup; done Step 0 owns review-candidate classification before lock acquisition and the manifest write), confirmed the plan landing's covered flip and the prompt-log prune receipt, and deleted the row at completion. No runtime contract changed. The independent test-scope origin remains open.

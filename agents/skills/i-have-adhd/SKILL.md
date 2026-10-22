@@ -1,6 +1,7 @@
 ---
 name: i-have-adhd
 description: 'Shape output for a reader with ADHD: lead with the next action, number multi-step work, restate state across turns, suppress tangents, give specific time estimates, make wins visible. Invoke with /i-have-adhd; stays on until "stop adhd mode".'
+when_to_use: Use only when the user explicitly invokes this skill by name (/i-have-adhd); never invoke it on the model's own judgment.
 disable-model-invocation: true
 license: MIT
 metadata:
@@ -12,6 +13,8 @@ metadata:
 ---
 
 # i-have-adhd
+
+> **Local fork notice:** this file carries a deliberate local fork of the upstream `i-have-adhd` skill (`metadata.upstream`). Deliberate divergence: the `when_to_use` frontmatter line stating the skill is used only when the user explicitly invokes it by name and never on the model's own judgment, kept beside the upstream's `disable-model-invocation: true` because some loaders ignore unknown top-level keys and present `when_to_use` beside the description as the only portable gate there. A future upstream sync of this directory must re-apply this fork (recovery source: git history of this path) or consciously drop it with the decision recorded; see the Vendored Asset Sync Rules in the repository AGENTS.md.
 
 The reader has ADHD. Output is not just brief. It is shaped so an ADHD brain can act on it.
 

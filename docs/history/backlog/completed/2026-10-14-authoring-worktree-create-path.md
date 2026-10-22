@@ -1,11 +1,11 @@
 # Backlog: Worktree-first standard's single create path refuses the authoring shape
 
 - **Filed:** 2026-10-14, authoring-cycle done closeout (investigate-blocker-continuity-signal session)
-- **Status:** covered (docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md)
+- **Status:** covered (docs/history/plans/completed/2026-10-20-authoring-worktree-landing-shape.md)
 - **Workflow:** backlog
 - **Priority:** normal
-- **Cluster:** docs/history/backlog/2026-10-20-authoring-worktree-landing-shape.md (shared Worktree-first authoring lifecycle; create-path arm)
-- **Cluster:** docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md (shared plan-authoring lifecycle; closeout duty)
+- **Cluster:** docs/history/backlog/completed/2026-10-20-authoring-worktree-landing-shape.md (shared Worktree-first authoring lifecycle; create-path arm)
+- **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (shared plan-authoring lifecycle; closeout duty)
 - **Origin class:** self-serving
 - **Class:** fix
 - **Driving force:** reliability

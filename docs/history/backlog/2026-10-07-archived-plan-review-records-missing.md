@@ -4,7 +4,11 @@ Driving force: correctness
 Date filed: 2026-10-07
 Origin: Task 2 done boundary Step 3 item 0d reconstruction duty (execution-claim-write-enforcement run), report-only
 Cluster: docs/history/backlog/completed/2026-10-07-corrections-graded-freshness-post-squash.md
-Cluster: docs/history/backlog/2026-10-19-fold-commit-staged-record-gap.md (same root area from the other side of the landing boundary: that row's records never surface mid-certification, these went missing after it)
+Cluster: (removed pointer) docs/history/backlog/2026-10-19-fold-commit-staged-record-gap.md was covered and its origin row deleted in commit e06fa7c0f; the same root area from the other side of the landing boundary: that row's records never surfaced mid-certification, these went missing after it
+
+## Witness 2026-10-22
+
+Fresh re-derivation during the 2026-10-22 exec-mode run (both plan executions): all six `-plan-review-` records remain absent from the gitignored reviews home and the citing archived plans are unchanged; the same exact-path series identity also surfaced as the mirror symptom at certification time, where landed-head readiness and staging diagnostics reported no review artifact for the pre-archive source path (recorded warning-only per the diagnostic contract). This strengthens the annotation arm: the series identity is by design path-bound, so a post-archive citation can never re-resolve by itself.
 
 ## Finding
 

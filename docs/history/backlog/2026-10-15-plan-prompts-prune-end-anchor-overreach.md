@@ -1,4 +1,5 @@
 # Backlog: the PLAN-PROMPTS landing prune removed nine entries through a wrong end-anchor, and the prune audit stayed green
+- **Cluster:** docs/history/backlog/2026-10-22-prune-audit-landing-token-never-resolves.md (same prune-audit surface: receipt-ledger line preservation is the sibling invariant to this row's inventory arm)
 
 - **Filed:** 2026-10-15, discovered while building the corrective commit 9a7a71689
 - **Status:** open

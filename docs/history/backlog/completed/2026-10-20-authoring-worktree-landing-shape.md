@@ -1,7 +1,7 @@
 # Backlog: plan authoring closeout fast-forwards checkpoint history instead of squashing
 
 - **Filed:** 2026-10-20, after operator correction on the plan-authoring landing
-- **Status:** covered (docs/history/plans/2026-10-20-authoring-worktree-landing-shape.md)
+- **Status:** covered (docs/history/plans/completed/2026-10-20-authoring-worktree-landing-shape.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Plan-authoring worktree runs in consumer projects also require the canonical squash landing; do not defer this as skills-repo-only formal hardening.
@@ -12,8 +12,8 @@
 - **Severity/source:** high, witnessed operator correction in this session; `main` reflog records a fast-forward merge of the authoring branch at `6f103bece`, and the main history preserves its `wip:` checkpoint commits. No review finding or round.
 - **Capture hygiene:** `scan-public-hygiene --files` passed on the composed draft.
 - **Dedup probe:** searched open backlog filenames and problem text for `authoring squash`, `worktree landing`, `fast-forward`, `wip commits`, and `closeout landing`. Nearest: `docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md` shares the plans Final Step closeout surface and an omitted terminal duty; `docs/history/backlog/2026-10-14-authoring-worktree-create-path.md` covers the create arm of the same Worktree-first authoring lifecycle; `docs/history/backlog/completed/2026-10-19-gate-removal-squash-accounting-requires-archive-twin.md` concerns branch accounting after a correct squash; `docs/history/backlog/2026-10-04-main-rewind-consolidation-incident.md` concerns a non-fast-forward ref rewrite. Investigate the three authoring lifecycle duties together and keep the separate branch-accounting and history-rewrite cases distinct.
-- **Cluster:** `docs/history/backlog/2026-10-19-authoring-claim-closeout-delete-duty.md`
-- **Cluster:** `docs/history/backlog/2026-10-14-authoring-worktree-create-path.md`
+- **Cluster:** `docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md`
+- **Cluster:** `docs/history/backlog/completed/2026-10-14-authoring-worktree-create-path.md`
 
 ## Problem
 

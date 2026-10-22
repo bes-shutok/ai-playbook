@@ -4,11 +4,15 @@ frontmatter description (folded block scalars joined single-spaced) against
 the 1024-character cap; over-950 descriptions are warned. Exit 1 naming
 every over-cap file and length; exit 0 otherwise. The frontmatter parse
 binds to the closing ``---`` fence, so fenced code blocks in the document
-body are never swallowed. Stdlib only; ``--selftest`` runs embedded
-fixtures."""
+body are never swallowed. Inside a git checkout the default scan measures
+only repository-tracked ``SKILL.md`` files (tracked files stay in scope
+regardless of ignore rules; untracked files are excluded whether ignored
+or not); outside a checkout, and for explicit paths, the scan is
+recursive. Stdlib only; ``--selftest`` runs embedded fixtures."""
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -73,17 +77,61 @@ def measure(path: Path) -> tuple[str | None, int]:
     return description, (len(description) if description is not None else 0)
 
 
-def check_tree(roots: list[Path]) -> tuple[list[str], list[str]]:
+def tracked_skill_files(root: Path) -> list[Path] | None:
+    """Repository-tracked ``SKILL.md`` files under ``root``, or ``None``
+    when ``root`` is not inside a git checkout (or git is unavailable or
+    fails, degrading to the caller's recursive fallback). Ignore rules
+    never remove a tracked file from scope; untracked files never enter
+    it."""
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=120,
+        )
+        if probe.returncode != 0:
+            return None
+        listing = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--deduplicate", "--", "."],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listing.returncode != 0:
+        return None
+    matches: list[Path] = []
+    for raw in listing.stdout.split(b"\0"):
+        if raw.rsplit(b"/", 1)[-1] != b"SKILL.md":
+            continue
+        path = root / raw.decode("utf-8", errors="replace")
+        if path.is_file():
+            matches.append(path)
+    return sorted(matches)
+
+
+def check_tree(
+    roots: list[Path], tracked_only: bool = False
+) -> tuple[list[str], list[str]]:
     """Return (failures, warnings): failure rows name the file and length
-    over the cap; warning rows name over-warn files."""
+    over the cap; warning rows name over-warn files. With ``tracked_only``
+    (the default scan) a directory root inside a git checkout selects only
+    repository-tracked ``SKILL.md`` files, and falls back to the recursive
+    selection outside a checkout; explicit roots keep the recursive
+    selection."""
     failures: list[str] = []
     warnings: list[str] = []
     for root in roots:
-        skill_files = (
-            sorted(root.rglob("SKILL.md"))
-            if root.is_dir()
-            else ([root] if root.is_file() else [])
-        )
+        if root.is_dir():
+            skill_files = tracked_skill_files(root) if tracked_only else None
+            if skill_files is None:  # no checkout, git failure, or untracked mode
+                skill_files = sorted(root.rglob("SKILL.md"))
+        else:
+            skill_files = [root] if root.is_file() else []
         for path in skill_files:
             description, length = measure(path)
             if description is None:
@@ -160,6 +208,14 @@ def _selftest() -> int:
             not any("fenced" in row for row in fails + warns),
             "body fence not swallowed",
         )
+        fails_tracked, warns_tracked = check_tree([root], tracked_only=True)
+        # Precondition: the temp root sits outside any git checkout (the
+        # default TMPDIR); inside one, tracked-only selection returns []
+        # and this equality assertion fails visibly.
+        expect(
+            (fails_tracked, warns_tracked) == (fails, warns),
+            "tracked-only scan outside a checkout keeps recursive selection",
+        )
     if failures:
         for row in failures:
             print(f"selftest FAIL: {row}", file=sys.stderr)
@@ -176,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return _selftest()
     roots = [Path(p) for p in args.paths] if args.paths else [Path(DEFAULT_TREE)]
-    failures, warnings = check_tree(roots)
+    failures, warnings = check_tree(roots, tracked_only=not args.paths)
     for row in warnings:
         print(row, file=sys.stderr)
     for row in failures:

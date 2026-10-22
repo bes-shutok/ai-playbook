@@ -201,7 +201,7 @@ Record in staging Metadata under the `Guideline pack:` field (the field name `re
 
 ## Step 3: Launch Sub-Agents in Parallel
 
-Select the full or focused panel per `review-agents/review-panel-selection.md`, recording its rationale and Domains. Before launch, mint usage per `review-staging`'s **Usage capture (production write path)** and carry its identity through the round.
+Select the full or focused panel per `review-agents/review-panel-selection.md`, recording its rationale and Domains. Before launch, mint usage per `review-staging`'s **Usage capture (production write path)** and carry its identity through the round; when the round runs from a linked worktree and the capture prints nothing, capture from the primary checkout and merge the JSON into the sidecar from a temp file (the capture's stderr note names the anchor it used).
 
 **Soften watchlist (multi-round / review-loop):** Before launching workers, read `### Soften watchlist` from the previous staging doc for this branch (and git log subjects matching `Soften r` when the section is missing). Pass every `open` row into each relevant worker prompt. Workers must either restage the issue or return an explicit reaffirmation; the orchestrator records the outcome in the new staging doc. Do not discard with `prior-review` alone when the prior outcome was a soften/revert.
 
@@ -255,7 +255,7 @@ Each worker returns a JSON array plus `descendant_launches`. Fully expanded find
 ]
 ```
 
-**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; the enum values, field types, clean-verdict rules, the min-date fences (`EXTENDED_SIDECAR_MIN_DATE`, `RECORD_KIND_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`.
+**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; the clean-verdict rules, the min-date fences (`EXTENDED_SIDECAR_MIN_DATE`, `RECORD_KIND_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`; field types and the descriptor-bound values live in the validator's schema descriptor, whose structural shapes `--scaffold` renders; the remaining allowed values (the findings-row enums, the discard codes, the panel statuses) stay documented in `review-staging`.
 
 **Conditional lenses:** load premortem and concurrency inside `risk` per `review-panel-selection.md`.
 

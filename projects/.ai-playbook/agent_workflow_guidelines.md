@@ -839,9 +839,9 @@ When an implement sub-agent reports that work for the current task "was already 
 
 50.6. **Read facts minimally and safely.** Task-start instructions to read facts do not require printing the full file: retrieve only the keys or section needed, because local facts may contain credentials or other sensitive values. Keep secret values out of tool output, logs, diffs, and reports; verify presence without printing a value when possible.
 
-## 53. MCP OAuth Credentials: Paths in Facts, Tokens in credentials/
+## 53. Credential Storage: References in Facts and Docs, Values in credentials/
 
-53.1. **Never store access or refresh tokens in `user_facts_path`, repo `repo_facts_rel`, committed docs, Jira, or Slack.** Facts may list **paths and workflow keys** (`mcp_credentials_dir`, `mcp_cursor_auth_backup`, `mcp_credentials_sync_script`).
+53.1. **Never store a credential-like literal in facts stores or shared records.** Credential-like literal: an API key, password, client secret, private key, access token, refresh token, or comparable authenticator. Covered stores: `user_facts_path`, repo `repo_facts_rel`, committed documentation, Jira, and Slack. Store only non-secret **location or workflow references** (`mcp_credentials_dir`, `mcp_cursor_auth_backup`, `mcp_credentials_sync_script`). Safe retrieval and output of facts values: §50.6.
 
 53.2. **Backup location:** `~/.ai-playbook/credentials/` (mode `700`; JSON files mode `600`). Separate Cursor MCP backup (`mcp-cursor.json`) from `mcp-remote` CLI backup (`mcp-atlassian-mcp-remote/`).
 

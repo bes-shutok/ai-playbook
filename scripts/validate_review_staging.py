@@ -17,9 +17,10 @@ result must invoke --hard (the report-only reading rule in
 scripts/OUTCOME_CONTRACT.md; preflight keeps its inventory posture where
 findings never move its exit or its label). Every non-metadata run ends with
 exactly one final `OUTCOME:` line on stdout after the human-readable
-evidence; `--help` and `--selftest` are metadata exits with no `OUTCOME:`
-line. Declared placement deviation: a `--json` run carries the outcome as
-the JSON `outcome` field and emits no stdout `OUTCOME:` line.
+evidence; `--help`, `--selftest`, and `--scaffold` are metadata exits with
+no `OUTCOME:` line (--scaffold prints a mode-scaffold JSON envelope and
+writes no file). Declared placement deviation: a `--json` run carries the
+outcome as the JSON `outcome` field and emits no stdout `OUTCOME:` line.
 Library surfaces sit outside this CLI contract and keep their function-level
 behavior: `validate_staging_file`, the `is_staging_review_path` scope helper
 consumed by the done-sweep lib, and the module imports in
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -71,6 +73,18 @@ except Exception:  # pragma: no cover - a corrupt sibling must fail open too
 # footprint (no line appended). Subprocess invocations of the script stay
 # measured as designed.
 _selftest_telemetry_suppressed = False
+
+# Scaffold-mode suppression (review-staging schema scaffold and validation
+# reuse plan, Task 2): --scaffold is likewise a metadata emission, not a
+# measured lane, and it must leave no telemetry footprint and write no file.
+# The production telemetry write in ``main()``'s finally consults this guard
+# and stays silent for the scaffold mode only; every validation mode keeps
+# recording. ``main()`` scopes the guard to its own call (saved at entry,
+# restored in the finally after the telemetry decision), so an in-process
+# scaffold call never silences a later validation call in the same process;
+# the embedded selftest additionally saves and restores it around its
+# in-process telemetry witness.
+_scaffold_telemetry_suppressed = False
 
 # Finding-record calibration vocabulary (machinery script refactor program,
 # Task 4): the closed enums and the per-finding calibration checks live in
@@ -169,38 +183,12 @@ SHARED_PATTERN_OWNERS = frozenset(
 CANONICAL_PATTERN_RE = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*$"
 )
-# Version-1 top-level sidecar contract. Required fields must all be present;
-# optional fields are permitted in their documented type (``depth`` string,
-# ``domains`` list, ``extensions`` object). Any other top-level field is
-# rejected; future extensions belong inside the object-valued ``extensions``.
-V1_REQUIRED_TOP_LEVEL_FIELDS = (
-    "schema_version",
-    "review_type",
-    "date",
-    "artifact_slug",
-    "round",
-    "panel_mode",
-    "selection_reason",
-    "source_kind",
-    "source_digest",
-    "escalation_reason",
-    "counts",
-    "panel",
-    "deduplication_groups",
-    "discarded",
-    "severity_calibration",
-    "triage_outcomes",
-    "findings",
-    "overflow",
-    "soften_watchlist",
-)
-# Optional version-1 top-level fields with documented types: ``depth`` string,
-# ``domains`` list, ``verdict`` string ``yes``/``no``, ``extensions`` object.
-# ``usage`` is allowlisted only: the validator never gates its shape. Shape
-# ownership lives in the capture module's selftests
-# (``scripts/review_usage_capture.py --selftest``), the single producer of
-# the field, so a malformed ``usage`` value validates here by design.
-V1_OPTIONAL_TOP_LEVEL_FIELDS = ("depth", "domains", "verdict", "extensions", "usage")
+# The version-1 top-level sidecar inventory (required and optional fields)
+# lives in V1_SCHEMA_DESCRIPTOR below, the single owner of the current-v1
+# schema declaration (review-staging schema scaffold and validation reuse
+# plan, Task 1); the exported tuples are derived views over it. Any other
+# top-level field is rejected; future extensions belong inside the
+# object-valued ``extensions``.
 # r6 F8: version-1 ``date`` is a shape-checked string (calendar validity is
 # out of scope; the documented contract is the format). ``\Z`` (not ``$``)
 # so a trailing newline cannot slip through, ASCII-only ``[0-9]`` so
@@ -340,55 +328,9 @@ COVERAGE_OUTCOME_VALUES = (
     "degraded",
     "failed",
 )
-COVERAGE_ALLOWED_KEYS = frozenset(
-    {
-        "outcome",
-        "material_lens_set",
-        "completed",
-        "replacement",
-        "inherited_coverage",
-        "missing",
-        "attempts",
-        "retry_budget",
-    }
-)
-ATTEMPT_ALLOWED_KEYS = frozenset(
-    {
-        "attempt_id",
-        "worker",
-        "lenses",
-        "started_at",
-        "deadline",
-        "elapsed",
-        "outcome",
-        "failure_class",
-        "usage_state",
-        "admission_state",
-        "admission_error_class",
-        "execution_mode",
-        "attempt_number",
-        "retry_of",
-        "contributed_coverage",
-        "prompt_scope",
-        "artifact",
-        "sidecar",
-    }
-)
-COVERAGE_REPLACEMENT_ALLOWED_KEYS = frozenset(
-    {"lens", "original_artifact", "original_sidecar", "original_failure"}
-)
-COVERAGE_INHERITED_ALLOWED_KEYS = frozenset(
-    {"lens", "artifact", "sidecar"}
-)
-COVERAGE_RETRY_BUDGET_ALLOWED_KEYS = frozenset(
-    {
-        "per_attempt_timeout_minutes",
-        "per_worker_max",
-        "wall_clock_ceiling_minutes",
-        "exhausted",
-        "exhaustion_reason",
-    }
-)
+# The coverage object's allowed local keys and nested row-shape key sets
+# live in V1_SCHEMA_DESCRIPTOR's "coverage" section (Task 1 descriptor
+# consolidation); the exported names are derived views over it.
 ATTEMPT_OUTCOME_VALUES = frozenset(
     {"complete", "failed", "timeout", "cancelled", "malformed-output"}
 )
@@ -507,12 +449,6 @@ VALID_RISK_SIGNALS = frozenset(
         "security-or-rollout-boundary",
     }
 )
-V1_EXTENDED_REQUIRED_FIELDS = (
-    "review_mode",
-    "risk_signals",
-    "prior_findings_filter",
-    "last_fix_commit",
-)
 # Release-gate ledger classification enum (fresh-review coverage plan,
 # Tasks 5 and 7): every deferred-boundary entry must carry exactly one of
 # these values.
@@ -618,6 +554,361 @@ VALID_DISCARD_REASONS = frozenset({
     "excerpt-mismatch",
     "wrong-owner",
 })
+
+# The single current-v1 schema descriptor (review-staging schema scaffold
+# and validation reuse plan, Task 1): one declaration of the unconditional
+# required/optional field presence, the structural types, the allowed local
+# keys, and the nested shapes. Four consumers read it:
+# ``validate_version1_payload`` (presence, the null-form exemption set, and
+# the structural value gates), ``validate_current_payload`` (the shared
+# mistyped-container guard dispatches on each field's declared kind),
+# ``validate_coverage_contract`` (the coverage allowed-key sets and the
+# lens-name list fields), and ``build_scaffold_payload`` (the scaffold
+# template walks the same sections). Ownership boundaries the descriptor
+# deliberately does NOT absorb, each keeping its existing gate:
+# date-conditioned field presence and the other date fences, cross-field
+# semantics, Markdown/sidecar parity, linked-record checks, delegated
+# extension schemas, and the ``usage`` value -- ``usage`` is allowlisted
+# only (its value shape belongs to the capture module), so its spec
+# declares no shape and the scaffold omits the key.
+#
+# Per-field spec keys:
+# - ``type``: the structural JSON type; a tuple lists the accepted forms.
+# - ``gate``: which existing owner consumes the spec -- "v1" (the
+#   descriptor-driven structural loop in validate_version1_payload),
+#   "container" (the shared mistyped-container guards, dispatched on the
+#   declared kind), "presence"
+#   (presence-only: both accepted shapes, no value gate), "coverage"
+#   (validate_coverage_contract), "record-kind" (the shared record_kind
+#   enum helper), "none" (usage: no gate at all). For "classifier"
+#   (schema_version: classify_sidecar_schema's version gate) and
+#   "current" (panel_mode/source_kind/source_digest: validate_current_payload's
+#   procedural value gates) the tag only NAMES the procedural owner: those
+#   gates intentionally stay outside the descriptor and do not read the spec.
+# - ``null_form``: the documented null-when-not-applicable required fields
+#   the r5 F1 explicit-null gate exempts.
+# - ``null``: "reject" (a PRESENT JSON null fails this field's own gate)
+#   versus the default skip (the r5 F1 null gate or a documented null form
+#   owns the absent shape).
+# - ``enum``/``enum_style``: the closed vocabulary and its message shape.
+# - ``format``/``format_error``/``type_error``/``items_enum``/
+#   ``items_error``: targeted message or element overrides where the
+#   generic shape would not be byte-identical to the pre-consolidation
+#   gates.
+V1_SCHEMA_DESCRIPTOR = {
+    "required": {
+        "schema_version": {"gate": "classifier"},
+        "review_type": {"type": str, "gate": "v1"},
+        "date": {
+            "type": str,
+            "gate": "v1",
+            "format": V1_DATE_RE,
+            "format_error": (
+                "version-1 sidecar field 'date' must be a string in "
+                "YYYY-MM-DD format"
+            ),
+        },
+        "artifact_slug": {"type": str, "gate": "v1"},
+        "round": {"type": (str, int), "gate": "v1"},
+        "panel_mode": {"type": str, "gate": "current"},
+        "selection_reason": {"type": str, "gate": "v1", "null_form": True},
+        "source_kind": {"type": str, "gate": "current"},
+        "source_digest": {"type": str, "gate": "current"},
+        "escalation_reason": {"type": str, "gate": "v1", "null_form": True},
+        "counts": {"type": dict, "gate": "container"},
+        "panel": {"type": list, "gate": "container"},
+        "deduplication_groups": {"type": list, "gate": "container"},
+        "discarded": {"type": list, "gate": "container"},
+        "severity_calibration": {"type": list, "gate": "container"},
+        "triage_outcomes": {"type": (list, dict), "gate": "presence"},
+        "findings": {"type": list, "gate": "container"},
+        "overflow": {"type": list, "gate": "container"},
+        "soften_watchlist": {"type": list, "gate": "container"},
+    },
+    "optional": {
+        "depth": {"type": str, "gate": "v1", "null": "reject"},
+        "domains": {"type": list, "gate": "v1", "null": "reject"},
+        "verdict": {
+            "enum": VERDICT_VALUES,
+            "gate": "v1",
+            "enum_style": "options",
+            "null": "reject",
+        },
+        "extensions": {
+            "type": dict,
+            "gate": "v1",
+            "null": "reject",
+            "type_error": (
+                "version-1 sidecar 'extensions' must be an object when "
+                "present"
+            ),
+        },
+        # Allowlisted only: the validator never gates the shape. The single
+        # producer is the capture module
+        # (``scripts/review_usage_capture.py --selftest``), so a malformed
+        # ``usage`` value validates here by design.
+        "usage": {"gate": "none"},
+    },
+    # Date-conditioned presence: the fence gates in
+    # validate_version1_payload own whether the field must be present; the
+    # structural value gate runs whenever the field IS present (the
+    # presence-vs-value rule).
+    "extended": {
+        "review_mode": {
+            "enum": VALID_REVIEW_MODES,
+            "gate": "v1",
+            "enum_style": "membership",
+        },
+        "risk_signals": {
+            "type": list,
+            "gate": "v1",
+            "null": "reject",
+            "items_enum": VALID_RISK_SIGNALS,
+            "items_error": (
+                "version-1 sidecar risk_signals tag {tag!r} must be one "
+                "of the documented kebab-case signal tags: "
+                + str(sorted(VALID_RISK_SIGNALS))
+            ),
+        },
+        "prior_findings_filter": {"type": bool, "gate": "v1"},
+        "last_fix_commit": {
+            "type": str,
+            "gate": "v1",
+            "type_error": (
+                "version-1 sidecar field 'last_fix_commit' must be a "
+                "string or null"
+            ),
+        },
+    },
+    # Conditionally present fields whose presence another gate owns.
+    "conditional": {
+        "coverage": {"type": dict, "gate": "coverage"},
+        "record_kind": {"enum": RECORD_KIND_VALUES, "gate": "record-kind"},
+    },
+    # The coverage object's nested shape: allowed local keys and container
+    # kinds. The semantic gates (outcome enums, verdict cross-field rules,
+    # link checks) stay in validate_coverage_contract.
+    "coverage": {
+        "allowed_keys": frozenset(
+            {
+                "outcome",
+                "material_lens_set",
+                "completed",
+                "replacement",
+                "inherited_coverage",
+                "missing",
+                "attempts",
+                "retry_budget",
+            }
+        ),
+        "lens_name_lists": ("material_lens_set", "completed", "missing"),
+        "object_lists": {
+            "replacement": frozenset(
+                {
+                    "lens",
+                    "original_artifact",
+                    "original_sidecar",
+                    "original_failure",
+                }
+            ),
+            "inherited_coverage": frozenset(
+                {"lens", "artifact", "sidecar"}
+            ),
+            "attempts": frozenset(
+                {
+                    "attempt_id",
+                    "worker",
+                    "lenses",
+                    "started_at",
+                    "deadline",
+                    "elapsed",
+                    "outcome",
+                    "failure_class",
+                    "usage_state",
+                    "admission_state",
+                    "admission_error_class",
+                    "execution_mode",
+                    "attempt_number",
+                    "retry_of",
+                    "contributed_coverage",
+                    "prompt_scope",
+                    "artifact",
+                    "sidecar",
+                }
+            ),
+        },
+        "objects": {
+            "retry_budget": frozenset(
+                {
+                    "per_attempt_timeout_minutes",
+                    "per_worker_max",
+                    "wall_clock_ceiling_minutes",
+                    "exhausted",
+                    "exhaustion_reason",
+                }
+            ),
+        },
+    },
+}
+
+# Derived single-source views over the descriptor. The exported names keep
+# their pre-consolidation contracts for the fence loops, the preflight
+# inventory, and the sibling consumers (scripts/plan_readiness.py,
+# scripts/test_plan_readiness.py); the descriptor above is the only place
+# the inventory is declared. The tuple orders match the pre-consolidation
+# declarations exactly (the preflight inventory pins the required order).
+V1_REQUIRED_TOP_LEVEL_FIELDS = tuple(V1_SCHEMA_DESCRIPTOR["required"])
+V1_OPTIONAL_TOP_LEVEL_FIELDS = tuple(V1_SCHEMA_DESCRIPTOR["optional"])
+V1_EXTENDED_REQUIRED_FIELDS = tuple(V1_SCHEMA_DESCRIPTOR["extended"])
+COVERAGE_ALLOWED_KEYS = V1_SCHEMA_DESCRIPTOR["coverage"]["allowed_keys"]
+COVERAGE_REPLACEMENT_ALLOWED_KEYS = V1_SCHEMA_DESCRIPTOR["coverage"][
+    "object_lists"
+]["replacement"]
+COVERAGE_INHERITED_ALLOWED_KEYS = V1_SCHEMA_DESCRIPTOR["coverage"][
+    "object_lists"
+]["inherited_coverage"]
+COVERAGE_RETRY_BUDGET_ALLOWED_KEYS = V1_SCHEMA_DESCRIPTOR["coverage"][
+    "objects"
+]["retry_budget"]
+ATTEMPT_ALLOWED_KEYS = V1_SCHEMA_DESCRIPTOR["coverage"]["object_lists"][
+    "attempts"
+]
+# The r5 F1 null gate's documented exemption: the two nullable enum-reason
+# fields, derived from the descriptor's ``null_form`` markers.
+V1_NULL_FORM_REQUIRED_FIELDS = frozenset(
+    name
+    for name, spec in V1_SCHEMA_DESCRIPTOR["required"].items()
+    if spec.get("null_form")
+)
+
+# Structural-type phrases for the descriptor-driven version-1 gate's
+# targeted messages (byte-identical to the pre-consolidation gates). The
+# dual-typed tuple's pinned phrase is "a string or integer" (no article on
+# the second noun), so tuples join the bare nouns.
+_V1_TYPE_PHRASES = {
+    str: "a string",
+    int: "an integer",
+    bool: "a boolean",
+    list: "a list",
+    dict: "an object",
+}
+_V1_TYPE_TUPLE_NOUNS = {
+    str: "string",
+    int: "integer",
+}
+
+
+def _v1_type_phrase(declared) -> str:
+    if isinstance(declared, tuple):
+        return "a " + " or ".join(
+            _V1_TYPE_TUPLE_NOUNS[t] for t in declared
+        )
+    return _V1_TYPE_PHRASES[declared]
+
+
+def _gate_v1_spec_field(
+    payload: dict,
+    result: ValidationResult,
+    field_name: str,
+    spec: dict,
+) -> None:
+    """The descriptor-driven structural value gate for one version-1 field
+    (review-staging schema scaffold and validation reuse plan, Task 1).
+
+    Emits the same targeted error the pre-consolidation per-field loops
+    emitted, derived from the field's declared spec. An ABSENT field is
+    never gated here (presence is the presence loop's or the fence's
+    report). A PRESENT JSON null follows the spec's ``null`` policy: the
+    default skip leaves the null shape to its documented owner (the r5 F1
+    explicit-null gate, or the documented not-applicable form), while
+    ``null: reject`` reports the field's own gate (explicit null is not the
+    absent form for these fields).
+    """
+    if field_name not in payload:
+        return
+    value = payload[field_name]
+    if value is None and spec.get("null") != "reject":
+        return
+    if "enum" in spec:
+        if spec.get("enum_style") == "options":
+            if value not in spec["enum"]:
+                result.add_error(
+                    f"version-1 sidecar field {field_name!r} must be "
+                    + " or ".join(repr(v) for v in spec["enum"])
+                )
+        else:
+            if not isinstance(value, str) or value not in spec["enum"]:
+                result.add_error(
+                    f"version-1 sidecar field {field_name!r} must be one "
+                    f"of {sorted(spec['enum'])}; got {value!r}"
+                )
+        return
+    declared = spec["type"]
+    declared_types = declared if isinstance(declared, tuple) else (declared,)
+    if bool in declared_types:
+        type_ok = isinstance(value, bool)
+    else:
+        type_ok = isinstance(value, declared_types) and not isinstance(
+            value, bool
+        )
+    if not type_ok:
+        result.add_error(
+            spec.get("type_error")
+            or (
+                f"version-1 sidecar field {field_name!r} must be "
+                + _v1_type_phrase(declared)
+            )
+        )
+        return
+    if "format" in spec and not spec["format"].match(value):
+        result.add_error(spec["format_error"])
+
+
+def _reject_placeholder_remnants(payload: dict, result: ValidationResult) -> None:
+    """The scaffold copy-through gate: no whole-value unfilled scaffold
+    placeholder reaches a validated sidecar through the caller-numbered
+    fields (the ``counts`` values, the panel raw/solo/echo counters) or
+    the free-form ``extensions`` subtree (values and keys). A swept value
+    or key that BEGINS with the placeholder prefix fails; a mention
+    mid-string does not, because prose fields (finding bodies, discard
+    reasons) are deliberately not swept -- quoting the placeholder syntax
+    in reviewed content is legitimate. Fail-closed, so a
+    faithful-but-partial fill cannot ship a template string into
+    aggregation.
+    """
+    def _reject(value: object) -> None:
+        result.add_error(
+            "version-1 sidecar carries an unfilled scaffold "
+            f"placeholder: {value!r}; fill every scaffold caller "
+            "placeholder before validation"
+        )
+
+    def _walk(node: object) -> None:
+        if isinstance(node, str):
+            if node.startswith("<CALLER:"):
+                _reject(node)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, str) and key.startswith("<CALLER:"):
+                    _reject(key)
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    counts = payload.get("counts")
+    if isinstance(counts, dict):
+        _walk(counts)
+    panel = payload.get("panel")
+    if isinstance(panel, list):
+        for row in panel:
+            if isinstance(row, dict):
+                for field in ("raw", "solo", "echo"):
+                    if field in row:
+                        _walk(row[field])
+    extensions = payload.get("extensions")
+    if extensions is not None:
+        _walk(extensions)
 
 
 def finding_has_comment_and_analysis(block: str) -> tuple[bool, bool]:
@@ -2838,6 +3129,226 @@ def _require_object(
     return {}
 
 
+def _descriptor_field_spec(field_name: str) -> dict | None:
+    """The descriptor spec for a top-level sidecar field, or None when the
+    field is not declared (V1_SCHEMA_DESCRIPTOR is the single owner of the
+    top-level inventory)."""
+    for section in ("required", "optional", "extended", "conditional"):
+        spec = V1_SCHEMA_DESCRIPTOR[section].get(field_name)
+        if spec is not None:
+            return spec
+    return None
+
+
+def _require_descriptor_container(
+    payload: dict,
+    field_name: str,
+    result: ValidationResult,
+    schema_label: str,
+) -> list | dict:
+    """Descriptor-routed mistyped-container gate (review-staging schema
+    scaffold and validation reuse plan, Task 1): dispatches on the container
+    kind V1_SCHEMA_DESCRIPTOR declares for the field and otherwise behaves
+    exactly like the shared ``_require_array`` / ``_require_object`` guards
+    it calls (same empty substitute, same null-as-absent contract, same
+    targeted error text). An undeclared field keeps the array guard, the
+    guards' historical default."""
+    spec = _descriptor_field_spec(field_name)
+    if spec is not None and spec.get("type") is dict:
+        return _require_object(payload, field_name, result, schema_label)
+    return _require_array(payload, field_name, result, schema_label)
+
+
+# The scaffold's advisory example values, keyed by descriptor field name.
+# Examples illustrate each field's structural shape; the descriptor owns the
+# contract. Every caller-specific value is a ``<CALLER: ...>`` placeholder;
+# an unfilled scaffold fails the existing gates, which name every placeholder
+# a gate consumes (``counts.staged_findings`` rides the record-free
+# conservation value gate; as of the copy-through gate, every whole-value
+# ``<CALLER:`` remnant in the caller-numbered fields and the extensions
+# subtree is named by ``_reject_placeholder_remnants``; ``review_type``
+# and ``artifact_slug`` type gates accept placeholder strings, so those
+# two ride SCAFFOLD_LABELS' advisory prose beside the fence and coverage
+# gates that fail the unfilled scaffold), and the ``source_digest``
+# placeholder is deliberately not valid hex. A field added to V1_SCHEMA_DESCRIPTOR without an example here fails
+# the builder loudly instead of silently emitting a wrong shape.
+_SCAFFOLD_EXAMPLES = {
+    "schema_version": 1,
+    "review_type": "<CALLER: review type, e.g. plan>",
+    "date": "<CALLER: record date, YYYY-MM-DD, after every date fence>",
+    "artifact_slug": "<CALLER: artifact slug>",
+    "round": "<CALLER: round id, rN form or integer, matching the staging filename>",
+    "panel_mode": "full",
+    "selection_reason": None,
+    "source_kind": "<CALLER: plan|rfc|document|code>",
+    "source_digest": (
+        "<CALLER: 64-char lowercase hex SHA-256 of the reviewed artifact>"
+    ),
+    "escalation_reason": None,
+    "counts": {
+        "workers_launched": "<CALLER: number of launched panel workers>",
+        "staged_findings": "<CALLER: staged findings count>",
+        "raw_findings": (
+            "<CALLER: raw findings count across workers; the summarizer's "
+            "artifact size bucket reads it>"
+        ),
+    },
+    "panel": [
+        {
+            "worker": worker,
+            "lenses": sorted(REQUIRED_PANEL_LENSES[worker]),
+            "parent_worker": None,
+            "descendant_launches": [],
+            "status": "<CALLER: complete|skipped|failed|timed-out>",
+            "raw": "<CALLER: raw findings the worker returned>",
+            "solo": "<CALLER: solo staged count for the worker>",
+            "echo": "<CALLER: echo staged count for the worker>",
+            "relaunch": False,
+        }
+        for worker in DEFAULT_PANEL_WORKERS
+    ],
+    "deduplication_groups": [],
+    "discarded": [],
+    "severity_calibration": [],
+    "triage_outcomes": {},
+    "findings": [],
+    "overflow": [],
+    "soften_watchlist": [],
+    "record_kind": "canonical",
+    "extensions": {
+        "convergence": {
+            "self_heal_attempt": {
+                "status": "<CALLER: unused|consumed|unknown>",
+                "run_id": (
+                    "<CALLER: the artifact chain's 32-hex run_id: r1's "
+                    "minted review-run-id carried unchanged across rounds; "
+                    "only a recovery round records its own minted id with "
+                    "status unknown>"
+                ),
+            }
+        }
+    },
+    "review_mode": "<CALLER: fresh-adversarial|targeted|verification-only>",
+    "risk_signals": [],
+    "prior_findings_filter": "<CALLER: true|false>",
+    "last_fix_commit": "<CALLER: full commit sha, or null when none>",
+}
+
+# The scaffold's per-field labels: advisory prose naming where caller values
+# belong and which presence rules the descriptor does not represent (the
+# date-conditioned fences and the Markdown-side mint pair). Task 2's
+# --scaffold envelope serializes these beside the template.
+SCAFFOLD_LABELS = {
+    "triage_outcomes": (
+        "recommended: the review-staging per-worker/lens rollup (array of "
+        "rows as in its minimum-schema example); the validator checks "
+        "presence only and also accepts an object rollup"
+    ),
+    "usage": (
+        "omitted: allowlisted only; the capture module owns the value shape "
+        "and the scaffold invents none"
+    ),
+    "extensions": (
+        "present: a post-fence canonical record (on or after "
+        f"{SELF_HEAL_STATE_MIN_DATE}) requires "
+        "extensions.convergence.self_heal_attempt with status "
+        "unused|consumed|unknown and the chain's run_id (normally r1's "
+        "minted review-run-id carried unchanged, never the current round's "
+        "fresh mint; a recovery round records its own minted id with "
+        "status unknown); a delegated extension such as corrections is "
+        "absent, never null or an empty array"
+    ),
+    "soften_watchlist": (
+        "always present, even when empty: the Markdown parity arm keys on it"
+    ),
+    "coverage": (
+        "date- and source_kind-conditioned: required for plan records dated "
+        f"on or after {COVERAGE_SIDECAR_MIN_DATE}; the semantic gates "
+        "(outcome/verdict rules, link checks) stay validator-owned"
+    ),
+    "date_conditioned": (
+        "record_kind and the four extended freshness fields (review_mode, "
+        "risk_signals, prior_findings_filter, last_fix_commit) are "
+        "date-conditioned: extended fields on or after "
+        f"{EXTENDED_SIDECAR_MIN_DATE}, record_kind on or after "
+        f"{RECORD_KIND_SIDECAR_MIN_DATE}"
+    ),
+    "markdown_metadata": (
+        "the Markdown Metadata twin must carry the review-run-id and "
+        "review-started-at-ms mint pair or the exact fallback marker "
+        f"{USAGE_MINT_FALLBACK_MARKER!r} on records dated on or after "
+        f"{USAGE_MINT_PAIR_MIN_DATE}"
+    ),
+}
+
+
+def _scaffold_coverage_example() -> dict:
+    """The scaffold's coverage example: the descriptor's coverage shape with
+    caller placeholders in the hand-filled lens lists and one
+    inherited-coverage row showing the required row shape."""
+    coverage_spec = V1_SCHEMA_DESCRIPTOR["coverage"]
+    example: dict = {
+        "outcome": "<CALLER: clean|replacement-covered|degraded|failed>",
+    }
+    for name in coverage_spec["lens_name_lists"]:
+        example[name] = ["<CALLER: lens name>"]
+    example["inherited_coverage"] = [
+        {
+            key: "<CALLER: inherited-coverage row value>"
+            for key in sorted(
+                coverage_spec["object_lists"]["inherited_coverage"]
+            )
+        }
+    ]
+    return example
+
+
+def build_scaffold_payload() -> dict:
+    """Build the current-v1 plan-review sidecar scaffold template from
+    V1_SCHEMA_DESCRIPTOR (review-staging schema scaffold and validation
+    reuse plan, Task 1).
+
+    The descriptor owns the field inventory; this builder attaches only the
+    advisory example values in ``_SCAFFOLD_EXAMPLES``. The template models a
+    record dated after every current fence: the date-conditioned fields
+    (``record_kind``, the four extended freshness fields, and the
+    ``coverage`` object) are all named in ``SCAFFOLD_LABELS`` as
+    date-conditioned; ``record_kind`` and ``risk_signals`` carry the
+    canonical plan-review defaults the template models, while the rest are
+    ``<CALLER: ...>`` placeholders. ``usage`` is
+    omitted entirely: it is allowlisted only, its value shape belongs to the
+    capture module, and the scaffold invents no shape for it. The output is
+    an unvalidated template carrying no record-validation outcome; filling
+    the ``<CALLER: ...>`` placeholders is what makes it validate.
+    """
+    scaffold: dict = {}
+    for name in V1_SCHEMA_DESCRIPTOR["required"]:
+        scaffold[name] = copy.deepcopy(_SCAFFOLD_EXAMPLES[name])
+    for name in V1_SCHEMA_DESCRIPTOR["extended"]:
+        scaffold[name] = copy.deepcopy(_SCAFFOLD_EXAMPLES[name])
+    scaffold["record_kind"] = _SCAFFOLD_EXAMPLES["record_kind"]
+    # Extensions carry the convergence example a post-self-heal-fence
+    # canonical record needs; a delegated extension such as corrections is
+    # absent, never null or an empty array.
+    scaffold["extensions"] = copy.deepcopy(_SCAFFOLD_EXAMPLES["extensions"])
+    scaffold["coverage"] = _scaffold_coverage_example()
+    return scaffold
+
+
+def _scaffold_envelope() -> dict:
+    """The ``--scaffold`` output envelope (review-staging schema scaffold
+    and validation reuse plan, Task 2): the descriptor-built current-v1
+    template under ``scaffold``, the advisory field labels beside it, and
+    ``mode: scaffold`` marking the whole payload as unvalidated template
+    output. No ``outcome`` key exists: the envelope carries no
+    record-validation verdict, and a caller must not read one into it."""
+    return {
+        "mode": "scaffold",
+        "scaffold": build_scaffold_payload(),
+        "labels": dict(SCAFFOLD_LABELS),
+    }
+
+
 def _coverage_link_paths(value) -> list[Path]:
     """Resolve a coverage link value (artifact or sidecar path string)
     against the process cwd and, when relative, also as recorded. Returns
@@ -3046,9 +3557,13 @@ def validate_coverage_contract(
     required-field rule, and the local-equivalence rule. Presence is
     fenced by the caller (required for ``source_kind`` ``plan`` records
     dated on or after COVERAGE_SIDECAR_MIN_DATE; validated whenever
-    present otherwise)."""
+    present otherwise). The allowed local keys and the lens-name list
+    fields come from V1_SCHEMA_DESCRIPTOR's coverage section
+    (review-staging schema scaffold and validation reuse plan, Task 1);
+    the semantic gates keep their procedural owners."""
     coverage = payload.get("coverage")
     source_kind = payload.get("source_kind")
+    coverage_spec = V1_SCHEMA_DESCRIPTOR["coverage"]
     if coverage is None:
         if (
             not coverage_exempt
@@ -3065,7 +3580,7 @@ def validate_coverage_contract(
         result.add_error("version-1 sidecar field 'coverage' must be an object")
         return
     for key in coverage:
-        if key not in COVERAGE_ALLOWED_KEYS:
+        if key not in coverage_spec["allowed_keys"]:
             result.add_error(
                 f"version-1 sidecar 'coverage' rejects unknown key {key!r}"
             )
@@ -3075,7 +3590,7 @@ def validate_coverage_contract(
             "coverage outcome must be one of "
             f"{[v for v in COVERAGE_OUTCOME_VALUES]}; got {outcome!r}"
         )
-    for key in ("material_lens_set", "completed", "missing"):
+    for key in coverage_spec["lens_name_lists"]:
         value = coverage.get(key)
         if value is not None and (
             not isinstance(value, list)
@@ -3096,7 +3611,7 @@ def validate_coverage_contract(
                 )
                 continue
             for key in entry:
-                if key not in COVERAGE_REPLACEMENT_ALLOWED_KEYS:
+                if key not in coverage_spec["object_lists"]["replacement"]:
                     result.add_error(
                         "coverage 'replacement' entry rejects unknown key "
                         f"{key!r}"
@@ -3113,7 +3628,9 @@ def validate_coverage_contract(
                 )
                 continue
             for key in entry:
-                if key not in COVERAGE_INHERITED_ALLOWED_KEYS:
+                if key not in coverage_spec["object_lists"][
+                    "inherited_coverage"
+                ]:
                     result.add_error(
                         "coverage 'inherited_coverage' entry rejects "
                         f"unknown key {key!r}"
@@ -3129,7 +3646,7 @@ def validate_coverage_contract(
             retry_budget = None
         else:
             for key in retry_budget:
-                if key not in COVERAGE_RETRY_BUDGET_ALLOWED_KEYS:
+                if key not in coverage_spec["objects"]["retry_budget"]:
                     result.add_error(
                         "coverage 'retry_budget' rejects unknown key "
                         f"{key!r}"
@@ -3183,7 +3700,7 @@ def validate_coverage_contract(
             result.add_error("coverage 'attempts' entries must be objects")
             continue
         for key in attempt:
-            if key not in ATTEMPT_ALLOWED_KEYS:
+            if key not in coverage_spec["object_lists"]["attempts"]:
                 result.add_error(
                     "coverage attempt record rejects unknown key "
                     f"{key!r} (attempt telemetry is structurally "
@@ -4466,9 +4983,8 @@ def validate_version1_payload(
                 f"version-1 sidecar missing required top-level field "
                 f"{field_name!r}"
             )
-        elif payload[field_name] is None and field_name not in (
-            "selection_reason",
-            "escalation_reason",
+        elif payload[field_name] is None and (
+            field_name not in V1_NULL_FORM_REQUIRED_FIELDS
         ):
             # r5 F1: an explicit JSON null for a version-1 required field is
             # NOT absent (except the two documented null-when-not-applicable
@@ -4488,73 +5004,25 @@ def validate_version1_payload(
                 "must not be JSON null; null-as-absent compatibility applies "
                 "only to versionless records"
             )
-    # r6 F8: scalar and optional-field type gates, placed beside (not woven
-    # into) the r5 F1 null gate above. Required scalar fields skip ``None`` so
-    # the r5 F1 gate stays the single reporter for explicit-null required
-    # fields; optional fields fire on any PRESENT value including explicit
-    # null (null is not the absent form for optional version-1 fields).
-    # v1-gate-trio: the tuple widens with the enum-reason pair
-    # (``selection_reason`` / ``escalation_reason``). For that pair the None
-    # skip is correctness, not just delegation: null is the documented
-    # not-applicable form (r5 F1 carve-out), so only present non-strings are
-    # reported here. ``source_kind`` stays out of the tuple: its membership
-    # gate in ``validate_current_payload`` already rejects hashable mistyped
-    # values and a second gate would double-report them.
-    # The None contract differs per group, so the widened tuple is split into
-    # two loops sharing one error-emitting body (``_gate_v1_scalar`` below):
-    # both loops skip ``None``, but for different documented reasons.
-
-    def _gate_v1_scalar(field_name: str, value) -> None:
-        if not isinstance(value, str):
-            result.add_error(
-                f"version-1 sidecar field {field_name!r} must be a string"
-            )
-            return
-        if field_name == "date" and not V1_DATE_RE.match(value):
-            result.add_error(
-                "version-1 sidecar field 'date' must be a string in YYYY-MM-DD "
-                "format"
-            )
-
-    # None -> r5 F1 sole reporter: the null gate above is the single reporter
-    # for explicit-null required scalars, so this loop skips ``None``.
-    for field_name in ("review_type", "artifact_slug", "date"):
-        value = payload.get(field_name)
-        if value is None:
-            continue
-        _gate_v1_scalar(field_name, value)
-    # None legal (r5 F1 carve-out): null is the documented not-applicable
-    # form for the enum-reason pair, so only present non-strings report here.
-    for field_name in ("selection_reason", "escalation_reason"):
-        value = payload.get(field_name)
-        if value is None:
-            continue
-        _gate_v1_scalar(field_name, value)
-    # v1-gate-trio: ``round`` is dual-typed by contract (string or integer;
-    # review-staging SKILL.md contract table). bool is excluded explicitly
-    # because True is an int subclass in Python; the None skip keeps the r5 F1
-    # gate the single reporter for an explicit-null required round.
-    round_value = payload.get("round")
-    if round_value is not None and (
-        isinstance(round_value, bool) or not isinstance(round_value, (str, int))
-    ):
-        result.add_error(
-            "version-1 sidecar field 'round' must be a string or integer"
-        )
-    for field_name, field_type, type_name in (
-        ("depth", str, "a string"),
-        ("domains", list, "a list"),
-    ):
-        if field_name in payload and not isinstance(
-            payload[field_name], field_type
-        ):
-            result.add_error(
-                f"version-1 sidecar field {field_name!r} must be {type_name}"
-            )
-    # Verdict gate: an explicit null is REJECTED (a round always has a
-    # verdict, and null would blur absent-fallback semantics).
-    if "verdict" in payload and payload["verdict"] not in VERDICT_VALUES:
-        result.add_error("version-1 sidecar field 'verdict' must be 'yes' or 'no'")
+    # r6 F8: scalar and optional-field structural gates, descriptor-driven
+    # (review-staging schema scaffold and validation reuse plan, Task 1):
+    # the required and optional sections of V1_SCHEMA_DESCRIPTOR own the
+    # structural types and their targeted messages; ``_gate_v1_spec_field``
+    # keeps each message byte-identical to the pre-consolidation gates.
+    # Required fields skip ``None`` so the r5 F1 null gate above stays the
+    # single reporter for explicit-null required fields, except the two
+    # ``null_form`` enum fields whose skip is correctness, not just
+    # delegation: null is their documented not-applicable form (r5 F1
+    # carve-out). The optional ``depth``/``domains``/``verdict``/
+    # ``extensions`` specs carry ``null: reject`` because a PRESENT null is
+    # not the absent form for optional version-1 fields. ``source_kind``
+    # carries no "v1" gate: its membership gate in
+    # ``validate_current_payload`` already rejects hashable mistyped values
+    # and a second gate would double-report them.
+    for section in ("required", "optional"):
+        for field_name, spec in V1_SCHEMA_DESCRIPTOR[section].items():
+            if spec.get("gate") == "v1":
+                _gate_v1_spec_field(payload, result, field_name, spec)
     # ``record_kind`` is always a legal top-level field (pre-fence records
     # may declare it voluntarily; post-fence records must, per the fence
     # below). The four worker-evidence carrier fields are legal only on a
@@ -4564,7 +5032,7 @@ def validate_version1_payload(
         set(V1_REQUIRED_TOP_LEVEL_FIELDS)
         | set(V1_OPTIONAL_TOP_LEVEL_FIELDS)
         | set(V1_EXTENDED_REQUIRED_FIELDS)
-        | {"coverage", "record_kind"}
+        | set(V1_SCHEMA_DESCRIPTOR["conditional"])
     )
     if payload.get("record_kind") == "worker-evidence":
         allowed |= set(WORKER_EVIDENCE_REQUIRED_FIELDS)
@@ -4574,10 +5042,6 @@ def validate_version1_payload(
                 f"version-1 sidecar rejects unknown top-level field {key!r}; "
                 f"future extensions belong in the object-valued 'extensions'"
             )
-    if "extensions" in payload and not isinstance(payload["extensions"], dict):
-        result.add_error(
-            "version-1 sidecar 'extensions' must be an object when present"
-        )
 
     # Extended freshness fields (fresh-review coverage plan, Task 3).
     # Grandfathering: a version-1 record whose ``date`` string is EARLIER
@@ -4694,63 +5158,43 @@ def validate_version1_payload(
     validate_coverage_contract(
         payload, result, coverage_exempt=coverage_exempt
     )
-    # r2 F6: only PRESENCE is gated on the date fence; the type, enum, and
-    # cross-field checks below run whenever a field is PRESENT, so a
-    # grandfathered-dated record voluntarily carrying the extended fields
-    # still gets its values validated.
-    review_mode = payload.get("review_mode")
-    if review_mode is not None and (
-        not isinstance(review_mode, str)
-        or review_mode not in VALID_REVIEW_MODES
+    # r2 F6: only PRESENCE is gated on the date fence; the structural value
+    # gates below run whenever a field is PRESENT, so a grandfathered-dated
+    # record voluntarily carrying the extended fields still gets its values
+    # validated. The gates are descriptor-driven (review-staging schema
+    # scaffold and validation reuse plan, Task 1); the r3 F9 per-tag
+    # membership stays beside the risk_signals spec it consumes.
+    for field_name, spec in V1_SCHEMA_DESCRIPTOR["extended"].items():
+        if spec.get("gate") == "v1":
+            _gate_v1_spec_field(payload, result, field_name, spec)
+        items_enum = spec.get("items_enum")
+        if items_enum is not None and isinstance(
+            payload.get(field_name), list
+        ):
+            # r3 F9: per-tag membership runs whenever the field is present
+            # (the presence-vs-value rule, mirroring review_mode), so a tag
+            # outside the documented closed set fails even on
+            # grandfathered-dated records voluntarily carrying the field.
+            for tag in payload[field_name]:
+                if tag not in items_enum:
+                    result.add_error(spec["items_error"].format(tag=tag))
+    _reject_placeholder_remnants(payload, result)
+    # Cross-field rules keep their procedural owners: a clean verdict with
+    # prior_findings_filter true (prior findings are context, never a
+    # review filter, on a clean round), and a clean verdict with a
+    # non-null last_fix_commit requiring review_mode 'fresh-adversarial'
+    # (a 'targeted' label on a post-fix clean round bypasses the
+    # fresh-adversarial mandate; fresh-review coverage plan, Tasks 3 and 7).
+    if payload.get("prior_findings_filter") is True and is_clean_verdict(
+        content
     ):
-        result.add_error(
-            "version-1 sidecar field 'review_mode' must be one of "
-            f"{sorted(VALID_REVIEW_MODES)}; got {review_mode!r}"
-        )
-    if "risk_signals" in payload and not isinstance(
-        payload["risk_signals"], list
-    ):
-        result.add_error(
-            "version-1 sidecar field 'risk_signals' must be a list"
-        )
-    # r3 F9: per-tag membership runs whenever the field is present (the
-    # presence-vs-value rule, mirroring review_mode above), so a tag
-    # outside the documented closed set fails even on grandfathered-dated
-    # records voluntarily carrying the field.
-    if isinstance(payload.get("risk_signals"), list):
-        for tag in payload["risk_signals"]:
-            if tag not in VALID_RISK_SIGNALS:
-                result.add_error(
-                    f"version-1 sidecar risk_signals tag {tag!r} must be "
-                    "one of the documented kebab-case signal tags: "
-                    f"{sorted(VALID_RISK_SIGNALS)}"
-                )
-    filter_value = payload.get("prior_findings_filter")
-    if filter_value is not None and not isinstance(filter_value, bool):
-        result.add_error(
-            "version-1 sidecar field 'prior_findings_filter' must be a "
-            "boolean"
-        )
-    elif filter_value is True and is_clean_verdict(content):
         result.add_error(
             "clean verdict with prior_findings_filter true: prior "
             "findings are context, never a review filter, on a clean "
             "round"
         )
-    last_fix = payload.get("last_fix_commit")
-    if last_fix is not None and not isinstance(last_fix, str):
-        result.add_error(
-            "version-1 sidecar field 'last_fix_commit' must be a string "
-            "or null"
-        )
-    # Cross-field rule (review-staging SKILL.md, version-1 sidecar
-    # contract): a clean verdict with a non-null last_fix_commit
-    # requires review_mode 'fresh-adversarial'; a 'targeted' label on a
-    # post-fix clean round bypasses the fresh-adversarial mandate
-    # (fresh-review coverage plan, Tasks 3 and 7).
-    last_fix_present = _last_fix_present(last_fix)
     if (
-        last_fix_present
+        _last_fix_present(payload.get("last_fix_commit"))
         and is_clean_verdict(content)
         and payload.get("review_mode") != "fresh-adversarial"
     ):
@@ -5026,7 +5470,7 @@ def _validate_stats_sidecar_gates(
     validate_soften_watchlist_agreement(
         content, payload, result, soften_exempt=soften_exempt
     )
-    discarded = _require_array(
+    discarded = _require_descriptor_container(
         payload, "discarded", result, schema_class
     )
     for row in discarded:
@@ -5339,7 +5783,14 @@ def validate_current_payload(
                 + _producer_note_for(payload.get("source_kind"))
             )
 
-    panel = _require_array(payload, "panel", result, schema_label)
+    # The container gates route through the descriptor
+    # (_require_descriptor_container, review-staging schema scaffold and
+    # validation reuse plan, Task 1): the guards' error text, empty
+    # substitute, and null-as-absent contract are unchanged; only the
+    # array/object kind lookup is centralized.
+    panel = _require_descriptor_container(
+        payload, "panel", result, schema_label
+    )
     launched = [
         row
         for row in panel
@@ -5381,11 +5832,15 @@ def validate_current_payload(
                 f"descendant launch {descendant!r} is not flattened into panel"
             )
 
-    counts = _require_object(payload, "counts", result, schema_label)
+    counts = _require_descriptor_container(
+        payload, "counts", result, schema_label
+    )
     if "workers_launched" in counts and counts["workers_launched"] != len(launched):
         result.add_error("counts.workers_launched does not match panel launches")
 
-    findings = _require_array(payload, "findings", result, schema_label)
+    findings = _require_descriptor_container(
+        payload, "findings", result, schema_label
+    )
     # Record-kind matrix (review records contract plan, Task 1): a declared
     # non-canonical record skips the canonical finding-hierarchy gates, so
     # its findings rows (when any) never reach the per-finding canonical
@@ -5495,7 +5950,9 @@ def validate_current_payload(
     validate_finding_order(valid_rows, result)
     validate_finding_budget(gated_findings, result)
 
-    overflow = _require_array(payload, "overflow", result, schema_label)
+    overflow = _require_descriptor_container(
+        payload, "overflow", result, schema_label
+    )
     # A declared non-canonical record skips the canonical overflow
     # placement gate (finding-hierarchy family); the container presence
     # gate above still ran.
@@ -5512,9 +5969,15 @@ def validate_current_payload(
     # truthy mistyped value (e.g. the integer 5) can never reach the
     # summarizer's len-derived counts and crash the strict audit. Absent and
     # JSON null stay absent (r4 F14).
-    _require_array(payload, "severity_calibration", result, schema_label)
-    _require_array(payload, "deduplication_groups", result, schema_label)
-    _require_array(payload, "soften_watchlist", result, schema_label)
+    _require_descriptor_container(
+        payload, "severity_calibration", result, schema_label
+    )
+    _require_descriptor_container(
+        payload, "deduplication_groups", result, schema_label
+    )
+    _require_descriptor_container(
+        payload, "soften_watchlist", result, schema_label
+    )
 
     # A declared non-canonical record skips the canonical Markdown severity
     # groups and finding-conservation gates (finding-hierarchy family,
@@ -7533,6 +7996,827 @@ def _selftest_typed_current_schema(root: Path, check) -> None:
     )
 
 
+def _selftest_schema_descriptor_scaffold(root: Path, check) -> None:
+    """Family: the current-v1 schema descriptor and its scaffold builder
+    (review-staging schema scaffold and validation reuse plan, Task 1).
+
+    RED-first: the pins fail until the single descriptor exists and the four
+    consumers (the version-1 payload gate, the current-shape container
+    gates, the coverage contract, and the scaffold builder) route through
+    it. The versionless mistyped-container pins stay owned by the
+    pre-existing families; the descriptor flips below prove the routing."""
+    import json as _json
+
+    descriptor = V1_SCHEMA_DESCRIPTOR
+
+    # The descriptor owns the field inventory: the exported tuples are
+    # derived views over the descriptor sections, in the documented order
+    # (the preflight inventory pins the required order).
+    check(
+        "descriptor: required tuple is the derived descriptor view and "
+        "carries the documented field order",
+        tuple(descriptor["required"]) == V1_REQUIRED_TOP_LEVEL_FIELDS
+        == (
+            "schema_version",
+            "review_type",
+            "date",
+            "artifact_slug",
+            "round",
+            "panel_mode",
+            "selection_reason",
+            "source_kind",
+            "source_digest",
+            "escalation_reason",
+            "counts",
+            "panel",
+            "deduplication_groups",
+            "discarded",
+            "severity_calibration",
+            "triage_outcomes",
+            "findings",
+            "overflow",
+            "soften_watchlist",
+        ),
+    )
+    check(
+        "descriptor: optional tuple is the derived descriptor view and "
+        "carries the documented field order",
+        tuple(descriptor["optional"]) == V1_OPTIONAL_TOP_LEVEL_FIELDS
+        == ("depth", "domains", "verdict", "extensions", "usage"),
+    )
+    check(
+        "descriptor: extended tuple is the derived descriptor view and "
+        "carries the documented field order",
+        tuple(descriptor["extended"]) == V1_EXTENDED_REQUIRED_FIELDS
+        == (
+            "review_mode",
+            "risk_signals",
+            "prior_findings_filter",
+            "last_fix_commit",
+        ),
+    )
+    check(
+        "descriptor: null-form required fields are the documented enum pair",
+        V1_NULL_FORM_REQUIRED_FIELDS
+        == frozenset({"selection_reason", "escalation_reason"}),
+    )
+    check(
+        "descriptor: conditional section carries coverage and record_kind",
+        set(descriptor["conditional"]) == {"coverage", "record_kind"},
+    )
+    check(
+        "descriptor: coverage key sets are the derived descriptor views",
+        descriptor["coverage"]["allowed_keys"] is COVERAGE_ALLOWED_KEYS
+        and descriptor["coverage"]["object_lists"]["attempts"]
+        is ATTEMPT_ALLOWED_KEYS
+        and descriptor["coverage"]["object_lists"]["replacement"]
+        is COVERAGE_REPLACEMENT_ALLOWED_KEYS
+        and descriptor["coverage"]["object_lists"]["inherited_coverage"]
+        is COVERAGE_INHERITED_ALLOWED_KEYS
+        and descriptor["coverage"]["objects"]["retry_budget"]
+        is COVERAGE_RETRY_BUDGET_ALLOWED_KEYS,
+    )
+
+    def stage(name: str, payload: dict) -> Path:
+        # Pre-fence filename date (mirroring the v1 contract family): the
+        # descriptor fixtures pin structural gates, not the date fences,
+        # and a post-fence name against the fixture's pre-fence sidecar
+        # date would trip the grandfather cross-check instead.
+        return _write_staging(
+            root,
+            f"2026-07-17-branch-review-desc-{name}-r1.md",
+            _version1_markdown(),
+            payload,
+        )
+
+    # Consumption pin (validate_version1_payload): the structural value gate
+    # reads the field's declared spec. Flipping date's declared type must
+    # flip the targeted error, proving the gate is descriptor-driven.
+    date_flip = _version1_payload()
+    original_date_spec = descriptor["required"]["date"]
+    descriptor["required"]["date"] = dict(original_date_spec, type=int)
+    try:
+        date_result = validate_staging_file(
+            stage("date-flip", date_flip), hard=True
+        )
+    finally:
+        descriptor["required"]["date"] = original_date_spec
+    check(
+        "descriptor consumers: flipping date's declared type flips the "
+        "version-1 scalar gate",
+        any(
+            "version-1 sidecar field 'date' must be an integer" in e
+            for e in date_result.errors
+        ),
+    )
+
+    # Consumption pin (validate_current_payload): the mistyped-container
+    # guard dispatches on the descriptor's declared kind.
+    panel_flip = _version1_payload()
+    original_panel_spec = descriptor["required"]["panel"]
+    descriptor["required"]["panel"] = dict(original_panel_spec, type=dict)
+    try:
+        panel_result = validate_staging_file(
+            stage("panel-flip", panel_flip), hard=True
+        )
+    finally:
+        descriptor["required"]["panel"] = original_panel_spec
+    check(
+        "descriptor consumers: flipping panel's declared kind flips the "
+        "container gate",
+        any("'panel' must be an object" in e for e in panel_result.errors),
+    )
+
+    # Consumption pin (validate_coverage_contract): the allowed-key gate
+    # reads the descriptor's coverage shape.
+    coverage_fixture = _coverage_fixture_payload(
+        _version1_payload(),
+        {
+            "outcome": "clean",
+            "material_lens_set": ["testing"],
+            "completed": ["testing"],
+            "missing": [],
+        },
+    )
+    original_allowed = descriptor["coverage"]["allowed_keys"]
+    descriptor["coverage"]["allowed_keys"] = original_allowed - {"outcome"}
+    try:
+        cov_result = ValidationResult(Path("desc-cov"))
+        validate_coverage_contract(
+            coverage_fixture, cov_result, coverage_exempt=True
+        )
+    finally:
+        descriptor["coverage"]["allowed_keys"] = original_allowed
+    check(
+        "descriptor consumers: narrowing coverage's allowed keys fires the "
+        "unknown-key gate",
+        any(
+            "coverage' rejects unknown key 'outcome'" in e
+            for e in cov_result.errors
+        ),
+    )
+
+    # The scaffold builder: the descriptor-driven template for the
+    # current-v1 sidecar. usage is allowlisted only, so the scaffold omits
+    # the key rather than inventing a shape; every unconditional required
+    # key is present with a labeled caller placeholder or an example shape.
+    scaffold = build_scaffold_payload()
+    check(
+        "scaffold: every descriptor-required top-level key present",
+        set(V1_REQUIRED_TOP_LEVEL_FIELDS) <= set(scaffold),
+    )
+    check(
+        "scaffold: usage key omitted (allowlisted only; the capture module "
+        "owns the value shape)",
+        "usage" not in scaffold,
+    )
+    check(
+        "scaffold: extensions carries the convergence self-heal example "
+        "with caller placeholders and no corrections key",
+        set(scaffold.get("extensions", {})) == {"convergence"}
+        and set(scaffold["extensions"]["convergence"]) == {"self_heal_attempt"}
+        and set(scaffold["extensions"]["convergence"]["self_heal_attempt"])
+        == {"status", "run_id"}
+        and all(
+            str(v).startswith("<CALLER:")
+            for v in scaffold["extensions"]["convergence"][
+                "self_heal_attempt"
+            ].values()
+        ),
+    )
+    check(
+        "scaffold: soften_watchlist stays present even when empty",
+        scaffold.get("soften_watchlist") == [],
+    )
+    aliased_probe = build_scaffold_payload()
+    aliased_probe["panel"][0]["worker"] = "aliasing-mutant"
+    aliased_probe["extensions"]["convergence"]["self_heal_attempt"][
+        "status"
+    ] = "aliasing-mutant"
+    aliased_fresh = build_scaffold_payload()
+    check(
+        "scaffold: two builds do not alias module example state "
+        "(mutating one returned template leaves the next build clean)",
+        aliased_fresh["panel"][0]["worker"] == "correctness-completeness"
+        and aliased_fresh["extensions"]["convergence"]["self_heal_attempt"][
+            "status"
+        ].startswith("<CALLER:"),
+    )
+    check(
+        "scaffold: coverage example keys are descriptor-allowed",
+        set(scaffold.get("coverage", {})) <= set(COVERAGE_ALLOWED_KEYS)
+        and all(
+            set(row) <= set(COVERAGE_INHERITED_ALLOWED_KEYS)
+            for row in scaffold.get("coverage", {}).get(
+                "inherited_coverage", []
+            )
+        ),
+    )
+    check(
+        "scaffold: the source_digest placeholder is not valid hex (the "
+        "copy-through tripwire survives)",
+        not HEX64_RE.match(str(scaffold.get("source_digest", ""))),
+    )
+
+    # triage_outcomes: presence-only, both forms accepted; the scaffold's
+    # labeled example is the object form and passes the version-1 gates.
+    check(
+        "scaffold: triage_outcomes example is the object form",
+        isinstance(scaffold.get("triage_outcomes"), dict),
+    )
+    check(
+        "scaffold: triage_outcomes labeled recommended (both forms accepted)",
+        "recommended" in SCAFFOLD_LABELS.get("triage_outcomes", ""),
+    )
+    triage_obj = _version1_payload()
+    triage_obj["triage_outcomes"] = _json.loads(
+        _json.dumps(scaffold["triage_outcomes"])
+    )
+    check(
+        "triage outcomes: the scaffold's object-form example passes the "
+        "version-1 gates",
+        validate_staging_file(stage("triage-obj", triage_obj), hard=True).ok,
+    )
+    triage_arr = _version1_payload()
+    triage_arr["triage_outcomes"] = []
+    check(
+        "triage outcomes: the array form still passes",
+        validate_staging_file(stage("triage-arr", triage_arr), hard=True).ok,
+    )
+
+    # usage: the validator keeps accepting a malformed value (allowlisted
+    # only) while the scaffold omits the key, the pairing the plan pins.
+    malformed_usage = _version1_payload()
+    malformed_usage["usage"] = {"totally": "malformed", "nested": [1, 2]}
+    check(
+        "usage: malformed value still accepted by the validator while the "
+        "scaffold omits the key",
+        validate_staging_file(
+            stage("usage-malformed", malformed_usage), hard=True
+        ).ok,
+    )
+
+
+def _selftest_scaffold_mode(root: Path, check) -> None:
+    """Family: the optional read-only ``--scaffold`` mode (review-staging
+    schema scaffold and validation reuse plan, Task 2).
+
+    RED-first: the pins fail until ``_main`` dispatches ``--scaffold`` into
+    a metadata-mode JSON envelope (``mode: scaffold``, no record-validation
+    ``outcome``, no final OUTCOME line) ahead of the path-required gate,
+    with the production telemetry path staying silent for the scaffold mode
+    only. The fixture-root snapshot and the isolated telemetry witness pin
+    the no-file-write and no-telemetry-append behavior; the filled/unfilled
+    pair arms pin the copy-through tripwire and that filling every caller
+    placeholder yields a record the existing hard gates accept."""
+    import os
+    import tempfile
+    from datetime import date as _date, timedelta as _timedelta
+
+    # The selftest restores both telemetry-suppression guards around its
+    # in-process witness (the positive control must ride the PRODUCTION
+    # telemetry path, so the selftest-wide guard is lifted temporarily).
+    global _selftest_telemetry_suppressed, _scaffold_telemetry_suppressed
+
+    @contextlib.contextmanager
+    def _captured():
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            yield out_buf, err_buf
+
+    def call(argv: list[str]):
+        """Run main(argv) under both-stream capture; SystemExit is the
+        argparse errors' channel, so its code is the return value."""
+        with _captured() as (out_buf, err_buf):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    # A valid staging pair the positional-path and --hard arms point at:
+    # the scaffold dispatch must emit the envelope instead of validating
+    # it, never presenting the record as validated.
+    valid_path = _write_staging(
+        root,
+        "2026-09-22-scaffold-mode-valid-r1.md",
+        _post_window_fixture_markdown("plan"),
+        _post_window_fixture_payload("plan"),
+    )
+
+    # ---- Template content pins (the descriptor-built builder; these hold
+    # with or without the CLI flag).
+    scaffold = build_scaffold_payload()
+    check(
+        "scaffold template: exact key set (descriptor required + extended "
+        "+ record_kind + extensions + coverage)",
+        set(scaffold)
+        == set(V1_REQUIRED_TOP_LEVEL_FIELDS)
+        | set(V1_EXTENDED_REQUIRED_FIELDS)
+        | {"record_kind", "extensions", "coverage"},
+    )
+    check(
+        "scaffold template: panel rows carry per-row launch data for every "
+        "default worker",
+        [row.get("worker") for row in scaffold["panel"]]
+        == list(DEFAULT_PANEL_WORKERS)
+        and all(
+            set(row)
+            == {
+                "worker",
+                "lenses",
+                "parent_worker",
+                "descendant_launches",
+                "status",
+                "raw",
+                "solo",
+                "echo",
+                "relaunch",
+            }
+            for row in scaffold["panel"]
+        ),
+    )
+    check(
+        "scaffold template: counts object carries the three caller-numbered "
+        "fields (raw_findings included: the summarizer's size bucket reads "
+        "it) and deduplication groups stay a list",
+        set(scaffold["counts"])
+        == {"workers_launched", "staged_findings", "raw_findings"}
+        and isinstance(scaffold["deduplication_groups"], list),
+    )
+    check(
+        "scaffold template: coverage example is caller-labeled with the "
+        "lens lists and one inherited-coverage row",
+        "<CALLER" in str(scaffold["coverage"].get("outcome"))
+        and set(scaffold["coverage"])
+        == {
+            "outcome",
+            "material_lens_set",
+            "completed",
+            "missing",
+            "inherited_coverage",
+        }
+        and all(
+            all(
+                "<CALLER" in str(entry)
+                for entry in scaffold["coverage"][name]
+            )
+            for name in V1_SCHEMA_DESCRIPTOR["coverage"]["lens_name_lists"]
+        )
+        and len(scaffold["coverage"]["inherited_coverage"]) == 1,
+    )
+    check(
+        "scaffold labels: triage_outcomes labeled recommended (the "
+        "validator checks presence only and accepts both forms)",
+        "recommended" in SCAFFOLD_LABELS["triage_outcomes"]
+        and "presence" in SCAFFOLD_LABELS["triage_outcomes"]
+        and "array" in SCAFFOLD_LABELS["triage_outcomes"],
+    )
+    check(
+        "scaffold labels: soften stays present when empty and extensions "
+        "omit corrections rather than nulling them",
+        "always present" in SCAFFOLD_LABELS["soften_watchlist"]
+        and "never null or an empty array" in SCAFFOLD_LABELS["extensions"],
+    )
+    check(
+        "scaffold labels: the usage label names the omission and its "
+        "capture-module owner",
+        "omitted" in SCAFFOLD_LABELS["usage"]
+        and "capture module" in SCAFFOLD_LABELS["usage"],
+    )
+    check(
+        "scaffold labels: the date-conditioned and mint-pair labels name "
+        "the fences and the fallback marker",
+        EXTENDED_SIDECAR_MIN_DATE in SCAFFOLD_LABELS["date_conditioned"]
+        and RECORD_KIND_SIDECAR_MIN_DATE
+        in SCAFFOLD_LABELS["date_conditioned"]
+        and "review-run-id" in SCAFFOLD_LABELS["markdown_metadata"]
+        and USAGE_MINT_FALLBACK_MARKER
+        in SCAFFOLD_LABELS["markdown_metadata"]
+        and COVERAGE_SIDECAR_MIN_DATE in SCAFFOLD_LABELS["coverage"],
+    )
+
+    # ---- Filled and unfilled pairs. The filled pair's record date is the
+    # maximum of the validator's own fence constants plus one day (never a
+    # frozen literal), so the pair models a record dated after every
+    # current fence the module declares.
+    fence_constants = (
+        EXTENDED_SIDECAR_MIN_DATE,
+        COVERAGE_SIDECAR_MIN_DATE,
+        PANEL_PROFILE_MAX_DATE,
+        RECORD_KIND_SIDECAR_MIN_DATE,
+        SOFTEN_WATCHLIST_PARITY_MIN_DATE,
+        USAGE_MINT_PAIR_MIN_DATE,
+        SELF_HEAL_STATE_MIN_DATE,
+    )
+    max_fence = max(fence_constants)
+    record_date = (
+        _date.fromisoformat(max_fence) + _timedelta(days=1)
+    ).isoformat()
+    check(
+        "filled scaffold pair: every fence constant is calendar-valid "
+        "(the derived record date post-dates the maximum by construction)",
+        all(_calendar_valid_record_date(f) for f in fence_constants),
+    )
+
+    run_id = "a" * 32
+    started_ms = "1767225600000"
+
+    def _filled_scaffold() -> dict:
+        filled = json.loads(json.dumps(build_scaffold_payload()))
+        filled["review_type"] = "plan"
+        filled["round"] = "r1"
+        filled["date"] = record_date
+        filled["artifact_slug"] = "scaffold-filled-sample"
+        filled["source_kind"] = "plan"
+        filled["source_digest"] = hashlib.sha256(
+            b"scaffold-filled-fixture-bytes"
+        ).hexdigest()
+        filled["counts"] = {
+            "workers_launched": 5,
+            "staged_findings": 0,
+            "raw_findings": 0,
+        }
+        for row in filled["panel"]:
+            row["status"] = "complete"
+            row["raw"] = 0
+            row["solo"] = 0
+            row["echo"] = 0
+        filled["review_mode"] = "targeted"
+        filled["prior_findings_filter"] = False
+        filled["last_fix_commit"] = None
+        all_lenses = sorted(
+            {lens for ls in REQUIRED_PANEL_LENSES.values() for lens in ls}
+        )
+        filled["coverage"] = {
+            "outcome": "clean",
+            "material_lens_set": all_lenses,
+            "completed": all_lenses,
+            "missing": [],
+            # The example row demonstrates the row shape; a caller with no
+            # inherited coverage empties the list.
+            "inherited_coverage": [],
+        }
+        # Fill the convergence placeholders the template carries; corrections
+        # stays absent: the absent-corrections rule the fill must preserve.
+        state = filled["extensions"]["convergence"]["self_heal_attempt"]
+        state["status"] = "unused"
+        state["run_id"] = run_id
+        return filled
+
+    def _scaffold_markdown() -> str:
+        # The Markdown twin: the post-window clear-review base with the
+        # four freshness lines, the record-kind twin, and the plan Coverage
+        # line, plus the mint pair the date fences demand (the scaffold's
+        # markdown_metadata label names this obligation).
+        return _post_window_fixture_markdown("plan").replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n"
+            f"- review-run-id: {run_id}\n"
+            f"- review-started-at-ms: {started_ms}",
+            1,
+        )
+
+    filled_dir = root / "scaffold-filled"
+    filled_dir.mkdir()
+    filled_path = filled_dir / (
+        f"{record_date}-branch-review-scaffold-filled-r1.md"
+    )
+    filled_path.write_text(_scaffold_markdown(), encoding="utf-8")
+    filled_path.with_suffix(".stats.json").write_text(
+        json.dumps(_filled_scaffold()), encoding="utf-8"
+    )
+    filled_result = validate_staging_file(filled_path, hard=True)
+    check(
+        "filled scaffold pair: filling every caller placeholder yields a "
+        "record the existing hard validation accepts",
+        filled_result.ok,
+    )
+    partial_dir = root / "scaffold-partial"
+    partial_dir.mkdir()
+    partial_path = partial_dir / (
+        f"{record_date}-branch-review-scaffold-partial-r1.md"
+    )
+    partial_payload = _filled_scaffold()
+    partial_payload["counts"]["raw_findings"] = (
+        "<CALLER: raw findings count across workers>"
+    )
+    partial_path.write_text(_scaffold_markdown(), encoding="utf-8")
+    partial_path.with_suffix(".stats.json").write_text(
+        json.dumps(partial_payload), encoding="utf-8"
+    )
+    partial_result = validate_staging_file(partial_path, hard=True)
+    check(
+        "filled scaffold pair: a partial fill leaving a caller placeholder "
+        "in a gate-free field fails hard naming the placeholder",
+        not partial_result.ok
+        and any(
+            "unfilled scaffold placeholder" in e for e in partial_result.errors
+        ),
+    )
+    quoted_payload = _filled_scaffold()
+    quoted_payload["findings"] = []
+    quoted_ext = dict(quoted_payload["extensions"])
+    quoted_ext["review_notes"] = {
+        "note": "quotes the scaffold marker for context: a literal "
+        "mid-string placeholder mention in prose stays tolerated"
+    }
+    quoted_payload["extensions"] = quoted_ext
+    quoted_path = partial_dir / f"{record_date}-branch-review-quoted-marker-r1.md"
+    quoted_path.write_text(_scaffold_markdown(), encoding="utf-8")
+    quoted_path.with_suffix(".stats.json").write_text(
+        json.dumps(quoted_payload), encoding="utf-8"
+    )
+    quoted_result = validate_staging_file(quoted_path, hard=True)
+    check(
+        "filled scaffold pair: prose quoting the placeholder syntax is "
+        "not swept (the copy-through gate scopes to caller-numbered "
+        "fields and the extensions subtree)",
+        quoted_result.ok,
+    )
+    keyed_payload = _filled_scaffold()
+    keyed_ext = {"<CALLER: extension name>": {"k": "v"}}
+    keyed_payload["extensions"] = keyed_ext
+    keyed_path = partial_dir / f"{record_date}-branch-review-keyed-remnant-r1.md"
+    keyed_path.write_text(_scaffold_markdown(), encoding="utf-8")
+    keyed_path.with_suffix(".stats.json").write_text(
+        json.dumps(keyed_payload), encoding="utf-8"
+    )
+    keyed_result = validate_staging_file(keyed_path, hard=True)
+    check(
+        "filled scaffold pair: a placeholder remnant in an extensions key "
+        "fails hard (the sweep walks keys)",
+        not keyed_result.ok
+        and any(
+            "unfilled scaffold placeholder" in e for e in keyed_result.errors
+        ),
+    )
+    check(
+        "filled scaffold pair: absent-corrections and advisory-triage "
+        "rules preserved (no corrections extension; the triage object "
+        "form stays)",
+        "corrections" not in _filled_scaffold()["extensions"]
+        and _filled_scaffold()["triage_outcomes"] == {},
+    )
+
+    unfilled_dir = root / "scaffold-unfilled"
+    unfilled_dir.mkdir()
+    unfilled_path = unfilled_dir / (
+        f"{record_date}-branch-review-scaffold-unfilled-r1.md"
+    )
+    unfilled_path.write_text(_scaffold_markdown(), encoding="utf-8")
+    unfilled_path.with_suffix(".stats.json").write_text(
+        json.dumps(build_scaffold_payload()), encoding="utf-8"
+    )
+    unfilled_result = validate_staging_file(unfilled_path, hard=True)
+    check(
+        "unfilled scaffold: hard validation fails (the copy-through "
+        "tripwire holds)",
+        not unfilled_result.ok,
+    )
+    check(
+        "unfilled scaffold: errors name the placeholder fields the "
+        "existing gates consume",
+        all(
+            any(name in e for e in unfilled_result.errors)
+            for name in (
+                "date",
+                "source_kind",
+                "source_digest",
+                "workers_launched",
+                "review_mode",
+                "prior_findings_filter",
+                "last_fix_commit",
+                "outcome",
+                "inherited_coverage",
+                "status",
+                "<CALLER: lens name>",
+            )
+        ),
+    )
+    check(
+        "unfilled scaffold: the source_digest placeholder is not valid hex",
+        not HEX64_RE.match(str(build_scaffold_payload()["source_digest"])),
+    )
+
+    # ---- Envelope and dispatch arms, bracketed by the fixture-root
+    # snapshot: the scaffold mode must not write a file, so the root's
+    # path, file list, and content digests are identical across every
+    # scaffold generation below.
+    def _snapshot(fix_root: Path) -> dict:
+        files = sorted(
+            p.relative_to(fix_root).as_posix()
+            for p in fix_root.rglob("*")
+            if p.is_file()
+        )
+        return {
+            "path": str(fix_root.resolve()),
+            "files": files,
+            "digests": {
+                rel: hashlib.sha256(
+                    (fix_root / rel).read_bytes()
+                ).hexdigest()
+                for rel in files
+            },
+        }
+
+    before = _snapshot(root)
+    rc_bare, out_bare, err_bare = call(["--scaffold"])
+    check("scaffold envelope: bare --scaffold exits 0", rc_bare == 0)
+    bare = json.loads(out_bare) if out_bare.strip() else {}
+    check(
+        "scaffold envelope: marked mode: scaffold with no "
+        "record-validation outcome key",
+        bare.get("mode") == "scaffold" and "outcome" not in bare,
+    )
+    check(
+        "scaffold envelope: carries the current-v1 template under "
+        "'scaffold'",
+        bare.get("scaffold") == build_scaffold_payload(),
+    )
+    check(
+        "scaffold envelope: carries the advisory field labels",
+        bare.get("labels") == dict(SCAFFOLD_LABELS),
+    )
+    check(
+        "scaffold envelope: metadata-mode exit with no final OUTCOME line "
+        "on either stream (the --selftest precedent)",
+        "OUTCOME:" not in out_bare and "OUTCOME:" not in err_bare,
+    )
+    check(
+        "scaffold dispatch: bare --scaffold precedes the path-required "
+        "gate (exit 0, no usage refusal)",
+        rc_bare == 0
+        and "path or --newest-for-branch is required" not in err_bare,
+    )
+
+    rc_path, out_path, err_path = call(["--scaffold", str(valid_path)])
+    rc_hard, out_hard, err_hard = call(
+        ["--scaffold", "--hard", str(valid_path)]
+    )
+    check(
+        "scaffold dispatch: with a positional valid path the envelope is "
+        "unchanged (no validation output)",
+        rc_path == 0
+        and (json.loads(out_path) if out_path.strip() else {}) == bare
+        and "OK:" not in out_path
+        and "FAIL:" not in err_path
+        and "ERROR:" not in err_path,
+    )
+    check(
+        "scaffold dispatch: with --hard and a valid path the envelope is "
+        "unchanged (the record is not presented as validated)",
+        rc_hard == 0
+        and (json.loads(out_hard) if out_hard.strip() else {}) == bare
+        and "ERROR:" not in err_hard,
+    )
+
+    rc_branch, out_branch, _err_branch = call(
+        [
+            "--scaffold",
+            "--newest-for-branch",
+            "no-such-branch-slug",
+            "--cwd",
+            str(root),
+        ]
+    )
+    check(
+        "scaffold dispatch: --newest-for-branch yields the scaffold "
+        "envelope, not the branch-skip payload",
+        rc_branch == 0
+        and (json.loads(out_branch) if out_branch.strip() else {}) == bare,
+    )
+
+    after = _snapshot(root)
+    check(
+        "fixture snapshot: the root path is unchanged across scaffold "
+        "generation",
+        after["path"] == before["path"],
+    )
+    check(
+        "fixture snapshot: the file list and content digests are unchanged "
+        "across scaffold generation (no filesystem writes)",
+        after["files"] == before["files"]
+        and after["digests"] == before["digests"],
+    )
+
+    # ---- Telemetry witness: cwd pinned to the fixture root,
+    # resolve_metrics_home patched to a fresh temporary metrics directory,
+    # both plus the suppression guards restored on any exception.
+    if invocation_telemetry is None:
+        check(
+            "telemetry witness: the invocation_telemetry module is "
+            "importable",
+            False,
+        )
+        return
+    check(
+        "telemetry witness: the invocation_telemetry module is importable",
+        True,
+    )
+    prior_cwd = os.getcwd()
+    prior_resolve = invocation_telemetry.resolve_metrics_home
+    prior_selftest_flag = _selftest_telemetry_suppressed
+    prior_scaffold_flag = _scaffold_telemetry_suppressed
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="vrs-scaffold-telemetry-"
+        ) as telemetry_dir:
+            os.chdir(root)
+            metrics_home = Path(telemetry_dir) / "metrics"
+            invocation_telemetry.resolve_metrics_home = lambda: metrics_home
+            _selftest_telemetry_suppressed = False
+            _scaffold_telemetry_suppressed = False
+            metrics_log = (
+                metrics_home
+                / invocation_telemetry.INVOCATION_COSTS_FILENAME
+            )
+            rc_ctl, _out_ctl, _err_ctl = call(["--hard", str(valid_path)])
+            control_lines = (
+                metrics_log.read_text(encoding="utf-8").splitlines()
+                if metrics_log.is_file()
+                else []
+            )
+            control_rows = [
+                json.loads(line) for line in control_lines if line.strip()
+            ]
+            check(
+                "telemetry witness: the ordinary validation positive "
+                "control appends exactly one line to the isolated metrics "
+                "log",
+                rc_ctl == 0
+                and len(control_rows) == 1
+                and control_rows[0].get("script")
+                == "validate_review_staging.py"
+                and control_rows[0].get("invocation_kind")
+                == "review-validation",
+            )
+            log_before = (
+                metrics_log.read_bytes() if metrics_log.is_file() else b""
+            )
+            rc_scaf, out_scaf, _err_scaf = call(
+                ["--scaffold", str(valid_path)]
+            )
+            log_after = (
+                metrics_log.read_bytes() if metrics_log.is_file() else b""
+            )
+            check(
+                "telemetry witness: --scaffold leaves the isolated metrics "
+                "log unchanged through the production telemetry path",
+                rc_scaf == 0
+                and log_after == log_before
+                and (
+                    json.loads(out_scaf) if out_scaf.strip() else {}
+                ).get("mode")
+                == "scaffold",
+            )
+            check(
+                "telemetry witness: the scaffold guard is False "
+                "immediately after the in-process scaffold call "
+                "(main() restores it; the pin reads the concrete "
+                "restored value, not a baseline the family's earlier "
+                "scaffold calls may have leaked)",
+                not _scaffold_telemetry_suppressed,
+            )
+            rc_ctl2, _out_ctl2, _err_ctl2 = call(["--hard", str(valid_path)])
+            after_rows = [
+                json.loads(line)
+                for line in (
+                    metrics_log.read_text(encoding="utf-8").splitlines()
+                    if metrics_log.is_file()
+                    else []
+                )
+                if line.strip()
+            ]
+            check(
+                "telemetry witness: a validation call after an in-process "
+                "--scaffold call still records (the scaffold guard is "
+                "scoped to its own main() call, not the process)",
+                rc_ctl2 == 0
+                and not _scaffold_telemetry_suppressed
+                and len(after_rows) == 2,
+            )
+    finally:
+        invocation_telemetry.resolve_metrics_home = prior_resolve
+        os.chdir(prior_cwd)
+        _selftest_telemetry_suppressed = prior_selftest_flag
+        _scaffold_telemetry_suppressed = prior_scaffold_flag
+    check(
+        "telemetry witness: the cwd, the metrics-home patch, and both "
+        "telemetry-suppression guards are restored",
+        os.getcwd() == prior_cwd
+        and invocation_telemetry.resolve_metrics_home is prior_resolve
+        and _selftest_telemetry_suppressed == prior_selftest_flag
+        and _scaffold_telemetry_suppressed == prior_scaffold_flag,
+    )
+    post_telemetry = _snapshot(root)
+    check(
+        "fixture snapshot: the root content stays unchanged across the "
+        "telemetry-context scaffold generation",
+        post_telemetry == before,
+    )
+
+
 def _selftest_finding_budget(root: Path, check) -> None:
     """Finding budget: per worker, all Critical + all blocking expand; up to 5
     additional non-blocking High/Medium; up to 2 additional non-blocking Low.
@@ -9123,6 +10407,55 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
                 for e in round_result.errors
             ),
         )
+    # The extensions override slot is consumed byte-exact: the descriptor's
+    # type_error text must equal the pre-consolidation refusal, not the
+    # generic descriptor phrase (the flip pin lesson 173 asks for).
+    ext_bad = _v1_copy()
+    ext_bad["extensions"] = []
+    ext_result = validate_staging_file(
+        stage("extensions-array-v1", ext_bad, base_md), hard=True
+    )
+    check(
+        "v1 contract: a non-object extensions value fails hard with the "
+        "byte-exact pre-consolidation refusal",
+        not ext_result.ok
+        and any(
+            e == "version-1 sidecar 'extensions' must be an object when present"
+            for e in ext_result.errors
+        ),
+    )
+    # Two more consumed message-override slots, pinned the same way: the
+    # generic type phrase would misstate last_fix_commit's documented null
+    # form, and the risk_signals items text carries the closed tag set.
+    lfc_bad = _v1_copy()
+    lfc_bad["last_fix_commit"] = 3.5
+    lfc_result = validate_staging_file(
+        stage("last-fix-commit-float-v1", lfc_bad, base_md), hard=True
+    )
+    check(
+        "v1 contract: a float last_fix_commit fails hard with the "
+        "byte-exact string-or-null refusal",
+        not lfc_result.ok
+        and any(
+            e == "version-1 sidecar field 'last_fix_commit' must be a "
+            "string or null"
+            for e in lfc_result.errors
+        ),
+    )
+    rs_bad = _v1_copy()
+    rs_bad["risk_signals"] = ["not-a-tag"]
+    rs_result = validate_staging_file(
+        stage("risk-signals-bad-tag-v1", rs_bad, base_md), hard=True
+    )
+    check(
+        "v1 contract: an unknown risk_signal tag fails hard naming the "
+        "closed tag set",
+        not rs_result.ok
+        and any(
+            "risk_signals" in e and "documented kebab-case signal tags" in e
+            for e in rs_result.errors
+        ),
+    )
 
     # Over-gating guard: absent optional fields stay valid.
     for field_name in ("depth", "domains"):
@@ -18143,6 +19476,11 @@ def _run_selftest_body() -> int:
             ("current_contract", _selftest_current_contract),
             ("source_digest", _selftest_source_digest),
             ("typed_current_schema", _selftest_typed_current_schema),
+            (
+                "schema_descriptor_scaffold",
+                _selftest_schema_descriptor_scaffold,
+            ),
+            ("scaffold_mode", _selftest_scaffold_mode),
             ("finding_budget", _selftest_finding_budget),
             ("finding_conservation", _selftest_finding_conservation),
             (
@@ -18354,16 +19692,24 @@ def main(argv: list[str] | None = None) -> int:
     fail-open self-timed append fires on the SystemExit paths too (usage
     errors, refusals); the writer's own failure never touches the exit
     status or either contract channel."""
+    global _scaffold_telemetry_suppressed
     started = time.time()
+    prior_scaffold_flag = _scaffold_telemetry_suppressed
+    _scaffold_telemetry_suppressed = False
     try:
         return _main(argv)
     finally:
-        if invocation_telemetry is not None and not _selftest_telemetry_suppressed:
+        if (
+            invocation_telemetry is not None
+            and not _selftest_telemetry_suppressed
+            and not _scaffold_telemetry_suppressed
+        ):
             invocation_telemetry.record_invocation(
                 "validate_review_staging.py",
                 "review-validation",
                 invocation_telemetry.elapsed_ms(started),
             )
+        _scaffold_telemetry_suppressed = prior_scaffold_flag
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -18401,6 +19747,15 @@ def _main(argv: list[str] | None = None) -> int:
         "--selftest",
         action="store_true",
         help="Run fixture checks and exit",
+    )
+    parser.add_argument(
+        "--scaffold",
+        action="store_true",
+        help=(
+            "Emit the current-v1 sidecar scaffold template as a mode-"
+            "scaffold JSON envelope and exit 0 without validating any "
+            "record"
+        ),
     )
     parser.add_argument(
         "--source-plan",
@@ -18546,6 +19901,20 @@ def _main(argv: list[str] | None = None) -> int:
 
     if args.selftest:
         return run_selftest()
+
+    if args.scaffold:
+        # Read-only metadata emission (review-staging schema scaffold and
+        # validation reuse plan, Task 2): dispatched ahead of the
+        # path-required gate and of every record gate, so no flag
+        # combination reaches a validation run or a scaffold-specific
+        # refusal, and the envelope carries no record-validation outcome.
+        # Raising the suppression guard here is what keeps the production
+        # telemetry write in main()'s finally silent; the embedded selftest
+        # saves and restores the guard around its in-process witness.
+        global _scaffold_telemetry_suppressed
+        _scaffold_telemetry_suppressed = True
+        print(json.dumps(_scaffold_envelope(), indent=2))
+        return 0
 
     target: Path | None = None
     if args.path:

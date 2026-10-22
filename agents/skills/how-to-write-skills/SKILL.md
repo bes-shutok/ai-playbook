@@ -379,6 +379,8 @@ model: haiku                     # Optional: Use specific model (haiku, opus, so
   - Speed: Use `haiku` for quick reference lookups
   - Default: Inherits from parent session if not specified
 
+- **Runtime-specific gating keys**: pair a loader-specific gating key (for example `disable-model-invocation: true`) with portable `when_to_use` wording stating the skill is used only when the user explicitly invokes it by name, because other loaders ignore unknown top-level keys and surface `when_to_use` beside the description as the only portable gate there.
+
 ## Common Mistakes to Avoid
 
 ### 1. Vague Descriptions

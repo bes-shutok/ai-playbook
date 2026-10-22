@@ -10,6 +10,8 @@
 - **Driving force:** correctness
 
 Cluster: docs/history/backlog/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md (same defect class: a living record citing a backlog path that moved)
+Cluster: none live (the sibling docs/history/backlog/2026-10-22-exec-prompts-entry-cites-deleted-backlog-row.md, the prompt-log rejected-alternative citation case, was resolved by events and deleted; witness 466cf9739, whose closeout prune removed the citing entry with the citation inside)
+Cluster: EXEC-PROMPTS.md entry prompt-log-payload-targets-and-verdict-test-statement (covered 2026-10-22; the payload-target and verdict-application duty sentences landed, the origin row deleted per the covered-row rule)
 
 ## Problem
 

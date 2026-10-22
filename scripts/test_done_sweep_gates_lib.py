@@ -9150,9 +9150,11 @@ def test_review_staging_markdown_candidate_validated_directly(
 # --------------------------------------------------------------------------- #
 def test_description_length_gate(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] The description-length gate fails rc 1
-    naming an over-cap fixture skill and passes rc 0 on an under-cap tree
-    (the checker is copied repo-local into each fixture so the deployment
-    -gap path is not exercised here)."""
+    naming an over-cap tracked fixture skill and passes rc 0 on an
+    under-cap tree (the checker is copied repo-local into each fixture so
+    the deployment-gap path is not exercised here; the fixture skill is
+    committed because the default scan inside a checkout selects tracked
+    skills)."""
     # Over-cap fixture skill.
     root = make_repo(tmp_path, "desc-over", gitignore_docs=True)
     write_facts(root)
@@ -9165,6 +9167,8 @@ def test_description_length_gate(tmp_path, sweep_env):
         "---\nname: overcap\ndescription: " + "x" * 1025 + "\n---\n\nbody\n",
         encoding="utf-8",
     )
+    git(root, "add", "agents")
+    git(root, "commit", "-m", "skill", "-q")
     result = run_gate("description-length", ctx_for(root))
     assert result.rc == 1
     assert "overcap" in result.message
@@ -9182,8 +9186,110 @@ def test_description_length_gate(tmp_path, sweep_env):
         "---\nname: fine\ndescription: short\n---\n\nbody\n",
         encoding="utf-8",
     )
+    # Track the under-cap fixture so the rc 0 leg proves measurement of a
+    # tracked under-cap skill, not vacuous selection silence.
+    git(root2, "add", "agents")
+    git(root2, "commit", "-m", "skill", "-q")
     result2 = run_gate("description-length", ctx_for(root2))
     assert result2.rc == 0, result2.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: description-length default-scan scope  [class: REPOSITORY_TEST]
+# (plan docs/history/plans/2026-10-21-description-length-checker-scope-and-
+# admission.md, Task 1). These drive the checker directly (default scan vs
+# explicit paths) because the gate only ever invokes the default scan.
+# --------------------------------------------------------------------------- #
+def _write_overcap_skill(root: Path, rel_dir: str) -> str:
+    """Write an over-cap SKILL.md under ``rel_dir`` in the fixture repo;
+    returns the repo-relative SKILL.md path."""
+    skill_dir = root / rel_dir
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: skill\ndescription: " + "x" * 1025 + "\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    return f"{rel_dir}/SKILL.md"
+
+
+def _run_description_checker(root: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run the repo-local checker with cwd at the fixture root."""
+    return sh(
+        [sys.executable, str(SCRIPTS_DIR / "check_skill_description_length.py"), *args],
+        root,
+    )
+
+
+def test_description_length_default_scan_selects_tracked_only(tmp_path):
+    """[class: REPOSITORY_TEST] Inside a checkout the default scan reports
+    tracked over-cap descriptions - including a tracked path that matches
+    an ignore rule - and excludes untracked descriptions whether ignored
+    or not."""
+    root = make_repo(tmp_path, "desc-tracked-scope", gitignore_docs=True)
+    tracked_rel = _write_overcap_skill(root, "agents/skills/overcap")
+    tracked_ignored_rel = _write_overcap_skill(root, "agents/skills/ignored-but-tracked")
+    untracked_ignored_rel = _write_overcap_skill(root, "agents/skills/synced/cached")
+    untracked_rel = _write_overcap_skill(root, "agents/skills/draft")
+    git(root, "add", "agents/skills/overcap", "agents/skills/ignored-but-tracked")
+    git(root, "commit", "-m", "skills", "-q")
+    gitignore = root / ".gitignore"
+    gitignore.write_text(
+        gitignore.read_text(encoding="utf-8")
+        + "agents/skills/ignored-but-tracked/\nagents/skills/synced/\n",
+        encoding="utf-8",
+    )
+    # Fixture honesty: the tracked one still matches an ignore rule (the
+    # --no-index probe evaluates the rule for a tracked path) and the
+    # synced one is untracked-ignored.
+    assert (
+        git(root, "check-ignore", "-q", "--no-index", tracked_ignored_rel).returncode == 0
+    )
+    assert git(root, "check-ignore", "-q", untracked_ignored_rel).returncode == 0
+    tracked_set = {tracked_rel, tracked_ignored_rel}
+    untracked_set = {untracked_ignored_rel, untracked_rel}
+
+    result = _run_description_checker(root)
+
+    assert result.returncode == 1, result.stderr
+    out = result.stdout + result.stderr
+    for rel in tracked_set:
+        assert rel in out, rel
+    for rel in untracked_set:
+        assert rel not in out, rel
+    assert "1025" in out
+
+
+def test_description_length_explicit_directory_reports_untracked(tmp_path):
+    """[class: REPOSITORY_TEST] Explicit-directory selection is unchanged:
+    inside a checkout the named directory is scanned recursively and an
+    untracked over-cap skill is still reported, while the default scan on
+    the same tree stays silent."""
+    root = make_repo(tmp_path, "desc-explicit-untracked", gitignore_docs=True)
+    untracked_rel = _write_overcap_skill(root, "agents/skills/draft")
+
+    default = _run_description_checker(root)
+    assert default.returncode == 0, default.stderr
+
+    explicit = _run_description_checker(root, "agents/skills")
+    assert explicit.returncode == 1, explicit.stderr
+    out = explicit.stdout + explicit.stderr
+    assert untracked_rel in out
+    assert "1025" in out
+
+
+def test_description_length_default_scan_outside_checkout_recursive(tmp_path):
+    """[class: REPOSITORY_TEST] Outside a checkout the default scan keeps
+    its recursive selection and reports an over-cap skill description."""
+    root = tmp_path / "desc-no-checkout"
+    _write_overcap_skill(root, "agents/skills/orphan")
+    assert not (root / ".git").exists()
+
+    result = _run_description_checker(root)
+
+    assert result.returncode == 1, result.stderr
+    out = result.stdout + result.stderr
+    assert "agents/skills/orphan/SKILL.md" in out
+    assert "1025" in out
 
 
 # --------------------------------------------------------------------------- #

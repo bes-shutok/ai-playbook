@@ -112,13 +112,13 @@ Primary class anchors:
 - `validate_coverage_contract` in `scripts/validate_review_staging.py`
 - `_main` in `scripts/validate_review_staging.py`
 
-- [ ] Given a current-v1 canonical plan-review sidecar, expect one descriptor to own unconditional required/optional field presence, structural types, allowed local keys, and nested shapes except the allowlisted-only `usage` value, and `validate_version1_payload`, `validate_current_payload`, `validate_coverage_contract`, and scaffold generation to consume it [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given date-conditioned field presence, other date fences, cross-field semantics, Markdown/sidecar parity, linked-record checks, delegated extension schemas, the capture-module-owned `usage` shape, or the shared container and row-shape gates in `validate_current_payload`, expect their existing procedural/schema owners to remain in place and retain their current validation behavior [class: IMPLEMENTATION_REQUIRED]
-- [ ] Descriptor consumers: given the versionless mistyped-container family the validator's selftests already pin, expect those pins to stay green under the descriptor consolidation. [class: REPOSITORY_TEST]
-- [ ] Given a `usage` key with a malformed value, expect the validator to continue accepting it as allowlisted-only, and expect the scaffold to omit the key rather than inventing a shape [class: REPOSITORY_TEST]
-- [ ] Given each accepted `triage_outcomes` representation, expect the existing validator to continue accepting both array and object forms while the scaffold's labeled example passes [class: REPOSITORY_TEST]
-- [ ] Given representative existing valid, findings-bearing, usage-error, unreadable-input, and JSON invocations, expect return codes, stdout/stderr placement, and final outcome contracts to match existing behavior; the help/usage synopsis may add the new flag [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: declare the current-v1 sidecar descriptor` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a current-v1 canonical plan-review sidecar, expect one descriptor to own unconditional required/optional field presence, structural types, allowed local keys, and nested shapes except the allowlisted-only `usage` value, and `validate_version1_payload`, `validate_current_payload`, `validate_coverage_contract`, and scaffold generation to consume it [class: IMPLEMENTATION_REQUIRED]
+- [x] Given date-conditioned field presence, other date fences, cross-field semantics, Markdown/sidecar parity, linked-record checks, delegated extension schemas, the capture-module-owned `usage` shape, or the shared container and row-shape gates in `validate_current_payload`, expect their existing procedural/schema owners to remain in place and retain their current validation behavior [class: IMPLEMENTATION_REQUIRED]
+- [x] Descriptor consumers: given the versionless mistyped-container family the validator's selftests already pin, expect those pins to stay green under the descriptor consolidation. [class: REPOSITORY_TEST]
+- [x] Given a `usage` key with a malformed value, expect the validator to continue accepting it as allowlisted-only, and expect the scaffold to omit the key rather than inventing a shape [class: REPOSITORY_TEST]
+- [x] Given each accepted `triage_outcomes` representation, expect the existing validator to continue accepting both array and object forms while the scaffold's labeled example passes [class: REPOSITORY_TEST]
+- [x] Given representative existing valid, findings-bearing, usage-error, unreadable-input, and JSON invocations, expect return codes, stdout/stderr placement, and final outcome contracts to match existing behavior; the help/usage synopsis may add the new flag [class: REPOSITORY_TEST]
+- [x] Commit: `feat: declare the current-v1 sidecar descriptor` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Emit the optional read-only scaffold
 
@@ -130,22 +130,22 @@ Files:
 Primary class anchors:
 - `_main` in `scripts/validate_review_staging.py`
 
-- [ ] Given scaffold output, expect every unconditional descriptor-required key and structural shape to appear; account for conditionally present fields and label caller placeholders as unvalidated values [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given scaffold output, expect current-v1 shapes for coverage and its lens lists, panel rows with per-row launch data, deduplication groups, optional `extensions`, soften watchlist, and inherited-coverage rows [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the scaffold's `triage_outcomes` example, expect it to be labeled recommended because the validator checks presence but accepts both array and object forms [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given no soften rows, expect `soften_watchlist: []` to remain present; given no corrections extension, expect `extensions.corrections` to be absent, never null or an empty array [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given `--scaffold`, expect a JSON envelope marked `mode: scaffold` with no record-validation `outcome` and a current-v1 plan-review template under `scaffold`, no filesystem or invocation-telemetry writes, and early scaffold dispatch without a new combination-specific refusal [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given `--scaffold` with a positional valid path or with `--hard` and a valid path, expect the same scaffold-mode JSON envelope without a validation outcome and exit 0 with no validation or refusal output, proving early dispatch without presenting the record as validated [class: REPOSITORY_TEST]
-- [ ] Given the in-process telemetry selftest, expect cwd pinned to a fixture root and `invocation_telemetry.resolve_metrics_home` temporarily patched to a fresh temporary metrics directory; a try/finally restores both plus the telemetry-suppression flag on any exception [class: REPOSITORY_TEST]
-- [ ] Given ordinary validation and `--scaffold` calls in the telemetry selftest, expect the positive control to append only to the isolated metrics log while scaffold leaves that log unchanged through the production telemetry path [class: REPOSITORY_TEST]
-- [ ] Given the scaffold selftest fixture root, expect its path and content snapshot to remain unchanged across scaffold generation [class: REPOSITORY_TEST]
-- [ ] Given scaffold output with caller placeholders filled, expect a deterministic valid staging pair to pass existing hard validation while preserving the absent-corrections and advisory-triage rules; the filled pair's record date derives from the validator's own fence constants plus one day, never a frozen literal [class: REPOSITORY_TEST]
-- [ ] Given scaffold output with no caller value filled, expect existing hard validation to fail naming each placeholder field, and expect the scaffold's `source_digest` placeholder to not be valid hex, preserving the copy-through tripwire [class: REPOSITORY_TEST]
-- [ ] Given the scaffold template, expect it to represent a record dated after every current fence: `record_kind`, the review-run-id and started-at mint pair or its fallback marker, and the four extended fields appear as labeled date-conditioned caller placeholders [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given bare `--scaffold` with no path and no other flags, expect exit 0 with the scaffold envelope; scaffold dispatch precedes the path-required gate; given `--scaffold --newest-for-branch`, expect the scaffold envelope [class: REPOSITORY_TEST]
-- [ ] Outcome posture: given `--scaffold`, expect a metadata-mode exit with no final `OUTCOME:` line (JSON envelope only), matching the selftest precedent, with the validate_review_staging.py row in `scripts/OUTCOME_CONTRACT.md` updated to name it [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the validator's embedded selftests; expect all existing schema and new scaffold checks to pass [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: emit validator-owned review sidecar scaffold` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given scaffold output, expect every unconditional descriptor-required key and structural shape to appear; account for conditionally present fields and label caller placeholders as unvalidated values [class: IMPLEMENTATION_REQUIRED]
+- [x] Given scaffold output, expect current-v1 shapes for coverage and its lens lists, panel rows with per-row launch data, deduplication groups, optional `extensions`, soften watchlist, and inherited-coverage rows [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the scaffold's `triage_outcomes` example, expect it to be labeled recommended because the validator checks presence but accepts both array and object forms [class: IMPLEMENTATION_REQUIRED]
+- [x] Given no soften rows, expect `soften_watchlist: []` to remain present; given no corrections extension, expect `extensions.corrections` to be absent, never null or an empty array [class: IMPLEMENTATION_REQUIRED]
+- [x] Given `--scaffold`, expect a JSON envelope marked `mode: scaffold` with no record-validation `outcome` and a current-v1 plan-review template under `scaffold`, no filesystem or invocation-telemetry writes, and early scaffold dispatch without a new combination-specific refusal [class: IMPLEMENTATION_REQUIRED]
+- [x] Given `--scaffold` with a positional valid path or with `--hard` and a valid path, expect the same scaffold-mode JSON envelope without a validation outcome and exit 0 with no validation or refusal output, proving early dispatch without presenting the record as validated [class: REPOSITORY_TEST]
+- [x] Given the in-process telemetry selftest, expect cwd pinned to a fixture root and `invocation_telemetry.resolve_metrics_home` temporarily patched to a fresh temporary metrics directory; a try/finally restores both plus the telemetry-suppression flag on any exception [class: REPOSITORY_TEST]
+- [x] Given ordinary validation and `--scaffold` calls in the telemetry selftest, expect the positive control to append only to the isolated metrics log while scaffold leaves that log unchanged through the production telemetry path [class: REPOSITORY_TEST]
+- [x] Given the scaffold selftest fixture root, expect its path and content snapshot to remain unchanged across scaffold generation [class: REPOSITORY_TEST]
+- [x] Given scaffold output with caller placeholders filled, expect a deterministic valid staging pair to pass existing hard validation while preserving the absent-corrections and advisory-triage rules; the filled pair's record date derives from the validator's own fence constants plus one day, never a frozen literal [class: REPOSITORY_TEST]
+- [x] Given scaffold output with no caller value filled, expect existing hard validation to fail naming each placeholder field, and expect the scaffold's `source_digest` placeholder to not be valid hex, preserving the copy-through tripwire [class: REPOSITORY_TEST] (fold: the unfilled pin names the 11 gate-consumed placeholders; review_type, artifact_slug, counts.staged_findings have no record-free value gate and ride SCAFFOLD_LABELS)
+- [x] Given the scaffold template, expect it to represent a record dated after every current fence: `record_kind`, the review-run-id and started-at mint pair or its fallback marker, and the four extended fields appear as labeled date-conditioned caller placeholders [class: IMPLEMENTATION_REQUIRED] (fold: record_kind and risk_signals carry canonical plan-review defaults; all date-conditioned fields are named in SCAFFOLD_LABELS)
+- [x] Given bare `--scaffold` with no path and no other flags, expect exit 0 with the scaffold envelope; scaffold dispatch precedes the path-required gate; given `--scaffold --newest-for-branch`, expect the scaffold envelope [class: REPOSITORY_TEST]
+- [x] Outcome posture: given `--scaffold`, expect a metadata-mode exit with no final `OUTCOME:` line (JSON envelope only), matching the selftest precedent, with the validate_review_staging.py row in `scripts/OUTCOME_CONTRACT.md` updated to name it [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the validator's embedded selftests; expect all existing schema and new scaffold checks to pass [class: REPOSITORY_TEST]
+- [x] Commit: `feat: emit validator-owned review sidecar scaffold` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Replace repeated schema instructions with a generated-scaffold pointer
 
@@ -154,13 +154,13 @@ Context surface: the plan's Terms and Standing constraints; both are referenced,
 Files:
 - `agents/skills/review-staging/SKILL.md`
 
-- [ ] Given the review-staging authoring recipe, expect authors to use the optional `--scaffold` mode, fill caller values, and still run current preflight/hard gates [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the authoring recipe, expect the generated scaffold to be the source for structural shapes only; retain or point to skill guidance for date-conditioned and semantic requirements the descriptor does not represent [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the schema-contract prose, expect the competing “schema of record” claim and duplicate operative structural inventory to be removed, and the replacement pointer to delete at least as many operative bytes as it adds [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the embedded minimal-valid pair, expect it to remain only as a non-operative selftest fixture; the authoring instructions must direct users to the generated scaffold rather than copying its sidecar shape [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the fixture pair and its validator selftest, expect it to remain valid under the current descriptor [class: REPOSITORY_TEST]
-- [ ] Given the scaffold output, expect a scripted field-presence check to find every origin-listed hand-filled section, backed by Task 1's embedded selftests and the filled-scaffold-passes-hard-validation run [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: point review authors to generated sidecar scaffold` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the review-staging authoring recipe, expect authors to use the optional `--scaffold` mode, fill caller values, and still run current preflight/hard gates [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the authoring recipe, expect the generated scaffold to be the source for structural shapes only; retain or point to skill guidance for date-conditioned and semantic requirements the descriptor does not represent [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the schema-contract prose, expect the competing “schema of record” claim and duplicate operative structural inventory to be removed, and the replacement pointer to delete at least as many operative bytes as it adds [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the embedded minimal-valid pair, expect it to remain only as a non-operative selftest fixture; the authoring instructions must direct users to the generated scaffold rather than copying its sidecar shape [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the fixture pair and its validator selftest, expect it to remain valid under the current descriptor [class: REPOSITORY_TEST]
+- [x] Given the scaffold output, expect a scripted field-presence check to find every origin-listed hand-filled section, backed by Task 1's embedded selftests and the filled-scaffold-passes-hard-validation run [class: REPOSITORY_TEST]
+- [x] Commit: `docs: point review authors to generated sidecar scaffold` [class: IMPLEMENTATION_REQUIRED]
 
 ## Residual findings (cap closure)
 

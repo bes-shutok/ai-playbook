@@ -11,7 +11,12 @@ failures are visible. Capture is fail-open: every adapter error path
 returns ``None``; capture never raises into the sidecar-writing flow and
 never estimates values. Capture requires a git work tree: the repo
 	anchor is resolved from ``git rev-parse --show-toplevel`` from the
-	caller's cwd, and a non-git cwd yields no record.
+	caller's cwd, resolved further to the worktree list's main checkout
+	(a linked worktree's toplevel names the worktree root, never the
+	primary checkout root the runtime store's session directories
+	carry), and a non-git cwd yields no record. When ``--json`` yields
+	no record, a one-line stderr note names the resolved anchor and the
+	zero-sessions empty (a bare-cwd, non-git anchor stays silent).
 
 Window and grain semantics: interval attribution is PRIMARY when the
 review-run identity is passed (``mint`` mints it at round start; the
@@ -136,16 +141,48 @@ CREATE TABLE turn_usage (
 # --------------------------------------------------------------------------- #
 
 
+def _resolve_main_checkout_root(toplevel: Path) -> Path | None:
+    """Main checkout root for the work tree at ``toplevel``, or ``None``.
+
+    ``git worktree list --porcelain`` lists the main worktree first; a
+    linked worktree's own toplevel never matches the runtime store's
+    session ``directory`` values (they carry the primary checkout root),
+    so the attribution anchor resolves there. ``None`` on any git
+    failure or unusable output, and for the main checkout itself the
+    first entry is the caller's own root (anchor unchanged).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=str(toplevel),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    for line in out.stdout.splitlines():
+        if line.startswith("worktree "):
+            return Path(os.path.realpath(line[len("worktree "):].strip()))
+    return None
+
+
 def _resolve_repo_anchor(
     cwd: Path, allow_cwd_fallback: bool = False
 ) -> Path | None:
-    """Realpath of ``git rev-parse --show-toplevel`` from ``cwd``.
+    """Realpath of the main checkout root for the work tree at ``cwd``.
 
     Production-strict (N3): when git is unavailable or the directory is
     not a work tree, return ``None`` — a bare cwd anchor (run from ``~``)
     would match every session under home. Selftests opt in to the cwd
     fallback explicitly via ``allow_cwd_fallback=True`` to stay hermetic
     against non-git fixture dirs.
+
+    Worktree-aware: a linked worktree's ``--show-toplevel`` names the
+    worktree root, so the anchor resolves through the worktree list to
+    the main checkout's root (``_resolve_main_checkout_root``); on any
+    worktree-list failure the toplevel anchor is kept, never dropped.
     """
     try:
         out = subprocess.run(
@@ -156,7 +193,8 @@ def _resolve_repo_anchor(
             timeout=10,
             check=True,
         )
-        anchor = Path(os.path.realpath(out.stdout.strip()))
+        toplevel = Path(os.path.realpath(out.stdout.strip()))
+        anchor = _resolve_main_checkout_root(toplevel) or toplevel
     except Exception:  # noqa: BLE001
         if not allow_cwd_fallback:
             return None
@@ -1426,6 +1464,74 @@ def _selftest_foreign_directory(check: Callable) -> None:
           capture_usage(home=fx.home, cwd=fx.repo, now_ms=fx.now) is None)
 
 
+@_test("review_usage_capture#selftest_worktree_anchor_resolves_to_main")
+def _selftest_worktree_anchor_resolves_to_main(check: Callable) -> None:
+    """Worktree-aware anchor: a linked worktree cwd attributes over the
+    MAIN checkout's sessions (the runtime store carries the primary
+    checkout's directory), the primary cwd keeps the same attribution,
+    and the bare-cwd no-record behavior is unchanged (N3)."""
+    tmp_git = _tmp_dir()
+    main_repo = tmp_git / "main"
+    linked = tmp_git / "linked"
+    try:
+        def git(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=str(main_repo), check=True,
+                capture_output=True, text=True, timeout=30,
+            )
+
+        main_repo.mkdir()
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "selftest@example.invalid")
+        git("config", "user.name", "selftest")
+        (main_repo / "f.txt").write_text("x\n", encoding="utf-8")
+        git("add", "f.txt")
+        git("commit", "-q", "-m", "init")
+        git("worktree", "add", "-q", str(linked))
+    except Exception as exc:  # noqa: BLE001
+        check("git worktree fixture available", False,
+              f"{type(exc).__name__}: {exc}")
+        return
+
+    try:
+        fx = _Fixture(_tmp_dir())
+        fx.session("sess_root_wt00001", directory=main_repo)
+        fx.row("sess_root_wt00001", input_tokens=100,
+               computed_total_tokens=100)
+        fx.build()
+        rec = capture_usage(
+            home=fx.home, cwd=linked, now_ms=fx.now,
+            allow_cwd_fallback=True,
+        )
+        check("linked-worktree cwd -> main checkout's record",
+              rec is not None, f"got {rec}")
+        if rec is not None:
+            check("attributed to the main checkout's session",
+                  rec["provenance"]["session_ids"] == ["sess_root_wt"],
+                  f"got {rec['provenance']['session_ids']}")
+
+        rec_main = capture_usage(
+            home=fx.home, cwd=main_repo, now_ms=fx.now,
+            allow_cwd_fallback=True,
+        )
+        main_ids = (
+            rec_main["provenance"]["session_ids"] if rec_main else None
+        )
+        check("primary checkout cwd unchanged",
+              rec_main is not None and main_ids == ["sess_root_wt"],
+              f"got {main_ids}")
+
+        # N3 unchanged: tmp_git itself is not inside a work tree, so the
+        # production-strict anchor (cwd fallback unset) is still None.
+        check("bare non-git cwd anchor still None (N3)",
+              capture_usage(home=fx.home, cwd=tmp_git, now_ms=fx.now)
+              is None)
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(tmp_git, ignore_errors=True)
+
+
 @_test("review_usage_capture#selftest_never_raises")
 def _selftest_never_raises(check: Callable) -> None:
     tmp = _tmp_dir()
@@ -2230,8 +2336,25 @@ def main(argv: list[str] | None = None) -> int:
                 "--review-started-at-ms for interval attribution)\n"
             )
         print(json.dumps(record, indent=2))
-    # No store data: print nothing; the caller writes the sidecar
-    # without a usage field (missing stays missing).
+        return 0
+    # No store data: print nothing on stdout; the caller writes the
+    # sidecar without a usage field (missing stays missing). When the
+    # anchor resolved, a one-line stderr note names it so an honest
+    # empty is self-explaining at the call site (zero sessions for the
+    # window vs. a checkout bug); a bare-cwd (non-git) anchor stays
+    # silent (N3 no-record behavior unchanged).
+    try:
+        anchor = _resolve_repo_anchor(Path.cwd())
+        if anchor is not None:
+            sys.stderr.write(
+                "review_usage_capture: no usage record: zero sessions "
+                "matched the attribution anchor "
+                f"{_abbreviate_home_str(str(anchor), Path.home())} for "
+                "the window; the caller writes the sidecar without a "
+                "usage field (missing stays missing)\n"
+            )
+    except Exception:  # noqa: BLE001
+        pass
     return 0
 
 

@@ -10,6 +10,7 @@
 - **Skill/step:** `agents/skills/docs-branch/SKILL.md`, sync entry-point selection; `scripts/test_docs_branch_step2_selector.py`
 - **Severity:** low; the selector test still expects the retired backend selection and fails when run against the new single-runner skill
 Cluster: docs/history/backlog/2026-10-09-docs-branch-witness-contract-and-recovery-test.md (same surface: the docs-branch skill and its runner tests; both rows are deferrals from the same execution)
+Cluster: docs/history/backlog/2026-10-22-done-docs-restore-untracked-record-loss.md (same surface: the docs-branch sync runner; that row investigates an unattributed mid-run record deletion near the sync pass)
 
 ## Problem
 

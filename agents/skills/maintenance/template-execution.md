@@ -212,10 +212,14 @@ stages only the verified paths; a run with no final `OUTCOME:` line is tool
 error under the contract and stages nothing. Then (after the landing and before the branch deletion)
 run the dirt regression gate against the run's merge base over the arm's own
 working tree (the run worktree's own working tree)
-(`python3
-scripts/dirt_regression_gate.py --base <merge-base-sha>` over the working
-tree's modified files, and over every file the dirt backup/restore touched
-when a restore ran): a dirt regression finding is remedied in place (the
+(`python3 scripts/dirt_regression_gate.py --base <merge-base-sha> -- "${DIRT_PATHS[@]}"`;
+the `<merge-base-sha>` placeholder is replaced with the run's actual merge
+base before execution; `DIRT_PATHS` is safely populated as a Bash array with
+one element per working-tree modified file plus every file the dirt
+backup/restore touched when a restore ran; the `"${DIRT_PATHS[@]}"` expansion
+passes each path as one literal quoted argument and constructing or
+evaluating shell command text from raw path bytes is prohibited;
+`--base` without path operands is a command-construction usage error): a dirt regression finding is remedied in place (the
 regressed file is restored from HEAD and the merge summary carries one line
 per restored file naming the regression); it is NOT a gate failure and does
 not trigger the release/keep-branch abort; the gate reports the outcome contract's four outcomes (scripts/OUTCOME_CONTRACT.md, final `OUTCOME:` line): a finding is fail (remedy in place as above); an indeterminate or tool-error result stops the merge step (do not delete the branch, do not report the merge complete; take the gate-failure release arm: release via merge-release-repo with the acquired exports, keep the branch, and report): report the gate's lines and re-derive the landed tree from disk outside the held critical section before retrying; only a determinate pass or fail verdict proceeds to branch deletion; a run that emits no final `OUTCOME:` line is tool error under the contract and stops the merge step the same way; then verify the landed commit on the repository's default branch:

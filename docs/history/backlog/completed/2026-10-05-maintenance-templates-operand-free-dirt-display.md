@@ -1,7 +1,7 @@
 # Backlog: operand-free dirt-gate command displays in the maintenance templates
 
 - **Filed:** 2026-10-05, review residual (r1 F5 of docs/history/plans/2026-10-05-dirt-gate-new-file-refactor-and-required-operands.md; the covering plan fixed the done-skill display site and records this row as the residual's home)
-- **Status:** open
+- **Status:** covered (plan docs/history/plans/completed/2026-10-22-maintenance-dirt-gate-operand-display.md landed the operand-bearing display; the current active site is agents/skills/maintenance/template-execution.md, the prompt-templates.md lines this row cited moved in the maintenance skill size refactor)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** review finding (r1, Low, seam-and-scope#adjacent-same-shape-unlisted)

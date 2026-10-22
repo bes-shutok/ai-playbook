@@ -98,11 +98,11 @@ Evidence:
 - The checker currently uses recursive selection; the gitignored synced cache and its false warnings are documented in lesson 138.
 - The checker has an embedded `--selftest`; the landing-sweep suite already exercises the description-length gate.
 
-- [ ] The default scan inside a checkout selects only repository-tracked skill descriptions, including tracked files that match ignore rules; an over-cap nested gitignored but untracked file produces no finding. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Inside a checkout, an over-cap non-ignored untracked skill description is excluded from the default scan; outside a checkout, the default scan recursively reports an over-cap skill description. [class: IMPLEMENTATION_REQUIRED]
-- [ ] An over-cap tracked skill still produces a finding with its path and folded length; explicit-directory mode still reports an untracked over-cap skill description, and `--selftest` retains its existing behavior. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The checker selftest and landing-sweep tests distinguish tracked over-cap descriptions, including tracked paths that match ignore rules, from untracked ignored and non-ignored descriptions in the default in-checkout scan, and preserve explicit-directory selection and the outside-checkout recursive fallback. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: scope description length scan to tracked skills` [class: IMPLEMENTATION_REQUIRED]
+- [x] The default scan inside a checkout selects only repository-tracked skill descriptions, including tracked files that match ignore rules; an over-cap nested gitignored but untracked file produces no finding. [class: IMPLEMENTATION_REQUIRED]
+- [x] Inside a checkout, an over-cap non-ignored untracked skill description is excluded from the default scan; outside a checkout, the default scan recursively reports an over-cap skill description. [class: IMPLEMENTATION_REQUIRED]
+- [x] An over-cap tracked skill still produces a finding with its path and folded length; explicit-directory mode still reports an untracked over-cap skill description, and `--selftest` retains its existing behavior. [class: IMPLEMENTATION_REQUIRED]
+- [x] The checker selftest and landing-sweep tests distinguish tracked over-cap descriptions, including tracked paths that match ignore rules, from untracked ignored and non-ignored descriptions in the default in-checkout scan, and preserve explicit-directory selection and the outside-checkout recursive fallback. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: scope description length scan to tracked skills` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Record admission and sunset evidence
 
@@ -116,7 +116,11 @@ Evidence:
 Primary class anchors:
 - `check_failures` in `scripts/machinery_inventory.py`, which validates active registry entries and removals records.
 
-- [ ] The existing registry entry records the incident, expected frequency, false-positive cost after tracked-set selection, and the 2027-10-20 review date. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The active registry entry records re-demotion criteria that require a complete firing census plus no further catches; an empty ledger alone is not evidence of completeness, and if completeness cannot be established, preserve the warning posture and record an operator review. The entry also requires warning posture until a separately authorized blocker-promotion plan exists. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The machinery inventory validator accepts the updated active entry; do not add a removals-array row while the checker remains tracked. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: record description length gate admission criteria` [class: IMPLEMENTATION_REQUIRED]
+- [x] The existing registry entry records the incident, expected frequency, false-positive cost after tracked-set selection, and the 2027-10-20 review date. [class: IMPLEMENTATION_REQUIRED]
+- [x] The active registry entry records re-demotion criteria that require a complete firing census plus no further catches; an empty ledger alone is not evidence of completeness, and if completeness cannot be established, preserve the warning posture and record an operator review. The entry also requires warning posture until a separately authorized blocker-promotion plan exists. [class: IMPLEMENTATION_REQUIRED]
+- [x] The machinery inventory validator accepts the updated active entry; do not add a removals-array row while the checker remains tracked. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: record description length gate admission criteria` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md: covered by this plan (landing marked it covered); deleted at implementation completion per the plan's Outcome text, with no per-item archive copy by that same disposition. The surviving records are the registry admission entry (script:check_skill_description_length.py in scripts/machinery_registry.json) and the related true-catch row docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md, which stays open for the separately authorized blocking-posture and firing-capture work.

@@ -740,6 +740,18 @@
           "evidence": "valid-contract-correction-refused",
           "time_lost_minutes": null,
           "note": "commit-blocked-after-test-pass"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-20",
+          "evidence": "seven requested paths refused as base-era restoration over lines gained since 3e97e4f5de83",
+          "time_lost_minutes": null
+        },
+        {
+          "kind": "incident",
+          "date": "2026-10-20",
+          "evidence": "blocked-valid-correction-landing",
+          "time_lost_minutes": null
         }
       ]
     },

@@ -112,11 +112,11 @@ Primary class anchors:
 - `Step 3.1 verification gate` in `agents/skills/execute-plan/SKILL.md`
 - `Step 3.2: Triage input` in `agents/skills/execute-plan/SKILL.md`
 
-- [ ] Given a staged review Markdown file and its sidecar, expect Step 3.1 to run python3 scripts/validate_review_staging.py --hard <record> before Step 3.2 and continue only when the command succeeds and its final outcome is `OUTCOME: pass`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a malformed record for which soft validation exits zero with `OUTCOME: fail`, expect Phase 3 to stop before Step 3.2; a workflow test proves the soft-mode failure cannot enter triage. [class: REPOSITORY_TEST]
-- [ ] Given a valid findings-bearing record and a valid clear record, expect both to pass the same hard-mode validator invocation without a new schema rule. [class: REPOSITORY_TEST]
-- [ ] Given the existing review loop, expect no additional blocking gate, lock, ledger, refusal class, or validator mode. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: validate execution review records before triage` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a staged review Markdown file and its sidecar, expect Step 3.1 to run python3 scripts/validate_review_staging.py --hard <record> before Step 3.2 and continue only when the command succeeds and its final outcome is `OUTCOME: pass`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a malformed record for which soft validation exits zero with `OUTCOME: fail`, expect Phase 3 to stop before Step 3.2; a workflow test proves the soft-mode failure cannot enter triage. [class: REPOSITORY_TEST]
+- [x] Given a valid findings-bearing record and a valid clear record, expect both to pass the same hard-mode validator invocation without a new schema rule. [class: REPOSITORY_TEST]
+- [x] Given the existing review loop, expect no additional blocking gate, lock, ledger, refusal class, or validator mode. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: validate execution review records before triage` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Produce findings-bearing review pairs
 
@@ -132,13 +132,13 @@ Primary class anchors:
 - `_current_findings_markdown` in `scripts/validate_review_staging.py`
 - `validate_current_payload` in `scripts/validate_review_staging.py`
 
-- [ ] Given structured review metadata and findings, expect the producer to emit a Markdown record and `.stats.json` sidecar matching the validator's current findings-bearing grammar. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given generated artifacts, expect the producer to report success only when the validator's final outcome is `OUTCOME: pass`; exit code zero alone is insufficient because soft mode can report `OUTCOME: fail`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a malformed generated pair, expect a producer test to verify refusal with the record path and validator result, including a soft-mode exit-zero failure outcome. [class: REPOSITORY_TEST]
-- [ ] Given findings with varied severity and triage states, expect the generated Markdown counts and sidecar findings to agree with the validator's parity rules. [class: REPOSITORY_TEST]
-- [ ] Given an empty findings set, expect the existing repair helper's zero-findings behavior to remain unchanged and the new producer not to claim that it repaired an existing record. [class: REPOSITORY_TEST]
-- [ ] Given repeated producer inputs, expect deterministic Markdown and sidecar bytes; isolate validator telemetry under a temporary metrics home or scope filesystem assertions to producer-owned writes. [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: produce validated execution review records` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given structured review metadata and findings, expect the producer to emit a Markdown record and `.stats.json` sidecar matching the validator's current findings-bearing grammar. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given generated artifacts, expect the producer to report success only when the validator's final outcome is `OUTCOME: pass`; exit code zero alone is insufficient because soft mode can report `OUTCOME: fail`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a malformed generated pair, expect a producer test to verify refusal with the record path and validator result, including a soft-mode exit-zero failure outcome. [class: REPOSITORY_TEST]
+- [x] Given findings with varied severity and triage states, expect the generated Markdown counts and sidecar findings to agree with the validator's parity rules. [class: REPOSITORY_TEST]
+- [x] Given an empty findings set, expect the existing repair helper's zero-findings behavior to remain unchanged and the new producer not to claim that it repaired an existing record. [class: REPOSITORY_TEST]
+- [x] Given repeated producer inputs, expect deterministic Markdown and sidecar bytes; isolate validator telemetry under a temporary metrics home or scope filesystem assertions to producer-owned writes. [class: REPOSITORY_TEST]
+- [x] Commit: `feat: produce validated execution review records` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Write the execution receipt after the Phase 3 exit decision
 
@@ -156,12 +156,12 @@ Primary class anchors:
 - `Phase 4: Archive Plan` in `agents/skills/execute-plan/SKILL.md`
 - `Landing closeout - origin coverage and duplicate-origin refusal` in `agents/skills/plans/SKILL.md`
 
-- [ ] Given Step 3.5 selects Phase 4 after a fresh blocking-clean review, expect it to write one dated record under `{reviews_dir}` using the current plans-egress execution-receipt naming grammar and the SHA-256 of the final Phase 3 plan bytes. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given Step 3.5 selects Phase 4 under a satisfied recorded residual-acceptance policy, expect it to write the same receipt with the final Phase 3 plan digest even though blocking findings remain in the accepted named set. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given either Phase 4 exit, expect repository tests to assert the receipt name and digest match the final Phase 3 plan bytes; the residual-acceptance case proves accepted named findings do not suppress receipt production. [class: REPOSITORY_TEST]
-- [ ] Given Step 3.5 selects another Phase 3 round, expect it to write no execution receipt. [class: REPOSITORY_TEST]
-- [ ] Given Phase 4 appends the required disposition after Step 3.5 receipt creation, expect the plans lifecycle to refresh the digest to the final archived plan bytes before the archive commit and its `check-archive`; a workflow test proves the check sees the refreshed digest. [class: REPOSITORY_TEST]
-- [ ] Given done closeout, expect the skill to verify and migrate the Phase 4 refreshed receipt without changing its digest. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given lesson 107, expect its rule to name Step 3.5's selected Phase 4 exit as the receipt production point while retaining its observed refusal as evidence. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the existing egress guard and landing sweep, expect their commands, inputs, and refusal behavior to remain unchanged. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: produce execution receipt at review round close` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given Step 3.5 selects Phase 4 after a fresh blocking-clean review, expect it to write one dated record under `{reviews_dir}` using the current plans-egress execution-receipt naming grammar and the SHA-256 of the final Phase 3 plan bytes. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given Step 3.5 selects Phase 4 under a satisfied recorded residual-acceptance policy, expect it to write the same receipt with the final Phase 3 plan digest even though blocking findings remain in the accepted named set. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given either Phase 4 exit, expect repository tests to assert the receipt name and digest match the final Phase 3 plan bytes; the residual-acceptance case proves accepted named findings do not suppress receipt production. [class: REPOSITORY_TEST]
+- [x] Given Step 3.5 selects another Phase 3 round, expect it to write no execution receipt. [class: REPOSITORY_TEST]
+- [x] Given Phase 4 appends the required disposition after Step 3.5 receipt creation, expect the plans lifecycle to refresh the digest to the final archived plan bytes before the archive commit and its `check-archive`; a workflow test proves the check sees the refreshed digest. [class: REPOSITORY_TEST]
+- [x] Given done closeout, expect the skill to verify and migrate the Phase 4 refreshed receipt without changing its digest. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given lesson 107, expect its rule to name Step 3.5's selected Phase 4 exit as the receipt production point while retaining its observed refusal as evidence. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the existing egress guard and landing sweep, expect their commands, inputs, and refusal behavior to remain unchanged. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: produce execution receipt at review round close` [class: IMPLEMENTATION_REQUIRED]

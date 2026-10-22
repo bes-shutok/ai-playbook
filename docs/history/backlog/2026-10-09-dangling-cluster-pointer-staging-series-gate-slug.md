@@ -10,6 +10,8 @@
 - **Driving force:** simplicity
 Cluster: docs/history/backlog/2026-10-06-staging-preflight-done-readiness-shared-payload-span.md (one of the two rows citing the retired slug this row repoints)
 Cluster: docs/history/backlog/2026-10-19-machinery-registry-witness-ref-rot.md (same defect class: a living record citing a backlog path that moved)
+Cluster: docs/history/backlog/completed/ (removed 2026-10-22, covered by the dedupe landing) (same defect class: a living pointer whose referent's canonical home moved to completed/)
+Cluster: EXEC-PROMPTS.md entry prompt-log-payload-targets-and-verdict-test-statement (covered 2026-10-22; the payload-target duty sentence landed, the origin row deleted per the covered-row rule)
 
 ## Problem
 

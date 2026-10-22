@@ -11,7 +11,7 @@
 - **Capture hygiene:** repo-relative paths only; no personal or machine-specific data.
 - **Dedup probe:** searched open backlog filenames and text for `description-length`, `1024`, `warning posture`, `guard-liveness`, `promot`; nearest rows are `2026-10-10-promotion-threshold-activation-contract.md` (maintenance pre-review stops, a different gate family) and `2026-10-17-memory-index-over-budget-compress-and-index.md` (a byte budget on the memory index, not a sweep gate); no open row owns this gate's posture.
 
-- **Cluster:** docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster)
+- **Cluster:** (the shared-mechanism row docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md was deleted 2026-10-22 by its covering plan's execution; the description-length family link now lives in that plan's disposition record)
 - **Cluster:** docs/history/backlog/2026-10-18-done-plan-readiness-child-tool-error.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster)
 ## Problem
 
