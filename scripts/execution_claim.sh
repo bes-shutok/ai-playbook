@@ -1613,6 +1613,7 @@ take_occupant_gate() {
   refuse "  occupying worktree: $occupant"
   refuse "  stale claim preserved: $CLAIM_PATH (holder session: $holder)"
   refuse "  remedies: adopt the existing worktree per the recognition arm, or remove it deliberately, then take again"
+  refuse "  bounded removal remedy: git worktree remove --force <path>, git branch -D <branch>, then re-run take so the gateway creates claim and worktree atomically"
   die_fail
 }
 
@@ -1664,6 +1665,7 @@ cmd_take() {
     refuse "take refused: branch $BRANCH is held by an existing worktree"
     refuse "  occupying worktree: $occupant"
     refuse "  remedies: adopt the existing worktree per the recognition arm, or remove it deliberately, then take again"
+    refuse "  bounded removal remedy: git worktree remove --force <path>, git branch -D <branch>, then re-run take so the gateway creates claim and worktree atomically"
     if (( CREATED_HERE )); then
       rm -f "$CLAIM_PATH"
       refuse "  cleanup: removed this invocation's fresh claim $CLAIM_PATH"

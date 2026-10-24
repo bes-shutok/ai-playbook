@@ -15,6 +15,7 @@
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
 #        [--side-commit REPO_PATH]... [--manifest PATH] [--run-id RUN_ID]
 #        [--authorize-ancestor-restoration PATH BLOB_ID]
+#        [--authorize-dirt-correction PATH BLOB_ID]...
 #   done_run.sh finalize [--manifest PATH] [--run-id RUN_ID]
 #        [--from-holder] [--session IDENTITY] [--no-landing-cost]
 #        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
@@ -60,13 +61,13 @@
 # deliverables file, the stale-checkout adjudication (revert_set_classifier
 # classify restores ancestor-blob debris outside the declared set, never
 # staging it), the cached-diff guard (a declared staged path whose content
-# equals an ancestor vintage is the relocated leaked-revert stop), the dirt
-# regression gate, the staged-scope guard, the foreign-dirt disposition
-# ladder (a manifest foreign claim aborts the landing; other unclaimed dirt
-# is reported and left), the formatting-only candidate list (no revert
-# without --revert-formatting), the unused-import pass (skip-note when no
-# linter resolves; findings report-only), the lesson-scope audit when the
-# lessons corpus is touched, the --learn-receipts-from ledger appends
+# equals an ancestor vintage is the relocated leaked-revert stop), the
+# staged-scope guard, the foreign-dirt disposition ladder (a manifest
+# foreign claim aborts the landing; other unclaimed dirt is reported and
+# left), the formatting-only candidate list (no revert without
+# --revert-formatting), the unused-import pass (skip-note when no linter
+# resolves; findings report-only), the lesson-scope audit when the lessons
+# corpus is touched, the --learn-receipts-from ledger appends
 # (post-hoc-from-receipt, before the sweep), the landing sweep over the
 # final staged set, the docs-branch sync (the worktree migration precedes it
 # in an ad-hoc worktree; the sync holds its own runner-owned merge-lock
@@ -75,38 +76,55 @@
 # primary-checkout inspection; the default final-closeout keeps today's
 # behavior byte-identically; the sweep-gates runner's usage text is the
 # canonical roster split), the registry digest arm, the reverse-squash
-# check-staged, and
-# exactly one landing commit with the owned-commits ledger append fused to
-# it (git commit ... && git rev-parse HEAD >> ledger). That landing commit
-# refuses an empty declared set over a non-empty staged index, naming every
-# staged path as the foreign set, and keeps the clean-index skip (no staged
-# changes; landing commit skipped). The base-branch
-# immutability rule is reported as a warning line, never a refusal. The
-# subcommand then walks the facts-resolved side repos (user-facts keys
-# skills_repo_path and shared_docs_dir), reports dirty paths per repo, and
-# executes one confirmed commit action per repo named by --side-commit,
-# re-running the public-hygiene scan over each staged side-repo set before
-# that repo's commit. With --authorize-ancestor-restoration PATH BLOB_ID the
-# invocation authorizes exactly one declared staged restoration to the named
-# blob, bound to the current run: the newest root-confirmed marker, the
-# manifest bound to it (selected exports, run id, and repo root must match),
-# and the live env-token done lock must all resolve before any ref update,
-# the authorized path must sit in the declared set with a staged blob equal
-# to BLOB_ID, and the cached-diff guard lifts only that path (every other
-# ancestor-matching path still refuses). That landing then records the
-# guarded staged tree, captures HEAD's symbolic target and OID (or detached
-# state and direct HEAD OID) before the hooks, runs pre-commit,
+# check-staged, and exactly one captured-tree landing with the owned-commits
+# ledger append fused to it. That landing records the staged tree with git
+# write-tree, runs the dirt regression gate exactly once against that
+# captured tree (--tree mode: classification reads the immutable tree, never
+# the mutable worktree), captures HEAD's symbolic target and OID (or
+# detached state and direct HEAD OID) before the hooks, runs pre-commit,
 # prepare-commit-msg, and commit-msg in Git order with normal
-# args/env/message-file handling, refuses any hook failure or index-tree
-# change, revalidates the exact run tuple and lock immediately before the
-# ref update, and lands the unchanged tree with sole parent at captured
-# HEAD through one compare-and-swap ref transaction (git update-ref --stdin;
-# direct HEAD with no-deref when detached, never creating a branch), the
-# owned-commits ledger append fused after the swap, and post-commit run
-# last (its failure cannot undo the commit). Reference-transaction hooks
-# keep their standard phases and veto power; their side effects are outside
-# the wrapper guarantee. Nothing about the authorization is persisted to
-# the manifest, staging, message, or classifier. When DONE_RUN_TRACE_FILE
+# args/env/message-file handling, refuses any hook failure or staged-index
+# tree change, re-verifies each authorized blob against the captured tree
+# before the hooks run, revalidates the live run tuple immediately before
+# the ref update, and lands the unchanged tree with sole
+# parent at captured HEAD through one compare-and-swap ref transaction
+# (git update-ref --stdin; direct HEAD with no-deref when detached, never
+# creating a branch), the owned-commits ledger append fused after the swap,
+# and post-commit run last (its failure cannot undo the commit; it sees the
+# actual HEAD, including after a checkout race). The landing reports the
+# captured destination: only the captured branch advances, and a later
+# checkout cannot retarget the commit. Reference-transaction hooks keep
+# their standard phases and veto power; their side effects are outside the
+# wrapper guarantee. Ordinary (unauthorized) and authorized commits share
+# this one captured-tree landing flow. That landing commit refuses an empty
+# declared set over a non-empty staged index, naming every staged path as
+# the foreign set, and keeps the clean-index skip (no staged changes;
+# landing commit skipped). The base-branch immutability rule is reported as
+# a warning line, never a refusal. The subcommand then walks the
+# facts-resolved side repos (user-facts keys skills_repo_path and
+# shared_docs_dir), reports dirty paths per repo, and executes one
+# confirmed commit action per repo named by --side-commit, re-running the
+# public-hygiene scan over each staged side-repo set before that repo's
+# commit. With --authorize-ancestor-restoration PATH BLOB_ID the
+# invocation authorizes exactly one declared staged restoration to the
+# named blob, bound to the current run: the newest root-confirmed marker,
+# the manifest bound to it (selected exports, run id, and repo root must
+# match), and the live env-token done lock must all resolve before any ref
+# update, the authorized path must sit in the declared set with a staged
+# blob equal to BLOB_ID, and the cached-diff guard lifts only that path
+# (every other ancestor-matching path still refuses). With
+# --authorize-dirt-correction PATH BLOB_ID (repeatable) the invocation
+# authorizes one finite correction set: an exact mapping from each
+# operator-declared path to that path's expected staged blob, bound to the
+# operator direction and the same live run tuple; at the landing each
+# mapping entry's blob must still equal the path's blob in the captured
+# tree, and the dirt regression gate lifts only a regressed path the set
+# names with the exact matching blob, while indeterminate and tool-error
+# classifier outcomes, stale runs, duplicate or undeclared paths, malformed
+# mappings, and unmatched regressions all refuse. The two authorizations
+# are separate: neither satisfies or lifts the other guard. Nothing about
+# either authorization is persisted to the manifest, staging, message, or
+# classifier. When DONE_RUN_TRACE_FILE
 # is set the subcommand appends
 # one `stage <name>` line per composed stage, so a run's trace shows the
 # order the plan fixes.
@@ -551,132 +569,248 @@ run_commit_hook() { # hook-name [args...] -> rc
   GIT_DIR="${GIT_DIR:-$(git rev-parse --absolute-git-dir)}" "$hook_path" "$@"
 }
 
-landing_die() { # rc message...: an authorized-landing refusal (cleans the commit scratch first)
+landing_die() { # rc message...: a captured-tree-landing refusal (cleans the commit scratch first)
   local rc="$1"
   shift
   rm -rf "${tmpd:-}" 2>/dev/null || true
   commit_die "$rc" "$@"
 }
 
-# The authorized landing: one commit from the guarded staged tree with sole
-# parent at captured HEAD, landed through one compare-and-swap ref
-# transaction. Caller globals: FULL_SUBJECT, DRIFT_WITNESS, LEDGER_PATH,
-# and the validated AUTH_* tuple. Every refusal here happens before the ref
-# update and before the ledger append.
-authorized_landing() {
+# The captured-tree landing shared by every primary-repository commit
+# (ordinary and authorized alike): one guarded staged tree, the dirt
+# regression gate run exactly once against it, Git-order pre-update commit
+# hooks, index-tree and HEAD-identity refusals, and one compare-and-swap
+# ref transaction. Caller globals: FULL_SUBJECT, DRIFT_WITNESS, LEDGER_PATH,
+# the validated AUTH_* run tuple, the cached-diff authorization (AUTH_PATH
+# and AUTH_BLOB), and the dirt correction set (DIRT_CORRECTION_PATHS and
+# DIRT_CORRECTION_BLOBS). Every refusal here happens before the ref update
+# and before the ledger append.
+captured_tree_landing() {
   local tree_accepted head_target="" head_detached=0 head_oid \
     git_dir msg_file tree_after new_oid gpgsign \
-    auth_declared_now staged_blob_now declared_path
-  local -a sign_args=()
-  # 0. The authorized binding must still hold at the tree-capture moment:
-  #    the path is still in the declared set and its staged blob still
-  #    equals the expected blob. A mutation between the guard lift and this
-  #    function (the --revert-formatting arm among them) refuses here
-  #    instead of landing a blob different from the authorized one.
-  auth_declared_now=0
-  for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
-    [ "$declared_path" = "$AUTH_PATH" ] && auth_declared_now=1
-  done
-  [ "$auth_declared_now" -eq 1 ] || \
-    landing_die 1 "authorized landing: the authorized path left the declared set before the tree capture: $AUTH_PATH; refusing before the ref update; nothing committed"
-  staged_blob_now="$(git ls-files -s -- "$AUTH_PATH" | awk '{print $2}')"
-  [ "$staged_blob_now" = "$AUTH_BLOB" ] || \
-    landing_die 1 "authorized landing: the authorized path's staged blob changed before the tree capture ($staged_blob_now, expected $AUTH_BLOB for $AUTH_PATH); refusing before the ref update; nothing committed"
+    auth_declared_now staged_blob_now declared_path \
+    base_ref base_sha dirt_gate correction_path correction_blob \
+    tree_blob rpath rpath_ci ci staged_path staged_now
+  local -a sign_args=() dirt_paths=() regressed_paths=()
+  # 0. Capture-window fence: re-assert the staged-scope equality
+  #    immediately before the tree capture. Anything staged into the index
+  #    since the step-6 guard ran (a concurrent-looking extra staged path)
+  #    must refuse here, never ride the captured tree. Fail-closed corner:
+  #    a rename whose only declared member is its origin refuses too
+  #    (declare the destination as well).
+  staged_now="$(git diff --cached --name-only HEAD)"
+  if [ -n "$staged_now" ]; then
+    while IFS= read -r staged_path; do
+      [ -n "$staged_path" ] || continue
+      auth_declared_now=0
+      for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
+        [ "$declared_path" = "$staged_path" ] && auth_declared_now=1
+      done
+      [ "$auth_declared_now" -eq 1 ] || \
+        landing_die 1 "captured-tree landing: a foreign path entered the staged index before the tree capture: $staged_path; refusing before the ref update; nothing committed"
+    done < <(printf '%s\n' "$staged_now")
+  fi
   # 1. Record the accepted staged tree (the guards' declared-set tree).
   tree_accepted="$(git write-tree)" || \
-    landing_die 2 "authorized landing: cannot record the accepted staged tree (write-tree failed)"
-  # 2. Capture HEAD identity before the hooks run.
+    landing_die 2 "captured-tree landing: cannot record the accepted staged tree (write-tree failed)"
+  # 2. The dirt regression gate, exactly once, against the captured tree:
+  #    done commits classify the immutable tree (--tree mode), never the
+  #    mutable worktree, so a worktree-only cleanup after this capture
+  #    cannot change the verdict. An authorized dirt correction lifts only
+  #    a regressed path it names (with the exact matching blob, checked
+  #    below); indeterminate and tool-error outcomes refuse, and so does
+  #    every unmatched regression.
+  trace_stage dirt-regression-guard
+  base_ref="$(facts_toml_value base_branch)"
+  if [ -z "$base_ref" ]; then
+    base_ref="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  fi
+  for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
+    git cat-file -e "$tree_accepted:$declared_path" 2>/dev/null && \
+      git cat-file -e "HEAD:$declared_path" 2>/dev/null && \
+      dirt_paths+=("$declared_path")
+  done
+  if [ "${#dirt_paths[@]}" -gt 0 ]; then
+    if [ -z "$base_ref" ]; then
+      echo "done_run commit: dirt regression gate: no default branch resolved; skipped"
+    else
+      dirt_gate="$(resolve_helper dirt_regression_gate.py)"
+      if [ -z "$dirt_gate" ]; then
+        echo "done_run commit: dirt regression gate: no dirt_regression_gate.py resolved; skipped" >&2
+      else
+        base_sha="$(git merge-base HEAD "$base_ref" 2>/dev/null || true)"
+        if [ -z "$base_sha" ]; then
+          echo "done_run commit: dirt regression gate: base $base_ref does not merge-base against HEAD; skipped" >&2
+        else
+          DG_RC=0
+          DG_OUT="$(python3 "$dirt_gate" --base "$base_sha" --tree "$tree_accepted" -- ${dirt_paths+"${dirt_paths[@]}"} 2>&1)" || DG_RC=$?
+          printf '%s\n' "$DG_OUT"
+          if [ "$DG_RC" -ne 0 ] && [ "$DG_RC" -ne 1 ]; then
+            # Indeterminate and tool-error classifier outcomes refuse with
+            # or without an authorization: no authorization suppresses a
+            # non-regression classifier result.
+            landing_die "$DG_RC" "dirt regression guard refused the captured tree (rc=$DG_RC); nothing committed"
+          fi
+          if [ "$DG_RC" -eq 1 ]; then
+            # Fail-closed handoff: rc=1 must carry the gate's contractual
+            # verdict line and at least one machine-readable regression
+            # path. A drifted helper (a python traceback exit, a rewritten
+            # output format) is a refusal, never a fail-open landing.
+            printf '%s\n' "$DG_OUT" | grep -q '^OUTCOME: fail$' || \
+              landing_die 2 "captured-tree dirt guard: rc=1 carried no contractual 'OUTCOME: fail' line (helper drift); refusing before the ref update; nothing committed"
+            regressed_paths=()
+            while IFS= read -r rpath; do
+              [ -n "$rpath" ] && regressed_paths+=("$rpath")
+            done < <(printf '%s\n' "$DG_OUT" | sed -n 's/^dirt REGRESSION PATH: //p')
+            if [ "${#regressed_paths[@]}" -eq 0 ]; then
+              landing_die 1 "captured-tree dirt guard: rc=1 named no parsable regression path (helper drift); refusing before the ref update; nothing committed"
+            fi
+            for rpath in ${regressed_paths+"${regressed_paths[@]}"}; do
+              rpath_ci=""
+              ci=0
+              for correction_path in ${DIRT_CORRECTION_PATHS+"${DIRT_CORRECTION_PATHS[@]}"}; do
+                [ "$correction_path" = "$rpath" ] && rpath_ci="$ci"
+                ci=$((ci+1))
+              done
+              if [ -z "$rpath_ci" ]; then
+                landing_die 1 "dirt regression guard: unmatched regression in the captured tree: $rpath; an authorized dirt correction covers only its exact path and staged blob; refusing before the ref update; nothing committed"
+              fi
+              echo "done_run commit: dirt regression guard: authorized dirt correction accepted for this invocation: $rpath"
+            done
+          fi
+        fi
+      fi
+    fi
+  fi
+  # 3. Each authorized dirt correction's blob must still equal the path's
+  #    blob in the captured tree: a mutation between the staging binding
+  #    and this capture refuses here, whether or not the gate flagged the
+  #    path.
+  ci=0
+  for correction_path in ${DIRT_CORRECTION_PATHS+"${DIRT_CORRECTION_PATHS[@]}"}; do
+    correction_blob="${DIRT_CORRECTION_BLOBS[$ci]}"
+    tree_blob="$(git rev-parse --verify --quiet "$tree_accepted:$correction_path" 2>/dev/null || true)"
+    [ "$tree_blob" = "$correction_blob" ] || \
+      landing_die 1 "authorized dirt correction: the captured tree's blob for $correction_path (${tree_blob:-absent}) does not equal the expected blob ($correction_blob); refusing before the ref update; nothing committed"
+    ci=$((ci+1))
+  done
+  # 4. The cached-diff authorization binding must still hold at the
+  #    tree-capture moment: the path is still in the declared set and its
+  #    staged blob still equals the expected blob. A mutation between the
+  #    guard lift and this landing (the --revert-formatting arm among
+  #    them) refuses here instead of landing a blob different from the
+  #    authorized one.
+  if [ -n "$AUTH_PATH" ]; then
+    auth_declared_now=0
+    for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
+      [ "$declared_path" = "$AUTH_PATH" ] && auth_declared_now=1
+    done
+    [ "$auth_declared_now" -eq 1 ] || \
+      landing_die 1 "authorized landing: the authorized path left the declared set before the tree capture: $AUTH_PATH; refusing before the ref update; nothing committed"
+    staged_blob_now="$(git ls-files -s -- "$AUTH_PATH" | awk '{print $2}')"
+    [ "$staged_blob_now" = "$AUTH_BLOB" ] || \
+      landing_die 1 "authorized landing: the authorized path's staged blob changed before the tree capture ($staged_blob_now, expected $AUTH_BLOB for $AUTH_PATH); refusing before the ref update; nothing committed"
+  fi
+  # 5. Capture HEAD identity before the hooks run.
   if head_target="$(git symbolic-ref -q HEAD)"; then
     head_detached=0
   else
     head_detached=1
   fi
   head_oid="$(git rev-parse --verify HEAD)" || \
-    landing_die 3 "authorized landing: cannot resolve HEAD"
-  # 3. The message file, composed the way git commit -m <s> -m <w> renders it.
+    landing_die 3 "captured-tree landing: cannot resolve HEAD"
+  # 6. The message file, composed the way git commit -m <s> -m <w> renders it.
   git_dir="$(git rev-parse --git-dir)"
   msg_file="$git_dir/COMMIT_EDITMSG"
   { printf '%s\n' "$FULL_SUBJECT"
     if [ -n "$DRIFT_WITNESS" ]; then printf '\n%s\n' "$DRIFT_WITNESS"; fi
-  } > "$msg_file" || landing_die 3 "authorized landing: cannot write the commit message file"
-  # 4. The pre-update commit hooks in Git order, normal args/env/message
+  } > "$msg_file" || landing_die 3 "captured-tree landing: cannot write the commit message file"
+  # 7. The pre-update commit hooks in Git order, normal args/env/message
   #    handling; a hook failure refuses before any ref or ledger update.
   run_commit_hook pre-commit || \
-    landing_die 1 "authorized landing: pre-commit hook refused; nothing committed"
+    landing_die 1 "captured-tree landing: pre-commit hook refused; nothing committed"
   run_commit_hook prepare-commit-msg "$msg_file" message || \
-    landing_die 1 "authorized landing: prepare-commit-msg hook refused; nothing committed"
+    landing_die 1 "captured-tree landing: prepare-commit-msg hook refused; nothing committed"
   run_commit_hook commit-msg "$msg_file" || \
-    landing_die 1 "authorized landing: commit-msg hook refused; nothing committed"
-  # 5. Any index-tree change during the hooks refuses before the ref update.
+    landing_die 1 "captured-tree landing: commit-msg hook refused; nothing committed"
+  # 8. Any staged-index tree change during the hooks refuses before the ref
+  #    update; mutations staged after this final check stay excluded from
+  #    the landed commit.
   tree_after="$(git write-tree)" || \
-    landing_die 2 "authorized landing: cannot re-read the staged tree after the pre-update commit hooks"
+    landing_die 2 "captured-tree landing: cannot re-read the staged tree after the pre-update commit hooks"
   [ "$tree_after" = "$tree_accepted" ] || \
-    landing_die 1 "authorized landing: a pre-update commit hook changed the staged index tree ($tree_accepted -> $tree_after); refusing before the ref update; nothing committed"
-  # 6. The captured HEAD identity must still hold.
+    landing_die 1 "captured-tree landing: a pre-update commit hook changed the staged index tree ($tree_accepted -> $tree_after); refusing before the ref update; nothing committed"
+  # 9. The captured HEAD identity must still hold.
   if [ "$head_detached" -eq 0 ]; then
     [ "$(git symbolic-ref -q HEAD)" = "$head_target" ] || \
-      landing_die 1 "authorized landing: HEAD's symbolic target changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
+      landing_die 1 "captured-tree landing: HEAD's symbolic target changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
   else
     git symbolic-ref -q HEAD >/dev/null 2>&1 && \
-      landing_die 1 "authorized landing: HEAD left detached during the pre-update commit hooks; refusing before the ref update; nothing committed"
+      landing_die 1 "captured-tree landing: HEAD left detached during the pre-update commit hooks; refusing before the ref update; nothing committed"
   fi
   [ "$(git rev-parse --verify HEAD)" = "$head_oid" ] || \
-    landing_die 1 "authorized landing: HEAD's OID moved during the pre-update commit hooks; refusing before the ref update; nothing committed"
-  # 7. One commit from the unchanged tree, sole parent at captured HEAD,
-  #    message exactly the post-commit-msg file bytes; the worktree is never
-  #    reread. The configured signing is preserved through commit-tree -S.
+    landing_die 1 "captured-tree landing: HEAD's OID moved during the pre-update commit hooks; refusing before the ref update; nothing committed"
+  # 10. One commit from the unchanged tree, sole parent at captured HEAD,
+  #     message exactly the post-commit-msg file bytes; the worktree is never
+  #     reread. The configured signing is preserved through commit-tree -S.
   gpgsign="$(git config --bool --get commit.gpgsign 2>/dev/null || true)"
   [ "$gpgsign" = "true" ] && sign_args=(-S)
   new_oid="$(git commit-tree "$tree_accepted" -p "$head_oid" -F "$msg_file" ${sign_args+"${sign_args[@]}"})" || \
-    landing_die 2 "authorized landing: git commit-tree refused; nothing committed"
-  # 8. Revalidate the exact current-run tuple and the same live token-owned
-  #    lock directory/token, immediately before the ref transaction.
-  local r_marker="$AUTH_MARKER" r_manifest="$AUTH_MANIFEST" \
-    r_run_id="$AUTH_RUN_ID" r_digest="$AUTH_MANIFEST_DIGEST"
-  resolve_authorized_run_tuple
-  if [ "$AUTH_MARKER" != "$r_marker" ] || [ "$AUTH_MANIFEST" != "$r_manifest" ] || \
-     [ "$AUTH_RUN_ID" != "$r_run_id" ] || [ "$AUTH_MANIFEST_DIGEST" != "$r_digest" ]; then
-    landing_die 1 "authorized landing: the current-run tuple changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
+    landing_die 2 "captured-tree landing: git commit-tree refused; nothing committed"
+  # 11. An authorized invocation revalidates the exact current-run tuple
+  #     and the same live token-owned lock directory/token, immediately
+  #     before the ref transaction.
+  if [ -n "$AUTH_RUN_ID" ]; then
+    local r_marker="$AUTH_MARKER" r_manifest="$AUTH_MANIFEST" \
+      r_run_id="$AUTH_RUN_ID" r_digest="$AUTH_MANIFEST_DIGEST"
+    resolve_authorized_run_tuple
+    if [ "$AUTH_MARKER" != "$r_marker" ] || [ "$AUTH_MANIFEST" != "$r_manifest" ] || \
+       [ "$AUTH_RUN_ID" != "$r_run_id" ] || [ "$AUTH_MANIFEST_DIGEST" != "$r_digest" ]; then
+      landing_die 1 "captured-tree landing: the current-run tuple changed during the pre-update commit hooks; refusing before the ref update; nothing committed"
+    fi
   fi
-  # 8b. Last-instant HEAD identity re-check, immediately before the ref
-  #     transaction: the tuple revalidation subprocesses above sit in the
-  #     window the pre-hook check (step 6) cannot cover.
+  # 11b. Last-instant HEAD identity re-check, immediately before the ref
+  #      transaction: the tuple revalidation subprocesses above sit in the
+  #      window the pre-hook check (step 9) cannot cover.
   if [ "$head_detached" -eq 0 ]; then
     [ "$(git symbolic-ref -q HEAD)" = "$head_target" ] || \
-      landing_die 1 "authorized landing: HEAD's symbolic target changed before the ref transaction; refusing; nothing committed"
+      landing_die 1 "captured-tree landing: HEAD's symbolic target changed before the ref transaction; refusing; nothing committed"
   else
     git symbolic-ref -q HEAD >/dev/null 2>&1 && \
-      landing_die 1 "authorized landing: HEAD left detached before the ref transaction; refusing; nothing committed"
+      landing_die 1 "captured-tree landing: HEAD left detached before the ref transaction; refusing; nothing committed"
   fi
   [ "$(git rev-parse --verify HEAD)" = "$head_oid" ] || \
-    landing_die 1 "authorized landing: HEAD's OID moved before the ref transaction; refusing; nothing committed"
-  # 9. One ref transaction: atomically verify the captured identity and
-  #    compare-and-swap the captured branch ref (or direct HEAD when
-  #    detached; no branch is created). Reference-transaction hooks keep
-  #    their standard phases and veto power.
+    landing_die 1 "captured-tree landing: HEAD's OID moved before the ref transaction; refusing; nothing committed"
+  # 12. One ref transaction: atomically verify the captured identity and
+  #     compare-and-swap the captured branch ref (or direct HEAD when
+  #     detached; no branch is created). Reference-transaction hooks keep
+  #     their standard phases and veto power; only the captured branch
+  #     advances, and a checkout raced into the transaction cannot
+  #     retarget the commit.
   if [ "$head_detached" -eq 0 ]; then
     printf 'start\nupdate %s %s %s\nprepare\ncommit\n' \
       "$head_target" "$new_oid" "$head_oid" \
       | git update-ref --stdin || \
-      landing_die 1 "authorized landing: the ref transaction refused the captured branch ref compare-and-swap (a reference-transaction hook may have vetoed, or the ref moved); nothing committed"
+      landing_die 1 "captured-tree landing: the ref transaction refused the captured branch ref compare-and-swap (a reference-transaction hook may have vetoed, or the ref moved); nothing committed"
+    echo "done_run commit: captured-tree landing: landed $new_oid on captured branch $head_target (captured at $head_oid)"
   else
     printf 'start\noption no-deref\nupdate HEAD %s %s\nprepare\ncommit\n' \
       "$new_oid" "$head_oid" \
       | git update-ref --stdin || \
-      landing_die 1 "authorized landing: the ref transaction refused the detached HEAD compare-and-swap (a reference-transaction hook may have vetoed, or HEAD moved); nothing committed"
+      landing_die 1 "captured-tree landing: the ref transaction refused the detached HEAD compare-and-swap (a reference-transaction hook may have vetoed, or HEAD moved); nothing committed"
+    echo "done_run commit: captured-tree landing: landed $new_oid on detached HEAD (captured at $head_oid)"
   fi
-  # 10. The owned-commits ledger append fused after the swap; recorded once.
-  #     A failed append refuses loudly naming the landed commit that stands
-  #     (the same posture the non-authorized path's fused append has).
+  # 13. The owned-commits ledger append fused after the swap; recorded once.
+  #     A failed append refuses loudly naming the landed commit that stands.
   AUTH_LANDED_OID="$new_oid"
   if [ -n "$LEDGER_PATH" ]; then
     printf '%s\n' "$new_oid" >> "$LEDGER_PATH" || \
-      landing_die 1 "authorized landing: the owned-commits ledger append failed; the landed commit stands ($new_oid)"
+      landing_die 1 "captured-tree landing: the owned-commits ledger append failed; the landed commit stands ($new_oid)"
   fi
-  # 11. post-commit after success on the new HEAD; its failure cannot undo
-  #     the commit.
+  # 14. post-commit after success on the actual HEAD; its failure cannot
+  #     undo the commit.
   run_commit_hook post-commit || \
-    echo "done_run commit: authorized landing: post-commit hook failed; the landed commit stands" >&2
+    echo "done_run commit: captured-tree landing: post-commit hook failed; the landed commit stands" >&2
 }
 
 remove_from_declared() { # path: drop one reverted path from DECLARED
@@ -731,6 +865,7 @@ cmd_commit() {
   AUTH_PATH=""; AUTH_BLOB=""
   AUTH_MARKER=""; AUTH_MANIFEST=""; AUTH_RUN_ID=""; AUTH_MANIFEST_DIGEST=""
   AUTH_LANDED_OID=""
+  DIRT_CORRECTION_PATHS=(); DIRT_CORRECTION_BLOBS=()
   shift # subcommand
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -756,6 +891,26 @@ cmd_commit() {
           exit 3;;
         esac
         AUTH_PATH="$2"; AUTH_BLOB="$3"; shift 3;;
+      --authorize-dirt-correction)
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --authorize-dirt-correction needs <repo-relative-path> <expected-blob-id>" >&2
+          exit 3;;
+        esac
+        case "${3:-}" in ""|--*)
+          echo "done_run commit: --authorize-dirt-correction needs <repo-relative-path> <expected-blob-id>" >&2
+          exit 3;;
+        esac
+        printf '%s' "$3" | grep -qE '^[0-9a-f]{40}$|^[0-9a-f]{64}$' || {
+          echo "done_run commit: --authorize-dirt-correction: malformed expected blob id: $3 (want a full hex object id)" >&2
+          exit 3;
+        }
+        for path in ${DIRT_CORRECTION_PATHS+"${DIRT_CORRECTION_PATHS[@]}"}; do
+          [ "$path" = "$2" ] && {
+            echo "done_run commit: --authorize-dirt-correction given more than once for path: $2; one entry per path" >&2
+            exit 3;
+          }
+        done
+        DIRT_CORRECTION_PATHS+=("$2"); DIRT_CORRECTION_BLOBS+=("$3"); shift 3;;
       *) echo "done_run commit: unknown argument: $1" >&2; exit 3;;
     esac
   done
@@ -767,11 +922,12 @@ cmd_commit() {
   cd "$repo_top" || commit_die 3 "cannot enter the repository root"
   session="$(session_dir)" || commit_die 3 "cannot resolve the repo root"
 
-  # 0. An authorized restoration binds to the current run before anything
-  #    else mutates: resolve the run tuple through the existing
-  #    loader/classifier and refuse every stale/terminal/mismatched member
-  #    before any staging, ref, or ledger update.
-  if [ -n "$AUTH_PATH" ]; then
+  # 0. An authorized landing (the cached-diff restoration or the dirt
+  #    correction set) binds to the current run before anything else
+  #    mutates: resolve the run tuple through the existing loader/classifier
+  #    and refuse every stale/terminal/mismatched member before any
+  #    staging, ref, or ledger update.
+  if [ -n "$AUTH_PATH" ] || [ "${#DIRT_CORRECTION_PATHS[@]}" -gt 0 ]; then
     trace_stage authorize-run-tuple
     resolve_authorized_run_tuple
   fi
@@ -806,10 +962,11 @@ cmd_commit() {
       commit_die 3 "git add refused the declared pathspec; stage the surviving paths in their own invocation and re-run"
   fi
 
-  # 1b. Bind the authorized restoration to this invocation's declared set
-  #     and its exact staged blob: the path must have been declared via
-  #     --stage here, and its staged blob must equal the operator-supplied
-  #     expected blob. Both refusals happen before any ref or ledger update.
+  # 1b. Bind each authorization to this invocation's declared set and its
+  #     exact staged blob: the cached-diff restoration's path and the dirt
+  #     correction set's every path must have been declared via --stage
+  #     here, and each staged blob must equal the operator-supplied
+  #     expected blob. All refusals happen before any ref or ledger update.
   if [ -n "$AUTH_PATH" ]; then
     AUTH_DECLARED=0
     for path in ${DECLARED+"${DECLARED[@]}"}; do
@@ -823,6 +980,25 @@ cmd_commit() {
     [ "$AUTH_STAGED_BLOB" = "$AUTH_BLOB" ] || \
       commit_die 1 "authorized restoration: the staged blob $AUTH_STAGED_BLOB does not equal the expected blob $AUTH_BLOB for $AUTH_PATH; nothing committed"
     echo "done_run commit: authorized restoration: path $AUTH_PATH bound to expected blob $AUTH_BLOB for this invocation"
+  fi
+  if [ "${#DIRT_CORRECTION_PATHS[@]}" -gt 0 ]; then
+    ci=0
+    for path in ${DIRT_CORRECTION_PATHS+"${DIRT_CORRECTION_PATHS[@]}"}; do
+      correction_blob="${DIRT_CORRECTION_BLOBS[$ci]}"
+      AUTH_DECLARED=0
+      for declared_path in ${DECLARED+"${DECLARED[@]}"}; do
+        [ "$declared_path" = "$path" ] && AUTH_DECLARED=1
+      done
+      [ "$AUTH_DECLARED" -eq 1 ] || \
+        commit_die 3 "authorized dirt correction: the authorized correction path is not in the declared --stage set: $path"
+      correction_blob_staged="$(git ls-files -s -- "$path" | awk '{print $2}')"
+      [ -n "$correction_blob_staged" ] || \
+        commit_die 1 "authorized dirt correction: the authorized correction path has no staged index entry: $path; nothing committed"
+      [ "$correction_blob_staged" = "$correction_blob" ] || \
+        commit_die 1 "authorized dirt correction: the staged blob $correction_blob_staged does not equal the expected blob $correction_blob for $path; nothing committed"
+      echo "done_run commit: authorized dirt correction: path $path bound to expected blob $correction_blob for this invocation"
+      ci=$((ci+1))
+    done
   fi
 
   # 2. Append staged plans-root paths to the deliverables file.
@@ -940,42 +1116,10 @@ cmd_commit() {
     esac
   fi
 
-  # 5. Dirt regression gate over the declared HEAD-tracked paths. A
-  #    worktree-absent declared path (the set's own removal) is skipped:
-  #    the declaration discharges the accidental-reversion hypothesis for
-  #    it; existing paths gate exactly as before.
-  trace_stage dirt-regression-guard
-  DIRT_GATE="$(resolve_helper dirt_regression_gate.py)"
-  BASE_REF=""
-  BASE_REF="$(facts_toml_value base_branch)"
-  if [ -z "$BASE_REF" ]; then
-    BASE_REF="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  fi
-  DIRT_PATHS=()
-  for path in ${DECLARED+"${DECLARED[@]}"}; do
-    [ -e "$path" ] || continue
-    git cat-file -e "HEAD:$path" 2>/dev/null && DIRT_PATHS+=("$path")
-  done
-  if [ "${#DIRT_PATHS[@]}" -gt 0 ]; then
-    if [ -z "$BASE_REF" ]; then
-      echo "done_run commit: dirt regression gate: no default branch resolved; skipped"
-    elif [ -z "$DIRT_GATE" ]; then
-      echo "done_run commit: dirt regression gate: no dirt_regression_gate.py resolved; skipped" >&2
-    else
-      BASE_SHA="$(git merge-base HEAD "$BASE_REF" 2>/dev/null || true)"
-      if [ -z "$BASE_SHA" ]; then
-        echo "done_run commit: dirt regression gate: base $BASE_REF does not merge-base against HEAD; skipped" >&2
-      else
-        DG_RC=0
-        DG_OUT="$(python3 "$DIRT_GATE" --base "$BASE_SHA" -- ${DIRT_PATHS+"${DIRT_PATHS[@]}"} 2>&1)" || DG_RC=$?
-        printf '%s\n' "$DG_OUT"
-        if [ "$DG_RC" -ne 0 ]; then
-          rm -rf "$tmpd"
-          commit_die "$DG_RC" "dirt regression guard refused the staging pass (rc=$DG_RC); nothing committed"
-        fi
-      fi
-    fi
-  fi
+  # 5. (moved) The dirt regression gate runs exactly once per landing,
+  #    against the captured tree, inside captured_tree_landing below: done
+  #    commits classify their captured tree, and the shared boundary keeps
+  #    one gate invocation per primary-repository commit.
 
   # 6. Staged-scope guard over the declared set before the commit.
   trace_stage staged-scope-guard
@@ -1250,12 +1394,12 @@ cmd_commit() {
     echo "done_run commit: reverse-squash guard absent; check skipped"
   fi
 
-  # 16. Exactly one landing commit carrying work plus lessons, with the
-  #     owned-commits ledger append fused to it; base-branch immutability is
-  #     a warning line, never a refusal. An empty declared set over a
-  #     non-empty staged index refuses before the construction: with no
-  #     trailing pathspec Git reads `git commit --` as commit-the-whole-
-  #     index, so every staged path is foreign and nothing may land.
+  # 16. Exactly one captured-tree landing carrying work plus lessons, with
+  #     the owned-commits ledger append fused to it; base-branch
+  #     immutability is a warning line, never a refusal. An empty declared
+  #     set over a non-empty staged index refuses before the construction:
+  #     with no trailing pathspec Git reads `git commit --` as commit-the-
+  #     whole-index, so every staged path is foreign and nothing may land.
   trace_stage landing-commit
   STAGED_NOW="$(git diff --cached --name-only HEAD)"
   if [ -z "$STAGED_NOW" ]; then
@@ -1265,6 +1409,10 @@ cmd_commit() {
       # authorization if skipped: refuse naming the missing staged content.
       rm -rf "$tmpd"
       commit_die 1 "authorized landing: the staged set is empty at the landing (the authorized path's content left the index: $AUTH_PATH); nothing committed"
+    fi
+    if [ "${#DIRT_CORRECTION_PATHS[@]}" -gt 0 ]; then
+      rm -rf "$tmpd"
+      commit_die 1 "authorized landing: the staged set is empty at the landing (the authorized correction paths' content left the index: ${DIRT_CORRECTION_PATHS[*]}); nothing committed"
     fi
     echo "done_run commit: no staged changes; landing commit skipped"
   elif [ "${#DECLARED[@]}" -eq 0 ]; then
@@ -1285,27 +1433,16 @@ cmd_commit() {
     else
       echo "done_run commit: owned-commits ledger skipped (no run manifest from Step 0)"
     fi
-    if [ -n "$AUTH_PATH" ]; then
-      # The authorized landing keys its ledger to the validated run tuple
-      # and runs the guarded tree / ref-transaction protocol.
+    if [ -n "$AUTH_RUN_ID" ]; then
+      # An authorized invocation (cached-diff restoration or dirt
+      # correction set) keys its ledger to the validated run tuple.
       LEDGER_PATH="$session/owned-commits-$AUTH_RUN_ID.txt"
       mkdir -p "$session"
-      authorized_landing
-    else
-      COMMIT_ARGS=(-m "$FULL_SUBJECT")
-      if [ -n "$DRIFT_WITNESS" ]; then COMMIT_ARGS+=(-m "$DRIFT_WITNESS"); fi
-      COMMIT_ARGS+=(-- ${DECLARED+"${DECLARED[@]}"})
-      COMMIT_OK=0
-      if [ -n "$LEDGER_PATH" ]; then
-        git commit "${COMMIT_ARGS[@]}" && git rev-parse HEAD >> "$LEDGER_PATH" || COMMIT_OK=1
-      else
-        git commit "${COMMIT_ARGS[@]}" || COMMIT_OK=1
-      fi
-      if [ "$COMMIT_OK" -ne 0 ]; then
-        rm -rf "$tmpd"
-        commit_die 1 "the landing commit refused; nothing appended to the owned-commits ledger"
-      fi
     fi
+    # The shared captured-tree landing: ordinary and authorized
+    # primary-repository commits both record the staged tree, run the dirt
+    # gate once against it, and land through the guarded ref transaction.
+    captured_tree_landing
     echo "done_run commit: landed ${AUTH_LANDED_OID:-$(git rev-parse HEAD)}"
   fi
 
@@ -1700,7 +1837,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,123p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,140p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

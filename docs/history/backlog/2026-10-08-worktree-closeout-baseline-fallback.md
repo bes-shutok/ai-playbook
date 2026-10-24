@@ -30,9 +30,11 @@ During the 2026-10-08 closeout, `python3 scripts/worktree_closeout_migrate.py mi
 
 2026-10-18 third witness (plan-authoring closeout): `done_run.sh commit` captured a fresh worktree-migration baseline immediately before `migrate`, after 24 session review artifacts already existed. Its manifest therefore recorded no review-home transfers, and `gate-removal` refused on the missing cited series. Re-running against the session's Phase-0 `closeout-baseline.json` transferred 31 new or changed files and verified all 24 review artifacts byte-for-byte; a post-finalize transfer also preserved the newly appended telemetry. The cause is now established for this witness: the late baseline excludes artifacts created earlier in the run.
 
+2026-10-24 recurrence (plan-authoring closeout): the done-run migration baseline already contained the review series, so the migration copied only its baseline and `gate-removal` refused on the missing series. Capturing the primary checkout's state and migrating the source worktree against it transferred the required records with digest verification; hard review validation and `gate-removal` then passed. No artifact was lost. This repeats the late-baseline under-copy shape.
+
 ## Why not fixed now
 
-The 2026-10-18 witnesses now establish two under-copy paths: a migration can use a valid baseline that predates only some artifact writes, or `done_run.sh` can take its baseline too late to include any earlier review artifacts. The session recovered by migrating against its Phase-0 baseline and verifying the primary copies. Keep the baseline refusal when neither a valid baseline nor a valid skip record exists; investigate how the done and plan closeout steps should share one run-start baseline before choosing the smallest fix. No new blocking machinery is proposed.
+The 2026-10-18 and 2026-10-24 witnesses establish that a late baseline omits review artifacts that already exist in the source worktree. The 2026-10-24 session recovered by capturing the primary checkout's state and migrating with digest verification. The existing plan `docs/history/plans/2026-10-18-worktree-closeout-single-start-baseline.md` covers this remedy but remains unarchived; keep this row open at medium priority until that plan lands. Preserve the baseline refusal and do not add blocking machinery.
 
 ## Source
 

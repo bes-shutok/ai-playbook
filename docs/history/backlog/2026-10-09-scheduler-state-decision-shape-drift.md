@@ -1,7 +1,7 @@
 # Backlog: scheduler-state decision fields drift to string shape and no reader or writer repairs it
 
 - **Filed:** 2026-10-09, during a D-4 authoring carrier turn
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-24-scheduler-state-decision-shape-drift.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Cluster:** agents/skills/maintenance/SKILL.md (State file section — the `decision`/`decision_reason` schema example)

@@ -9,7 +9,7 @@
 - **Driving force:** correctness (the census must not count done work as open queue)
 - **Skill/step:** the `docs/history/backlog/` top-level corpus; the repository guidelines' commit rule for completed rows
 - **Cluster:** docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md (same defect class: terminal-state artifacts the closing boundary leaves behind)
-- **Cluster:** docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md (the deletion rule's checker counterpart: deleted origins read LIVE to the prompt-log stale check)
+- **Cluster:** docs/history/plans/completed/2026-10-23-prompt-log-stale-check-deleted-origin-served.md (the deletion rule's checker counterpart: deleted origins read LIVE to the prompt-log stale check)
 
 ## Problem
 

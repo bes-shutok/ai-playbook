@@ -1190,6 +1190,16 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertIn(str(occupied), combined)
         self.assertIn("adopt", combined)
         self.assertIn("remove", combined)
+        # The bounded removal remedy names both removal commands in order
+        # (worktree removal, then branch deletion) before the take re-run.
+        self.assertIn("git worktree remove --force", combined)
+        self.assertIn("git branch -D", combined)
+        self.assertLess(
+            combined.index("git worktree remove --force"),
+            combined.index("git branch -D"),
+            "the removal remedy does not order worktree removal before branch deletion",
+        )
+        self.assertIn("re-run take", combined)
         # The occupant check runs before the takeover arm: the refusal
         # preserves the dead session's claim (destroying it would erase the
         # registry entry the next reader needs) and creates no fresh claim.
@@ -1457,6 +1467,12 @@ class TestExecutionClaim(unittest.TestCase):
         combined = proc.stdout + proc.stderr
         self.assertIn(str(occupied), combined)
         self.assertIn("cleanup: removed this invocation's fresh claim", combined)
+        # The post-acquire arm prints the same bounded removal remedy; pin
+        # its copy so the twin refusal sites cannot silently diverge.
+        self.assertIn("bounded removal remedy", combined)
+        self.assertIn("git worktree remove --force", combined)
+        self.assertIn("git branch -D", combined)
+        self.assertIn("re-run take", combined)
         self.assertFalse(
             self.claim.exists(), "fresh claim survived the occupant refusal"
         )

@@ -602,6 +602,23 @@ if [[ "$MODE" == "probe" ]]; then
     emit_outcome fail
     exit 1
   fi
+  # The tracked-ignored pass is report-only: it never changes the verdict
+  # or exit code, and check-ignore's none-matched exit 1 must not abort the
+  # pipeline under errexit and pipefail (the `|| true` guard), so a clean
+  # branch reaches the pass verdict unchanged. The core.quotePath=false pin
+  # sits on check-ignore, not the delta diff: check-ignore unquotes
+  # C-quoted stdin itself (a diff-side pin would be a no-op) but re-quotes
+  # its own stdout, and that echoed output is what the warning prints, so
+  # non-ASCII delta paths reach the warning line as real bytes.
+  # --diff-filter=ACMR keeps a landing that untracks inherited
+  # tracked-ignored paths from warning about its own cleanup (arrivals and
+  # modifications warn; removals stay silent).
+  TRACKED_IGNORED="$(git -C "$REPO_ROOT" diff --name-only --diff-filter=ACMR "$BASE_TIP" "$SOURCE_TIP" |
+    git -C "$REPO_ROOT" -c core.quotePath=false check-ignore --no-index --stdin)" || true
+  while IFS= read -r TI_PATH; do
+    [[ -n "$TI_PATH" ]] || continue
+    echo "warning: tracked-ignored path on the branch delta: ${TI_PATH}"
+  done <<< "$TRACKED_IGNORED"
   emit_outcome pass
   exit 0
 fi

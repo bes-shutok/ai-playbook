@@ -8,18 +8,49 @@ surface. Fixtures mirror the tracked log's section shape: an entry-
 template fence in the header, then one ``## <slug>`` section per entry
 with its ``Origins:`` list. Origins are cited in the corpus style
 (``docs/history/backlog/<name>.md``) while the fixture files sit beside
-the fixture log, exercising the checker's basename resolution.
+the fixture log, exercising the checker's basename resolution. Every
+fixture git and checker subprocess runs under the shared sanitized
+environment (``fixture_env``): inherited ``GIT_*`` variables stripped
+and system/global git configuration disabled.
 """
 
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "check_prompt_log_origins.py"
 LOG_REL = "docs/history/backlog/PLAN-PROMPTS.md"
 EXEC_LOG_REL = "docs/history/backlog/EXEC-PROMPTS.md"
+
+# The fixture-owned empty HOME: with it the global git configuration
+# resolves to nothing for every fixture subprocess (the OS reaps the
+# session's temporary directory).
+_FIXTURE_HOME = Path(tempfile.mkdtemp(prefix="prune-audit-fixture-home-"))
+
+
+def fixture_env() -> dict[str, str]:
+    """The shared sanitized environment passed to every fixture git and
+    checker subprocess: inherited ``GIT_*`` variables are stripped,
+    system and global git configuration are disabled
+    (``GIT_CONFIG_NOSYSTEM`` plus the fixture-owned empty ``HOME``, with
+    ``XDG_CONFIG_HOME`` dropped so the XDG config path also resolves
+    inside it), and only the required fixture values are added, so a
+    hostile inherited environment can never redirect a fixture write."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
+    env.pop("XDG_CONFIG_HOME", None)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["HOME"] = str(_FIXTURE_HOME)
+    return env
 
 TEMPLATE_FENCE = """\
 Entry template (one section per entry):
@@ -106,6 +137,7 @@ def run_checker(log: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=60,
+        env=fixture_env(),
     )
 
 
@@ -311,6 +343,438 @@ def test_prompt_log_origins_completed_hit_wins_over_deferred_twin(tmp_path):
     assert "STALE: twin-entry" in proc.stdout
 
 
+class TestDeletedOriginServedClass:
+    """The check_log layer's deleted-origin served class: an origin the
+    shared classifier reads live (no top-level, status, archive, or
+    deferred hit) is served when its resolved backlog-relative path is
+    absent from the HEAD tree and a HEAD-reachable commit deleted it.
+
+    Every fixture drives the real script through subprocess from the
+    suite's own cwd against a scratch git repository reusing the
+    committed-deletion-capable helper shape (per-commit identity
+    plumbing, two commits: the origin rows, then their deletion), so
+    the checker must resolve the repository from the log path, never
+    from the caller's cwd. Every fixture git and checker subprocess
+    runs under the shared sanitized environment (``fixture_env``).
+    """
+
+    def git(self, repo: Path, *args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, f"git {args}: {proc.stderr}"
+        return proc.stdout
+
+    def write(self, repo: Path, rel: str, text: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def commit(self, repo: Path, message: str) -> str:
+        self.git(repo, "add", "-A")
+        self.git(
+            repo,
+            "-c",
+            "user.name=Deleted Origin Fixture",
+            "-c",
+            "user.email=deleted-origin-fixture@example.test",
+            "commit",
+            "-m",
+            message,
+        )
+        return self.git(repo, "rev-parse", "HEAD").strip()
+
+    def seed_rows(
+        self, repo: Path, sections: list[str], origins: dict[str, str]
+    ) -> str:
+        """Init the scratch repo, write the origin rows and the log,
+        commit; returns the seed commit. Commit one of the two-commit
+        deletion shape (the origin rows, then their deletion)."""
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        for name, text in origins.items():
+            self.write(repo, f"docs/history/backlog/{name}", text)
+        self.write(repo, LOG_REL, log_text(sections))
+        return self.commit(repo, "seed the log and origin rows")
+
+    def run_checker_env(
+        self, log: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(log)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+
+    def test_deleted_origin_served_with_deletion_commit(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-deleted-served-origin.md"
+        self.seed_rows(
+            repo,
+            # The citation names a differing directory: only the
+            # resolved-path derivation (the backlog directory joined
+            # with the basename) can find the deletion commit.
+            [entry("deleted-served-entry", [f"another/place/{name}"])],
+            {name: "# fixture origin\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        del_commit = self.commit(repo, "delete the covered row (delete-not-stub)")
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            f"SERVED: deleted-served-entry -> {name} [deleted in {del_commit}]"
+            in proc.stdout
+        )
+        assert "STALE: deleted-served-entry" in proc.stdout
+        assert "LIVE" not in proc.stdout
+
+    def test_never_existed_origin_stays_live(self, tmp_path):
+        repo = tmp_path
+        self.seed_rows(
+            repo,
+            [entry("ghost-entry", ["2026-10-01-never-was.md"])],
+            # The cited origin is never written, so it has no history
+            # and no deletion commit can exist for it.
+            {},
+        )
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "LIVE: ghost-entry -> 2026-10-01-never-was.md" in proc.stdout
+        assert "SERVED" not in proc.stdout
+        assert "STALE" not in proc.stdout
+        # No lookup failed, so neither the stdout summary nor the
+        # stderr diagnostic may appear.
+        assert "deletion-lookup" not in proc.stdout
+        assert "deletion-lookup" not in proc.stderr
+
+    def test_same_basename_unrelated_directory_deletion_stays_live(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-crossdir-origin.md"
+        self.seed_rows(
+            repo,
+            # A deletion of a same-basename path in an unrelated
+            # directory must never serve the backlog origin: only the
+            # resolved backlog-relative pathspec may match.
+            [entry("crossdir-entry", [name])],
+            {name: "# fixture origin\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/plans/{name}").parent.mkdir(parents=True)
+        (repo / f"docs/history/plans/{name}").write_text("# unrelated twin\n", encoding="utf-8")
+        self.commit(repo, "add an unrelated same-basename file")
+        (repo / f"docs/history/plans/{name}").unlink()
+        self.commit(repo, "delete the unrelated same-basename file")
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"LIVE: crossdir-entry -> {name}" in proc.stdout
+        assert "[deleted in" not in proc.stdout
+
+    def test_deleted_then_readded_at_head_stays_live(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-readded-origin.md"
+        self.seed_rows(
+            repo,
+            [entry("readded-entry", [name])],
+            {name: "# fixture origin\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "delete the covered row")
+        # HEAD-tree absence gate: the path exists at HEAD again, so
+        # the deletion commit witnesses history, not the current
+        # served state, and the origin stays live.
+        (repo / f"docs/history/backlog/{name}").write_text("# re-added row\n\n- **Status:** open\n", encoding="utf-8")
+        self.commit(repo, "re-add the row at a new path state")
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"LIVE: readded-entry -> {name}" in proc.stdout
+        assert "[deleted in" not in proc.stdout
+
+    def test_working_tree_readd_after_head_deletion_reads_served(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-dirty-readd-origin.md"
+        self.seed_rows(
+            repo,
+            [entry("dirty-readd-entry", [name])],
+            {name: "# fixture origin\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        del_commit = self.commit(repo, "delete the covered row")
+        # HEAD is authoritative for the deletion class: an uncommitted
+        # working-tree re-add is dirt until committed, so the origin
+        # still reads served.
+        (repo / f"docs/history/backlog/{name}").write_text(
+            "# fixture origin\n\n- **Status:** open\n", encoding="utf-8"
+        )
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            f"SERVED: dirty-readd-entry -> {name} [deleted in {del_commit}]"
+            in proc.stdout
+        )
+
+    def test_literal_pathspec_ignores_glob_matching_decoy(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-glob*origin.md"
+        decoy = "2026-10-01-globXorigin.md"
+        self.seed_rows(
+            repo,
+            [entry("glob-entry", [name])],
+            {
+                name: "# fixture origin\n\n- **Status:** open\n",
+                decoy: "# decoy\n\n- **Status:** open\n",
+            },
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        real_commit = self.commit(repo, "delete the real row")
+        (repo / f"docs/history/backlog/{decoy}").unlink()
+        self.commit(repo, "delete the glob-matching decoy later")
+        # Without :(literal) the bare pathspec glob-matches the decoy
+        # and the most recent deletion (the decoy's) is named instead.
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            f"SERVED: glob-entry -> {name} [deleted in {real_commit}]"
+            in proc.stdout
+        )
+
+    def test_deletion_lookup_decode_error_stays_live(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-decode-origin.md"
+        self.seed_rows(
+            repo,
+            [entry("decode-entry", [name])],
+            {name: "# fixture\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "delete the row so the deletion lookup runs")
+        real_git = shutil.which("git")
+        assert real_git, "a real git binary is required to build the shim"
+        shim_dir = tmp_path / "git-shim-decode"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        # The shim delegates root resolution, reports the path absent
+        # from HEAD, and answers the deletion walk with a raw non-UTF-8
+        # byte so the text-mode decode raises inside the arm.
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "rev-parse" ]; then exec {shlex.quote(real_git)} "$@"; fi\n'
+            'if [ "$1" = "cat-file" ]; then exit 1; fi\n'
+            "printf '\\377\\n'\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        shimmed = fixture_env()
+        shimmed["PATH"] = f"{shim_dir}{os.pathsep}{shimmed.get('PATH', os.defpath)}"
+        proc = self.run_checker_env(repo / LOG_REL, shimmed)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"LIVE: decode-entry -> {name}" in proc.stdout
+        assert "deletion-lookup failures: 1" in proc.stdout
+        assert "Traceback" not in proc.stderr
+        stderr_lines = [line for line in proc.stderr.splitlines() if line.strip()]
+        assert len(stderr_lines) == 1, proc.stderr
+        assert stderr_lines[0].startswith("deletion-lookup:")
+        assert "decode-error" in stderr_lines[0]
+
+    def test_deletion_lookup_decode_error_at_presence_gate_stays_live(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-decode-gate-origin.md"
+        self.seed_rows(
+            repo,
+            [entry("decode-gate-entry", [name])],
+            {name: "# fixture\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "delete the row so the presence gate runs")
+        real_git = shutil.which("git")
+        assert real_git, "a real git binary is required to build the shim"
+        shim_dir = tmp_path / "git-shim-decode-gate"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        # The shim delegates root resolution and answers the HEAD-tree
+        # presence probe (the arm's first site) with a raw non-UTF-8
+        # byte; the deletion walk must never be reached.
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "rev-parse" ]; then exec {shlex.quote(real_git)} "$@"; fi\n'
+            'if [ "$1" = "cat-file" ]; then printf \'\\377\\n\'; exit 0; fi\n'
+            'echo "deletion walk reached" >&2\n'
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        shimmed = fixture_env()
+        shimmed["PATH"] = f"{shim_dir}{os.pathsep}{shimmed.get('PATH', os.defpath)}"
+        proc = self.run_checker_env(repo / LOG_REL, shimmed)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"LIVE: decode-gate-entry -> {name}" in proc.stdout
+        assert "deletion-lookup failures: 1" in proc.stdout
+        assert "deletion walk reached" not in proc.stderr
+        stderr_lines = [line for line in proc.stderr.splitlines() if line.strip()]
+        assert len(stderr_lines) == 1, proc.stderr
+        assert stderr_lines[0].startswith("deletion-lookup:")
+        assert "decode-error" in stderr_lines[0]
+
+    def test_deletion_lookup_embedded_nul_stays_live(self, tmp_path):
+        repo = tmp_path
+        # An origin token carrying a NUL byte is a corrupt log, not a
+        # file that can exist; the arm's git argv refuses it at the
+        # process layer and the lookup degrades to live.
+        name = "2026-10-01-nul\x00origin.md"
+        self.seed_rows(repo, [entry("nul-entry", [name])], {})
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Traceback" not in proc.stderr
+        assert "LIVE: nul-entry -> " in proc.stdout
+        assert "deletion-lookup failures: 1" in proc.stdout
+        stderr_lines = [line for line in proc.stderr.splitlines() if line.strip()]
+        assert len(stderr_lines) == 1, proc.stderr
+        assert stderr_lines[0].startswith("deletion-lookup:")
+        assert "invalid-argument" in stderr_lines[0]
+
+    def test_mixed_deleted_and_open_entry_stays(self, tmp_path):
+        repo = tmp_path
+        del_name = "2026-10-01-mx-deleted.md"
+        live_name = "2026-10-01-mx-open.md"
+        self.seed_rows(
+            repo,
+            [
+                entry(
+                    "mixed-deleted-entry",
+                    [f"docs/history/backlog/{del_name}", f"docs/history/backlog/{live_name}"],
+                )
+            ],
+            {
+                del_name: "# fixture\n\n- **Status:** open\n",
+                live_name: "# fixture\n\n- **Status:** open\n",
+            },
+        )
+        (repo / f"docs/history/backlog/{del_name}").unlink()
+        del_commit = self.commit(repo, "delete the covered row of the pair")
+        proc = run_checker(repo / LOG_REL)
+        # A mixed entry still carries unlanded work: exit 0, no STALE.
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.count("SERVED:") == 1, proc.stdout
+        assert (
+            f"SERVED: mixed-deleted-entry -> {del_name} [deleted in {del_commit}]"
+            in proc.stdout
+        )
+        assert proc.stdout.count("LIVE:") == 1, proc.stdout
+        assert f"LIVE: mixed-deleted-entry -> {live_name}" in proc.stdout
+        assert "STALE" not in proc.stdout
+
+    def test_deferred_hit_wins_over_top_level_deletion(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-deferred-deleted.md"
+        self.seed_rows(
+            repo,
+            [entry("deferred-deleted-entry", [name])],
+            {name: "# fixture\n\n- **Status:** open\n"},
+        )
+        # One commit parks the basename in deferred/ and deletes the
+        # top-level copy: the deferred class must keep its never-serves
+        # precedence, so the deletion arm is never consulted.
+        self.write(repo, f"docs/history/backlog/deferred/{name}", "# fixture deferred\n")
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "defer the row and delete its top-level copy")
+        proc = run_checker(repo / LOG_REL)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"DEFERRED: deferred-deleted-entry -> {name} "
+            f"[deferred/{name} (still actionable: deferred is neither"
+            " completed nor rejected)]"
+        ) in proc.stdout
+        assert "SERVED" not in proc.stdout
+        assert "STALE" not in proc.stdout
+
+    def test_archive_hit_wins_over_top_level_deletion(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-archive-deleted.md"
+        self.seed_rows(
+            repo,
+            [entry("archive-deleted-entry", [name])],
+            {name: "# fixture\n\nStatus: covered\n"},
+        )
+        self.write(
+            repo, f"docs/history/backlog/completed/{name}", "# fixture archived\n"
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "archive the covered row and delete the top-level copy")
+        proc = run_checker(repo / LOG_REL)
+        # The archive hit keeps the resolved archive path as the detail;
+        # the deletion arm is never consulted for a served origin.
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            f"SERVED: archive-deleted-entry -> {name} [completed/{name}]"
+            in proc.stdout
+        )
+        assert "[deleted in" not in proc.stdout
+        assert "STALE: archive-deleted-entry" in proc.stdout
+
+    def test_deletion_lookup_git_failure_stays_live(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-shim-origin.md"
+        resolved_rel = f"docs/history/backlog/{name}"
+        self.seed_rows(
+            repo,
+            # The twin entry cites the same basename: the memoized
+            # lookup must count the shared failing path once.
+            [entry("shim-entry", [name]), entry("shim-twin", [name])],
+            {name: "# fixture\n\n- **Status:** open\n"},
+        )
+        (repo / f"docs/history/backlog/{name}").unlink()
+        self.commit(repo, "delete the row so the deletion lookup runs")
+        # Leg one (nonzero exit): the PATH shim delegates the
+        # repository-root resolution to the real git and fails every
+        # other call, so the HEAD-tree gate reads absent and the
+        # deletion lookup exits nonzero.
+        real_git = shutil.which("git")
+        assert real_git, "a real git binary is required to build the shim"
+        shim_dir = tmp_path / "git-shim"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "rev-parse" ]; then exec {shlex.quote(real_git)} "$@"; fi\n'
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        shimmed = fixture_env()
+        shimmed["PATH"] = f"{shim_dir}{os.pathsep}{shimmed.get('PATH', os.defpath)}"
+        proc = self.run_checker_env(repo / LOG_REL, shimmed)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"LIVE: shim-entry -> {name}" in proc.stdout
+        assert f"LIVE: shim-twin -> {name}" in proc.stdout
+        assert "deletion-lookup failures: 1" in proc.stdout
+        assert "Traceback" not in proc.stderr
+        stderr_lines = [line for line in proc.stderr.splitlines() if line.strip()]
+        assert len(stderr_lines) == 1, proc.stderr
+        assert stderr_lines[0].startswith("deletion-lookup:")
+        assert resolved_rel in stderr_lines[0]
+        assert "nonzero-exit" in stderr_lines[0]
+        # Leg two (missing binary): PATH stripped of git must land in
+        # the same exception arm, with the same live verdict and the
+        # one-line diagnostic naming the origin path.
+        stripped = fixture_env()
+        stripped["PATH"] = str(_FIXTURE_HOME)
+        bare = self.run_checker_env(repo / LOG_REL, stripped)
+        assert bare.returncode == 0, bare.stdout + bare.stderr
+        assert f"LIVE: shim-entry -> {name}" in bare.stdout
+        assert "deletion-lookup failures: 1" in bare.stdout
+        assert "Traceback" not in bare.stderr
+        bare_lines = [line for line in bare.stderr.splitlines() if line.strip()]
+        assert len(bare_lines) == 1, bare.stderr
+        assert bare_lines[0].startswith("deletion-lookup:")
+        assert name in bare_lines[0]
+        assert "git-missing" in bare_lines[0]
+
+
 class TestPromptLogPruneAudit:
     """The ``--prune-audit --base <ref>`` mode: every removal from the
     prompt log in base..HEAD is classified against its plan-file witness
@@ -322,12 +786,21 @@ class TestPromptLogPruneAudit:
     mode's run-from-anywhere promise is exercised: the audit must resolve
     the repository from the log path, never from the caller's working
     directory. The venv pytest runner is the canonical invocation; bare
-    ``python3`` on this file executes nothing (no runner below).
+    ``python3`` on this file executes nothing (no runner below). Every
+    fixture git and checker subprocess runs under one shared sanitized
+    environment (``fixture_env``): inherited ``GIT_*`` variables
+    stripped, system and global git configuration disabled, and only
+    the required fixture values added.
     """
 
     def git(self, repo: Path, *args: str) -> str:
         proc = subprocess.run(
-            ["git", *args], cwd=repo, capture_output=True, text=True, timeout=60
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
         )
         assert proc.returncode == 0, f"git {args}: {proc.stderr}"
         return proc.stdout
@@ -371,12 +844,33 @@ class TestPromptLogPruneAudit:
             capture_output=True,
             text=True,
             timeout=60,
+            env=fixture_env(),
         )
 
     def final_line(self, proc: subprocess.CompletedProcess) -> str:
         lines = proc.stdout.strip().splitlines()
         assert lines, proc.stdout + proc.stderr
         return lines[-1]
+
+    def test_non_utf8_log_blob_in_range_is_tool_error(self, tmp_path):
+        repo = tmp_path
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        log = repo / LOG_REL
+        log.parent.mkdir(parents=True, exist_ok=True)
+        # A latin-1 byte in the log blob: the audit's text-mode git
+        # reads must surface the mode's tool-error contract, never a
+        # traceback.
+        log.write_bytes(
+            log_text([entry("latin-entry", ["2026-10-01-latin-origin.md"])]).encode("utf-8")
+            + b"\n<!-- caf\xe9 -->\n"
+        )
+        base = self.commit(repo, "seed the log with a non-UTF-8 byte")
+        log.write_bytes(log.read_bytes() + b"\n")
+        self.commit(repo, "touch the log inside the range")
+        proc = self.audit(log, base)
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert "Traceback" not in proc.stderr
+        assert proc.stdout.rstrip().splitlines()[-1] == "OUTCOME: tool_error", proc.stdout
 
     def test_witnessed_bulk_removal_is_flagged(self, tmp_path):
         repo = tmp_path
@@ -1072,6 +1566,7 @@ class TestPromptLogPruneAudit:
             capture_output=True,
             text=True,
             timeout=60,
+            env=fixture_env(),
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert proc.stdout.startswith("selftest ok:")
@@ -1274,6 +1769,267 @@ class TestPromptLogPruneAudit:
         assert "PRUNE-OK: exec-entry" in proc.stdout
         assert self.final_line(proc) == "OUTCOME: pass"
 
+    def test_in_commit_landing_receipt_witnesses_removal(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("incommit-prune", ["2026-10-01-incommit-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The rolling logs' same-commit receipt convention: the removal
+        # commit's own log post-image newly carries the ledger line
+        # naming the removed slug with the literal token ``landing``
+        # (trailing rationale prose tolerated, per the ledger grammar).
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                ["PLAN-PROMPTS-PRUNE: incommit-prune -> landing in this commit"],
+            ),
+        )
+        self.commit(repo, "prune the in-commit entry with its landing receipt")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            "PRUNE-OK: incommit-prune -> landing (in-commit receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        # The accepted in-commit class joins the existing log-ledger
+        # receipt count in the summary.
+        assert "1 removals (1 by log ledger)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_sibling_log_landing_receipt_never_cross_witnesses(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("cross-prune", ["2026-10-01-cross-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The removal hits the plan log while the newly added ``landing``
+        # receipt lives only in the sibling exec log's post-image: each
+        # log's receipt delta compares that log alone, so the removal
+        # still flags (the orphan sibling receipt stays warning-only).
+        self.write(repo, LOG_REL, log_text([]))
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text_with_ledger(
+                [], ["EXEC-PROMPTS-PRUNE: cross-prune -> landing in this commit"]
+            ),
+        )
+        self.commit(repo, "prune the entry, landing receipt only in the sibling")
+        short = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            "REMOVED-WITHOUT-WITNESS: cross-prune"
+            f" (commit {short} prune the entry, landing receipt only in"
+            in proc.stdout
+        )
+        assert "(in-commit receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_in_commit_receipt_witnesses_only_its_own_slug(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [
+                entry("receipted-prune", ["2026-10-01-receipted-origin.md"]),
+                entry("bare-prune", ["2026-10-01-bare-origin.md"]),
+            ],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # One removal carries its landing receipt; the sibling removal in
+        # the same commit does not. Receipt matching stays scoped to the
+        # one removed slug: the receipted entry passes while the bare one
+        # still flags and the audit exits 1.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                ["PLAN-PROMPTS-PRUNE: receipted-prune -> landing in this commit"],
+            ),
+        )
+        self.commit(repo, "prune two entries, receipt only one")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            "PRUNE-OK: receipted-prune -> landing (in-commit receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" in proc.stdout
+        assert "bare-prune" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_in_commit_receipt_with_another_token_still_flags(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("token-prune", ["2026-10-01-token-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # A newly added same-log line with any token other than the
+        # literal ``landing`` never gets the in-commit class; an
+        # unresolvable non-landing token keeps flagging.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [], ["PLAN-PROMPTS-PRUNE: token-prune -> relocated-elsewhere"]
+            ),
+        )
+        self.commit(repo, "prune the entry with a non-landing receipt token")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: token-prune (commit" in proc.stdout
+        assert "(in-commit receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_in_commit_receipt_with_different_slug_still_flags(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("slug-mismatch", ["2026-10-01-mismatch-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # A newly added same-log ``landing`` line naming a different
+        # slug never witnesses the removed entry.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [], ["PLAN-PROMPTS-PRUNE: not-this-slug -> landing in this commit"]
+            ),
+        )
+        self.commit(repo, "prune the entry under a mismatched landing receipt")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: slug-mismatch (commit" in proc.stdout
+        assert "(in-commit receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_earlier_landing_line_never_witnesses_later_removal(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("earlier-prune", ["2026-10-01-earlier-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The receipt lands first (the orphan shape, warning-only); the
+        # removal commit's post-image adds no new line, so the per-log
+        # ``(slug, token)`` count delta is empty and the earlier
+        # ``landing`` line never qualifies as the in-commit receipt.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("earlier-prune", ["2026-10-01-earlier-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: earlier-prune -> landing in this commit"],
+            ),
+        )
+        self.commit(repo, "add the landing receipt first (no removal)")
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [], ["PLAN-PROMPTS-PRUNE: earlier-prune -> landing in this commit"]
+            ),
+        )
+        self.commit(repo, "complete the removal without a new receipt line")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: earlier-prune (commit" in proc.stdout
+        assert "(in-commit receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_landing_receipt_only_commit_still_warns_with_exit_zero(self, tmp_path):
+        # The receipt-only shape under the new token: a commit adds a
+        # same-log ``landing`` receipt line while removing no entry from
+        # that log; the RECEIPT-WITHOUT-REMOVAL warning keeps its exit 0.
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("live-entry", ["2026-10-01-live-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: ghost-entry -> landing in this commit"],
+            ),
+        )
+        self.commit(repo, "add the landing receipt with no removal")
+        short = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert f"RECEIPT-WITHOUT-REMOVAL: {short} {LOG_REL}" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_poisoned_git_env_cannot_redirect_fixture_writes(
+        self, tmp_path, monkeypatch
+    ):
+        # The env-hygiene regression fixture: GIT_DIR, GIT_WORK_TREE,
+        # GIT_INDEX_FILE, GIT_COMMON_DIR, and GIT_OBJECT_DIRECTORY all
+        # point at a separate temporary repository, and the shared
+        # sanitized subprocess environment strips every one of them, so
+        # the fixture write lands in the intended repository and the
+        # decoy repository stays empty.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self.init_repo_with_log(
+            repo, [entry("env-entry", ["2026-10-01-env-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        self.git(decoy, "-c", "init.defaultBranch=main", "init")
+        decoy_git_dir = decoy / ".git"
+        monkeypatch.setenv("GIT_DIR", str(decoy_git_dir))
+        monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(decoy_git_dir / "index"))
+        monkeypatch.setenv("GIT_COMMON_DIR", str(decoy_git_dir))
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(decoy_git_dir / "objects"))
+        # The fixture write under the fully poisoned environment.
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune the env entry under a poisoned environment")
+        head = self.git(repo, "rev-parse", "HEAD").strip()
+        assert head != base
+        assert "prune the env entry" in self.git(repo, "log", "-1", "--format=%s")
+        # The checker subprocess inherits the same sanitization and still
+        # audits the intended repository (the unwitnessed removal flags).
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: env-entry" in proc.stdout
+        # The decoy repository stayed empty: unborn HEAD, clean status.
+        decoy_head = subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                str(decoy_git_dir),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert decoy_head.returncode != 0
+        assert self.git(decoy, "status", "--porcelain").strip() == ""
+
 
 class TestCollateralServedDiscovery:
     """The ``--collateral-served --base <ref>`` read-only discovery mode:
@@ -1288,7 +2044,12 @@ class TestCollateralServedDiscovery:
 
     def git(self, repo: Path, *args: str) -> str:
         proc = subprocess.run(
-            ["git", *args], cwd=repo, capture_output=True, text=True, timeout=60
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
         )
         assert proc.returncode == 0, f"git {args}: {proc.stderr}"
         return proc.stdout
@@ -1325,6 +2086,7 @@ class TestCollateralServedDiscovery:
             capture_output=True,
             text=True,
             timeout=120,
+            env=fixture_env(),
         )
 
     def seed(
@@ -1369,6 +2131,173 @@ class TestCollateralServedDiscovery:
         assert lines == [
             "COLLATERAL-SERVED: flip-entry -> 2026-10-01-flip-origin.md"
         ], proc.stdout
+
+    def test_sibling_log_swept_in_one_invocation_with_log_name_field(self, tmp_path):
+        repo = tmp_path
+        base = self.seed(
+            repo,
+            [entry("plan-flip-entry", ["2026-10-01-plan-flip-origin.md"])],
+            {"2026-10-01-plan-flip-origin.md": "# fixture\n\n- **Status:** open\n"},
+        )
+        # The sibling exec log carries a qualifying entry of its own inside
+        # the same range, discovered in the one invocation through the
+        # audited plan log's path; the sibling-originated line carries the
+        # log name field while the audited log's line keeps today's format.
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text([entry("exec-flip-entry", ["2026-10-01-exec-flip-origin.md"])]),
+        )
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-exec-flip-origin.md",
+            "# fixture\n\n- **Status:** open\n",
+        )
+        self.commit(repo, "seed the sibling exec log inside the range")
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-plan-flip-origin.md",
+            "# fixture\n\nStatus: done\n",
+        )
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-exec-flip-origin.md",
+            "# fixture\n\nStatus: done\n",
+        )
+        self.commit(repo, "flip both origins to covered")
+        proc = self.discover(repo, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        lines = [
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("COLLATERAL-SERVED:")
+        ]
+        assert lines == [
+            "COLLATERAL-SERVED: plan-flip-entry -> 2026-10-01-plan-flip-origin.md",
+            "COLLATERAL-SERVED: exec-flip-entry ->"
+            " 2026-10-01-exec-flip-origin.md"
+            " [docs/history/backlog/EXEC-PROMPTS.md]",
+        ], proc.stdout
+
+    def test_sibling_log_swept_when_exec_log_is_audited(self, tmp_path):
+        repo = tmp_path
+        base = self.seed(
+            repo,
+            [],
+            {},
+        )
+        # The reverse invocation direction: the audited surface is the
+        # exec log and the sibling is the plan log, exercising the
+        # mapping's EXEC key end to end ("over either rolling log").
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text([entry("exec-audited-entry", ["2026-10-01-exec-audited-origin.md"])]),
+        )
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-exec-audited-origin.md",
+            "# fixture\n\n- **Status:** open\n",
+        )
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-plan-sibling-origin.md",
+            "# fixture\n\n- **Status:** open\n",
+        )
+        self.commit(repo, "seed the exec-audited entry")
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-exec-audited-origin.md",
+            "# fixture\n\nStatus: done\n",
+        )
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-plan-sibling-origin.md",
+            "# fixture\n\nStatus: done\n",
+        )
+        self.write(
+            repo,
+            LOG_REL,
+            log_text([entry("plan-sibling-entry", ["2026-10-01-plan-sibling-origin.md"])]),
+        )
+        self.commit(repo, "flip both origins and seed the sibling plan entry in range")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--collateral-served",
+                "--base",
+                base,
+                str(repo / EXEC_LOG_REL),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        lines = [
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("COLLATERAL-SERVED:")
+        ]
+        assert lines == [
+            "COLLATERAL-SERVED: exec-audited-entry ->"
+            " 2026-10-01-exec-audited-origin.md",
+            "COLLATERAL-SERVED: plan-sibling-entry ->"
+            " 2026-10-01-plan-sibling-origin.md"
+            " [docs/history/backlog/PLAN-PROMPTS.md]",
+        ], proc.stdout
+
+    def test_base_archived_only_twin_deleted_in_range_not_listed(self, tmp_path):
+        repo = tmp_path
+        name = "2026-10-01-archived-only-origin.md"
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        # At base the origin exists only as its completed/ twin (served
+        # by archive, top-level absent); the range deletes the twin.
+        # base_served must stay conjuncted with base_present, so the
+        # entry is neither range-produced nor listed.
+        self.write(
+            repo,
+            f"docs/history/backlog/completed/{name}",
+            "# fixture\n\n- **Status:** covered\n",
+        )
+        self.write(repo, LOG_REL, log_text([entry("arch-entry", [name])]))
+        base = self.commit(repo, "seed the archived-only twin")
+        (repo / f"docs/history/backlog/completed/{name}").unlink()
+        self.commit(repo, "delete the archived twin inside the range")
+        proc = self.discover(repo, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "COLLATERAL-SERVED:" not in proc.stdout, proc.stdout
+
+    def test_sibling_log_absent_lists_audited_log_alone(self, tmp_path):
+        repo = tmp_path
+        base = self.seed(
+            repo,
+            [entry("solo-flip-entry", ["2026-10-01-solo-flip-origin.md"])],
+            {"2026-10-01-solo-flip-origin.md": "# fixture\n\n- **Status:** open\n"},
+        )
+        # No EXEC-PROMPTS.md ever exists in the tree: the discovery fails
+        # open, listing the audited log alone with exit 0 and no sibling
+        # error instead of failing.
+        self.write(
+            repo,
+            "docs/history/backlog/2026-10-01-solo-flip-origin.md",
+            "# fixture\n\nStatus: done\n",
+        )
+        self.commit(repo, "flip the audited origin to covered")
+        proc = self.discover(repo, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        lines = [
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("COLLATERAL-SERVED:")
+        ]
+        assert lines == [
+            "COLLATERAL-SERVED: solo-flip-entry -> 2026-10-01-solo-flip-origin.md"
+        ], proc.stdout
+        assert "EXEC-PROMPTS" not in proc.stdout
+        assert "tool_error" not in proc.stdout
 
     def test_archive_move_in_range_lists(self, tmp_path):
         repo = tmp_path

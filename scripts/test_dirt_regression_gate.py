@@ -698,5 +698,245 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertIn("OUTCOME: pass", stdout)
 
 
+class DirtRegressionGateTreeModeTest(unittest.TestCase):
+    """The captured-tree mode: classification reads only the immutable tree
+    object the done runner hands over, never the mutable worktree or index,
+    while the legacy ``--base <commit> -- <paths...>`` worktree CLI stays
+    available for maintenance merge callers."""
+
+    def setUp(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="dirt-regression-gate-tree-test-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.tmp = tmp
+        self.repo = self._init_repo()
+
+    def _git_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_CONFIG_GLOBAL"] = str(self.tmp / "gitconfig")
+        return env
+
+    def _git(self, *args: str, cwd: Path | None = None) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd if cwd is not None else self.repo),
+            capture_output=True,
+            text=True,
+            env=self._git_env(),
+        )
+        self.assertEqual(
+            proc.returncode, 0, f"git {args} failed: {proc.stderr}"
+        )
+        return proc.stdout
+
+    def _init_repo(self) -> Path:
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        self._git("init", "-q", "-b", "main", cwd=repo)
+        self._git("config", "user.email", "test@example.com", cwd=repo)
+        self._git("config", "user.name", "Test Fixture", cwd=repo)
+        return repo
+
+    def _commit(self, rel: str, text: str, message: str) -> None:
+        target = self.repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            target.unlink()
+        else:
+            target.write_text(text, encoding="utf-8")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", message)
+
+    def _run_gate(self, *args: str) -> tuple[int, str, str]:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), *args],
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo),
+            env=self._git_env(),
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def _seed_head_gained_lines(self) -> str:
+        self._commit("app.txt", BASE_TEXT, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", HEAD_TEXT, "head gains lines")
+        return base_sha
+
+    def _set_dirt(self, rel: str, text: str) -> None:
+        (self.repo / rel).write_text(text, encoding="utf-8")
+
+    def _captured_tree_with(self, rel: str, text: str | None) -> str:
+        """A tree object holding `text` at `rel` (None deletes) over HEAD,
+        captured through the index and followed by a hard reset so the
+        worktree and index are clean again; the tree object persists."""
+        target = self.repo / rel
+        if text is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        self._git("add", "-A")
+        tree = self._git("write-tree").strip()
+        self._git("reset", "--hard", "-q", "HEAD")
+        return tree
+
+    def test_tree_mode_regression_refuses_with_clean_worktree(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        tree = self._captured_tree_with("app.txt", BASE_TEXT)
+        # The worktree and index are clean here (hard reset above): the
+        # refusal must come from the captured tree alone.
+        status = self._git("status", "--porcelain")
+        self.assertEqual(status, "")
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        self.assertIn("dirt REGRESSION PATH: app.txt\n", stdout)
+        self.assertIn("OUTCOME: fail", stdout)
+
+    def test_tree_mode_handoff_line_carries_exact_path_bytes(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        odd = "work (v1).txt"
+        self._commit(odd, BASE_TEXT, "base the oddly named file")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit(odd, HEAD_TEXT, "head gains lines")
+        tree = self._captured_tree_with(odd, BASE_TEXT)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, odd
+        )
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        # The machine-readable line carries the exact path bytes: a path
+        # containing " (" must not truncate to a prefix twin.
+        self.assertIn(f"dirt REGRESSION PATH: {odd}\n", stdout)
+        # the display line is unchanged beside it
+        self.assertIn(f"dirt REGRESSION: {odd} (", stdout)
+
+    def test_worktree_mode_emits_no_handoff_line(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        self._set_dirt("app.txt", BASE_TEXT)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        self.assertNotIn("dirt REGRESSION PATH:", stdout)
+
+    def test_tree_mode_forward_content_passes(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        tree = self._captured_tree_with("app.txt", HEAD_TEXT + "forward\n")
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_tree_mode_never_reads_the_worktree(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        tree = self._captured_tree_with("app.txt", HEAD_TEXT + "forward\n")
+        # The worktree file is gone entirely: any worktree read would fail
+        # closed, so a pass verdict proves the tree was the only read.
+        (self.repo / "app.txt").unlink()
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_tree_mode_whole_file_deletion_is_regression(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        tree = self._captured_tree_with("app.txt", None)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+
+    def test_tree_mode_baseabsent_whole_deletion_is_regression(self) -> None:
+        self._commit("seed.txt", "seed\n", "seed")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("new.txt", "one\ntwo\nthree\n", "head adds new file")
+        tree = self._captured_tree_with("new.txt", None)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "new.txt"
+        )
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: new.txt", stdout)
+
+    def test_tree_mode_baseabsent_new_file_passes(self) -> None:
+        self._commit("seed.txt", "seed\n", "seed")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        tree = self._captured_tree_with("brand-new.txt", "one\ntwo\n")
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "brand-new.txt"
+        )
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_tree_mode_binary_content_is_indeterminate(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        target = self.repo / "app.txt"
+        target.write_bytes(b"\x00\x01\x02binary\n")
+        self._git("add", "-A")
+        tree = self._git("write-tree").strip()
+        self._git("reset", "--hard", "-q", "HEAD")
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt INDETERMINATE: app.txt", stdout)
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_tree_mode_mixed_regression_and_indeterminate(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        self._commit("bin.dat", "text\n", "tracked binary candidate")
+        (self.repo / "app.txt").write_text(BASE_TEXT)
+        (self.repo / "bin.dat").write_bytes(b"\x00\x01binary\n")
+        self._git("add", "-A")
+        tree = self._git("write-tree").strip()
+        self._git("reset", "--hard", "-q", "HEAD")
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt", "bin.dat"
+        )
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        self.assertIn("dirt INDETERMINATE: bin.dat", stdout)
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_tree_mode_unresolvable_tree_is_tool_error(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", "0" * 40, "app.txt"
+        )
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("--tree does not resolve to a tree object", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_tree_mode_never_tracked_path_is_tool_error(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        tree = self._git("rev-parse", "HEAD^{tree}").strip()
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "ghost.txt"
+        )
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("does not exist or is not a tracked file", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_legacy_worktree_cli_still_classifies_the_worktree(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # The captured tree is clean while the worktree holds the regressed
+        # vintage: the legacy invocation classifies the worktree (refuse)
+        # and the tree invocation classifies the tree (pass).
+        tree = self._captured_tree_with("app.txt", HEAD_TEXT)
+        self._set_dirt("app.txt", BASE_TEXT)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "--tree", tree, "app.txt"
+        )
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

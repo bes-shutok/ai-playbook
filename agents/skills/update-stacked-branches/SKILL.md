@@ -132,6 +132,20 @@ git merge-recursive <backup_parent> -- HEAD <backup_branch>
 
 If `merge-recursive` fails or conflict count is huge versus the pre-delta, **Restore from backup** and stop.
 
+**Required finalize:** Method B reconstructs the branch delta on the rewritten parent and always records it as one commit before verify. This preserves the resulting tree after conflict resolution, not the branch's original sequence of commits; it is neither a merge commit nor a `git rebase` replay:
+
+```bash
+git commit -m "<single message for this branch story>"
+```
+
+**Exit criteria (all required; abort and Restore from backup on failure):**
+
+```bash
+git merge-base --is-ancestor <parent_tip> HEAD   # MUST exit 0
+test "$(git rev-list --count <parent_tip>..HEAD)" -eq 1
+git diff --quiet && git diff --cached --quiet    # committed tip; ignore untracked
+```
+
 ### Method C: Explicit rebase
 
 Use only when the user requests `git rebase`. Rebase each child onto its updated parent, bottom-up, so each branch replays only its own commits. When the parent was not rewritten during this session:
@@ -153,20 +167,6 @@ Do not squash this result unless the user separately requested a squash. If requ
 **Promoted-commit subcase.** When the operator has already applied a child commit to the updated parent (a promoted commit), the replay may omit it instead of aborting. Compare two routes: edit the rebase todo (`git rebase -i` with the same boundaries as above) to drop the promoted commit, or rebuild the child on the updated parent and replay only child-owned commits. Select the interactive todo route when the promoted commit is an exact equivalent. Patch-id equality can locate a candidate but is not evidence by itself: drop a commit only when its affected paths and its resulting content both match the parent's version. A partial overlap keeps its place in the replay; resolve it against the updated parent and preserve the parent's version rather than dropping child-only work.
 
 **Promoted-commit continuation boundary.** Proceed only when the resolved tree preserves the parent's version and the final parent-relative diff and ancestry prove the expected child-only delta against the Phase 0 pre-delta; otherwise `git rebase --abort`, restore the Phase 0 backup, and stop. For this subcase the expected post-delta is the Phase 0 pre-delta minus the promoted commit's delta, so apply the standing verify magnitude check against that expectation instead of the raw pre-delta. This subcase changes only which commits the replay includes: bottom-up order, the no-squash default, push approval, and backup lifetime are unchanged.
-
-**Required finalize:** Method B reconstructs the branch delta on the rewritten parent and always records it as one commit before verify. This preserves the resulting tree after conflict resolution, not the branch's original sequence of commits; it is neither a merge commit nor a `git rebase` replay:
-
-```bash
-git commit -m "<single message for this branch story>"
-```
-
-**Exit criteria (all required; abort and Restore from backup on failure):**
-
-```bash
-git merge-base --is-ancestor <parent_tip> HEAD   # MUST exit 0
-test "$(git rev-list --count <parent_tip>..HEAD)" -eq 1
-git diff --quiet && git diff --cached --quiet    # committed tip; ignore untracked
-```
 
 ### Optional squash
 

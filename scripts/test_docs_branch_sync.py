@@ -542,6 +542,55 @@ class DocsBranchSyncTests(unittest.TestCase):
         self.assertIn("free", status.stdout)
         self.assertEqual(list((self.repo.root / "merge-locks").iterdir()), [])
 
+    def test_witness_append_cas_loss_keeps_competing_tip_and_preserves_recovery_ref(self) -> None:
+        witness_line = "lesson-scope-audit: fixture drift: caller-owned witness text"
+        old_docs_tip = self.repo.seed_docs([
+            (".ai-playbook/reviews/witness.md", b"archive\n", NOW, None),
+        ])
+        main_tip = self.repo.git("rev-parse", "refs/heads/main").stdout.strip()
+        namespace = load_runner_namespace()
+        sync_error = namespace["SyncError"]
+        original_update = namespace["update_docs_ref"]
+
+        def racing_update(repo: Path, new_tip: str, expected: str) -> None:
+            docs_tree = self.repo.git("rev-parse", "refs/heads/docs^{tree}").stdout.strip()
+            competing = self.repo.git(
+                "commit-tree", docs_tree, "-p", expected, "-m", "competing docs tip",
+            ).stdout.strip()
+            self.repo.git("update-ref", "refs/heads/docs", competing)
+            racing_update.competing = competing
+            original_update(repo, new_tip, expected)
+
+        racing_update.competing = None
+        namespace["update_docs_ref"] = racing_update
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo.root)
+            with direct_main_environment(self.repo, "witness-cas-loss-trace.log"):
+                with self.assertRaisesRegex(sync_error, "docs tip changed; witness preserved at "):
+                    namespace["main"](["--append-witness", witness_line])
+        finally:
+            os.chdir(original_cwd)
+            namespace["update_docs_ref"] = original_update
+        self.assertIsNotNone(racing_update.competing)
+        self.assertEqual(
+            self.repo.git("rev-parse", "refs/heads/docs").stdout.strip(),
+            racing_update.competing,
+        )
+        recoveries = self.repo.git(
+            "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/docs-witness-recovery/",
+        ).stdout.strip().splitlines()
+        self.assertEqual(len(recoveries), 1)
+        refname, object_name = recoveries[0].split("\0")
+        self.assertTrue(refname.startswith("refs/docs-witness-recovery/"))
+        self.assertIn(witness_line, self.repo.git("show", "-s", "--format=%B", object_name).stdout)
+        self.assertEqual(self.repo.git("rev-parse", f"{object_name}^").stdout.strip(), old_docs_tip)
+        self.assertEqual(self.repo.git("rev-parse", "refs/heads/main").stdout.strip(), main_tip)
+        status = merge_lock_status(self.repo.root, self.repo.root)
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertIn("free", status.stdout)
+        self.assertEqual(list((self.repo.root / "merge-locks").iterdir()), [])
+
     def test_sync_lock_serializes_prune_before_restore(self) -> None:
         self.repo.seed_docs([
             (".ai-playbook/reviews/expiring.md", b"old branch copy\n", NOW, None),

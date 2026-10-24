@@ -24,7 +24,7 @@ Review for bugs, correctness issues, and quality problems.
 
 For value objects, records, structs, or commands whose constructor / init block defensively copies collections (or other inputs) before checking emptiness or other caller-visible invariants:
 
-1. Validate null/empty (and similar input invariants) **before** reassignment when post-copy validation would turn null inputs into opaque copy-helper failures (for example NPE from a defensive-copy API) instead of the type's documented validation error.
+1. Validate null/empty (and similar input invariants) **before** reassignment when post-copy validation would turn null inputs into opaque copy-helper failures instead of the type's documented validation error.
 2. Defensive copy after successful validation remains fine.
 3. Pattern: `quality#validate-after-assign`. Default **Low**; promote when it hides a reachable wrong error type on a public API.
 4. Language-specific copy/validate APIs belong in the language overlay and Guideline Pack, not here.
@@ -38,9 +38,9 @@ Structural clarity stays here; comment and doc **prose** is owned by `documentat
 3. Redundant words: a word in the package/interface name is not repeated in the class name
 4. Cognitive complexity: flag methods with deep nesting or many branching paths
 5. Single responsibility: one method doing too many things
-6. Method readability (`quality#method-readability`): for changed code, report callbacks or nested blocks with substantial cognitive load or any observable side effect, method-local types, and methods meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. Cognitive complexity keeps deep nesting, with no second nesting threshold. Warning-only: findings carry `blocking: false` and cannot affect readiness. Promote only in a separate reviewed change after a true catch.
+6. Method readability (`quality#method-readability`): for changed code, report callbacks or nested blocks with substantial cognitive load or any observable side effect, method-local types, and methods meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. Cognitive complexity keeps deep nesting, with no second nesting threshold. Keep clear, pure one-line mappings and guards inline. Warning-only: findings carry `blocking: false` and cannot affect readiness. Promote only in a separate reviewed change after a true catch.
 
-**Ownership (tiered):** runtime behavior and algorithm correctness only; do not report missing wiring, config binding gaps, or layer placement (see `review-panel-selection.md`).
+**Ownership (tiered):** runtime behavior and algorithm correctness, plus the naming and structural-clarity checks above; do not report missing wiring, config binding gaps, or layer placement (see `review-panel-selection.md`).
 
 ## MyBatis SqlSession local cache
 
@@ -55,8 +55,8 @@ When reviewing annotation MyBatis mappers:
 Before flagging cache eviction, invalidation, or fallback logic as incomplete or broken:
 
 1. **Trace the lifecycle timing**: find the TTL calculation for the cache keys and when the method runs relative to expiry; after expiry, eviction is a defensive no-op (DEL on non-existent keys), not a bug.
-2. **Distinguish defensive no-op from incomplete code**: evicting already-expired keys is future-proof (works if reused pre-TTL), not broken; do not flag it as "incomplete" or demand DB fallback.
-3. **Cost/benefit for suggested fallbacks**: before suggesting "add DB fallback for the case when cache is missing", calculate the cost (e.g. N DB queries per batch tick) and verify the missing-cache scenario is reachable; caches sharing the method caller's lifecycle cannot be missing.
+2. **Distinguish defensive no-op from incomplete code**: evicting already-expired keys is future-proof, not broken; do not flag it as "incomplete" or demand DB fallback.
+3. **Cost/benefit for suggested fallbacks**: before suggesting "add DB fallback for the case when cache is missing", calculate the cost and verify the missing-cache scenario is reachable; caches sharing the method caller's lifecycle cannot be missing.
 4. **Multi-cache coherence**: caches sharing a TTL anchor (e.g. per-ID and per-user on sendTime) expire together; one being absent does not imply the other is still active.
 
 ## Scalability
@@ -65,11 +65,11 @@ Before flagging cache eviction, invalidation, or fallback logic as incomplete or
 2. Memory loading: unbounded collections loaded entirely into memory
 3. Missing batch APIs: repeated single-item calls where batch alternatives exist
 4. No resilience contract: missing timeouts, retries, or circuit breakers for external calls
-5. **Catalog / config-list loops:** a `for` over allowlist, catalog, deny-keys, feature flags, or similar config calling a single-key repository/persistence method per iteration is reportable **even when the list size is 1 today**, when a bulk/batch read already exists on the same repository port or mapper (or an equivalent load-all-by-user/by-parent method is one adapter call away). Prefer one load then in-memory filter, and skip the DB load when the catalog returns an empty key list for this request. Pattern: `quality#catalog-loop-n-plus-one`. Do not dismiss solely because current N is small; note Low severity when blast radius is local and N is tiny.
+5. **Catalog / config-list loops:** a `for` over allowlist, catalog, deny-keys, feature flags, or similar config calling a single-key repository/persistence method per iteration is reportable **even when the list size is 1 today**, when a bulk/batch read already exists on the same repository port or mapper (or an equivalent load-all-by-user/by-parent method is one adapter call away). Prefer one load then in-memory filter, and skip the DB load when the catalog returns an empty key list. Pattern: `quality#catalog-loop-n-plus-one`. Do not dismiss solely because current N is small; note Low severity when blast radius is local and N is tiny.
 
 ## Hermeticity cross-check
 
-When tracing call graphs or data flows, note ambient-input reads reachable from tests in the diff or plan: env vars, network clients, cwd-relative or gitignored paths, and clock/timezone/locale dependence. Raise with a `quality#` prefix when visible. The `testing` worker leads the dedup group per `review-panel-selection.md`; the enumeration procedure lives in `testing.md`.
+When tracing call graphs or data flows, note ambient-input reads reachable from tests in the diff or plan: env vars, network clients, cwd-relative or gitignored paths, and clock/timezone/locale dependence. Raise with a `quality#` prefix. The `testing` worker leads the dedup group per `review-panel-selection.md`; the enumeration procedure lives in `testing.md`.
 
 Report problems only; no positive observations.
 

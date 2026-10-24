@@ -1,7 +1,7 @@
 # claim deletion fence misses uppercase plan stems (case-sensitive match)
 - **Cluster:** docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md; docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md
 
-Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider)
+Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider); docs/history/backlog/2026-10-24-execution-claim-take-refusal-remedy-gap.md (same surface: the execution-claim gateway's refusal ergonomics)
 
 Driving force: reliability
 Date filed: 2026-10-07

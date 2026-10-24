@@ -1,7 +1,7 @@
 # Backlog: a worktree task boundary gets a plan-readiness child tool error after task checkboxes change
 
 - **Filed:** 2026-10-18, execute-plan Task 1 done boundary
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-24-done-plan-readiness-child-tool-error.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** witnessed execution-boundary blocker

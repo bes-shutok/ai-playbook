@@ -8,7 +8,7 @@
 - **Class:** fix-class
 - **Driving force:** simplicity
 - **Severity:** low; the pre-commit gate can be passed by choosing a neutral local name, but the scan currently rejects ordinary parser code.
-- **Cluster:** `docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md`; `docs/history/backlog/2026-10-11-done-target-state-learn-commit-closeout.md` (closeout-path friction; this row is a scan false positive, the sibling is interpreter selection). `docs/history/backlog/2026-10-23-done-sensitive-scan-private-repository-scope.md` (shared gate mechanism; this row is credential-pattern matching, the sibling is repository-visibility policy).
+- **Cluster:** `docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md`; `docs/history/backlog/2026-10-11-done-target-state-learn-commit-closeout.md` (closeout-path friction; this row is a scan false positive, the sibling is interpreter selection). `docs/history/backlog/completed/2026-10-23-done-sensitive-scan-private-repository-scope.md` (shared gate mechanism; this row is credential-pattern matching, the sibling is repository-visibility policy).
 - **Source:** `scripts/done_sweep_gates_lib.py`, `DIFF_CONTENT_PATTERNS`; reproduced by the Task 1 pre-commit scan.
 
 ## Problem

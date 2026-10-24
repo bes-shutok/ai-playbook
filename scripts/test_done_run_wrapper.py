@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -47,8 +48,17 @@ CORPUS_REL = "docs/maintenance/development_lessons.md"
 class FixtureMixin:
     """Shared hermetic fixture: repo, env pins, runner invocation helpers."""
 
+    # Host Git selectors cleared before every fixture Git call (fixture
+    # setup, helper calls, runner subprocesses): a session-bound selector
+    # must never redirect a fixture call away from the temporary repo.
+    HOST_GIT_SELECTORS = (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+        "GIT_CONFIG_PARAMETERS", "GIT_EXTERNAL_DIFF", "GIT_CONFIG_COUNT",
+    )
+
     def setUp(self) -> None:
         self.tmp = Path(__import__("tempfile").mkdtemp(prefix="done-run-fixture-"))
+        self._clear_ambient_git_environment()
         self.fixture = self.tmp / "repo"
         self.fixture.mkdir()
         env = dict(os.environ)
@@ -75,6 +85,36 @@ class FixtureMixin:
         ):
             env.pop(var, None)
         self.base_env = env
+
+    def _clear_ambient_git_environment(self) -> None:
+        """Scrub host Git selectors from the process environment and scope
+        Git config to a fixture file (system config disabled, global config
+        pointed at an empty fixture file), restoring everything at cleanup;
+        helper Git calls and every runner subprocess inherit the cleared
+        environment."""
+        names = list(self.HOST_GIT_SELECTORS) + [
+            f"GIT_CONFIG_KEY_{i}" for i in range(10)
+        ] + [f"GIT_CONFIG_VALUE_{i}" for i in range(10)] + [
+            "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL",
+        ]
+        prior_values = {name: os.environ.get(name) for name in names}
+        self.addCleanup(self._restore_ambient_git_environment, prior_values)
+        for name in names:
+            os.environ.pop(name, None)
+        os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+        gitconfig = self.tmp / "gitconfig"
+        gitconfig.write_text("")
+        os.environ["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+
+    @staticmethod
+    def _restore_ambient_git_environment(
+        prior_values: dict[str, str | None],
+    ) -> None:
+        for name, value in prior_values.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def tearDown(self) -> None:
         subprocess.run(["chmod", "-R", "u+w", str(self.tmp)], check=False)
@@ -181,7 +221,8 @@ class FixtureMixin:
         return proc, self.eval_exports(proc.stdout)
 
     def commit_session(
-        self, setup_proc: subprocess.CompletedProcess, exports: dict, *commit_args: str,
+        self, setup_proc: subprocess.CompletedProcess | None, exports: dict,
+        *commit_args: str,
     ) -> subprocess.CompletedProcess:
         env = self.commit_env()
         env.update(exports)
@@ -2483,6 +2524,764 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(self.commit_count(), count_before)
         stages = self.trace_stages(self.commit_env() | exports)
         self.assertEqual(stages[-1], "staged-scope-guard")
+
+
+class DoneRunDirtCorrectionSetTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan
+    docs/history/plans/2026-10-22-done-dirt-regression-valid-correction-path.md):
+    the invocation-scoped --authorize-dirt-correction finite path/blob
+    mapping bound to the live run tuple: exact staged-blob and captured-tree
+    binding, per-path regression lifting at the shared captured-tree
+    boundary, and every named refusal with HEAD and the ledger unchanged."""
+
+    WORK_BASE = "m1\nm2\n"
+    WORK_GAINED = "m1\nm2\nWORKGAINED\n"
+    WORK_DIRT = "m2\nm2\n"
+    OTHER_BASE = "p1\np2\n"
+    OTHER_GAINED = "p1\np2\nOTHERGAINED\n"
+    OTHER_DIRT = "p2\np2\n"
+
+    def correction_fixture(self) -> tuple[dict, str, dict]:
+        """A two-file regressive staging wired to an origin/HEAD merge
+        base; returns (setup exports, prior HEAD, {path: staged blob})."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text(self.WORK_BASE)
+        (self.fixture / "other.txt").write_text(self.OTHER_BASE)
+        self.git("add", "work.txt", "other.txt")
+        self.git("commit", "-qm", "base the corrected files")
+        base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+        (self.fixture / "work.txt").write_text(self.WORK_GAINED)
+        (self.fixture / "other.txt").write_text(self.OTHER_GAINED)
+        self.git("add", "work.txt", "other.txt")
+        self.git("commit", "-qm", "gain content in both files")
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        blobs = {}
+        for rel, content in (
+            ("work.txt", self.WORK_DIRT),
+            ("other.txt", self.OTHER_DIRT),
+        ):
+            (self.fixture / rel).write_text(content)
+            self.git("add", rel)
+            blobs[rel] = self.git("ls-files", "-s", rel).stdout.split()[1]
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "other.txt",
+        )
+        return exports, prior_head, blobs
+
+    def assert_refused(self, proc: subprocess.CompletedProcess, exports: dict,
+                       prior_head: str, *fragments: str) -> None:
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, combined)
+        for fragment in fragments:
+            self.assertIn(fragment, combined)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), prior_head)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+
+    def test_matching_multi_file_correction_set_lands_every_declared_path(self) -> None:
+        exports, prior_head, blobs = self.correction_fixture()
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-dirt-correction", "work.txt", blobs["work.txt"],
+            "--authorize-dirt-correction", "other.txt", blobs["other.txt"],
+            "--subject", "land the directed contract correction",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, prior_head])
+        self.assertEqual(
+            self.git("rev-parse", "HEAD:work.txt").stdout.strip(),
+            blobs["work.txt"],
+        )
+        self.assertEqual(
+            self.git("rev-parse", "HEAD:other.txt").stdout.strip(),
+            blobs["other.txt"],
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+        self.assertEqual(self.commit_count(), count_before + 1)
+        combined = proc.stdout + proc.stderr
+        # the gate reported exactly the correction set's regressed paths and
+        # each was lifted once for this invocation
+        self.assertIn("dirt REGRESSION: work.txt", combined)
+        self.assertIn("dirt REGRESSION: other.txt", combined)
+        self.assertEqual(
+            combined.count(
+                "authorized dirt correction accepted for this invocation"
+            ),
+            2,
+        )
+        stages = self.trace_stages(self.commit_env() | exports)
+        # exactly one dirt-gate invocation, at the captured-tree boundary
+        self.assertEqual(stages.count("dirt-regression-guard"), 1)
+        self.assertLess(
+            stages.index("landing-sweep"), stages.index("dirt-regression-guard")
+        )
+
+    def test_witnessed_merge_lock_restoration_without_authorization_refuses(self) -> None:
+        exports, prior_head, _ = self.correction_fixture()
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--subject", "land an unauthorized merge-lock restoration",
+        )
+        self.assert_refused(proc, exports, prior_head, "dirt REGRESSION")
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "dirt-regression-guard")
+
+    def test_partial_correction_set_leaves_unmatched_regression_refused(self) -> None:
+        exports, prior_head, blobs = self.correction_fixture()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-dirt-correction", "work.txt", blobs["work.txt"],
+            "--subject", "authorize one correction beside an unmatched one",
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "unmatched regression in the captured tree: other.txt",
+        )
+        combined = proc.stdout + proc.stderr
+        # the matching path was lifted; only the unmatched one refused
+        self.assertIn(
+            "authorized dirt correction accepted for this invocation: work.txt",
+            combined,
+        )
+
+    def test_mismatched_staged_blob_refuses(self) -> None:
+        exports, prior_head, _ = self.correction_fixture()
+        head_blob = self.git("rev-parse", "HEAD:work.txt").stdout.strip()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-dirt-correction", "work.txt", head_blob,
+            "--subject", "authorize the wrong blob",
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "does not equal the expected blob")
+
+    def test_undeclared_correction_path_refuses(self) -> None:
+        exports, prior_head, blobs = self.correction_fixture()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-dirt-correction", "elsewhere.txt", blobs["work.txt"],
+            "--subject", "authorize a path outside the declared set",
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "not in the declared --stage set: elsewhere.txt")
+
+    def test_stale_run_tuple_refuses(self) -> None:
+        exports, prior_head, blobs = self.correction_fixture()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        record = json.loads(manifest.read_text())
+        record["complete"] = True
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "other.txt",
+            "--authorize-dirt-correction", "work.txt", blobs["work.txt"],
+            "--subject", "authorize over a finalized run",
+        )
+        self.assert_refused(proc, exports, prior_head,
+                            "the run boundary is finalized")
+
+    def test_duplicate_correction_path_is_a_usage_error(self) -> None:
+        self.init_fixture_repo()
+        proc = self.run_commit(
+            "--stage", "seed.txt",
+            "--authorize-dirt-correction", "a.txt",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--authorize-dirt-correction", "a.txt",
+            "0123456789abcdef0123456789abcdef01234568",
+            "--subject", "two entries for one path",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "given more than once for path: a.txt", proc.stderr
+        )
+
+    def test_malformed_blob_is_a_usage_error(self) -> None:
+        self.init_fixture_repo()
+        proc = self.run_commit(
+            "--stage", "seed.txt",
+            "--authorize-dirt-correction", "a.txt", "nothex",
+            "--subject", "a malformed expected blob",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("malformed expected blob id: nothex", proc.stderr)
+
+    def test_missing_blob_value_is_a_usage_error(self) -> None:
+        self.init_fixture_repo()
+        proc = self.run_commit(
+            "--stage", "seed.txt",
+            "--authorize-dirt-correction", "a.txt",
+            "--subject", "missing the blob value",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "needs <repo-relative-path> <expected-blob-id>", proc.stderr
+        )
+
+    def binding_mutation_fixture(self) -> tuple[dict, str, str]:
+        """work.txt: HEAD gained 'a\\nold \\n' over base 'a\\nold\\n'; the
+        staged state restores the vintage bytes, which is both a cached-diff
+        ancestor match and a formatting-only candidate against HEAD.
+        new.txt carries a plain edit so the landing stays reachable after
+        the formatting revert. Returns (exports, prior HEAD, vintage blob)."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+        (self.fixture / "work.txt").write_text("a\nold \n")
+        (self.fixture / "new.txt").write_text("new work\n")
+        self.git("add", "work.txt", "new.txt")
+        self.git("commit", "-qm", "gain trailing space and add new work")
+        (self.fixture / "new.txt").write_text("new work edited\n")
+        self.git("add", "new.txt")
+        (self.fixture / "work.txt").write_text("a\nold\n")
+        self.git("add", "work.txt")
+        vintage_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", "work.txt", "--owned-path", "new.txt",
+        )
+        return exports, prior_head, vintage_blob
+
+    def test_authorized_path_mutation_after_binding_refuses_on_captured_tree(self) -> None:
+        """The --revert-formatting arm mutates the authorized path after the
+        staging binding but before the tree capture: exactly one gate call
+        runs on the captured tree and the run refuses with HEAD and the
+        ledger unchanged."""
+        exports, prior_head, vintage_blob = self.binding_mutation_fixture()
+        count_before = self.commit_count()
+        env = self.commit_env()
+        env.update(exports)
+        proc = self.run_commit(
+            "--stage", "work.txt", "--stage", "new.txt",
+            "--authorize-ancestor-restoration", "work.txt", vintage_blob,
+            "--authorize-dirt-correction", "work.txt", vintage_blob,
+            "--revert-formatting", "work.txt",
+            "--subject", "revert the authorized path after binding",
+            env=env,
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "captured tree's blob for work.txt",
+            "does not equal the expected blob",
+        )
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(env)
+        self.assertEqual(stages.count("dirt-regression-guard"), 1)
+
+    def authorized_blob_fixture(
+        self, head_bytes: bytes, staged_bytes: bytes,
+    ) -> tuple[dict, str, str]:
+        """work.txt: base 's1\\ns2\\n', HEAD content exactly head_bytes, and
+        the staged content exactly staged_bytes; returns (exports, prior
+        HEAD, the staged blob id)."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text("s1\ns2\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+        (self.fixture / "work.txt").write_bytes(head_bytes)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain head content")
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.fixture / "work.txt").write_bytes(staged_bytes)
+        self.git("add", "work.txt")
+        blob = self.git("ls-files", "-s", "work.txt").stdout.split()[1]
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        return exports, prior_head, blob
+
+    def test_indeterminate_authorized_classification_refuses(self) -> None:
+        """An authorized correction whose captured-tree classification is
+        indeterminate refuses without a landing commit: no authorization
+        suppresses a non-regression classifier outcome."""
+        exports, prior_head, blob = self.authorized_blob_fixture(
+            b"s1\ns2\nGAINED\n", b"\x00\x01binary\n"
+        )
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt",
+            "--authorize-dirt-correction", "work.txt", blob,
+            "--subject", "authorize a binary restoration",
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "dirt regression guard refused the captured tree (rc=2)",
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertIn("dirt INDETERMINATE: work.txt", combined)
+
+    def test_tool_error_authorized_classification_refuses(self) -> None:
+        """The gate's strict-UTF-8 boundary is a tool error (rc=3) even
+        under an authorization: the authorized path's staged bytes equal
+        HEAD's undecodable blob (no diff for the sweep to trip over), a
+        second declared path keeps the landing live, and the gate still
+        fails closed reading the captured tree's content."""
+        latin1 = "s1\ns2\nlatin1-caf\xe9\n".encode("latin-1")
+        exports, prior_head, blob = self.authorized_blob_fixture(
+            latin1, latin1
+        )
+        (self.fixture / "new.txt").write_text("new work edited\n")
+        self.git("add", "new.txt")
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt", "--stage", "new.txt",
+            "--authorize-dirt-correction", "work.txt", blob,
+            "--subject", "authorize an undecodable restoration",
+        )
+        self.assert_refused(
+            proc, exports, prior_head,
+            "dirt regression guard refused the captured tree (rc=3)",
+        )
+
+
+class DoneRunDirtCachedDiffAuthorizationSeparationTest(FixtureMixin, unittest.TestCase):
+    """Neither authorization satisfies the other guard (plan Standing
+    constraints): a dirt-only authorization for a cached-diff regression and
+    a cached-diff-only authorization for a dirt regression each refuse with
+    no commit; only both together land the exact staged restoration."""
+
+    VINTAGE = "a\nold\n"
+    GAINED = "a\nnew\n"
+
+    def dual_guard_fixture(self) -> tuple[dict, str, str]:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+        (self.fixture / "work.txt").write_text(self.GAINED)
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain head content")
+        (self.fixture / "work.txt").write_text(self.VINTAGE)
+        self.git("add", "work.txt")
+        vintage_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        return exports, prior_head, vintage_blob
+
+    def test_dirt_only_authorization_leaves_cached_diff_refusal(self) -> None:
+        exports, prior_head, vintage_blob = self.dual_guard_fixture()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt",
+            "--authorize-dirt-correction", "work.txt", vintage_blob,
+            "--subject", "dirt authorization cannot lift the cached-diff guard",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("leaked revert", combined)
+        self.assertEqual(
+            self.git("rev-parse", "HEAD").stdout.strip(), prior_head
+        )
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "cached-diff-guard")
+
+    def test_cached_diff_only_authorization_leaves_dirt_refusal(self) -> None:
+        exports, prior_head, vintage_blob = self.dual_guard_fixture()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", vintage_blob,
+            "--subject", "cached-diff authorization cannot lift the dirt gate",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("dirt REGRESSION: work.txt", combined)
+        self.assertIn(
+            "unmatched regression in the captured tree: work.txt", combined
+        )
+        self.assertEqual(
+            self.git("rev-parse", "HEAD").stdout.strip(), prior_head
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "dirt-regression-guard")
+
+    def test_both_authorizations_land_the_exact_restoration(self) -> None:
+        exports, prior_head, vintage_blob = self.dual_guard_fixture()
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "work.txt",
+            "--authorize-ancestor-restoration", "work.txt", vintage_blob,
+            "--authorize-dirt-correction", "work.txt", vintage_blob,
+            "--subject", "land the doubly directed restoration",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, prior_head])
+        self.assertEqual(
+            self.git("rev-parse", "HEAD:work.txt").stdout.strip(),
+            vintage_blob,
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+        self.assertEqual(self.commit_count(), count_before + 1)
+
+
+class DoneRunCapturedTreeLandingTest(FixtureMixin, unittest.TestCase):
+    """The shared captured-tree landing for primary-repository commits:
+    hook refusals leave the ref and ledger unchanged, mutations staged
+    after the final tree check stay excluded from the landed commit, and a
+    checkout race after the final check advances only the captured branch
+    while the output and ledger name it and post-commit sees the moved
+    HEAD."""
+
+    def install_hook(self, name: str, body: str) -> Path:
+        hooks = self.fixture / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        hook = hooks / name
+        hook.write_text("#!/bin/sh\n" + body)
+        hook.chmod(0o755)
+        return hook
+
+    def plain_edit_fixture(self) -> tuple[dict, str]:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "seed.txt").write_text("seed\nwork\n")
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        return exports, prior_head
+
+    def test_ordinary_hook_scope_change_refuses(self) -> None:
+        exports, prior_head = self.plain_edit_fixture()
+        count_before = self.commit_count()
+        self.install_hook(
+            "pre-commit",
+            "printf 'stranger bytes\\n' > stranger.txt\n"
+            "git add stranger.txt\n",
+        )
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "seed.txt",
+            "--subject", "a hook stages a foreign scope change",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("changed the staged index tree", combined)
+        self.assertEqual(self.commit_count(), count_before)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+
+    def test_post_final_check_index_mutation_stays_staged_and_excluded(self) -> None:
+        exports, _ = self.plain_edit_fixture()
+        self.install_hook(
+            "reference-transaction",
+            "[ \"$1\" = prepared ] || exit 0\n"
+            "found=''\n"
+            "while read -r _old _new ref; do\n"
+            "  case \"$ref\" in\n"
+            "    refs/heads/feature/PROJ-1234-done-run) found=1;;\n"
+            "  esac\n"
+            "done\n"
+            "[ -n \"$found\" ] || exit 0\n"
+            "printf 'stranger race\\n' > stranger.txt\n"
+            "git add stranger.txt\n",
+        )
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "seed.txt",
+            "--subject", "a hook mutates the index after the final tree check",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        shown = self.git("show", "--name-only", "--format=", landing).stdout
+        self.assertIn("seed.txt", shown)
+        self.assertNotIn("stranger.txt", shown)
+        # the later mutation remains staged and excluded from the landing
+        staged = self.git("diff", "--cached", "--name-only").stdout
+        self.assertIn("stranger.txt", staged)
+
+    def test_checkout_race_after_final_check_advances_only_captured_branch(self) -> None:
+        exports, prior_head = self.plain_edit_fixture()
+        race_branch = "feature/PROJ-1234-race-b"
+        self.git("branch", race_branch, prior_head)
+        probe = self.tmp / "probe-post-commit.txt"
+        self.install_hook(
+            "reference-transaction",
+            "[ \"$1\" = prepared ] || exit 0\n"
+            "found=''\n"
+            "while read -r _old _new ref; do\n"
+            "  case \"$ref\" in\n"
+            "    refs/heads/feature/PROJ-1234-done-run) found=1;;\n"
+            "  esac\n"
+            "done\n"
+            "[ -n \"$found\" ] || exit 0\n"
+            "# race the wrapper's final check: retarget HEAD inside the\n"
+            "# transaction window (direct symref write; symbolic-ref would\n"
+            "# need the HEAD lock the transaction itself holds)\n"
+            "printf 'ref: refs/heads/" + race_branch + "\\n' > "
+            "\"$(git rev-parse --absolute-git-dir)/HEAD\"\n",
+        )
+        self.install_hook(
+            "post-commit",
+            "printf 'head=%s\\n' \"$(git rev-parse HEAD)\" >> '" + str(probe) + "'\n",
+        )
+        proc = self.commit_session(
+            None, exports,
+            "--stage", "seed.txt",
+            "--subject", "land through a checkout race after the final check",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # HEAD was retargeted by the race: read the landing from the
+        # captured branch, not from HEAD.
+        landing = self.git(
+            "rev-parse", "refs/heads/feature/PROJ-1234-done-run"
+        ).stdout.strip()
+        # only the captured branch advanced
+        parents = self.git("rev-list", "--parents", "-1",
+                           "refs/heads/feature/PROJ-1234-done-run").stdout.split()
+        self.assertEqual(parents, [landing, prior_head])
+        # the race destination and HEAD are unchanged
+        self.assertEqual(
+            self.git("rev-parse", f"refs/heads/{race_branch}").stdout.strip(),
+            prior_head,
+        )
+        self.assertEqual(
+            self.git("symbolic-ref", "--short", "-q", "HEAD").stdout.strip(),
+            race_branch,
+        )
+        self.assertEqual(
+            self.git("rev-parse", "HEAD").stdout.strip(), prior_head
+        )
+        # the output and ledger name the captured destination's landing
+        combined = proc.stdout + proc.stderr
+        self.assertIn(
+            "captured branch refs/heads/feature/PROJ-1234-done-run", combined
+        )
+        self.assertIn(f"landed {landing}", combined)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines(), [landing])
+        # post-commit ran after the swap and observed the moved HEAD
+        self.assertIn(f"head={prior_head}", probe.read_text())
+
+
+class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
+    """Fixture Git isolation witnesses (plan Task 1): a host Git selector in
+    the wrapper-test environment is cleared and the fixture-scoped config
+    keeps host/global config overrides out of the fixture's Git calls."""
+
+    def setUp(self) -> None:
+        # Simulate a host session's Git selectors arriving in the ambient
+        # environment before the fixture harness runs; the harness must
+        # clear them so every Git call operates on the fixture only.
+        os.environ["GIT_DIR"] = "/nonexistent-host-git-dir"
+        os.environ["GIT_INDEX_FILE"] = "/nonexistent-host-git-index"
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "user.name"
+        os.environ["GIT_CONFIG_VALUE_0"] = "Host Override"
+        super().setUp()
+
+    def test_host_selectors_cleared_and_config_isolated_to_fixture(self) -> None:
+        for var in (
+            "GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+        ):
+            self.assertNotIn(var, os.environ)
+        self.assertEqual(os.environ.get("GIT_CONFIG_NOSYSTEM"), "1")
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "seed.txt").write_text("seed\nwork\n")
+        count_before = self.commit_count()
+        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--stage", "seed.txt",
+            "--subject", "land under cleared host selectors",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        # the landed identity is the fixture's, never the host override
+        self.assertEqual(
+            self.git("log", "-1", "--format=%an").stdout.strip(), "t"
+        )
+
+
+class DoneRunCapturedTreeLandingFenceTest(FixtureMixin, unittest.TestCase):
+    """Captured-tree landing hardening witnesses: a drifted dirt-gate rc=1
+    answer (no machine-readable regression paths, or no contractual OUTCOME
+    line) refuses instead of failing open, and a foreign path staged into
+    the index inside the capture window (between the staged-scope guard and
+    the tree capture) refuses before the ref update. Both arms run a private
+    runner copy whose helper resolution sees a doctored module, so the drift
+    is injected at the exact boundary the landing owns."""
+
+    TEMP_RUNNER_HELPERS = (
+        "revert_set_classifier.py", "staged_scope_guard.py",
+        "done_sweep_gates.sh", "done_sweep_gates_lib.py",
+        "dirt_regression_gate.py", "reverse_squash_guard.py",
+        "docs_branch_sync.sh",
+    )
+
+    DOCTOR_GATE_NO_PATH_LINES = (
+        "import sys\n"
+        "print('dirt REGRESSION: work.txt (restores base-era text over lines "
+        "HEAD gained since deadbeef)')\n"
+        "print('OUTCOME: fail')\n"
+        "sys.exit(1)\n"
+    )
+    DOCTOR_GATE_NO_OUTCOME = (
+        "import sys\n"
+        "print('dirt REGRESSION: work.txt (restores base-era text over lines "
+        "HEAD gained since deadbeef)')\n"
+        "sys.exit(1)\n"
+    )
+    DOCTOR_RS_GUARD_STAGES_FOREIGN = (
+        "import subprocess\n"
+        "with open('stranger-window.txt', 'w') as handle:\n"
+        "    handle.write('staged in the capture window\\n')\n"
+        "subprocess.run(['git', 'add', 'stranger-window.txt'], check=True)\n"
+        "print('OUTCOME: pass')\n"
+    )
+
+    def temp_runner_dir(self, doctor: dict[str, str]) -> Path:
+        """A private runner copy whose resolve_helper sees this directory
+        first: real helpers are symlinked in, and each doctored name is
+        replaced by the given body."""
+        runner_dir = self.tmp / "runner"
+        runner_dir.mkdir()
+        shutil.copy2(RUNNER, runner_dir / "done_run.sh")
+        for name in self.TEMP_RUNNER_HELPERS:
+            os.symlink(REPO_ROOT / "scripts" / name, runner_dir / name)
+        for name, body in doctor.items():
+            target = runner_dir / name
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.write_text(body)
+        return runner_dir
+
+    def run_temp_commit(
+        self, runner_dir: Path, exports: dict, *args: str,
+    ) -> subprocess.CompletedProcess:
+        env = self.commit_env()
+        env.update(exports)
+        return subprocess.run(
+            ["bash", str(runner_dir / "done_run.sh"), "commit", *args],
+            cwd=str(self.fixture),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    def gated_fixture(self) -> tuple[dict, str]:
+        """A declared HEAD-tracked staged edit wired to an origin/HEAD merge
+        base, so the landing's capture window and dirt-gate stage are both
+        reached; returns (setup exports, prior HEAD)."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        (self.fixture / "work.txt").write_text("a\nb\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "base work content")
+        base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", base_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+        (self.fixture / "work.txt").write_text("a\nb\ngained\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "gain head content")
+        prior_head = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.fixture / "work.txt").write_text("a\nb\ngained edited\n")
+        self.git("add", "work.txt")
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        return exports, prior_head
+
+    def assert_refused_no_landing(
+        self, proc: subprocess.CompletedProcess, exports: dict,
+        prior_head: str, *fragments: str,
+    ) -> None:
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, combined)
+        for fragment in fragments:
+            self.assertIn(fragment, combined)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), prior_head)
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertFalse(ledger.exists())
+
+    def test_rc1_without_parsable_regression_paths_refuses(self) -> None:
+        exports, prior_head = self.gated_fixture()
+        runner_dir = self.temp_runner_dir({
+            "dirt_regression_gate.py": self.DOCTOR_GATE_NO_PATH_LINES,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", "work.txt", "--boundary-class", "per-task",
+            "--subject", "land under a drifted gate answer",
+        )
+        self.assert_refused_no_landing(
+            proc, exports, prior_head,
+            "rc=1 named no parsable regression path (helper drift)",
+        )
+
+    def test_rc1_without_outcome_line_refuses(self) -> None:
+        exports, prior_head = self.gated_fixture()
+        runner_dir = self.temp_runner_dir({
+            "dirt_regression_gate.py": self.DOCTOR_GATE_NO_OUTCOME,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", "work.txt", "--boundary-class", "per-task",
+            "--subject", "land under an outcome-less gate answer",
+        )
+        self.assert_refused_no_landing(
+            proc, exports, prior_head,
+            "no contractual 'OUTCOME: fail' line (helper drift)",
+        )
+
+    def test_foreign_staging_in_capture_window_refuses(self) -> None:
+        exports, prior_head = self.gated_fixture()
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": self.DOCTOR_RS_GUARD_STAGES_FOREIGN,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", "work.txt", "--boundary-class", "per-task",
+            "--subject", "land under a capture-window staging race",
+        )
+        self.assert_refused_no_landing(
+            proc, exports, prior_head,
+            "a foreign path entered the staged index before the tree "
+            "capture: stranger-window.txt",
+        )
+        # the injected entry remains staged, excluded from any landing
+        staged = self.git("diff", "--cached", "--name-only").stdout
+        self.assertIn("stranger-window.txt", staged)
 
 
 if __name__ == "__main__":

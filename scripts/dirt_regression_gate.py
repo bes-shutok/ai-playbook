@@ -42,11 +42,25 @@ pass or fail; a diff shape outside the modeled cases surfaces as
 indeterminate (exit 2), never as pass. Operating-context assumptions are
 declared in scripts/OUTCOME_CONTRACT.md (the authoritative surface).
 
-With ``--stamp``, the gate cites an adjacent ``.source-commit`` stamp file
+With ``--tree <tree-ish>``, classification reads a captured commit tree
+instead of the worktree: paths are repo-relative and every blob read, the
+HEAD comparison diff, and the restoration witnesses come only from that
+immutable tree object, so the result is a pure per-path function of
+(base, HEAD, tree, path) and no worktree or index state is read. This is
+the done runner's mode: it captures the final staged tree first and
+classifies that tree even when the worktree changes afterwards. The legacy
+``--base <commit> -- <paths...>`` worktree invocation is unchanged for
+maintenance merge callers. In ``--tree`` mode each regression additionally
+emits one machine-readable ``dirt REGRESSION PATH: <path>`` line beside its
+display line, so a caller can attribute lifts to exact path bytes. With
+``--stamp``, the gate cites an adjacent
+``.source-commit`` stamp file
 (written beside the deployed copy at deployment time) as
 provenance: when the stamp is present its recorded commit is cited on stdout;
 when absent a report-only note goes to stderr and never changes the verdict.
-Stamping is manual-only for now; the helper is the sanctioned manual path.
+Stamping is a worktree-mode concern and is skipped in ``--tree`` mode;
+stamping itself is manual-only for now, the helper is the sanctioned manual
+path.
 """
 
 from __future__ import annotations
@@ -184,35 +198,66 @@ def _hunk_is_regression(
     return bool(added) and all(line in base_set for line in added)
 
 
-def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
+def classify_path(
+    path: str, base: str, cwd: Path, tree: str | None = None
+) -> tuple[str, str]:
     """Classify one restored path. Returns (status, detail).
 
     status is "regression", "clean", or "indeterminate" per the outcome
     contract (scripts/OUTCOME_CONTRACT.md); "indeterminate" marks a diff
     shape the classifier does not model, never a pass or a fail.
+
+    With ``tree`` unset the candidate content is the worktree/index state
+    (the maintenance merge CLI). With a captured tree object the candidate
+    content is read only from that immutable tree: the result is a pure
+    per-path function of (base, HEAD, tree, path) and no worktree or index
+    state is read.
     """
     repo_root = Path(_git("rev-parse", "--show-toplevel", cwd=cwd).strip())
-    resolved = Path(path).resolve()
-    deletion_shape = not resolved.is_file()
-    try:
-        repo_rel = resolved.relative_to(repo_root)
-    except ValueError:
-        raise RuntimeError(f"path not inside repository {repo_root}: {path}")
-    repo_rel_posix = PurePosixPath(repo_rel).as_posix()
-    if not resolved.is_file():
-        tracked = _git("ls-files", "--", path, cwd=cwd).strip()
-        # A staged whole-file deletion (post-deletion `git add` sweep or
-        # `git rm`) removes the path from the index while HEAD still tracks
-        # it: an ordinary dirt shape the recipes' file enumeration picks up.
-        # Classify it through `git diff HEAD` below like any other deletion
-        # instead of misreporting it as a git-environment error; only a path
-        # HEAD never tracked fails closed here.
-        head_tracks = _git_ok("cat-file", "-e", f"HEAD:{repo_rel_posix}", cwd=cwd)
-        if not tracked and not head_tracks:
-            raise RuntimeError(f"path does not exist or is not a tracked file: {path}")
-        # absent from the worktree: a whole-file deletion in the dirt; git
-        # diff HEAD classifies it (removal-only hunk of HEAD-gained lines is
-        # a regression). The declared-deletion plan owns this path surface.
+    if tree is None:
+        resolved = Path(path).resolve()
+        deletion_shape = not resolved.is_file()
+        try:
+            repo_rel = resolved.relative_to(repo_root)
+        except ValueError:
+            raise RuntimeError(f"path not inside repository {repo_root}: {path}")
+        repo_rel_posix = PurePosixPath(repo_rel).as_posix()
+        if not resolved.is_file():
+            tracked = _git("ls-files", "--", path, cwd=cwd).strip()
+            # A staged whole-file deletion (post-deletion `git add` sweep or
+            # `git rm`) removes the path from the index while HEAD still
+            # tracks it: an ordinary dirt shape the recipes' file enumeration
+            # picks up. Classify it through `git diff HEAD` below like any
+            # other deletion instead of misreporting it as a git-environment
+            # error; only a path HEAD never tracked fails closed here.
+            head_tracks = _git_ok(
+                "cat-file", "-e", f"HEAD:{repo_rel_posix}", cwd=cwd
+            )
+            if not tracked and not head_tracks:
+                raise RuntimeError(
+                    f"path does not exist or is not a tracked file: {path}"
+                )
+            # absent from the worktree: a whole-file deletion in the dirt;
+            # git diff HEAD classifies it (removal-only hunk of HEAD-gained
+            # lines is a regression). The declared-deletion plan owns this
+            # path surface.
+    else:
+        repo_rel = PurePosixPath(path)
+        if repo_rel.is_absolute() or ".." in repo_rel.parts:
+            raise RuntimeError(f"path not inside repository {repo_root}: {path}")
+        repo_rel_posix = repo_rel.as_posix()
+        deletion_shape = not _git_ok(
+            "cat-file", "-e", f"{tree}:{repo_rel_posix}", cwd=cwd
+        )
+        if deletion_shape and not _git_ok(
+            "cat-file", "-e", f"HEAD:{repo_rel_posix}", cwd=cwd
+        ):
+            # A path absent from both the captured tree and HEAD would diff
+            # empty and silently pass; the worktree mode's fail-closed
+            # contract for never-tracked paths holds here too.
+            raise RuntimeError(
+                f"path does not exist or is not a tracked file: {path}"
+            )
 
     base_present = _git_ok(
         "cat-file", "-e", f"{base}:{repo_rel_posix}", cwd=cwd
@@ -221,7 +266,12 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
     base_set = set(base_lines)
     head_lines = _blob_lines("HEAD", repo_rel_posix, cwd)
     gained = set(head_lines) - base_set
-    diff_text = _git("diff", "HEAD", "--unified=0", "--", path, cwd=cwd)
+    if tree is None:
+        diff_text = _git("diff", "HEAD", "--unified=0", "--", path, cwd=cwd)
+    else:
+        diff_text = _git(
+            "diff", "HEAD", tree, "--unified=0", "--", path, cwd=cwd
+        )
     hunks = _hunks(diff_text)
     if diff_text.strip() and not hunks:
         # Unmodeled diff shape: content the classifier cannot see (a binary
@@ -294,18 +344,22 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
         return "regression", "removes lines HEAD gained from a deleted file"
 
     if base_present and not deletion_shape and candidate_hunks:
-        worktree_lines = _worktree_lines(resolved)
-        if worktree_lines == base_lines:
-            # Second witness: the worktree restores the complete base line list.
-            return "regression", "worktree restores the complete base line list"
+        if tree is None:
+            candidate_lines = _worktree_lines(resolved)
+        else:
+            candidate_lines = _blob_lines(tree, repo_rel_posix, cwd)
+        if candidate_lines == base_lines:
+            # Second witness: the candidate content (worktree bytes, or the
+            # captured tree's blob) restores the complete base line list.
+            return "regression", "restores the complete base line list"
 
         if (
             removal_only_candidate
-            and worktree_lines != base_lines
-            and not any(line in base_set for line in worktree_lines)
+            and candidate_lines != base_lines
+            and not any(line in base_set for line in candidate_lines)
         ):
             # Third witness: a removal-only candidate leaves only non-base text.
-            return "regression", "no base-era line survives in the worktree"
+            return "regression", "no base-era line survives in the candidate content"
     return "clean", ""
 
 
@@ -359,11 +413,20 @@ def main(argv: list[str] | None = None) -> int:
         help="merge-base sha the run's dirt was restored against",
     )
     parser.add_argument(
+        "--tree",
+        default=None,
+        help=(
+            "classify a captured commit tree instead of the worktree/index "
+            "state: paths are repo-relative and read only from the given "
+            "tree object"
+        ),
+    )
+    parser.add_argument(
         "--stamp",
         action="store_true",
         help=(
             "cite an adjacent .source-commit stamp as provenance when present; "
-            "report-only when absent"
+            "report-only when absent (worktree mode only)"
         ),
     )
     parser.add_argument(
@@ -389,20 +452,41 @@ def main(argv: list[str] | None = None) -> int:
         print("dirt gate: repository has no HEAD commit", file=sys.stderr)
         print("OUTCOME: tool_error")
         return 3
+    if args.tree is not None:
+        try:
+            tree_kind = _git("cat-file", "-t", args.tree, cwd=cwd).strip()
+        except RuntimeError:
+            tree_kind = ""
+        if tree_kind != "tree":
+            print(
+                f"dirt gate: --tree does not resolve to a tree object: "
+                f"{args.tree}",
+                file=sys.stderr,
+            )
+            print("OUTCOME: tool_error")
+            return 3
 
     regressed: list[str] = []
     indeterminate: list[str] = []
     for path in args.paths:
         try:
-            status, detail = classify_path(path, args.base, cwd)
+            status, detail = classify_path(
+                path, args.base, cwd, tree=args.tree
+            )
         except RuntimeError as exc:
             print(f"dirt gate: {exc}", file=sys.stderr)
             print("OUTCOME: tool_error")
             return 3
-        if args.stamp:
+        if args.stamp and args.tree is None:
             _report_stamp(path, sys.stdout, sys.stderr)
         if status == "regression":
             regressed.append(path)
+            if args.tree is not None:
+                # Machine-readable handoff for the captured-tree landing: one
+                # line per regression carrying the exact path bytes, immune
+                # to the display line's rendering (a path containing " ("
+                # must not truncate to a prefix twin downstream).
+                print(f"dirt REGRESSION PATH: {path}")
             print(f"dirt REGRESSION: {path} ({detail} since {args.base[:12]})")
         elif status == "indeterminate":
             indeterminate.append(path)

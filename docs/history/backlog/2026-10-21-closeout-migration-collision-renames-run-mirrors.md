@@ -1,7 +1,7 @@
 # Closeout migration collision-renames the run's own boundary mirrors
 
 - **Filed:** 2026-10-21, execute-plan closeout of plan-validation-command-undefined-repo (landed 28127e322)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-24-closeout-migration-same-run-mirror-replace.md)
 - **Workflow:** backlog
 - **Priority:** moderate (every worktree run that mirrors records at boundaries hits it; the staleness is silent)
 - **Cluster:** (sibling row removed 2026-10-22, covered by the facts-resolved capture landing) (same script: the closeout migration's baseline dirs and its collision arm are the two witnessed closeout stranding shapes)

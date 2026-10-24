@@ -17,16 +17,36 @@ entry's ``Origins:`` lines, and classifies every origin:
   ``covered``, or when the origin file is absent from the backlog top
   level because it sits in a served archive state directory
   (``completed/``, ``rejected/``, resolved by basename and reported
-  with the resolved path relative to the backlog directory).
+  with the resolved path relative to the backlog directory), or when
+  the earlier lookups left the origin live and it is absent from the
+  HEAD tree (an uncommitted working-tree re-add is dirt, not presence)
+  while its resolved backlog-relative path (the backlog directory's
+  repo-relative path joined with the basename) carries a reachable
+  deletion commit, reported as ``deleted in <commit>`` (the
+  covered-row deletion shape; the commit witnesses the removal for
+  audit, never the completion itself).
 - DEFERRED when the origin file resolves only into the deferred archive
   state directory (``deferred/``): a deferral is still-actionable work,
   neither completed nor rejected, so it carries its own line class and
   never serves an entry.
-- LIVE otherwise: a present file with no or a novel status, or an
-  absent file that resolves nowhere. A missing or unparseable status is
-  not by itself a finding; only done/covered prefixes and absent files
-  are findings, so the checker stays fail-open for novel statuses and
-  fail-closed only for the witnessed drift classes.
+- LIVE otherwise: a present file with no or a novel status and no
+  HEAD-tree deletion evidence, or an absent file with no deletion
+  commit. A missing
+  or unparseable status is not by itself a finding; only done/covered
+  prefixes and absent files are findings, so the checker stays
+  fail-open for novel statuses and fail-closed only for the witnessed
+  drift classes.
+
+The deleted-origin arm is consulted only for an origin the earlier
+lookups left live, at this check layer (the shared classifier also
+serves the collateral mode, where a deletion outside the audited range
+must not flip the verdict). A git plumbing failure on its lookup
+(nonzero exit, timeout, missing binary, non-decodable output, an
+argument the git process refuses) is no deletion evidence: one
+``deletion-lookup:`` stderr line per failed lookup naming the origin
+path and the failure class, one ``deletion-lookup failures: N`` stdout
+line per invocation when any lookup failed, never an uncaught
+exception; a log outside any git repository silences the arm outright.
 
 An entry is STALE only when EVERY origin is served (a mixed entry still
 carries unlanded work and stays, and a deferred origin is unlanded
@@ -65,8 +85,15 @@ receipt ledger form (the in-log ``PLAN-PROMPTS-PRUNE:`` /
 prose tolerated): when the removal's own log post-image carries such a
 line naming the removed slug and its token resolves (a commit digest,
 or a path present in the removal commit's tree), the removal is
-PRUNE-OK (log ledger receipt). The evidence classes keep that fixed
-precedence: plan-file witness, then commit-message receipt, then the
+PRUNE-OK (log ledger receipt). A newly added line of that same shape
+whose token is the literal ``landing`` (the logs' receipt form for a
+removal receipted in its own commit) is the in-commit receipt and
+joins the same log-ledger count; the match is a per-log
+``(slug, token)`` count delta between the log's pre-image and
+post-image, so a pre-existing (earlier) ``landing`` line never
+qualifies and a sibling-log receipt cannot cross-witness. The evidence
+classes keep that fixed precedence: plan-file witness, then
+commit-message receipt, then the
 log's own ledger line; a removal classified by an earlier class never
 consults later ones, and each log's removals consult only that log's
 post-image. The audit classifies mechanically; the
@@ -95,6 +122,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import TextIO
 
@@ -123,10 +151,14 @@ DEFERRED_DIR_NAME = "deferred"
 # detail: a deferral is neither completed nor rejected, so it never
 # serves its entry.
 DEFERRED_NOTE = "still actionable: deferred is neither completed nor rejected"
+# The deleted-origin arm's stderr diagnostic prefix: one line per failed
+# lookup, naming the origin path and the failure class.
+DELETION_LOOKUP_PREFIX = "deletion-lookup"
 PLANS_ROOT_REL = "docs/history/plans"
 
-# The two tracked rolling logs: the prune-audit enumerates both, the
-# audited log's sibling riding the same audit window (the ad-hoc-superseded
+# The two tracked rolling logs: the prune-audit and the collateral
+# discovery each enumerate both, the audited log's sibling riding the
+# same audit window (the ad-hoc-superseded
 # removal class lands in either log, so one window must cover both).
 SIBLING_LOG_RELS = {
     "docs/history/backlog/PLAN-PROMPTS.md": "docs/history/backlog/EXEC-PROMPTS.md",
@@ -292,12 +324,160 @@ def classify_origin(origin: str, backlog_dir: Path) -> tuple[str, str]:
     return "live", ""
 
 
+def _git_failure_class(exc: BaseException) -> str:
+    """The stable failure-class token for one raised git plumbing call;
+    the deletion-lookup diagnostic names it verbatim."""
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "timeout"
+    if isinstance(exc, FileNotFoundError):
+        return "git-missing"
+    if isinstance(exc, UnicodeDecodeError):
+        return "decode-error"
+    if isinstance(exc, ValueError):
+        return "invalid-argument"
+    return "os-error"
+
+
+def _report_deletion_failure(subject: str, failure: str, detail: str = "") -> None:
+    """One stderr diagnostic line per failed deletion lookup: the stable
+    prefix, the origin path, the failure class, then the plumbing
+    stderr flattened onto the same line."""
+    parts = [DELETION_LOOKUP_PREFIX, subject, failure]
+    flat = " ".join(detail.split())
+    if flat:
+        parts.append(flat)
+    print(": ".join(parts), file=sys.stderr)
+
+
+class _DeletionEvidence:
+    """The check_log layer's deleted-origin lookup (the covered-row
+    deletion served class), memoized per resolved backlog-relative path
+    within one invocation.
+
+    The arm never lives in the shared classifier: classify_origin has a
+    second production consumer at the collateral mode's head-side call
+    against the live repository, where a deletion outside the audited
+    range must not flip the head-served verdict (the base-side call
+    classifies an extracted base tree outside any repository and is
+    shielded by its base-present conjunct). The repository root is resolved once from the log path
+    with ``git rev-parse --show-toplevel``; a nonzero probe is the
+    ordinary non-repository shape and silences the arm without a
+    diagnostic. Any plumbing failure on a lookup (nonzero exit,
+    timeout, missing binary, non-decodable output, an argument the
+    process layer refuses such as an embedded NUL) degrades to no
+    deletion evidence: one
+    stderr diagnostic line naming the origin path and the failure
+    class, one increment of ``failures`` for the per-invocation stdout
+    summary, never a raised exception."""
+
+    def __init__(self, log_path: Path) -> None:
+        self._log_path = log_path
+        self._root: Path | None = None
+        self._backlog_rel: str | None = None
+        self._root_probed = False
+        self._root_failed = False
+        self._root_failure = ""
+        self._root_reported = False
+        self._evidence: dict[str, str | None] = {}
+        self.failures = 0
+
+    def deletion_detail(self, basename: str) -> str | None:
+        """``deleted in <commit>`` when the basename's resolved path is
+        HEAD-tree-absent and a HEAD-reachable commit deleted it, else
+        None. The gate and the walk run at most once per resolved path
+        per invocation."""
+        root, backlog_rel = self._resolve_root()
+        if root is None or backlog_rel is None:
+            if self._root_failed and not self._root_reported:
+                self._root_reported = True
+                self._fail(
+                    basename, self._root_failure, "git rev-parse --show-toplevel"
+                )
+            return None
+        resolved_rel = f"{backlog_rel}/{basename}"
+        if resolved_rel in self._evidence:
+            return self._evidence[resolved_rel]
+        commit = self._lookup(root, resolved_rel)
+        detail = f"deleted in {commit}" if commit is not None else None
+        self._evidence[resolved_rel] = detail
+        return detail
+
+    def _resolve_root(self) -> tuple[Path | None, str | None]:
+        """(repository root, backlog repo-relative directory) resolved
+        once per invocation from the log path. A nonzero probe is the
+        quiet non-repository shape; a raised probe marks the arm failed
+        for the invoking origin's diagnostic."""
+        if not self._root_probed:
+            self._root_probed = True
+            try:
+                probe = run_git(
+                    self._log_path.resolve().parent, "rev-parse", "--show-toplevel"
+                )
+            except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
+                self._root_failed = True
+                self._root_failure = _git_failure_class(exc)
+            else:
+                if probe.returncode == 0 and probe.stdout.strip():
+                    try:
+                        root = Path(probe.stdout.strip()).resolve()
+                        self._backlog_rel = (
+                            self._log_path.resolve().parent.relative_to(root).as_posix()
+                        )
+                        self._root = root
+                    except ValueError:
+                        pass
+        if self._root is None:
+            return None, None
+        return self._root, self._backlog_rel
+
+    def _lookup(self, root: Path, resolved_rel: str) -> str | None:
+        """The deletion commit for one resolved path, or None without
+        evidence. The HEAD-tree absence gate runs first: a path present
+        at HEAD was re-added after any deletion, so the deletion class
+        never consults it."""
+        try:
+            present = (
+                run_git(root, "cat-file", "-e", f"HEAD:{resolved_rel}").returncode
+                == 0
+            )
+        except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
+            self._fail(resolved_rel, _git_failure_class(exc))
+            return None
+        if present:
+            return None
+        try:
+            proc = run_git(
+                root,
+                "log",
+                "--diff-filter=D",
+                "-1",
+                "--format=%H",
+                "--",
+                f":(literal){resolved_rel}",
+            )
+        except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
+            self._fail(resolved_rel, _git_failure_class(exc))
+            return None
+        if proc.returncode != 0:
+            self._fail(resolved_rel, "nonzero-exit", proc.stderr)
+            return None
+        commit = proc.stdout.strip()
+        return commit or None
+
+    def _fail(self, subject: str, failure: str, detail: str = "") -> None:
+        self.failures += 1
+        _report_deletion_failure(subject, failure, detail)
+
+
 def check_log(log_path: Path, out: TextIO) -> int:
     """Check every entry of the log, print one line per origin plus a
     verdict line per stale entry, and return 1 only for a stale entry
-    (an entry whose every origin is served)."""
+    (an entry whose every origin is served). A live origin consults the
+    deleted-origin arm last: served only behind a reachable deletion
+    commit and a HEAD-tree absence."""
     text = log_path.read_text(encoding="utf-8", errors="replace")
     backlog_dir = log_path.resolve().parent
+    deletion = _DeletionEvidence(log_path)
     stale: list[str] = []
     for slug, origins in parse_entries(text):
         if not origins:
@@ -316,10 +496,18 @@ def check_log(log_path: Path, out: TextIO) -> int:
                 all_served = False
                 out.write(f"DEFERRED: {slug} -> {name} [{detail}]\n")
             else:
-                all_served = False
-                out.write(f"LIVE: {slug} -> {name}\n")
+                # The deleted-origin arm, consulted only after every
+                # earlier lookup left the origin live.
+                deleted = deletion.deletion_detail(name)
+                if deleted is not None:
+                    out.write(f"SERVED: {slug} -> {name} [{deleted}]\n")
+                else:
+                    all_served = False
+                    out.write(f"LIVE: {slug} -> {name}\n")
         if all_served:
             stale.append(slug)
+    if deletion.failures:
+        out.write(f"deletion-lookup failures: {deletion.failures}\n")
     for slug in stale:
         out.write(
             f"STALE: {slug}: every origin served;"
@@ -545,6 +733,24 @@ def ledger_token_resolves(repo_root: Path, commit: str, token: str) -> bool:
     return proc.returncode == 0
 
 
+def newly_added_receipt_pairs(
+    old_text: str, post_text: str
+) -> list[tuple[str, str]]:
+    """(slug, token) pairs for the receipt ledger lines one commit newly
+    adds to one log: the per-log ``(slug, token)`` count delta between
+    the log's pre-image and post-image, walked in post-image order, so
+    only a newly added line qualifies and a pre-existing identical line
+    never does."""
+    pre = Counter(LEDGER_RECEIPT_LINE_RE.findall(old_text))
+    added: list[tuple[str, str]] = []
+    for pair in LEDGER_RECEIPT_LINE_RE.findall(post_text):
+        if pre.get(pair, 0):
+            pre[pair] -= 1
+        else:
+            added.append(pair)
+    return added
+
+
 def walk_audit_commits(
     repo_root: Path, commits: list[str], log_rels: list[str], out: TextIO
 ) -> tuple[int, int, int, int]:
@@ -552,7 +758,9 @@ def walk_audit_commits(
     and return (removals, ledger_receipts, flagged, warnings). Raises
     AuditToolError on a git plumbing failure. ``log_rels`` is the
     enumerated rolling logs (the audited log plus its sibling when it
-    names one)."""
+    names one). The log-ledger count includes the in-commit receipt
+    class (a newly added same-log ``landing`` line naming the removed
+    slug)."""
     removals = 0
     ledger_receipts = 0
     flagged = 0
@@ -599,26 +807,20 @@ def walk_audit_commits(
             # log's post-image, never the sibling's.
             per_log.append((removed, added, new_text, old_text))
         # The receipt-without-removal warning class (warning-only, added
-        # by the landing-conflict-intent-union plan): the same ledger
-        # receipt regex applied to the per-log pre- and post-images, so
-        # a commit adding a receipt line while removing no entry from
-        # that same log becomes visible without changing any exit code.
+        # by the landing-conflict-intent-union plan): the shared per-log
+        # receipt delta (newly_added_receipt_pairs) applied to each
+        # log's pre- and post-images, so a commit adding a receipt line
+        # while removing no entry from that same log becomes visible
+        # without changing any exit code.
         for log_rel, (removed, _, post_text, old_text) in zip(log_rels, per_log):
-            pre_receipts = {
-                slug for slug, _ in LEDGER_RECEIPT_LINE_RE.findall(old_text)
-            }
-            added_receipts = [
-                slug
-                for slug, _ in LEDGER_RECEIPT_LINE_RE.findall(post_text)
-                if slug not in pre_receipts
-            ]
-            if added_receipts and not removed:
+            if newly_added_receipt_pairs(old_text, post_text) and not removed:
                 warnings += 1
                 out.write(f"RECEIPT-WITHOUT-REMOVAL: {short} {log_rel}\n")
         if not any(removed for removed, _, _, _ in per_log):
             continue
         candidates = witness_candidates(repo_root, sha)
-        for removed, added, post_text, _old_text in per_log:
+        for removed, added, post_text, old_text in per_log:
+            added_receipts = newly_added_receipt_pairs(old_text, post_text)
             for slug in removed:
                 removals += 1
                 if added:
@@ -652,9 +854,29 @@ def walk_audit_commits(
                     )
                     continue
                 # Third evidence class: the touched log's own receipt
-                # ledger line naming the removed slug with a resolving
-                # token (a removal classified by an earlier class never
-                # consults this one).
+                # ledger line naming the removed slug (a removal
+                # classified by an earlier class never consults this
+                # one). A line newly added by this very commit with the
+                # literal token ``landing`` is the logs' same-commit
+                # receipt form: the in-commit receipt. Any other token
+                # must resolve (a commit digest, or a path in the
+                # removal commit's tree); an earlier unresolvable
+                # ``landing`` line and a sibling-log receipt never
+                # witness here.
+                in_commit = next(
+                    (
+                        token
+                        for rslug, token in added_receipts
+                        if rslug == slug and token == "landing"
+                    ),
+                    None,
+                )
+                if in_commit is not None:
+                    ledger_receipts += 1
+                    out.write(
+                        f"PRUNE-OK: {slug} -> landing (in-commit receipt)\n"
+                    )
+                    continue
                 ledger = next(
                     (
                         token
@@ -716,7 +938,7 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
         )
     except AuditToolError as exc:
         return write_tool_error(out, str(exc))
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, UnicodeDecodeError) as exc:
         return write_tool_error(out, f"git plumbing failure: {exc}")
     out.write(
         f"prune-audit summary: {removals} removals "
@@ -757,6 +979,67 @@ def prune_audit_cli(log_arg: str | None, base_ref: str | None, out: TextIO) -> i
     return prune_audit(log_path, repo_root, base_ref, out)
 
 
+def _collateral_log_pass(
+    log_file: Path,
+    backlog_rel: str,
+    repo_root: Path,
+    base_commit: str,
+    base_backlog: Path,
+    log_name: str | None,
+    out: TextIO,
+) -> None:
+    """One log's discovery pass: one ``COLLATERAL-SERVED`` line per
+    qualifying entry (every origin served at HEAD or served at base and
+    deleted in the range, at least one origin's served state produced in
+    the range). ``log_name`` None keeps the audited log's exact line
+    format; a sibling pass appends the sibling log's repo-relative name
+    field to each line it writes."""
+    for slug, origins in parse_entries(
+        log_file.read_text(encoding="utf-8", errors="replace")
+    ):
+        if not origins:
+            continue
+        range_produced: list[str] = []
+        composite_holds = True
+        for origin in origins:
+            basename = Path(origin.replace("\\", "/")).name
+            origin_rel = f"{backlog_rel}/{basename}"
+            head_class, _ = classify_origin(origin, repo_root / backlog_rel)
+            head_present = (
+                run_git(
+                    repo_root,
+                    "cat-file",
+                    "-e",
+                    f"HEAD:{origin_rel}",
+                ).returncode
+                == 0
+            )
+            base_class, _ = classify_origin(basename, base_backlog)
+            base_present = (
+                run_git(
+                    repo_root,
+                    "cat-file",
+                    "-e",
+                    f"{base_commit}:{origin_rel}",
+                ).returncode
+                == 0
+            )
+            head_served = head_class == "served"
+            base_served = base_class == "served" and base_present
+            if not head_served and not (base_served and not head_present):
+                composite_holds = False
+                break
+            if head_served and not base_served:
+                range_produced.append(basename)
+            elif base_served and not head_present:
+                range_produced.append(basename)
+        if composite_holds and range_produced:
+            field = f" [{log_name}]" if log_name is not None else ""
+            out.write(
+                f"COLLATERAL-SERVED: {slug} -> {' '.join(range_produced)}{field}\n"
+            )
+
+
 def collateral_served(
     log_path: Path, repo_root: Path, base_ref: str, out: TextIO
 ) -> int:
@@ -773,7 +1056,12 @@ def collateral_served(
     the base commit's backlog directory outside the repository; the mode
     writes nothing to the repository. The deletion arm keys on
     tree-absence at HEAD, never on the classifier's ``live`` verdict (a
-    present unserved row also classifies ``live``)."""
+    present unserved row also classifies ``live``). The enumeration
+    mirrors the prune audit's: both rolling logs ride one invocation from
+    the same ``SIBLING_LOG_RELS`` mapping, the audited log's lines keep
+    their exact format while the sibling's lines carry its repo-relative
+    name field, and a sibling absent from the tree fails open with the
+    audited log's listing alone."""
     try:
         rel = log_path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
@@ -818,46 +1106,25 @@ def collateral_served(
                     continue
                 member.name = stripped
                 tar.extract(member, base_backlog, filter="data")
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        for slug, origins in parse_entries(text):
-            if not origins:
-                continue
-            range_produced: list[str] = []
-            composite_holds = True
-            for origin in origins:
-                basename = Path(origin.replace("\\", "/")).name
-                origin_rel = f"{backlog_rel}/{basename}"
-                head_class, _ = classify_origin(origin, repo_root / backlog_rel)
-                head_present = (
-                    run_git(
-                        repo_root,
-                        "cat-file",
-                        "-e",
-                        f"HEAD:{origin_rel}",
-                    ).returncode
-                    == 0
+        _collateral_log_pass(
+            log_path, backlog_rel, repo_root, base_commit, base_backlog, None, out
+        )
+        # The enumeration mirrors the prune audit's: the audited log's
+        # sibling rides the same invocation. A sibling absent from the
+        # tree fails open: the audited log alone lists, the exit stays 0.
+        sibling_rel = SIBLING_LOG_RELS.get(rel)
+        if sibling_rel is not None and sibling_rel != rel:
+            sibling_path = repo_root / sibling_rel
+            if sibling_path.is_file():
+                _collateral_log_pass(
+                    sibling_path,
+                    backlog_rel,
+                    repo_root,
+                    base_commit,
+                    base_backlog,
+                    sibling_rel,
+                    out,
                 )
-                base_class, _ = classify_origin(basename, base_backlog)
-                base_present = (
-                    run_git(
-                        repo_root,
-                        "cat-file",
-                        "-e",
-                        f"{base_commit}:{origin_rel}",
-                    ).returncode
-                    == 0
-                )
-                head_served = head_class == "served"
-                base_served = base_class == "served" and base_present
-                if not head_served and not (base_served and not head_present):
-                    composite_holds = False
-                    break
-                if head_served and not base_served:
-                    range_produced.append(basename)
-                elif base_served and not head_present:
-                    range_produced.append(basename)
-            if composite_holds and range_produced:
-                out.write(f"COLLATERAL-SERVED: {slug} -> {' '.join(range_produced)}\n")
     out.write(
         f"collateral-served summary: discovery over {base_ref}..HEAD "
         "(read-only listing; pruning stays the author's receipted rider edit)\n"
@@ -1151,8 +1418,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Flag PLAN-PROMPTS.md entries whose every origin is served "
-            "(a done/covered status, or the file resolved into a served "
-            "archive state directory; a deferred origin is still "
+            "(a done/covered status, the file resolved into a served "
+            "archive state directory, or a covered-row deletion reachable "
+            "from HEAD with the file absent from the HEAD tree; a deferred "
+            "origin is still "
             "actionable and never serves); exit 1 for a stale entry, "
             "0 otherwise. "
             "With --prune-audit, classify every base..HEAD removal from the "
@@ -1183,7 +1452,9 @@ def main(argv: list[str] | None = None) -> int:
             "naming the removed slug with a resolvable landing commit, "
             "or against the touched log's own receipt ledger line naming "
             "the removed slug with a resolvable digest or in-tree path "
-            "token (PRUNE-OK, SUPERSEDED-IN-COMMIT, "
+            "token, and the in-commit receipt: a ledger line with the "
+            "literal landing token newly added by the same commit "
+            "(PRUNE-OK, SUPERSEDED-IN-COMMIT, "
             "REMOVED-WITHOUT-WITNESS); exit 1 when a removal lacks its "
             "witness, 3 for a tool error"
         ),
@@ -1192,7 +1463,8 @@ def main(argv: list[str] | None = None) -> int:
         "--collateral-served",
         action="store_true",
         help=(
-            "read-only discovery of collateral served entries: list every "
+            "read-only discovery of collateral served entries across both "
+            "rolling logs: list every "
             "log entry (other than entries already pruned) whose every "
             "origin is served at HEAD or was served at the --base commit "
             "and deleted inside --base..HEAD, when at least one origin's "

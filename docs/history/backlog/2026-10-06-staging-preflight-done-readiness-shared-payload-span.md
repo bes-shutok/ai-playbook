@@ -12,7 +12,7 @@ Cluster: docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor
 - **Skill/step:** the plans lifecycle's landing closeout (duplicate-origin coverage gate) and the execute-plan preflight's anchor verification at execution time
 
 - **Cluster:** docs/history/plans/completed/2026-10-12-pre-round-gate-dimension-parity.md (backlog-wide survey: readiness and preflight gate surface)
-- **Cluster:** docs/history/backlog/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md (tracks this row's stale Cluster referent)
+- **Cluster:** docs/history/backlog/completed/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md (tracks this row's stale Cluster referent; row archived covered 2026-10-24)
 ## Observed vs expected
 
 Observed: two certified plans sit at the plans root and both prescribe replacing the same span in `agents/skills/maintenance/prompt-templates.md` (the payload certification sentence `record the residual findings in the plan), and the workflow is processed`, still present on main at count 1):

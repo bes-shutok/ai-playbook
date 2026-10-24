@@ -532,7 +532,7 @@
       "disposition": "keep",
       "id": "script:dirt_regression_gate.py",
       "kind": "script",
-      "note": "red test in the suite fails when this script breaks",
+      "note": "red test in the suite fails when this script breaks; valid-correction incident: docs/history/backlog/2026-10-20-done-dirt-regression-correction-block.md (one confirmed valid correction, catch frequency still unknown; false-positive cost: a blocked closeout plus the recovery work to re-stage and relaunch it); review 2027-01-20; retirement scope: the invocation-bound dirt-correction authorization path only, retired if no further valid-correction refusal occurs, while the gate's independent accidental-reversion protection is retained",
       "paths": [
         "scripts/dirt_regression_gate.py"
       ],

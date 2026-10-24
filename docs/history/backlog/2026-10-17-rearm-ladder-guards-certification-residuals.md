@@ -8,6 +8,7 @@
 - **Class:** fix-class
 - **Cluster:** docs/history/plans/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the certified plan; its landing serves the parent rows)
 - **Cluster:** docs/history/backlog/2026-10-23-pending-rearm-undischargeable-across-automation-born-carriers.md (same re-arm surface: this row's ladder-guard residuals orbit the restore-actor gap that row names)
+- **Cluster:** docs/history/plans/completed/2026-09-28-em-dash-whole-file-gate-added-lines-selection.md (same `check-no-em-dash.sh touched` surface; this row records the inverse failure shape when a pre-existing hit blocks an otherwise clean change; the sibling row it cited is covered by the 2026-10-24 EXEC-PROMPTS entry plan-validation-authoring-proves-task-file-scope)
 
 ## Residuals
 

@@ -109,7 +109,7 @@ Workflow verbs resolve to their owning skill under `agents/skills/` before impro
 Use short, clear subjects and keep each commit scoped to one logical change.
 
 - Preferred commit style: `<area>: <concise summary>`.
-- When a change completes a backlog row: an ad-hoc landing deletes the row from `docs/history/backlog/` in the same change rather than leaving a `Status: covered` stub; a landed plan instead archives its origin rows under `docs/history/backlog/completed/` with the covered flip, which the origins gate requires (see `docs/maintenance/development_lessons.md` #104). Name the covering commit or completed plan as the witness in the commit message, and tidy other rows' `Cluster:` pointers at removed or moved rows in the same commit.
+- When a change completes a backlog row: an ad-hoc landing deletes the row from `docs/history/backlog/` in the same change rather than leaving a `Status: covered` stub; a landed plan instead flips its origin rows `Status: covered (<plan path>)` in place and, in its completion pass, folds a `## Disposition of migrated backlog items` section onto the archived plan and deletes the origin file, the shape the origins gate accepts (a bare deletion without the fold fails closed; `docs/history/backlog/completed/` stays empty; see the plans skill's Plan Lifecycle and `docs/maintenance/development_lessons.md` #104). Name the covering commit or completed plan as the witness in the commit message, and tidy other rows' `Cluster:` pointers at removed rows in the same commit.
 - PRs should include changed skill files and rationale.
 - PRs should call out behavior changes in skill gates/output.
 - PRs should update `README.md` when skill names, paths, or usage changes.

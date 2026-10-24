@@ -203,17 +203,18 @@ PHASES = {
 # intentionally assignment-shaped so domain prose such as "claim token" does
 # not become a false positive while credential-like values remain blocked.
 #
-# Profile exemption (2026-10-12 operator direction, recorded in
-# docs/history/backlog/2026-10-12-done-private-repository-visibility-scan.md):
-# the exemption skips both content arms for company and private-pet profiles:
-# when the repo facts record project_type = "company", or project_type =
-# "pet" with artifact_visibility = "private", neither the credential family
-# nor the public-artifact family is matched over staged or untracked
-# content. The exemption is declaration-trusted: the untracked working-tree
-# facts are read fresh per gate run, so the profile is flippable within the
-# same landing and a well-formed but false declaration is honored. Every
-# non-exempt profile (public pets; absent, malformed, or unrecognized
-# project types) keeps the strict scan with both families.
+# Visibility exemption (2026-10-23 plan:
+# docs/history/plans/completed/2026-10-23-done-sensitive-scan-private-repository-scope.md;
+# supersedes the 2026-10-12 company/private-pet profile direction): the
+# exemption skips both content arms exactly when the repo facts resolve
+# artifact_visibility = "private" (case-insensitive), with no dependency on
+# project_type: neither the credential family nor the public-artifact family
+# is matched over staged or untracked content. The exemption is
+# declaration-trusted: the untracked working-tree facts are read fresh per
+# gate run, so the visibility is flippable within the same landing and a
+# well-formed but false declaration is honored. Every non-exempt visibility
+# (public; absent, malformed, or unrecognized values) keeps the strict scan
+# with both families for every project type.
 CREDENTIAL_CONTENT_PATTERNS = [
     r"(?i)\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
     r"(?i)\b(?:access|auth|claim|policy|refresh|session)?[_-]?token\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
@@ -292,7 +293,8 @@ class GateContext:
         """Declared repository audience from the repo facts TOML; "private"
         only on an exact case-insensitive match, anything else (absent,
         malformed, other values) reads as "public" (fail-safe strictness).
-        The sensitive-data gate honors it only for pet projects (see
+        The sensitive-data gate skips its two content arms exactly when this
+        resolves to "private", regardless of project_type (see
         project_type)."""
         raw = facts_paths.resolve_toml_key_raw(self.repo_root, "artifact_visibility")
         if isinstance(raw, str) and raw.strip().lower() == "private":
@@ -1219,6 +1221,33 @@ def _session_ignored_paths(ctx: GateContext, paths: list[str]) -> list[str]:
     return filtered
 
 
+def _tracked_ignored_paths(ctx: GateContext) -> list[str]:
+    """Index-tracked paths an ignore rule matches, repo-wide: ``git ls-files
+    -i -c --exclude-standard`` with no pathspec, deliberately NOT passed
+    through ``_session_ignored_paths`` (no session-window/mtime filter), so a
+    tracked-ignored path inherited from a polluted base is still reported.
+    The rows surface as warning-only report lines beside the untracked
+    ignored arm in ``gate_doc_registry``; they never join the check-writes
+    union and never change a gate verdict or exit code.
+
+    Admission (recording destination for a true catch): incident, the
+    witnessed double landing of force-tracked seals f5a8142ed and 4399aee99;
+    catch frequency, about two per 138 seals in the audit home's history
+    plus the three live tracked review records the first closeout reports;
+    false-positive cost, zero on a clean index once those records are
+    untracked; review 2027-01-20, promotion only after a true catch and a
+    pre-registered registry-removal row.
+    """
+    proc = ctx.git("ls-files", "-i", "-c", "--exclude-standard")
+    if proc.returncode != 0:
+        return []
+    return [
+        _unquote_porcelain_path(ln)
+        for ln in proc.stdout.splitlines()
+        if ln.strip()
+    ]
+
+
 def _unquote_porcelain_path(path: str) -> str:
     """Strip git's C-style quoting from a porcelain path (F9): git wraps a
     path with special characters in double quotes and escapes ``"`` ``\\``
@@ -1237,6 +1266,18 @@ def _unquote_porcelain_path(path: str) -> str:
             .replace("\x00", "\\")
         )
     return path
+
+
+def _escape_control_chars(path: str) -> str:
+    """Backslash-escape the control characters an unquoted porcelain row can
+    carry, so a path never breaks the line structure of the human-facing
+    warning block it is formatted into."""
+    return (
+        path.replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\v", "\\v")
+        .replace("\f", "\\f")
+    )
 
 
 def _porcelain_paths(ctx: GateContext, pathspec: str) -> tuple[list[str], list[str]]:
@@ -1971,6 +2012,15 @@ def gate_doc_registry(ctx: GateContext) -> GateResult:
     # ignored files (which have no change type) stay bare rows.
     porcelain_rows = _porcelain_lines(ctx, ".")
     ignored = _session_ignored_paths(ctx, _ignored_paths(ctx, "."))
+    # The tracked sibling's rows stay on the warnings channel only: they
+    # never join ``union`` below, which is what keeps the report from ever
+    # moving a verdict (admission in _tracked_ignored_paths). Unquoted
+    # porcelain rows can carry control characters and the warning goes to
+    # the human summary block, so each row is escaped before formatting.
+    warnings.extend(
+        f"warning: tracked-ignored path in the index: {_escape_control_chars(rel)}"
+        for rel in _tracked_ignored_paths(ctx)
+    )
     if owned_rows is not None:
         name_status = owned_rows
     else:
@@ -2949,13 +2999,11 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
     gate = "sensitive-data-scan"
     findings: list[str] = []
     warnings: list[str] = []
-    profile_exempt = ctx.project_type == "company" or (
-        ctx.project_type == "pet" and ctx.artifact_visibility == "private"
-    )
+    profile_exempt = ctx.artifact_visibility == "private"
     if profile_exempt:
-        # The profile exemption skips both content arms entirely: arms 1
-        # and 2 below iterate an empty pattern list, while arms 3 and 4
-        # still run for every profile.
+        # The private-visibility exemption skips both content arms entirely:
+        # arms 1 and 2 below iterate an empty pattern list, while arms 3 and
+        # 4 still run for every profile, private included.
         content_patterns: list[str] = []
     else:
         content_patterns = list(CREDENTIAL_CONTENT_PATTERNS)
@@ -3142,8 +3190,8 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
         )
     if profile_exempt:
         clean = (
-            "sensitive-data scan clean (content arms skipped by profile "
-            "exemption: company or private-pet"
+            "sensitive-data scan clean (content arms skipped: "
+            "artifact_visibility is private"
         )
         if push_range_ran:
             clean += "; push-range commit messages"

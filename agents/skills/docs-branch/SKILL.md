@@ -51,7 +51,7 @@ The runner prints any pruned branch paths (including paths absent from the check
 
 When the caller holds a lesson-scope-audit drift witness line (from done Step 3 item 4a) for a corpus whose path is gitignored, the docs-branch-only path has no `done` Step 3 corpus commit to carry the line, so this step lands it as the body of an append-only empty commit on the docs branch.
 
-Contract: the caller passes the exact witness line as the single argument; the line must start with lesson-scope-audit: (fail loud otherwise). The canonical drift witness line this skill expects is: lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run. Invoke the append from the audited project repository root; the skill does not resolve or verify the root (the docs-branch refusal only guards the current repo).
+Contract: the caller passes the exact witness line as the single argument; the line must start with lesson-scope-audit: (fail loud otherwise). The caller owns the witness line text (done owns the content, docs-branch the append mechanics, per the integration point below); this skill defines no canonical line. Invoke the append from the audited project repository root; the skill does not resolve or verify the root (the docs-branch refusal only guards the current repo).
 
 The append creates an empty commit parented to the observed docs tip and publishes it with compare-and-swap. If another writer moves the ref first, the append does not overwrite that tip; it preserves the witness commit under `refs/docs-witness-recovery/` and reports the retry path. A missing docs branch means no archive sync has established local history, so the append refuses rather than overstate coverage.
 

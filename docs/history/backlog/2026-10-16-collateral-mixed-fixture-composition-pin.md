@@ -6,7 +6,7 @@
 - **Priority:** low
 - **Origin class:** execution guidance for docs/history/plans/2026-10-16-prompt-log-collateral-served-prune.md Task 1
 - **Class:** hardening-class
-- **Cluster:** docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md (same checker surface: the stale check's absent-origin class versus the collateral discovery mode)
+- **Cluster:** docs/history/plans/completed/2026-10-23-prompt-log-stale-check-deleted-origin-served.md (same checker surface: the stale check's absent-origin class versus the collateral discovery mode)
 
 ## Residual
 

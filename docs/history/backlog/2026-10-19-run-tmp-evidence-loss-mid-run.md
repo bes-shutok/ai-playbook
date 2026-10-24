@@ -3,7 +3,7 @@
 - Cluster: removed (covering plan docs/history/plans/2026-10-19-executor-landing-helper-routing-gap.md executed and landed 2026-10-19; the done/executor boundary family; shared surface is the done runner's steps around the run's own record surfaces)
 - Added: 2026-10-19
 - Origin: the 2026-10-18 two-plan execution run (sess_e0cf1ac8; landings 5cd467d91 + 8802fee54)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-24-run-tmp-evidence-loss-sweep-scope-out.md)
 
 ## Witness
 

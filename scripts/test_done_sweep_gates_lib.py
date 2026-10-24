@@ -1307,6 +1307,176 @@ def test_doc_registry_ignores_unchanged_ignored_history(tmp_path, sweep_env, mon
 
 
 # --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-23-ignored-audit-home-tracked-index-fence.md
+# Task 2: the done sweep's tracked sibling (index-tracked paths an ignore
+# rule matches), warning-only beside the untracked ignored arm.
+# --------------------------------------------------------------------------- #
+_TRACKED_IGNORED_WARNING = "warning: tracked-ignored path in the index: "
+
+
+def test_doc_registry_reports_tracked_ignored_paths(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] Given a fixture repo seeding its own
+    audit-home ignore rule (`.ai-playbook/`) and two paths force-tracked
+    under it with `git add -f` (staging suffices; the tracked sibling reads
+    the index) outside any single gate's narrow pathspec (review-certs,
+    mirroring the witnessed seal shape): the doc-registry gate names each
+    path on its own warning row, still exits 0 with the pass verdict
+    (warning-only), and never adds the tracked-ignored rows to the
+    check-writes stdin union (the report rides the warnings channel, not the
+    verdict-changing union)."""
+    root = make_repo(tmp_path, "docreg-tracked-ignored", gitignore_docs=True)
+    # Read-then-append (r1 F11): keep the helper-written ignore list, append
+    # this fixture's rule; never rewrite the list.
+    (root / ".gitignore").write_text(
+        (root / ".gitignore").read_text(encoding="utf-8") + ".ai-playbook/\n",
+        encoding="utf-8",
+    )
+    write_facts(root)
+    certs = root / ".ai-playbook" / "review-certs"
+    certs.mkdir(parents=True, exist_ok=True)
+    (certs / "seal-a.md").write_text("seal a\n", encoding="utf-8")
+    (certs / "seal-b.md").write_text("seal b\n", encoding="utf-8")
+    git(root, "add", "-f", ".ai-playbook/review-certs/seal-a.md")
+    git(root, "add", "-f", ".ai-playbook/review-certs/seal-b.md")
+    write_stub_doc_registry_validator(root)
+    stdin_log = tmp_path / "docreg-tracked-ignored-stdin.txt"
+    monkeypatch.setenv("DOC_REGISTRY_STUB_STDIN_LOG", str(stdin_log))
+    monkeypatch.delenv("DOC_REGISTRY_STUB_FLAG", raising=False)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_REJECT_BARE", raising=False)
+
+    result = run_gate("doc-registry", ctx_for(root))
+
+    # Warning-only: the verdict stays the pass shape with the tracked
+    # paths reported.
+    assert result.rc == 0, result.message
+    for rel in (
+        ".ai-playbook/review-certs/seal-a.md",
+        ".ai-playbook/review-certs/seal-b.md",
+    ):
+        assert sum(
+            1
+            for w in result.warnings
+            if w == _TRACKED_IGNORED_WARNING + rel
+        ) == 1, (rel, result.warnings)
+    # The tracked-ignored rows never enter the union: the seal paths ride
+    # stdin only as their own typed porcelain rows (staged `A `), never as
+    # the sibling's bare rows.
+    rows = stdin_log.read_text(encoding="utf-8").splitlines()
+    assert "A  .ai-playbook/review-certs/seal-a.md" in rows
+    assert ".ai-playbook/review-certs/seal-a.md" not in rows
+    assert ".ai-playbook/review-certs/seal-b.md" not in rows
+
+
+def test_doc_registry_escapes_newline_in_tracked_ignored_warning(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A tracked-ignored path carrying a real
+    newline: the warning row names the path with the backslash-escaped
+    newline form, the row stays one row per path (no raw control character
+    breaks the warning line into a second warning-looking fragment), and
+    the gate verdict is unchanged (rc 0)."""
+    root = make_repo(tmp_path, "docreg-newline-tracked-ignored", gitignore_docs=True)
+    (root / ".gitignore").write_text(
+        (root / ".gitignore").read_text(encoding="utf-8") + ".ai-playbook/\n",
+        encoding="utf-8",
+    )
+    write_facts(root)
+    weird_rel = ".ai-playbook/review-certs/seal\nb.md"
+    weird = root / ".ai-playbook" / "review-certs" / "seal\nb.md"
+    weird.parent.mkdir(parents=True, exist_ok=True)
+    weird.write_text("newline seal\n", encoding="utf-8")
+    git(root, "add", "-f", weird_rel)
+    write_stub_doc_registry_validator(root)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_FLAG", raising=False)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_REJECT_BARE", raising=False)
+
+    result = run_gate("doc-registry", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    # The escaped row: exactly one tracked-ignored warning row, naming the
+    # path with the backslash-escaped newline.
+    escaped_row = _TRACKED_IGNORED_WARNING + ".ai-playbook/review-certs/seal\\nb.md"
+    assert result.warnings.count(escaped_row) == 1, result.warnings
+    assert (
+        sum(1 for w in result.warnings if w.startswith(_TRACKED_IGNORED_WARNING))
+        == 1
+    ), result.warnings
+    # One row per path: no warning row carries a raw newline that would
+    # fragment it into a second warning-prefixed line.
+    assert not any("\n" in w for w in result.warnings), result.warnings
+
+
+def test_doc_registry_clean_scope_reports_no_tracked_ignored(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Safety witness: the same seeded audit-home
+    ignore rule with nothing force-tracked under it reports nothing from the
+    tracked sibling and every gate verdict stays unchanged (rc 0, no
+    tracked-ignored warning row anywhere)."""
+    root = make_repo(tmp_path, "docreg-clean-scope", gitignore_docs=True)
+    (root / ".gitignore").write_text(
+        (root / ".gitignore").read_text(encoding="utf-8") + ".ai-playbook/\n",
+        encoding="utf-8",
+    )
+    write_facts(root)
+    write_stub_doc_registry_validator(root)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_FLAG", raising=False)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_REJECT_BARE", raising=False)
+
+    result = run_gate("doc-registry", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert "validate ok" in result.message
+    assert not any("tracked-ignored" in w for w in result.warnings), (
+        result.warnings
+    )
+
+
+def test_doc_registry_reports_inherited_tracked_ignored_despite_old_mtime(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The no-session-filter clause, pinned: a
+    tracked-ignored path committed in the base before the anchored done
+    session (its mtime predates the window start, so the untracked ignored
+    arm's session filter would drop it) is still reported repo-wide by the
+    tracked sibling; the verdict stays the pass."""
+    root = make_repo(tmp_path, "docreg-inherited-tracked-ignored", gitignore_docs=True)
+    (root / ".gitignore").write_text(
+        (root / ".gitignore").read_text(encoding="utf-8") + ".ai-playbook/\n",
+        encoding="utf-8",
+    )
+    write_facts(root)
+    seal = root / ".ai-playbook" / "review-certs" / "seal.md"
+    seal.parent.mkdir(parents=True, exist_ok=True)
+    seal.write_text("inherited seal\n", encoding="utf-8")
+    git(root, "add", "-f", ".ai-playbook/review-certs/seal.md")
+    git(root, "commit", "-m", "force-track inherited seal", "-q")
+    now = time.time()
+    old = now - 86400
+    os.utime(seal, (old, old))
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    write_stub_doc_registry_validator(root)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_FLAG", raising=False)
+    monkeypatch.delenv("DOC_REGISTRY_STUB_REJECT_BARE", raising=False)
+
+    ctx = ctx_for(root)
+    # The window is genuinely anchored and the inherited path predates it,
+    # so this witness has teeth against a regression that adds the session
+    # filter the clause forbids.
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    assert window.anchored
+    assert seal.stat().st_mtime < (window.start_epoch or 0.0)
+
+    result = run_gate("doc-registry", ctx)
+
+    assert result.rc == 0, result.message
+    assert (
+        _TRACKED_IGNORED_WARNING + ".ai-playbook/review-certs/seal.md"
+    ) in result.warnings, result.warnings
+
+
+# --------------------------------------------------------------------------- #
 # Plan checkbox: test_sensitive_data_scan_push_range_audit
 # [class: REPOSITORY_TEST]
 # --------------------------------------------------------------------------- #
@@ -1520,6 +1690,26 @@ def test_hygiene_child_findings_lands_finding(
     assert "public-hygiene scan failed" in result.message
     assert "FAIL: stub-hit" in result.message
     assert "OUTCOME:" not in result.message
+
+
+def test_hygiene_child_private_profile_still_reports_child_finding(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A private repository (artifact_visibility =
+    "private", no project_type) configured as the skills repository keeps the
+    hygiene arm active: a scan child reporting findings still lands the child
+    finding in the gate result while the content arms stay skipped."""
+    root = mktemp_repo("hygiene-private-findings")
+    _write_facts_with_visibility(root, 'artifact_visibility = "private"')
+    write_stub_hygiene_scanner(root, "fail")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "public-hygiene scan failed" in result.message
+    assert "FAIL: stub-hit" in result.message
+    assert "content arms skipped" not in result.message
 
 
 def test_hygiene_child_indeterminate_lands_indeterminate(
@@ -8896,14 +9086,18 @@ def test_visibility_scoped_private_repo_passes_valid_service_link(
     tmp_path, sweep_env
 ):
     """[class: REPOSITORY_TEST] A pet repository (project_type = "pet")
-    declaring artifact_visibility = "private" returns rc 0 under the profile
-    exemption: both content arms are skipped, so the valid internal service
-    links pass regardless of the credential control."""
+    declaring artifact_visibility = "private" returns rc 0: explicit private
+    visibility skips both content arms, so the valid internal service links
+    pass regardless of the credential control, and the result message names
+    private visibility as the skip reason."""
     root = _visibility_fixture(
         tmp_path, "private-link", 'artifact_visibility = "private"', "pet"
     )
     result = run_gate("sensitive-data-scan", ctx_for(root))
     assert result.rc == 0, result.message
+    assert "content arms skipped" in result.message
+    assert "artifact_visibility" in result.message
+    assert "private" in result.message
 
 
 def test_visibility_scoped_undeclared_repo_keeps_strict_default(
@@ -8930,15 +9124,91 @@ def test_visibility_scoped_public_declaration_keeps_strict_default(
     assert "\\.atlassian\\.net" in result.message
 
 
-def test_visibility_scoped_private_repo_credentials_exempt_by_profile_direction(
+def test_visibility_scoped_private_any_project_type_skips_both_families(
     tmp_path, sweep_env
 ):
-    """[class: REPOSITORY_TEST] Per the 2026-10-12 operator direction in
-    docs/history/backlog/2026-10-12-done-private-repository-visibility-scan.md,
-    a pet project (project_type = "pet") declaring
-    artifact_visibility = "private" is exempt from both content arms:
-    staged credential material alone no longer fails the gate, and the
-    result message names the profile-scoped exemption."""
+    """[class: REPOSITORY_TEST] Explicit private visibility alone skips both
+    content families for any project_type: with pet, company, absent, or
+    unrecognized project types, matching staged public-artifact content and
+    an untracked credential line both pass, and the clean result names
+    private visibility as the skip reason."""
+    for name, project_type in (
+        ("private-pet-matrix", "pet"),
+        ("private-company-matrix", "company"),
+        ("private-typeless-matrix", None),
+        ("private-unrecognized-type-matrix", "personal"),
+    ):
+        root = _visibility_fixture(
+            tmp_path, name, 'artifact_visibility = "private"', project_type
+        )
+        staged = root / "staged-link.md"
+        staged.write_text(
+            "notes under /Users/carol/notes/plan.md\n", encoding="utf-8"
+        )
+        git(root, "add", "staged-link.md")
+        result = run_gate("sensitive-data-scan", ctx_for(root))
+        assert result.rc == 0, (name, result.message)
+        assert "content arms skipped" in result.message, result.message
+        assert "artifact_visibility" in result.message, result.message
+        assert "private" in result.message, result.message
+        assert "content families" not in result.message, result.message
+
+
+def test_visibility_scoped_private_case_and_space_variants_skip(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] The explicit private match is case
+    insensitive and whitespace tolerant: "Private" and " private "
+    declarations both skip both content families with the private skip
+    reason, matching the resolver's strip-and-lower rule."""
+    for name, declaration in (
+        ("private-case-variant", 'artifact_visibility = "Private"'),
+        ("private-space-variant", 'artifact_visibility = " private "'),
+    ):
+        root = _visibility_fixture(tmp_path, name, declaration, "personal")
+        staged = root / "staged-link.md"
+        staged.write_text(
+            "notes under /Users/erin/notes/plan.md\n", encoding="utf-8"
+        )
+        git(root, "add", "staged-link.md")
+        result = run_gate("sensitive-data-scan", ctx_for(root))
+        assert result.rc == 0, (name, result.message)
+        assert "content arms skipped" in result.message, result.message
+        assert "artifact_visibility" in result.message, result.message
+
+
+def test_visibility_scoped_non_private_visibility_keeps_both_families(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Any visibility that does not resolve to
+    private keeps both content families active: public, absent, malformed
+    (non-string), and unrecognized declarations all land positive staged
+    (public-artifact) and untracked (credential) findings at rc 1."""
+    for name, declaration in (
+        ("public-visibility", 'artifact_visibility = "public"'),
+        ("absent-visibility", None),
+        ("malformed-visibility", "artifact_visibility = true"),
+        ("unrecognized-visibility", 'artifact_visibility = "semi-private"'),
+    ):
+        root = _visibility_fixture(tmp_path, name, declaration)
+        staged = root / "staged-link.md"
+        staged.write_text(
+            "notes under /Users/dave/notes/plan.md\n", encoding="utf-8"
+        )
+        git(root, "add", "staged-link.md")
+        result = run_gate("sensitive-data-scan", ctx_for(root))
+        assert result.rc == 1, (name, result.message)
+        assert "staged-link.md" in result.message, result.message
+        assert "credential-control.txt" in result.message, result.message
+
+
+def test_visibility_scoped_private_staged_credentials_skipped(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A private repository (project_type = "pet",
+    artifact_visibility = "private") skips the credential family over staged
+    content: staged credential material alone no longer fails the gate, and
+    the result message names private visibility as the skip reason."""
     root = _visibility_fixture(
         tmp_path, "private-cred", 'artifact_visibility = "private"', "pet"
     )
@@ -8946,7 +9216,9 @@ def test_visibility_scoped_private_repo_credentials_exempt_by_profile_direction(
     git(root, "add", "credential-control.txt")
     result = run_gate("sensitive-data-scan", ctx_for(root))
     assert result.rc == 0, result.message
-    assert "profile exemption" in result.message
+    assert "content arms skipped" in result.message
+    assert "artifact_visibility" in result.message
+    assert "private" in result.message
 
 
 def test_visibility_scoped_private_pet_allows_public_patterns(
@@ -9003,40 +9275,39 @@ def test_visibility_scoped_strict_pet_clean_names_both_families(
     assert "content families: credential+public-artifact" in result.message
 
 
-def test_visibility_scoped_company_exempt_with_malformed_visibility(
+def test_visibility_scoped_company_with_malformed_visibility_keeps_strict(
     tmp_path, sweep_env
 ):
-    """[class: REPOSITORY_TEST] Per the 2026-10-12 operator direction in
-    docs/history/backlog/2026-10-12-done-private-repository-visibility-scan.md,
-    a company project (project_type = "company") is exempt from both content
-    arms regardless of the visibility value: even a malformed
-    artifact_visibility value beside the company declaration keeps the gate
-    at rc 0 with the result message naming the profile-scoped exemption."""
+    """[class: REPOSITORY_TEST] A company project (project_type = "company")
+    with a malformed (non-string) artifact_visibility value keeps the strict
+    scan: visibility is not explicitly private, so staged credential material
+    fails the gate rc 1 and the failure never names a content-arm skip."""
     root = _visibility_fixture(
         tmp_path,
         "company-malformed-visibility",
-        'artifact_visibility = "semi-private"',
+        "artifact_visibility = true",
         "company",
     )
+    (root / "untracked-link.md").unlink()
+    (root / "credential-control.txt").unlink()
     (root / "staged-cred.txt").write_text(
         'password = "hunter2-staged-company"\n', encoding="utf-8"
     )
     git(root, "add", "staged-cred.txt")
     result = run_gate("sensitive-data-scan", ctx_for(root))
-    assert result.rc == 0, result.message
-    assert "profile exemption" in result.message
-    assert "content families" not in result.message
+    assert result.rc == 1, result.message
+    assert "staged-cred.txt" in result.message
+    assert "content arms skipped" not in result.message
 
 
-def test_visibility_scoped_company_profile_skips_content_arms(
+def test_visibility_scoped_company_without_private_visibility_keeps_strict(
     tmp_path, sweep_env
 ):
-    """[class: REPOSITORY_TEST] Per the 2026-10-12 operator direction in
-    docs/history/backlog/2026-10-12-done-private-repository-visibility-scan.md,
-    a company project with a staged public-artifact line passes the gate:
-    both content arms are skipped, the matched pattern appears nowhere in
-    the result, and the message names the profile-scoped exemption."""
-    root = _visibility_fixture(tmp_path, "company-staged-link", None, "company")
+    """[class: REPOSITORY_TEST] A company project (project_type = "company")
+    whose visibility is not explicitly private keeps the strict scan: a
+    staged public-artifact line fails the gate rc 1 and the failure never
+    names a content-arm skip."""
+    root = _visibility_fixture(tmp_path, "company-strict-link", None, "company")
     (root / "untracked-link.md").unlink()
     (root / "credential-control.txt").unlink()
     staged = root / "staged-link.md"
@@ -9046,50 +9317,9 @@ def test_visibility_scoped_company_profile_skips_content_arms(
     )
     git(root, "add", "staged-link.md")
     result = run_gate("sensitive-data-scan", ctx_for(root))
-    assert result.rc == 0, result.message
-    assert "atlassian" not in result.message
-    assert "profile exemption" in result.message
-
-
-def test_visibility_scoped_missing_project_type_ignores_private_visibility(
-    tmp_path, sweep_env
-):
-    """[class: REPOSITORY_TEST] With no project_type recorded, a legacy
-    artifact_visibility = "private" does not exempt: a staged public-artifact
-    line still fails the gate rc 1."""
-    root = _visibility_fixture(
-        tmp_path, "typeless-private-link", 'artifact_visibility = "private"'
-    )
-    staged = root / "staged-fallback-link.md"
-    staged.write_text(
-        "notes under /Users/carol/notes/plan.md\n", encoding="utf-8"
-    )
-    git(root, "add", "staged-fallback-link.md")
-    result = run_gate("sensitive-data-scan", ctx_for(root))
-    assert result.rc == 1
-    assert "staged-fallback-link.md" in result.message
-
-
-def test_visibility_scoped_invalid_project_type_ignores_private_visibility(
-    tmp_path, sweep_env
-):
-    """[class: REPOSITORY_TEST] An invalid project_type (neither pet nor
-    company) with artifact_visibility = "private" does not exempt: a staged
-    public-artifact line still fails the gate rc 1."""
-    root = _visibility_fixture(
-        tmp_path,
-        "invalid-type-private-link",
-        'artifact_visibility = "private"',
-        "personal",
-    )
-    staged = root / "staged-fallback-link.md"
-    staged.write_text(
-        "notes under /Users/dave/notes/plan.md\n", encoding="utf-8"
-    )
-    git(root, "add", "staged-fallback-link.md")
-    result = run_gate("sensitive-data-scan", ctx_for(root))
-    assert result.rc == 1
-    assert "staged-fallback-link.md" in result.message
+    assert result.rc == 1, result.message
+    assert "atlassian" in result.message
+    assert "content arms skipped" not in result.message
 
 
 def test_visibility_scoped_pet_without_private_visibility_keeps_strict(
@@ -9114,15 +9344,16 @@ def test_visibility_scoped_pet_without_private_visibility_keeps_strict(
         assert "staged-fallback-link.md" in result.message
 
 
-def test_visibility_scoped_company_push_range_attribution_still_fails(
+def test_visibility_scoped_private_push_range_attribution_still_fails(
     tmp_path, sweep_env
 ):
-    """[class: REPOSITORY_TEST] The profile exemption covers the content arms
-    only: a company project whose push-range commit message carries a
-    Co-authored-by trailer still fails the gate on the attribution finding,
-    and the failure result never claims the profile exemption."""
-    root = _repo_with_upstream(tmp_path, "company-trailer")
-    _write_facts_with_visibility(root, None, "company")
+    """[class: REPOSITORY_TEST] The private-visibility skip covers the content
+    arms only: a private repository with no recognized project type whose
+    push-range commit message carries a Co-authored-by trailer still fails
+    the gate on the attribution finding, and the failure result never names
+    a content-arm skip."""
+    root = _repo_with_upstream(tmp_path, "private-trailer")
+    _write_facts_with_visibility(root, 'artifact_visibility = "private"')
     (root / "note.txt").write_text("harmless\n", encoding="utf-8")
     git(root, "add", "note.txt")
     git(
@@ -9138,25 +9369,26 @@ def test_visibility_scoped_company_push_range_attribution_still_fails(
     assert result.rc == 1
     assert "Co-authored-by" in result.message
     assert "push-range commit" in result.message
-    assert "profile exemption" not in result.message
+    assert "content arms skipped" not in result.message
 
 
-def test_visibility_scoped_private_pet_credentials_exempt_by_profile_direction(
+def test_visibility_scoped_private_untracked_credentials_skipped(
     tmp_path, sweep_env
 ):
-    """[class: REPOSITORY_TEST] Per the 2026-10-12 operator direction in
-    docs/history/backlog/2026-10-12-done-private-repository-visibility-scan.md,
-    a private pet (project_type = "pet", artifact_visibility = "private")
-    with an untracked credential-shaped line is exempt from both content
-    arms: the untracked-content arm skips the family, the gate returns rc 0,
-    and the result message names the profile-scoped exemption."""
+    """[class: REPOSITORY_TEST] A private repository (project_type = "pet",
+    artifact_visibility = "private") with an untracked credential-shaped line
+    skips the credential family: the untracked-content arm stays silent, the
+    gate returns rc 0, and the result message names private visibility as
+    the skip reason."""
     root = _visibility_fixture(
         tmp_path, "private-pet-cred", 'artifact_visibility = "private"', "pet"
     )
     (root / "untracked-link.md").unlink()
     result = run_gate("sensitive-data-scan", ctx_for(root))
     assert result.rc == 0, result.message
-    assert "profile exemption" in result.message
+    assert "content arms skipped" in result.message
+    assert "artifact_visibility" in result.message
+    assert "private" in result.message
 
 
 def test_visibility_scoped_families_partition_the_old_constant():

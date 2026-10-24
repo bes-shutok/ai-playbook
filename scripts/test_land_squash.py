@@ -2,7 +2,9 @@
 """Selftest for land_squash.sh: scratch-repo fixtures driving the lock-bound
 squash-landing helper via subprocess for every refusal, restore, and outcome
 class. Covered classes: the probe modes with their no-mutation assertion, the
-lock-authenticity classes (unset, empty, nonexistent, meta-less, empty-token,
+probe's tracked-ignored warning on force-tracked branch-delta paths (and its
+clean-branch silence), the lock-authenticity classes (unset, empty,
+nonexistent, meta-less, empty-token,
 mismatched, sibling-repo), the wrong-HEAD and tip-moved refusals, the green
 path with tree equality and base-pin forwarding, the unresolvable-branch tool
 error, the dirty-intersection and staged pre-refusals, the record-only
@@ -21,8 +23,10 @@ pre-swap refusal, the base-mover compare-and-swap refusal, the diverge-origin
 informational note, the backward-peer indeterminate arm, and the
 omission-scope and usage-text audit."""
 
+import atexit
 import hashlib
 import os
+import shutil
 import subprocess
 import time
 import sys
@@ -35,9 +39,31 @@ HELPER = SCRIPTS / "land_squash.sh"
 DONE_LOCK = SCRIPTS / "done-lock.sh"
 
 
+_EMPTY_CONFIG_HOME = None
+
+
+def empty_config_home():
+    """One empty directory per suite run, created lazily so every base_env()
+    call pins the same path (git only reads its XDG home, never writes one).
+    Registered for atexit removal so the suite stops leaking temp dirs."""
+    global _EMPTY_CONFIG_HOME
+    if _EMPTY_CONFIG_HOME is None:
+        _EMPTY_CONFIG_HOME = tempfile.mkdtemp(prefix="land-squash-empty-home-")
+        atexit.register(shutil.rmtree, _EMPTY_CONFIG_HOME, True)
+    return _EMPTY_CONFIG_HOME
+
+
 def base_env():
-    """A clean environment: no inherited GIT_* or lock/seam variables."""
+    """A clean environment: no inherited GIT_* or lock/seam variables.
+    HOME and XDG_CONFIG_HOME are pinned to an empty directory (mirroring the
+    done-sweep suite's sweep_env hermeticity): git consults
+    $XDG_CONFIG_HOME/git/ignore and $HOME/.config/git/ignore regardless of
+    GIT_CONFIG_GLOBAL, so an ambient global ignore would flip the suite's
+    exact-count warning assertions into false failures."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    empty_home = empty_config_home()
+    env["HOME"] = empty_home
+    env["XDG_CONFIG_HOME"] = empty_home
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     for key in ("MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN",
@@ -104,6 +130,19 @@ def make_repo(path, extra_files=None):
     return path
 
 
+def force_track_ignored(root, *rel_paths):
+    """The done-sweep suite's force-add precedent: seed paths under an
+    ignored directory and track them with `git add -f`, committed on the
+    current branch; returns the new tip."""
+    for rel in rel_paths:
+        path = Path(root) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("force-tracked %s\n" % Path(rel).name)
+    git(root, "add", "-f", "--", *rel_paths)
+    git(root, "commit", "-q", "-m", "force-track ignored paths")
+    return rev(root, "HEAD")
+
+
 def acquire_merge_lock(repo, lock_root):
     """Acquire a live merge lock on repo via done-lock.sh; returns (dir, token)."""
     env = base_env()
@@ -145,11 +184,15 @@ def set_meta_field(lock_dir, key, value):
 
 
 def fingerprint(root):
-    """HEAD sha, index stage entries, and porcelain: the no-mutation witness."""
+    """HEAD sha, index stage entries, porcelain, and the ignored set: the
+    no-mutation witness (the ignored snapshot makes a write into an ignored
+    directory visible to the no-mutation assertions, which the untracked
+    porcelain arm alone never reports)."""
     return (
         rev(root, "HEAD"),
         git(root, "ls-files", "-s").stdout,
         git(root, "status", "--porcelain=v1").stdout,
+        git(root, "ls-files", "--others", "--ignored", "--exclude-standard").stdout,
     )
 
 
@@ -286,6 +329,101 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertIn("shared.txt", proc.stdout)
         self.assertIn("conflict", proc.stdout)
         self.assertEqual(fingerprint(conf), before)
+
+    # ---- probe tracked-ignored warning ---------------------------------
+
+    def test_probe_warns_on_force_tracked_ignored_paths(self):
+        # a source branch whose delta force-tracks three paths under an
+        # ignored directory (one of them non-ASCII): the probe names each
+        # path on its own warning line and still exits with the pass
+        # verdict; the warning is report-only (no exit-code or verdict
+        # change, no mutation). A base-inherited tracked-ignored path
+        # (force-tracked and committed on main BEFORE the branch forked,
+        # untouched by the branch) never warns: the predicate is the branch
+        # delta, not a source-tree-wide scan.
+        repo = make_repo(self.tmp / "tracked-ignored", extra_files={
+            ".gitignore": "docs/tmp/\n.ai-playbook/\n"})
+        force_track_ignored(repo, ".ai-playbook/inherited/base-inherited.md")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        force_track_ignored(repo, ".ai-playbook/review-certs/seal-a.md",
+                            ".ai-playbook/review-certs/seal-b.md",
+                            ".ai-playbook/review-certs/seal-é.md")
+        git(repo, "checkout", "-q", "main")
+        before = fingerprint(repo)
+
+        proc = probe(repo, "feature")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        for path in (".ai-playbook/review-certs/seal-a.md",
+                     ".ai-playbook/review-certs/seal-b.md",
+                     ".ai-playbook/review-certs/seal-é.md"):
+            self.assertEqual(
+                proc.stdout.count(
+                    "warning: tracked-ignored path on the branch delta: %s"
+                    % path),
+                1, proc.stdout)
+        # the non-ASCII path warns as raw path bytes, never git's C-quoted
+        # octal form (the quotePath pin sits on check-ignore's stdout)
+        self.assertNotIn("\\303\\251", proc.stdout)
+        # the base-inherited path never warns (tracked on main, absent
+        # from the branch delta)
+        self.assertEqual(
+            proc.stdout.count(
+                "warning: tracked-ignored path on the branch delta: "
+                ".ai-playbook/inherited/base-inherited.md"),
+            0, proc.stdout)
+        # exactly the three matched delta paths warn; the non-ignored delta
+        # path (feat.txt) and the base-inherited path never do
+        self.assertEqual(proc.stdout.count("warning:"), 3, proc.stdout)
+        self.assertEqual(fingerprint(repo), before)
+
+    def test_probe_warns_once_on_addition_and_silent_on_riding_untrack(self):
+        # a branch that force-tracks a new ignored path AND untracks a
+        # base-side tracked-ignored path in the same delta: the probe warns
+        # exactly once on the addition and stays silent on the removal
+        # (--diff-filter pins the deletion silence; a landing that untracks
+        # inherited paths never warns about its own cleanup)
+        repo = make_repo(self.tmp / "warn-untrack", extra_files={
+            ".gitignore": "docs/tmp/\n.ai-playbook/\n"})
+        force_track_ignored(repo, ".ai-playbook/base/base-side.md")
+        git(repo, "checkout", "-q", "-b", "feature")
+        force_track_ignored(repo, ".ai-playbook/review-certs/seal-a.md")
+        git(repo, "rm", "--cached", "-q", "--", ".ai-playbook/base/base-side.md")
+        git(repo, "commit", "-q", "-m", "untrack base-side tracked-ignored path")
+        git(repo, "checkout", "-q", "main")
+        before = fingerprint(repo)
+
+        proc = probe(repo, "feature")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(
+            proc.stdout.count(
+                "warning: tracked-ignored path on the branch delta: "
+                ".ai-playbook/review-certs/seal-a.md"),
+            1, proc.stdout)
+        # the riding removal never warns
+        self.assertNotIn(".ai-playbook/base/base-side.md", proc.stdout)
+        # the addition is the only warning line
+        self.assertEqual(proc.stdout.count("warning:"), 1, proc.stdout)
+        self.assertEqual(fingerprint(repo), before)
+
+    def test_probe_clean_branch_prints_no_tracked_ignored_warning(self):
+        # a clean (non-ignored-delta) branch over the same seeded ignore
+        # rule: no warning line, the existing pass verdict unchanged
+        repo = make_repo(self.tmp / "clean-no-warning", extra_files={
+            ".gitignore": "docs/tmp/\n.ai-playbook/\n"})
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+        before = fingerprint(repo)
+
+        proc = probe(repo, "feature")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertNotIn("warning: tracked-ignored", proc.stdout)
+        self.assertNotIn("warning: tracked-ignored", proc.stderr)
+        self.assertEqual(fingerprint(repo), before)
 
     # ---- lock authenticity -------------------------------------------
 
