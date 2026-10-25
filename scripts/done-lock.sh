@@ -635,6 +635,14 @@ try_acquire() {
   return 1
 }
 
+retry_acquire_if_lock_vanished() {
+  # A failed mkdir may race with the current holder's token-fenced removal.
+  # Retry the atomic acquire operation directly: checking for absence first
+  # would leave another check-then-act window before mkdir.
+  local label="$1"
+  try_acquire "$label"
+}
+
 require_label_value() {
   if [[ $# -eq 0 || -z "${1:-}" ]]; then
     echo "${PROG}: --label requires a value" >&2
@@ -662,6 +670,10 @@ cmd_acquire() {
   done
   require_git_repo
   if try_acquire "$label"; then
+    emit_outcome pass
+    exit 0
+  fi
+  if retry_acquire_if_lock_vanished "$label"; then
     emit_outcome pass
     exit 0
   fi
@@ -738,6 +750,10 @@ cmd_wait_acquire() {
       exit 0
     fi
     if [[ "$(now_epoch)" -ge "$deadline" ]]; then
+      if retry_acquire_if_lock_vanished "$label"; then
+        emit_outcome pass
+        exit 0
+      fi
       local held_class
       held_class="$(classify_held_outcome)"
       if [[ "$held_class" == "ambiguous" ]]; then

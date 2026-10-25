@@ -1,7 +1,9 @@
 # Review-plan lost its only "their absence is never a finding" clause for guessed inventory
 
+Cluster: docs/history/backlog/2026-10-25-review-plan-nonconvergence-recovery.md (shared review-plan defect surface: both origins concern unsupported reviewer findings that add churn; this origin witnesses the missing clause)
+
 - **Filed:** 2026-10-21, execute-plan Phase 3 r1 review of plan-validation-command-undefined-repo (finding cd1)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-25-review-plan-nonconvergence-disposition.md)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

@@ -31,8 +31,11 @@ Usage: done_sweep_gates.sh <landing|list-gates|write-manifest>
 
 Phases:
   landing      the closeout's one landing sweep run: the retained roster with
-               instruction-size and description-length in warning posture
-               (they report, never block); backlog-inbox and vim-swap-sweep
+               instruction-size in warning posture (it reports, never blocks)
+               and description-length blocking (a measured over-cap result
+               refuses, and the commit path records the catch pre-refusal;
+               deployment gaps and operational-exception exits answer tool
+               error); backlog-inbox and vim-swap-sweep
                are not on the roster (receiving-review capture step and the
                periodic survey advisory own their duties); accepts
                --boundary-class per-task|final-closeout (default final-

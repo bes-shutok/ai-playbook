@@ -1473,7 +1473,13 @@ def cmd_check_claim_fence(args):
 # as commits on the landing branch before the critical section, so any
 # follow-up commit on main after a landing is residue this sweep flags.
 
-LANDING_CLAIM_PREFIXES = ("plans: land ", "done: execute ")
+# Trust-on-subject class: a non-landing commit whose subject carries a recognized prefix can terminate a residue window early and mask follow-up residue from the closeout receipts.
+LANDING_CLAIM_PREFIXES = (
+    ("plans: land ", "authoring"),
+    ("done: execute ", "execution"),
+    ("execute-plan: land ", "execution"),
+    ("author: land ", "authoring"),
+)
 FLIP_CLASS_PREFIX = "done: mark"
 PRUNE_CLASS_PREFIX = "plans: prune"
 CLOSEOUT_CLASS_PREFIXES = ("done: archive", "done: fold")
@@ -1485,13 +1491,14 @@ PREV_LANDING_MAX = 5000
 
 
 def is_landing_claim(subject):
-    return any(subject.startswith(p) for p in LANDING_CLAIM_PREFIXES)
+    return any(subject.startswith(prefix)
+               for prefix, _kind in LANDING_CLAIM_PREFIXES)
 
 
 def landing_claim_slug(subject):
     """The anchor plan's kebab slug: the first hyphenated token after the
     grammar prefix; fallback to the first token when none is hyphenated."""
-    for prefix in LANDING_CLAIM_PREFIXES:
+    for prefix, _kind in LANDING_CLAIM_PREFIXES:
         if subject.startswith(prefix):
             tokens = subject[len(prefix):].split()
             for token in tokens:
@@ -1503,10 +1510,9 @@ def landing_claim_slug(subject):
 
 
 def anchor_kind(subject):
-    if subject.startswith("plans: land "):
-        return "authoring"
-    if subject.startswith("done: execute "):
-        return "execution"
+    for prefix, kind in LANDING_CLAIM_PREFIXES:
+        if subject.startswith(prefix):
+            return kind
     return None
 
 

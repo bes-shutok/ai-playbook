@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Skill description length gate: measure every scanned SKILL.md's
 frontmatter description (folded block scalars joined single-spaced) against
-the 1024-character cap; over-950 descriptions are warned. Exit 1 naming
-every over-cap file and length; exit 0 otherwise. The frontmatter parse
+the 1024-character cap; over-950 descriptions are warned. Outcome classes
+are disjoint: exit 1 names every over-cap file and length and is reserved
+for measured over-cap results only (the one class the landing sweep
+classifies as a guard catch); exit 2 reports an operational exception (an
+unreadable file, or an unexpected scan failure) as a stderr diagnostic and
+is never a measured result; exit 0 otherwise. (argparse's own usage
+error also exits 2 and is read as a tool error, never a measured
+result.) The frontmatter parse
 binds to the closing ``---`` fence, so fenced code blocks in the document
 body are never swallowed. Inside a git checkout the default scan measures
 only repository-tracked ``SKILL.md`` files (tracked files stay in scope
@@ -116,15 +122,18 @@ def tracked_skill_files(root: Path) -> list[Path] | None:
 
 def check_tree(
     roots: list[Path], tracked_only: bool = False
-) -> tuple[list[str], list[str]]:
-    """Return (failures, warnings): failure rows name the file and length
-    over the cap; warning rows name over-warn files. With ``tracked_only``
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (failures, warnings, errors): failure rows name the file and
+    length over the cap; warning rows name over-warn files; error rows are
+    operational-exception diagnostics (a file whose measurement raised) that
+    classify the whole run as exit 2, never exit 1. With ``tracked_only``
     (the default scan) a directory root inside a git checkout selects only
     repository-tracked ``SKILL.md`` files, and falls back to the recursive
     selection outside a checkout; explicit roots keep the recursive
     selection."""
     failures: list[str] = []
     warnings: list[str] = []
+    errors: list[str] = []
     for root in roots:
         if root.is_dir():
             skill_files = tracked_skill_files(root) if tracked_only else None
@@ -133,7 +142,11 @@ def check_tree(
         else:
             skill_files = [root] if root.is_file() else []
         for path in skill_files:
-            description, length = measure(path)
+            try:
+                description, length = measure(path)
+            except OSError as exc:
+                errors.append(f"{path}: unreadable ({exc})")
+                continue
             if description is None:
                 continue  # no description key: skipped silently
             if length > CAP:
@@ -145,7 +158,7 @@ def check_tree(
                     f"warning: {path}: folded description {length} "
                     f"over the {WARN}-character warning band"
                 )
-    return failures, warnings
+    return failures, warnings, errors
 
 
 def _selftest() -> int:
@@ -192,7 +205,7 @@ def _selftest() -> int:
         (no_desc_dir / "SKILL.md").write_text(
             "---\nname: nodesc\n---\n", encoding="utf-8"
         )
-        fails, warns = check_tree([root])
+        fails, warns, errs = check_tree([root])
         labels = {
             Path(row.split(":", 1)[0]).parent.name for row in fails
         }
@@ -208,12 +221,15 @@ def _selftest() -> int:
             not any("fenced" in row for row in fails + warns),
             "body fence not swallowed",
         )
-        fails_tracked, warns_tracked = check_tree([root], tracked_only=True)
+        expect(not errs, f"clean scan raises no operational errors: {errs}")
+        fails_tracked, warns_tracked, errs_tracked = check_tree(
+            [root], tracked_only=True
+        )
         # Precondition: the temp root sits outside any git checkout (the
         # default TMPDIR); inside one, tracked-only selection returns []
         # and this equality assertion fails visibly.
         expect(
-            (fails_tracked, warns_tracked) == (fails, warns),
+            (fails_tracked, warns_tracked, errs_tracked) == (fails, warns, errs),
             "tracked-only scan outside a checkout keeps recursive selection",
         )
     if failures:
@@ -225,18 +241,41 @@ def _selftest() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        epilog=(
+            "outcome classes: 0 pass; 1 measured over-cap descriptions only "
+            "(the modeled failure class the landing sweep refuses and "
+            "records as a guard catch); 2 operational exception (a stderr "
+            "diagnostic; never a measured result, never a catch; "
+            "argparse usage errors also exit 2 and read as tool errors)"
+        ),
+    )
     parser.add_argument("paths", nargs="*", default=None)
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
     if args.selftest:
         return _selftest()
     roots = [Path(p) for p in args.paths] if args.paths else [Path(DEFAULT_TREE)]
-    failures, warnings = check_tree(roots, tracked_only=not args.paths)
+    try:
+        failures, warnings, errors = check_tree(roots, tracked_only=not args.paths)
+    except Exception as exc:  # noqa: BLE001 - a scan crash must never
+        # masquerade as exit 1 (the measured over-cap class); it is an
+        # operational exception and answers exit 2 with a diagnostic.
+        print(
+            f"description-length: operational exception: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    for row in errors:
+        print(f"description-length: operational exception: {row}", file=sys.stderr)
     for row in warnings:
         print(row, file=sys.stderr)
     for row in failures:
         print(f"description-length: {row}", file=sys.stderr)
+    if errors:
+        return 2  # an operational exception dominates: never report exit 1
     return 1 if failures else 0
 
 

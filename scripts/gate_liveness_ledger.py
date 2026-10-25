@@ -30,6 +30,21 @@ catch-all, invalid row input, a ledger conflict that survives the one
 bounded retry). This is a recorder, not a gate: it has no
 modeled fail or indeterminate class. --help stays a metadata exit.
 
+Catch dedup by run identity (plan
+docs/history/plans/2026-10-24-description-length-gate-catch-promotion.md):
+a catch row whose note carries a ``run_id=<id>`` token is deduplicated per
+guard, appending it when the same guard already holds a catch row with the
+exact same run identity is a no-op (rows and tally unchanged), so sequential
+retries of the same refused run never duplicate their catch. Rows without a
+run-identity token never deduplicate. The identity rides the existing note
+field; no new row field. The normal writers (the done commit path's
+pre-refusal catch and the finalize append loop) serialize under the done
+lock; arbitrary concurrent direct ledger callers are outside this
+guarantee.
+
+Hermeticity knob (tests; harmless in production): ``GATE_LIVENESS_LEDGER_PATH``
+overrides the default ledger path (the JSON beside this script).
+
 Stdlib only; repo-relative paths only; no PII.
 """
 
@@ -49,6 +64,11 @@ KINDS = ("catch", "incident", "basis", "override")
 
 
 def default_ledger_path() -> Path:
+    override = os.environ.get("GATE_LIVENESS_LEDGER_PATH")
+    if override:
+        # Hermeticity knob (tests): redirect the default ledger home; unset
+        # in production, where the JSON beside this script stays the default.
+        return Path(override)
     return Path(__file__).resolve().parent / "gate_liveness_ledger.json"
 
 
@@ -181,12 +201,45 @@ def build_row(args: argparse.Namespace) -> dict:
     return row
 
 
-def append_row(data: dict, guard_name: str, row: dict) -> dict:
+RUN_ID_NOTE_RE = re.compile(r"\brun_id=([^\s;]+)")
+
+
+def row_run_identity(row: dict) -> str | None:
+    """The row's run-identity token from its note (``run_id=<id>``), or None
+    when the note carries none. The token is the dedup key for catch rows."""
+    note = row.get("note")
+    if not isinstance(note, str):
+        return None
+    match = RUN_ID_NOTE_RE.search(note)
+    return match.group(1) if match else None
+
+
+def append_row(data: dict, guard_name: str, row: dict) -> tuple[dict, bool]:
+    """Append one row to the named guard; return ``(guard, appended)``.
+
+    A catch row carrying a run-identity token in its note is deduplicated:
+    when the same guard already holds a catch row with the exact same run
+    identity, nothing is appended (the rows and the tally stay unchanged) and
+    ``appended`` is False, so a sequential retry of the same refused run
+    never duplicates its catch (plan
+    docs/history/plans/2026-10-24-description-length-gate-catch-promotion.md).
+    Rows without a run-identity token never deduplicate.
+    """
     guard = data["guards"].setdefault(guard_name, {"notes": "", "rows": []})
     if not isinstance(guard.get("rows"), list):
         raise ToolError(f"guard rows corrupted for {guard_name}")
+    if row.get("kind") == "catch":
+        identity = row_run_identity(row)
+        if identity is not None:
+            for existing in guard["rows"]:
+                if (
+                    isinstance(existing, dict)
+                    and existing.get("kind") == "catch"
+                    and row_run_identity(existing) == identity
+                ):
+                    return guard, False
     guard["rows"].append(row)
-    return guard
+    return guard, True
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -211,21 +264,30 @@ def cmd_record(args: argparse.Namespace) -> int:
     # mismatch refuses the append (bounded retry) and leaves the latest bytes
     # on disk for a rerun.
     data, loaded_bytes = load_ledger(path)
-    guard = append_row(data, args.guard, row)
+    guard, appended = append_row(data, args.guard, row)
     if not snapshot_is_current(path, loaded_bytes):
         data, loaded_bytes = load_ledger(path)
-        guard = append_row(data, args.guard, row)
+        guard, appended = append_row(data, args.guard, row)
         if not snapshot_is_current(path, loaded_bytes):
             raise ToolError(
                 "ledger changed again while the append was retried; "
                 "latest ledger bytes were left unchanged; "
                 "rerun the same record command to append the row"
             )
-    save_ledger(path, data)
+    if appended:
+        save_ledger(path, data)
     t = guard_tally(guard)
+    outcome_note = (
+        f"row appended: {args.kind} {args.date}"
+        if appended
+        else (
+            "no row appended: catch already recorded for this guard and "
+            f"run identity (run_id={row_run_identity(row)})"
+        )
+    )
     print(
         f"{args.guard}: catches={t['catches']} incidents={t['incidents']} overrides={t['overrides']} "
-        f"time_lost_minutes={t['time_lost_minutes']} (row appended: {args.kind} {args.date})"
+        f"time_lost_minutes={t['time_lost_minutes']} ({outcome_note})"
     )
     print("OUTCOME: pass")
     return 0
@@ -245,7 +307,12 @@ def build_parser() -> ContractParser:
     p_rec.add_argument("--evidence", required=True, help="repo-relative path or commit sha witnessing the row")
     p_rec.add_argument("--time-lost-minutes", type=int, default=None)
     p_rec.add_argument("--harm-cases", type=int, default=None, help="basis rows only: observed case count")
-    p_rec.add_argument("--note", default="")
+    p_rec.add_argument(
+        "--note",
+        default="",
+        help="free text; a catch row whose note carries run_id=<id> is "
+        "deduplicated per guard against the same exact run identity",
+    )
     p_rec.set_defaults(func=cmd_record)
     return parser
 

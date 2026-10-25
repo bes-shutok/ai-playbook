@@ -18,6 +18,12 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+# Sibling-module import bootstrap (the repo-wide test idiom, e.g.
+# test_code_delta_classifier.py): the plan's validation command runs this
+# suite as `python3 -m unittest scripts.test_worktree_closeout_migrate`,
+# a namespace-package import that does not put this directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import review_plan_identity
 
 SCRIPT_PATH = Path(__file__).resolve().parent / "worktree_closeout_migrate.py"
@@ -770,6 +776,40 @@ class WorktreeCloseoutTest(unittest.TestCase):
                 self.assertEqual(
                     hashlib.sha256(Path(entry["destination"]).read_bytes()).hexdigest(),
                     hashlib.sha256((source / entry["source"]).read_bytes()).hexdigest(),
+                )
+
+    def test_migrate_transfers_new_artifacts_across_all_four_capture_roots(self):
+        """[class: REPOSITORY_TEST] The Phase 0 capture root set covers the
+        reviews, tmp, metrics, and review-certs homes, and the baseline
+        migration carries a post-baseline artifact from every one of the
+        four roots, each manifest entry verified (plan
+        2026-10-18-worktree-closeout-single-start-baseline Task 1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            new_artifacts = {
+                ".ai-playbook/reviews/2026-10-18-four-roots-review-r1.md": b"review\n",
+                "docs/tmp/execute-plan/four-roots/task-1.log.md": b"log\n",
+                ".ai-playbook/metrics/four-roots-telemetry.json": b"{}\n",
+                ".ai-playbook/review-certs/four-roots-seal.md": b"seal\n",
+            }
+            for rel, data in new_artifacts.items():
+                _write(source / rel, data)
+            manifest = root / "manifest.json"
+            code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 0)
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            migrated = {entry["source"]: entry for entry in data["migrated"]}
+            self.assertEqual(set(migrated), set(new_artifacts))
+            for rel, entry in migrated.items():
+                self.assertTrue(entry["verified"])
+                self.assertEqual(
+                    (target / rel).read_bytes(),
+                    new_artifacts[rel],
                 )
 
 
@@ -5026,6 +5066,70 @@ class SkillSlugContractTest(unittest.TestCase):
         skill = self._read("agents/skills/execute-plan/SKILL.md")
         self.assertIn("Retained-branch reporting", skill)
         self.assertIn("branch-disposition", skill)
+
+
+class HelpCatalogTest(unittest.TestCase):
+    """Plan 2026-10-24-closeout-helper-command-discovery Task 1: the generic
+    --help catalog names every command main() routes, and every direct
+    command --help stays a successful usage exit through its existing
+    parser; operational dispatch and exit classes are pinned elsewhere and
+    are not restated here."""
+
+    COMMANDS = (
+        "capture",
+        "migrate",
+        "verify-records",
+        "gate-removal",
+        "owned-files-clean",
+        "sweep",
+    )
+
+    def _run_help(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), *args],
+            capture_output=True, text=True,
+        )
+
+    def test_generic_help_lists_all_six_commands(self):
+        proc = self._run_help("--help")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn(
+            "{capture,migrate,verify-records,gate-removal,owned-files-clean,sweep}",
+            proc.stdout,
+        )
+        for command in self.COMMANDS:
+            self.assertIn(command, proc.stdout)
+
+    def test_all_six_direct_help_routes_exit_zero_with_usage(self):
+        for command in self.COMMANDS:
+            with self.subTest(command=command):
+                proc = self._run_help(command, "--help")
+                self.assertEqual(proc.returncode, 0)
+                self.assertIn("usage:", proc.stdout)
+
+    def test_separator_escaped_catalog_token_keeps_exit_two(self):
+        # Review r1 fold: `-- <catalog token>` bypasses main()'s tokens[0]
+        # dispatch and reaches the generic parser, where the help-only entry
+        # has no handler; the legacy argparse exit class (2, usage on
+        # stderr, no traceback) is pinned.
+        for token in ("gate-removal", "owned-files-clean", "sweep"):
+            with self.subTest(token=token):
+                proc = subprocess.run(
+                    [sys.executable, str(SCRIPT_PATH), "--", token],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("invalid choice", proc.stderr)
+                self.assertIn("usage:", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+
+    def test_sweep_usage_keeps_doubled_token(self):
+        # Standing constraint: the doubled `sweep` usage token is left for a
+        # separate scope decision; this pins the spelling so the help-catalog
+        # change cannot silently alter it.
+        proc = self._run_help("sweep", "--help")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage: worktree_closeout_migrate.py sweep sweep", proc.stdout)
 
 
 if __name__ == "__main__":

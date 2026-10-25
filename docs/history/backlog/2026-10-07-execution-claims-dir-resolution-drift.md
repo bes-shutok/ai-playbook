@@ -4,7 +4,7 @@ Driving force: reliability
 Date filed: 2026-10-07
 Origin: Task 1 intermediate review (execution-claim-write-enforcement) backlog capture
 
-Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider)
+Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider); agents/skills/maintenance/failure-cap.md (check-side read-resolution sibling, landed 2026-10-25 by the child-outcome-evidence-resolution ad-hoc landing; the EXEC-PROMPTS prune receipt is the witness)
 
 ## Finding
 
@@ -18,4 +18,4 @@ Derive the claims directory in execution_claim.sh from the same facts resolution
 
 - Task 1 review pass, contract-docs worker overflow candidate (2026-10-07)
 - scripts/execution_claim.sh CLAIMS_REL vs scripts/reverse_squash_guard.py facts-based tmp_dir resolution
-- **Cluster:** docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/landing 5865a50a5, carried into current history by rewrite commit f3894756d; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md
+- **Cluster:** docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/landing 5865a50a5, carried into current history by rewrite commit f3894756d; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md; docs/history/backlog/2026-10-25-claim-release-operand-after-covered-row-deletion.md

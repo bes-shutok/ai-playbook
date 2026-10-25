@@ -1,5 +1,157 @@
 Tracked rolling log of ready-to-dispatch ad-hoc work entries, most urgent first, fed by investigate's work-type verdict and consumed by exec-mode sessions. This log is the exec-mode sibling of `docs/history/backlog/PLAN-PROMPTS.md`: its entries follow that file's Entry template unchanged, and its standing rules apply here by their established labels, with only the deltas stated below.
 
+## scheduling-ask-clock-time-confirmation-clause
+
+Added: 2026-10-25, learn+investigate over the 2026-10-24 9h17pm carrier-arming session (origin row below)
+
+Work-type verdict: ad-hoc-able because the arm is one interpretive clause added to an existing guidelines section; no gate, validator, or guard-bearing path is touched, and the ad-hoc eligibility test's small-single-surface shape admits it directly.
+
+Origins:
+- docs/history/backlog/2026-10-25-scheduling-ask-clock-time-confirmation.md
+- docs/history/backlog/2026-10-23-scheduling-asks-rearm-wording-candidates.md (cluster sibling; same verb-contract surface, different clause - its own candidates are separate work)
+
+Urgency: medium - two witnessed correction rounds in one scheduling session (a compact "9-17 pm" token read first as a single 21:00 fire, then as an hourly 21:00-16:59 window, before the intended 21:17 surfaced via operator correction); every future schedule ask carrying the same shorthand re-bites without the clause.
+
+Scope arms:
+- Confirmation clause: the "Scheduling asks (verb contract)" section in `AGENTS.md` gains one sentence: when the ask's time token is a compact `H-M`/`HhMM` form or is otherwise ambiguous, read it as the single time `H:MM` with the am/pm marker applied, and confirm by asking one question whose options each name the CONCRETE resolved clock time (for example "21:17"), never a restatement of the shorthand; no carrier is armed on an inferred reading.
+- Lesson witness cross-link: the clause cites lesson 220 in `docs/maintenance/development_lessons.md` as its witness; no second home is created.
+
+Orientation: read lesson 220 (the 2026-10-24 witness: two avoidable misreads, each patched in place after an operator correction), then the "Scheduling asks (verb contract)" section in `AGENTS.md`; disk re-derivation confirmed that section carries no existing clock-time confirmation rule.
+
+Prompt: Land the one clause per the scope arms; this is removal-shaped prose with no machinery, so no admission wording is owed; run the em-dash added-lines gate and the public hygiene scan; keep the anti-growth balance by not restating the lesson's narrative in the contract.
+
+Rejected alternatives:
+- A pre-arm validation script that parses the ask's time token and refuses ambiguous forms: rejected under the machinery admission protocol for missing incident class - the two witnessed misreads were caught by one clarifying question, not by a checkable artifact, and the false-positive cost is added friction on every schedule ask ("no witnessed incident" of script-catchable misfires beyond the conversational fix) (docs/history/backlog/2026-10-25-scheduling-ask-clock-time-confirmation.md)
+- Route the clause to the runtime overlay recipe in `agents/skills/maintenance/zcode.md` instead: rejected because the witnessed misread happened in an interactive scheduling session whose first-read surface is the verb contract, not a maintenance scheduler turn; the overlay paragraph is the wrong first reader (agents/skills/maintenance/zcode.md)
+- Rely on the private memory note only (no contract text): rejected because a session-private memory does not reach a fresh session's scheduling read set on another host or runtime, which is exactly the repeat surface; the one-clause cost is the smallest arm that removes the witnessed cost (docs/maintenance/development_lessons.md lesson 220)
+- A full time-parsing vocabulary section in the contract: rejected as text over-growth - the shorthand is one notation habit, priced by the repository guidelines' anti-growth rules; one clause covers it (AGENTS.md, Scheduling asks section; witnessed 2026-10-24 operator corrections, lesson 220)
+
+## producer-record-digest-family-routing-note
+
+Added: 2026-10-25, learn+investigate over the 2026-10-25 01:18 exec carrier run (two execute-plan picks; origin row's exec-run witness section)
+
+Work-type verdict: ad-hoc-able because the recommended arm is a body-named routing note on two tracked text surfaces (execute-plan Step 3.1 skill text and the producer's module docstring) with no open design choice; no gate, validator, guard-bearing path, dependency, or state schema changes, so the eligibility test's small-single-surface shape admits it. The row's remaining refactor bullets (self-heal arms, lens-table dedup, flag narrowing) stay open on the row and are NOT consumed by this entry.
+
+Origins:
+- docs/history/backlog/2026-10-22-producer-review-findings-followups.md
+- docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md (cluster sibling; same script, internal seam work that is separate from this routing note)
+
+Urgency: medium-low - two picks in one exec run each spent a round on `review_record_selection.py verify-digest` refusing producer-emitted records before falling back to the code-family seal; the fallback exists, so no landing was lost, but every exec run that reaches for the producer at Phase 3 re-bites until the routing is written.
+
+Scope arms:
+- Routing note (skill side): execute-plan Step 3.1 names the digest family each instrument owns: `scripts/produce_exec_review_record.py` emits plan-family records (SHA-256 of the plan bytes, `-plan-review-` series, the Phase 4 exec receipt) and `scripts/review_record_selection.py verify-digest` checks code-family records (SHA-256 of `git diff <base>...<head>` bytes); an exec round reviewing the code delta records freshness through the code-family seal (`.ai-playbook/review-certs/<slug>.md`, `family: code`, `range_digest`) and never runs verify-digest over a producer record.
+- Routing note (script side): the producer's module docstring states the same family ownership in one sentence, so a reader of the script learns the boundary without the skill text.
+
+Orientation: read the exec-run witness section of the origin row, then `docs/history/plans/completed/2026-10-20-exec-review-records-at-round-close.md` (the producer's motivating plan: its Why scopes the producer to the execution receipt and findings-bearing plan-family records), then `scripts/review_record_selection.py` module docstring lines on `verify-digest` (the diff-bytes derivation), then lesson 30's 2026-10-25 extension in `docs/maintenance/development_lessons.md` (the producer is single-worker and plan-series named; multi-worker code-review records are hand-composed).
+
+Prompt: Land the two routing-note arms per the scope arms; the change is prose only, so no admission wording is owed; pay for the skill-text growth in the same file per the repository guidelines' anti-growth rules (collapse a restatement in Step 3.1 of equal size); run `python3 scripts/validate_review_staging.py --selftest`, the em-dash added-lines gate, and the public hygiene scan before the commit; do not touch `scripts/review_record_selection.py` behavior.
+
+Rejected alternatives:
+- Extend the producer with a `--range <base>...<head>` arm emitting code-family records: rejected as the larger arm with open design choices (the `-code-review-` naming grammar, the multi-worker panel shape the single-worker producer cannot render) that this witness does not price; it stays on the origin row's refactor list (docs/history/backlog/2026-10-22-producer-review-findings-followups.md)
+- Teach `verify-digest` to accept plan-family records by reading the sidecar's digest kind: rejected because the verifier's value is diff freshness over the reviewed range, and accepting a plan-bytes digest would pass a stale code round whose plan did not change (scripts/review_record_selection.py)
+- Remove `verify-digest` (remove-or-keep axis): rejected because it is a landed mechanism with independent protective value for code-family records, and the witnessed cost is misrouting, not a false refusal (scripts/review_record_selection.py)
+- Add a pre-flight gate in execute-plan that refuses running verify-digest over a `-plan-review-` record: rejected under the machinery admission protocol for missing incident class; no witnessed incident shows a wrong landing, only wasted rounds, and the routing note removes the cost without a blocker (docs/history/backlog/2026-10-22-producer-review-findings-followups.md)
+- Leave the knowledge in the private memory note only: rejected because a fresh exec session on another host never reads it, which is the exact repeat surface witnessed twice in one run (docs/maintenance/development_lessons.md)
+
+## claim-release-operand-source-flag
+
+Added: 2026-10-25, learn+investigate over the 2026-10-24 ad-hoc exec run (project-corpus lesson 226 in docs/maintenance/development_lessons.md)
+
+Work-type verdict: ad-hoc-able because the arm is one optional flag plus its test on a single script surface (the execution-claim gateway's release path); the ad-hoc eligibility test's small-single-surface shape admits it, and the flag adds no gate or validator - it widens where release reads an existing required input, so the guard-bearing-paths exclusion does not bite.
+
+Origins:
+- docs/history/backlog/2026-10-25-claim-release-operand-after-covered-row-deletion.md
+- docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md; docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md (cluster roster, same gateway surface; each already represented by a plans-root plan record and NOT part of this work)
+
+Urgency: medium-low - three consecutive closeouts in one run each spent an improvisation round on the unreadable-operand refusal before releasing; the `git show <landing>^:<path>` scratch-file workaround works first try (lesson 226), so nothing is lost, but every covered-row exec closeout re-bites until release can read the operand from git object storage.
+
+Scope arms:
+- Operand-source flag: `scripts/execution_claim.sh release` (and the sweep arm, which reports preservation-scan inconclusiveness on the same deleted-operand shape) gains `--operand-source <commit>:<path>`: when given, the operand bytes are read via `git show` from object storage instead of the working tree, the slug derivation and every existing check are unchanged, and the flag is documented in the usage header next to the readable-operand requirement.
+- Refusal remedy line: the unreadable-operand refusal gains one line naming the flag as the bounded remedy when the origin row was deleted by its own landing (the same refusal-remedy-text pattern the take-occupant refusals already carry).
+- Test pinning: the gateway test suite gains one case releasing a claim whose operand exists only at `<landing>^` and one asserting the flag's absence leaves the current refusal intact.
+
+Orientation: read lesson 226 (the 2026-10-24 witness and the scratch-file recipe it records), then the release command and `derive_slug` in `scripts/execution_claim.sh`; disk re-derivation confirmed no `operand-source` token exists at HEAD (working-tree grep and `git grep` at the tip both empty).
+
+Prompt: Land the three arms in one change; the flag is removal-shaped (it deletes the per-closeout improvisation), so no admission wording is owed; run the focused gateway suite plus the em-dash added-lines gate and the public hygiene scan; keep the anti-growth balance by sizing the usage-header addition to the flag contract, not the lesson's narrative.
+
+Rejected alternatives:
+- Refusal-text-only remedy (name the git-show restore recipe in the refusal, no flag): rejected because it keeps the gitignored scratch-file dance in every covered-row closeout, which is exactly the per-session improvisation the row prices; the flag is the smallest arm that removes it (docs/history/backlog/2026-10-25-claim-release-operand-after-covered-row-deletion.md)
+- Keep covered origin rows as `Status: covered` stubs so the operand never disappears: rejected as contradicting the landed completed-backlog deletion doctrine, which deletes covered rows outright and has the EXEC-PROMPTS-PRUNE receipt as its record; changing the lifecycle to serve one release path inverts the cost (the covered-row rule in AGENTS.md; deletion receipts recorded per row in docs/history/backlog/EXEC-PROMPTS.md)
+- Rely on lesson 226 alone with no script change: rejected because a lesson documents the workaround but does not shrink it; the witnessed cost (three improvisation rounds in one run) recurs per closeout (docs/maintenance/development_lessons.md #226)
+- A claim-record sidecar caching the operand bytes at take time: rejected as new machinery and storage for a value git object storage already holds immutably at `<landing>^`; the machinery admission test names no incident the sidecar prevents that the flag does not (the machinery admission protocol in AGENTS.md; no-incident absence named per docs/history/backlog/2026-10-25-claim-release-operand-after-covered-row-deletion.md)
+
+## document-registry-first-table-repair
+
+Added: 2026-10-25, learn+investigate over the 2026-10-24 22:00 exec takeover session (origin row below)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm's eligibility test (`agents/skills/maintenance/decisions.md`): the origin carries a body-named single-surface fix with no open design choice (a data repair of one tracked table file: delete the in-table blank lines, split one joined line into its two rows), no guard, validator, lock, or machinery path is edited, and the origin is plan-uncovered.
+
+Origins:
+- docs/history/backlog/2026-10-25-document-registry-first-table-fragmented-rows-unparsed.md
+
+Urgency: medium - the registry validator currently parses 8 of 847 table lines, so its coverage check is blind and every end-of-file closeout row joins the unparsed tail; no lane is blocked, but the noise hides any real registration gap.
+
+Scope arms:
+- Table repair (`docs/maintenance/document-registry.md`): remove the blank separator lines inside the table region (introduced by `6b094a247`, 2026-10-22) so the table is contiguous from the header separator to the trailing prose, and split the physical line carrying two rows joined by ` || ` (from the landing `d72ca0084`) into two rows; no row text changes otherwise.
+- Verification arm: `python3 scripts/doc_registry_validator.py validate` reports a parsed-row count equal to the table's data-line count and a warning list reduced to genuinely unregistered files; the remaining warnings are reported in the landing receipt, not fixed in this change.
+
+Orientation: `scripts/doc_registry_validator.py` `parse_registry` reads the first table only and stops at the first non-table line by design; `c861ee3fc` chose to name present-but-unparsed rows beside the refusal rather than widen the parser, so the file shape is the thing to fix. The 2026-10-24 22:00 session worked around the drift by inserting its rows directly under the header separator; that convention is undocumented and the repair removes the need for it.
+
+Prompt: Using the ad-hoc backlog arm, fold `docs/history/backlog/2026-10-25-document-registry-first-table-fragmented-rows-unparsed.md` as one change: in `docs/maintenance/document-registry.md` delete every blank line between the header separator and the last `| ` row, split the one line holding two rows at its ` || ` join into two lines, change no row text, re-run `python3 scripts/doc_registry_validator.py validate` and record the before and after `registry row(s)` and `warn(s)` counts in the landing message, run the em-dash added-lines scan and the public hygiene scan, delete the origin row per the covered-row rule, and print the `EXEC-PROMPTS-PRUNE` receipt line for this entry.
+
+Rejected alternatives:
+- Widening `parse_registry` to read every table or to skip blank lines: rejected; the first-table rule is deliberate and the landed diagnostic `c861ee3fc` (`scripts/doc_registry_validator.py`, the "rows after the first non-table line are ignored" note) chose naming over widening, so a parser change reverses a recorded decision for a data defect
+- A blocking gate refusing blank lines or joined rows in the table: rejected under the repository guidelines' Machinery admission protocol - no witnessed incident beyond validator noise, the validator already names unparsed rows, and a shape gate over a hand-edited table adds a false-positive surface
+- Documenting the insert-under-the-header convention in the plans skill's registry-row duty instead of repairing the file: rejected; the convention would formalize a workaround for a defect the repair removes, leaving 800+ rows unparsed and the validator blind at the current 8-row parse (`docs/maintenance/document-registry.md`)
+
+Standing pre-authorization: the table repair arm.
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the change is a data repair of one tracked file; the gate alternative is rejected with the missing-incident absence named above.
+
+## review-worker-scratch-worktree-cleanup-clause
+
+Added: 2026-10-25, learn+investigate over the 2026-10-25 02:00 exec run (origin row below)
+
+Work-type verdict: ad-hoc-able because the arm is one worker-prompt clause edit plus an optional cleanup sentence in run-closeout text; no guard, validator, or gate-bearing path is touched, and the change corrects prose that itself caused the witnessed residue.
+
+Origins:
+- docs/history/backlog/2026-10-25-review-worker-tmp-worktree-residue.md
+
+Urgency: low - one /tmp worktree residue across the founding run of the read-only-tree clause; found and removed manually, no lasting harm.
+
+Scope arms:
+- Scratch-copy clause narrowing: the read-only-tree clause in both review worker templates in `agents/skills/execute-plan/subagent-prompts.md` (Step 1.2b rule 4 and the Review lens template) gains a preference sentence: prefer a plain directory copy for scratch checks; when a separate `git worktree add` is genuinely needed, create it under the session's tmp directory so the run's own closeout sweep can remove it, never under an untracked /tmp path the run has no record of.
+- No closeout sweep arm: the run closeout's existing docs/tmp sweep already removes session-tmp worktrees once the creation path points there; no new sweep machinery is added.
+
+Orientation: read docs/history/backlog/2026-10-25-review-worker-tmp-worktree-residue.md (the 2026-10-25 witness: a review lens worker created a detached-HEAD /tmp base worktree that outlived the run and was only removed when the operator asked), the landed read-only-tree clause witness fa83a8c0d, and the docs-tmp sweep gate in `scripts/done_sweep_gates_lib.py`.
+
+Prompt: Land one ad-hoc clause edit per the scope arm; keep the byte change inside the two template spots; run the em-dash added-lines gate and the public hygiene scan.
+
+Rejected alternatives:
+- A closeout sweep arm that enumerates /tmp for repo-derived worktrees and removes them: rejected under the machinery admission protocol - one witnessed instance, no second catch, and sweeping a shared /tmp namespace adds a destructive surface for no priced recurring cost (`docs/history/backlog/2026-10-25-review-worker-tmp-worktree-residue.md`)
+- Forbid worktrees outright in review workers: rejected because the clause's plain-copy preference already covers the need and some discrimination checks genuinely need a git-aware tree; the witnessed failure was placement and cleanup, not the worktree itself (fa83a8c0d, the landed clause text)
+- Record the residue only in memory: rejected because the next run's workers read the template, not the memory; the clause is the surface the workers actually load (`agents/skills/execute-plan/subagent-prompts.md`)
+
+
+## java-guideline rule 27 clarity gaps: multi-over-threshold builder target and the missing Verify line (origins: docs/history/backlog/2026-10-25-java-guideline-builder-placement-multiple-over-threshold.md, docs/history/backlog/2026-10-15-guidelines-rule-27-verify-line-convention.md)
+
+Cluster roster: the two origins above (same surface, rule 27 of projects/.ai-playbook/java_guidelines.md; the covered 2026-10-20 one-over-threshold row is history, served by docs/history/plans/2026-10-23-java-guideline-builder-placement-multi-constructor.md).
+
+Scope arms (one guideline file, one rule; no code): (1) settle the multi-over-threshold arrangement in rule 27's Lombok sentences: two or more constructors above the strict more-than-three threshold currently name no `@Builder` target, and annotating each collides on Lombok's generated builder class name. (2) While paying for its own growth, either add rule 27's one-line `**Verify:**` in the rules 20-25 three-part shape (finite-gauge check style: sample a three-or-fewer-parameter construction staying on the constructor and a four-parameter one going through the builder) or record in the guideline's own convention note that recognition rules carry no Verify line; do not restructure the rule's prose.
+
+Orientation: ad-hoc guideline edit in the executing checkout; the java guideline surface is projects/.ai-playbook/java_guidelines.md; keep the landed one-over-threshold wording, the record arm, and the framework-exemption paragraphs byte-intact except where arm (1) extends them.
+
+Ready-to-dispatch prompt payload: Using the ad-hoc reviewed-landing route (agents/skills/execute-plan Worktree-first Direct-commit class does not apply: the surface sits inside no open plan's claimed scope, but the change carries prose with a reviewed landing), edit rule 27 of projects/.ai-playbook/java_guidelines.md: after the landed sentence "When the class has one over-threshold constructor beside below-threshold convenience constructors, put `@Builder` on that constructor alone; the builder covers it, and its validation remains.", add one binding sentence for two or more over-threshold constructors: prefer class-level `@Builder` over the canonical constructor's type and treat the remaining over-threshold constructors as a consolidation signal, requiring explicit distinct `builderClassName` values only when two over-threshold constructors must genuinely coexist. Fold the Verify-line arm per orientation (2) in the same change, byte-paying any growth by trimming the rule's redundant restatements in the same file. Run the docs' validation (em-dash added-lines and public hygiene scans, exit 0); the panel is the standard focused docs panel over the branch delta. Land merge-locked, flip both origin rows covered, delete them per the fold-then-delete rule with the disposition folded onto the landing record.
+
+Rejected alternatives:
+- Redirect multi-over-threshold classes to a hand-written nested builder: rejected because it contradicts the rule's Lombok-available default and the witnessed cost is naming ambiguity, not Lombok unsuitability (docs/history/backlog/2026-10-25-java-guideline-builder-placement-multiple-over-threshold.md, Observed versus expected)
+- A per-constructor `builderClassName` mandate as the primary arm: rejected as the default shape because it blesses multi-builder classes instead of flagging them; kept only as the coexistence carve-out inside the recommended sentence (the rule's own coupling-signal precedent for more than three injected dependencies; plan docs/history/plans/2026-10-23-java-guideline-builder-placement-multi-constructor.md)
+- Leave-as-is: rejected because the covering plan's execution review r1 witnessed the ambiguity and no row tracked it until 2026-10-25 (.ai-playbook/reviews/2026-10-25-java-guideline-builder-placement-multi-constructor-code-review-r1.md, F1)
+- A guideline-conformance gate checking rule 27 shapes mechanically: rejected under the machinery admission protocol - no witnessed incident of a conformance failure, only prose clarity; the false-positive cost is a refused edit on every guideline wording change ("no witnessed incident" of script-catchable misfires) (repository guidelines' Machinery admission protocol section)
+
+Work-type verdict: ad-hoc-able. The eligibility test (the maintenance skill's Ad-hoc backlog arm bullet) admits both origins: formal-class/fix-class items on a tracked single surface with no open design choice (the recommended sentence settles the one open arrangement; the Verify arm is a convention edit), no guard-bearing path, no new dependency, no state-schema or machinery change. Both members classify uniformly, so the group routes as one entry to this log.
+
+Standing pre-authorization: the reviewed-landing route above; no machinery is added, so no admission line is owed beyond the gate-arm rejection recorded above.
 
 EXEC-PROMPTS-PRUNE: deciding-turn-inherits-step-order -> landing in this commit (ad-hoc landing: agents/skills/plans/SKILL.md gained one binding sentence in the certification-time record-durability checkpoint paragraph and one mirrored sentence in the ad-hoc worktree removal ordering paragraph, each binding the in-session deciding-turn execution to the same step order the dispatched path follows with the checkpoint preceding removal; growth paid by restated-parenthetical and clause deletions in the same file, byte-balanced within 30 bytes; em-dash added-lines gate and public hygiene scan pass; pins suite fails at HEAD on the pre-existing authoring stand-down gate span pin, unrelated; origin row deleted per the covered-row rule)
 
@@ -60,3 +212,34 @@ EXEC-PROMPTS-PRUNE: authored-plan-strand-checkpoint-on-certify -> 1b742efd2 (ad-
 
 EXEC-PROMPTS-PRUNE: unittest-discover-undercollects-plain-function-suites -> landing in this commit (ad-hoc reviewed landing: the guidelines' Testing Guidelines runner recipe now pins the venv pytest invocation as the collector for plain-function suites, keeps the unittest discover arm for class-style suites with the not-an-importable-package rationale attached there, and adds the collected-count sanity sentence; focused panel r1 ready=yes with live probes - discover ran 1 of a 337-def file OK while pytest ran 353 and caught three real fixture failures, pytest also collects TestCase classes; sweep confirmed empty, the two remaining discover invocations are self-referential runner commands in class-style suites and hook READMEs; origin row deleted per the covered-row rule with its Cluster pointer and lesson #198 See-also retargeted in the same change)
 
+
+EXEC-PROMPTS-PRUNE: worktree-transfer-in-copies-review-certs-dir -> landing in this commit (ad-hoc landing: the Transfer-in implementation block in agents/skills/execute-plan/worktree-first.md resolves review_certs_dir with the same fenced-TOML parse as reviews_dir/tmp_dir, refuses the run when any of the three keys is missing or empty, and cp -Rs the primary checkout seal directory into the worktree exactly like the reviews arm; the intro sentence and the Provisioned-worktree adoption conjunct name the seal directory as the third transferred input so an adopted worktree with a stale seal copy stands down; growth paid by deleting the module restated start-empty sentence and the fence paragraph restated noclobber parenthetical plus rationale clause, net +331 bytes; em-dash added-lines gate and public hygiene scan pass; pins suite fails at HEAD on the pre-existing authoring stand-down gate span pin, unrelated; origin row deleted per the covered-row rule)
+
+EXEC-PROMPTS-PRUNE: child-outcome-evidence-resolution -> landing in this commit (ad-hoc landing: the fast re-dispatch bullet and the rate-limited ingestion bullet in agents/skills/maintenance/failure-cap.md gained the claim-derived worktree tier as a one-sentence resolution order (recorded worktree, then the claim file branch-line worktree via git worktree list with first-observation backfill onto the entry worktree field, then the primary checkout tmp fallback last), and the two early outcome checks now evaluate the progress predicate for children whose outcome is pending or in_progress with the six-hour horizon, vanished-from-listing rule, and provider-stop exception unchanged; growth paid by consolidating the module restated manifest path resolution in the fast re-dispatch bullet into the by-reference form, net +435 bytes; em-dash added-lines gate and public hygiene scan pass; pins suite fails at HEAD on the pre-existing authoring stand-down gate span pin, unrelated; origin row deleted per the covered-row rule with the claims-dir-resolution sibling Cluster pointer retargeted to the landed surface in the same change)
+
+## state-file-schema-declaration-reconciliation
+
+Added: 2026-10-25, learn+investigate over the 2026-10-25 interactive exec run (the child-outcome-evidence-resolution landing's deferred r1 finding) and the 2026-10-24 plan-review certification residual
+
+Work-type verdict: ad-hoc-able because both members carry body-named single-surface fixes (declarative schema prose in `agents/skills/maintenance/state-file.md`: the outcome enum value list, the worktree-field writer sentence, the schema-v4 example's missing notes field) with no open design choice: each declaration is read off live state and observed writes, not chosen; it is a tracked skill surface, not a guard-bearing path (the checks read live state, not the declarations), adds no dependency, changes no state schema bytes, and removes no machinery, so the eligibility test's body-named-fix clause admits both members (the Ad-hoc backlog arm bullet in `agents/skills/maintenance/decisions.md`).
+
+Origins:
+- docs/history/backlog/2026-10-25-state-file-children-schema-reconciliation.md
+- docs/history/backlog/2026-10-24-maintenance-state-notes-schema-contract.md
+
+Urgency: low - the running checks read live state and never misbehave on the lag; the cost is implementer misdirection (a schema-reading executor rejects observed `in_progress` entries as invalid, the worktree writer enumeration under-counts its writers, and executors cannot tell whether `notes` is contractual).
+
+Scope arms:
+- Enum arm: the children[] schema example's outcome value list gains `in_progress`, matching the widened failure-cap predicates and observed writes.
+- Writer arm: the worktree field paragraph's writer sentence names the check-side first-observation backfill beside the child-side recording, one clause defining the backfill by reference to the failure-cap resolution order.
+- Notes arm: the schema-v4 example declares the notes field with the entry shape and Step 6 carry-forward behavior the scheduler-state plan requires, read from the live state.
+
+Orientation: read both origin rows, then the schema example line and the `worktree` field paragraph in `agents/skills/maintenance/state-file.md` (disk re-derivation: `grep -c '"outcome": "pending|progress|failed"' agents/skills/maintenance/state-file.md` returns 1 at HEAD, and the worktree paragraph's writer sentence names only the dispatched execution child). Introduction story: the enum line landed `867f8ed7e` (2026-10-18) three weeks after the in-session dispatch mode began writing `in_progress` entries, and was never audited against observed writes; the worktree paragraph landed with P57 (2026-09-24) and predates the check-side backfill (landing `def5dce98`).
+
+Prompt: Land the three arms in `agents/skills/maintenance/state-file.md` only; each arm is one declaration edit, no narrative; run the em-dash added-lines gate, the public hygiene scan, and `bash scripts/check_maintenance_pins.sh` (state-file.md is a pinned module; the pre-existing authoring stand-down gate span red is expected and unrelated); pay any growth by trimming restated schema prose in the same module; no admission wording is owed because no gate, validator, or ceremony is added.
+
+Rejected alternatives:
+- A drift validator asserting schema declarations against observed state writes: rejected under the machinery admission protocol - the checks read live state, so the lag never mis-runs machinery, and the validator's false-positive surface is every deliberate vocabulary extension ("no witnessed incident" of a wrong landing from the lag) (docs/history/backlog/2026-10-25-state-file-children-schema-reconciliation.md)
+- Remove the outcome enum values so the example stops drifting: rejected because the value list is the contract's machine-readable form and the failure-cap predicates cite it by name; removing it widens the ambiguity the reconciliation closes (agents/skills/maintenance/state-file.md)
+- Keep the knowledge in the review record's watchlist only: rejected because a watchlist row is session-scoped reading, while a fresh implementer reads the module, which is the exact misdirection surface (agents/skills/maintenance/failure-cap.md)
+- Split the two rows into separate entries: rejected because the members share one surface, one defect class (declarations lagging live state), and one edit session, the grouping being the Stage 1 roster (docs/history/backlog/2026-10-24-maintenance-state-notes-schema-contract.md)

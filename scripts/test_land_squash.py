@@ -12,7 +12,11 @@ intersection pre-refusal, the merge-failure path-exclusive restore with its
 dirty-at-snapshot carve-out, the dirty-writer concurrent-writer block arm,
 the interleaved-tip post-landing arm and the diverge-origin informational
 note, the parentage pre-swap refusal propagation, the stale-base
-tree-equality refusal, and the stale-record base-pin refusal. The
+tree-equality refusal, and the stale-record base-pin refusal, plus the
+compose-time landing-claim grammar notice (the free-form warning line with
+the landing outcome unchanged, the grammar-message silence, the
+guard-import-failure note in land mode, and the no-helper-copy audit over
+the guard constant). The
 land-worktree mode (the worktree-complete landing class) is covered by its
 own cases: the green path with the primary checkout byte-unchanged witness,
 the dirty-source-worktree tree-inequality refusal, the lock-mismatch refusal
@@ -25,6 +29,7 @@ omission-scope and usage-text audit."""
 
 import atexit
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -37,6 +42,21 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 HELPER = SCRIPTS / "land_squash.sh"
 DONE_LOCK = SCRIPTS / "done-lock.sh"
+
+
+def load_guard_module():
+    """The guard script imported as a module: the fixture layer reads the
+    recognized landing-claim prefixes from the same single source the
+    helper's compose-time notice reads, so no fixture restates the
+    grammar."""
+    spec = importlib.util.spec_from_file_location(
+        "reverse_squash_guard_test", str(SCRIPTS / "reverse_squash_guard.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD_MODULE = load_guard_module()
 
 
 _EMPTY_CONFIG_HOME = None
@@ -548,6 +568,109 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertIn("exit code: 0", landing_receipt.read_text())
         self.assertEqual(git(repo, "status", "--porcelain=v1").stdout, "")
         self.assertEqual(git(repo, "diff", "--cached", "--name-only", "HEAD").stdout, "")
+
+    # ---- the compose-time landing-claim grammar notice -----------------------
+
+    def test_land_free_form_message_warns_once_and_lands_unchanged(self):
+        # a landing message whose first line matches no recognized prefix:
+        # exactly one warning line naming the grammar read from the guard
+        # constant through the module import, and the landing outcome
+        # unchanged (pass, the landing commit composed with the warned
+        # subject on the pre-landing tip with the branch tree)
+        repo, lock = self.locked_repo("grammar-warn")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "landed.txt", "landed\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+        branch_tree = rev(repo, "feature^{tree}")
+
+        proc = land(repo, "feature", tip, "skills: separate the vendored twins",
+                    lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(
+            proc.stdout.count(
+                "warning: landing message subject matches no recognized"
+                " landing-claim grammar prefix"),
+            1, proc.stdout)
+        # the warning names every recognized prefix, read from the guard
+        # constant (no helper-local restatement of the grammar)
+        for prefix, _kind in GUARD_MODULE.LANDING_CLAIM_PREFIXES:
+            self.assertIn(repr(prefix), proc.stdout)
+        # the landing itself is unchanged by the notice
+        landing = rev(repo, "refs/heads/main")
+        self.assertNotEqual(landing, tip)
+        self.assertEqual(rev(repo, "%s^" % landing), tip)
+        self.assertEqual(rev(repo, "%s^{tree}" % landing), branch_tree)
+        self.assertEqual(
+            git(repo, "log", "-1", "--format=%s", landing).stdout.strip(),
+            "skills: separate the vendored twins")
+
+    def test_land_grammar_message_no_warning(self):
+        # a landing message whose first line carries a recognized prefix:
+        # no warning line and behavior identical to today
+        repo, lock = self.locked_repo("grammar-conformant")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "landed.txt", "landed\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+
+        proc = land(repo, "feature", tip,
+                    "plans: land 2026-10-23-widget-plan (witness fixture)",
+                    lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertNotIn("warning:", proc.stdout)
+        self.assertNotIn("grammar notice", proc.stdout)
+        landing = rev(repo, "refs/heads/main")
+        self.assertEqual(rev(repo, "%s^" % landing), tip)
+
+    def test_land_guard_import_failure_note(self):
+        # a missing guard copy at the notice point (land mode): one note
+        # line and an unchanged landing; the land-worktree mode refuses a
+        # missing guard copy at the wired check-landing gate before the
+        # notice point, so this class is land-mode-only by construction
+        scratch = self.tmp / "guardless-scripts"
+        scratch.mkdir()
+        shutil.copy(str(HELPER), str(scratch / "land_squash.sh"))
+        for name in ("landing_parentage_gate.py", "reconcile_post_landing.py"):
+            shutil.copy(str(SCRIPTS / name), str(scratch / name))
+        # reverse_squash_guard.py is deliberately absent from the scratch
+        # scripts home the copied helper resolves: the notice's guard import
+        # fails there while the landing path stays guard-free (land mode
+        # touches the guard at the notice point only)
+        repo, lock = self.locked_repo("grammar-import-failure")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "landed.txt", "landed\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+
+        env = base_env()
+        env["MERGE_LOCK_DIR"] = lock[0]
+        env["MERGE_LOCK_TOKEN"] = lock[1]
+        proc = subprocess.run(
+            ["bash", str(scratch / "land_squash.sh"), "land",
+             "--branch", "feature", "--expected-tip", tip,
+             "--message", "skills: separate the vendored twins"],
+            capture_output=True, text=True, check=False, cwd=str(repo),
+            env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(
+            proc.stdout.count(
+                "note: the landing-claim grammar notice could not import"
+                " the guard module"),
+            1, proc.stdout)
+        self.assertNotIn("warning: landing message subject", proc.stdout)
+        landing = rev(repo, "refs/heads/main")
+        self.assertEqual(rev(repo, "%s^" % landing), tip)
+
+    def test_land_notice_reads_guard_constant_not_a_helper_copy(self):
+        # the helper text carries no literal copy of the recognized prefix
+        # set: the grammar lives once, in the guard constant
+        script = HELPER.read_text()
+        for prefix, _kind in GUARD_MODULE.LANDING_CLAIM_PREFIXES:
+            self.assertNotIn(prefix, script)
 
     # ---- unresolvable source branch -------------------------------------
 

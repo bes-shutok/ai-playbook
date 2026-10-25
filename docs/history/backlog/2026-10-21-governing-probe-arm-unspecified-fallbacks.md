@@ -5,6 +5,7 @@ Priority: low
 Class: fix-class (prose gap in the arm both homes carry; no new gate proposed)
 Origin class: review-residual (execute-plan Phase 3 r1, plan docs/history/plans/2026-10-20-usage-wall-probe-before-timed-resume.md, findings CC-1 and CC-2)
 Driving force: reliability
+Cluster: (sibling row 2026-10-25-wave-boundary-pause-before-record-pair.md deleted 2026-10-26, its record-pair precondition clause landed; the deletion-failure and term-definition gaps here remain separate work)
 
 ## Skill and step
 

@@ -550,6 +550,21 @@ facts_tmp_dir_for() {
   printf '%s\n' "$value"
 }
 
+facts_discovery_cause() {
+  # The specific discovery failure behind facts_tmp_dir_for's refusal: the
+  # scan's inconclusive verdict names it beside the registered worktree
+  # (missing facts / unreadable facts / no tmp_dir); no path is guessed.
+  local wt="$1" facts
+  facts="$wt/.ai-playbook/facts.md"
+  if [[ ! -e "$facts" ]]; then
+    printf 'missing facts'
+  elif [[ ! -r "$facts" ]]; then
+    printf 'unreadable facts'
+  else
+    printf 'no tmp_dir'
+  fi
+}
+
 manifest_path_for() {
   # The canonical run-manifest path for a worktree and plan slug; returns 1
   # when the worktree's facts refuse discovery.
@@ -563,37 +578,63 @@ scan_registered_manifest() {
   # take and sweep preserve a claim whenever either supported manifest form
   # remains at its exact registered-worktree path; multiple matches or
   # missing facts refuse unchanged). Emits one tab-separated verdict line:
-  #   found<tab><manifest-path><tab><worktree-path>  exactly one registered
-  #                  worktree carries a non-symlink manifest file at the
-  #                  exact facts-resolved path (form recognition is the
+  #   found<tab><manifest-path><tab><worktree-path>  one manifest identity
+  #                  across the registered worktrees: a non-symlink
+  #                  manifest file at the exact facts-resolved path, where
+  #                  a byte-identical primary-side mirror (a copy under the
+  #                  primary checkout's matching run path) is the same
+  #                  identity and the canonical registered non-primary
+  #                  worktree is retained (form recognition is the
   #                  classification helper's job; this scan's preservation
   #                  predicate is file presence)
-  #   multiple      two or more registered worktrees carry one (ambiguous)
+  #   multiple      two or more manifest identities (ambiguous): two
+  #                  non-primary worktrees, or a primary-side copy whose
+  #                  bytes differ from the canonical manifest
   #   none          no manifest file exists at any resolvable path
-  #   inconclusive  a manifest path holds a symlink (never followed)
+  #   inconclusive<tab>facts<tab><cause><tab><worktree-path>
+  #                 the named worktree's facts refuse manifest discovery
+  #                 (<cause>: missing facts / unreadable facts / no
+  #                 tmp_dir)
+  #   inconclusive<tab>symlink<tab><manifest-path><tab><worktree-path>
+  #                 the named worktree's manifest path holds a symlink
+  #                 (never followed)
   # A worktree whose facts refuse discovery makes the scan inconclusive
   # (the Terms: missing facts refuse unchanged — the claim is preserved,
   # never taken over or swept, because a manifest could hide behind the
   # unreadable facts). No default-path fallback exists.
   local slug="$1" line cur manifest count=0 found_mf="" found_wt=""
+  local primary_norm
+  primary_norm="$(norm_path "$PRIMARY")"
   while IFS= read -r line; do
     cur="${line#worktree }"
     if manifest="$(manifest_path_for "$cur" "$slug")"; then
       if [[ -L "$manifest" ]]; then
-        printf 'inconclusive\n'
+        printf 'inconclusive\tsymlink\t%s\t%s\n' "$manifest" "$cur"
         return 0
       fi
       if [[ -f "$manifest" ]]; then
-        count=$((count + 1))
-        found_mf="$manifest"
-        found_wt="$cur"
-        if (( count > 1 )); then
+        if (( count == 1 )); then
+          # The one admitted collapse: a byte-identical primary-side
+          # mirror of the first find is the same identity, retained at
+          # the canonical non-primary worktree; every other second
+          # manifest stays multiple.
+          if [[ "$(norm_path "$cur")" == "$primary_norm" || "$(norm_path "$found_wt")" == "$primary_norm" ]] \
+              && cmp -s "$manifest" "$found_mf"; then
+            if [[ "$(norm_path "$cur")" != "$primary_norm" ]]; then
+              found_mf="$manifest"
+              found_wt="$cur"
+            fi
+            continue
+          fi
           printf 'multiple\n'
           return 0
         fi
+        count=1
+        found_mf="$manifest"
+        found_wt="$cur"
       fi
     else
-      printf 'inconclusive\n'
+      printf 'inconclusive\tfacts\t%s\t%s\n' "$(facts_discovery_cause "$cur")" "$cur"
       return 0
     fi
   done < <(git -C "$ANCHOR" worktree list --porcelain 2>/dev/null | grep '^worktree ')
@@ -1100,7 +1141,7 @@ try_dead_run_conversion() {
   # every registered worktree and finds no manifest returns no-context —
   # and a found manifest at the take path is itself the registration
   # witness (the scan walks registered worktrees only).
-  local scan verdict scan_mf scan_wt
+  local scan verdict scan_mf scan_wt scan_cause scan_detail
   scan="$(scan_registered_manifest "$SLUG")"
   verdict="${scan%%$'\t'*}"
   case "$verdict" in
@@ -1110,7 +1151,12 @@ try_dead_run_conversion() {
       die_fail
       ;;
     inconclusive)
-      refuse "conversion refused: the registered-manifest scan is inconclusive (facts refuse discovery, or a symlinked manifest path)"
+      IFS=$'\t' read -r verdict scan_cause scan_detail scan_wt <<<"$scan"
+      if [[ "$scan_cause" == "symlink" ]]; then
+        refuse "conversion refused: the registered-manifest scan is inconclusive: registered worktree $scan_wt: the manifest path is a symlink (never followed): $scan_detail"
+      else
+        refuse "conversion refused: the registered-manifest scan is inconclusive: registered worktree $scan_wt: $scan_detail (no manifest path is guessed)"
+      fi
       refuse "  the claim is preserved for operator reconciliation"
       die_fail
       ;;
@@ -1929,7 +1975,7 @@ cmd_sweep() {
       # too). The claim's own file name is the plan's canonical artifact
       # slug, so the scan needs no claim fields.
       slug="$(basename "$claim_file" .md)"
-      local scan verdict scan_wt
+      local scan verdict scan_mf scan_wt scan_cause scan_detail
       scan="$(scan_registered_manifest "$slug")"
       verdict="${scan%%$'\t'*}"
       case "$verdict" in
@@ -1941,7 +1987,12 @@ cmd_sweep() {
           reason="run manifests for this slug exist in more than one registered worktree (ambiguous)"
           ;;
         inconclusive)
-          reason="preservation scan inconclusive (a manifest path holds a symlink)"
+          IFS=$'\t' read -r verdict scan_cause scan_detail scan_wt <<<"$scan"
+          if [[ "$scan_cause" == "symlink" ]]; then
+            reason="preservation scan inconclusive: registered worktree $scan_wt: the manifest path is a symlink (never followed): $scan_detail"
+          else
+            reason="preservation scan inconclusive: registered worktree $scan_wt: $scan_detail (no manifest path is guessed)"
+          fi
           ;;
       esac
     fi

@@ -7,7 +7,7 @@
 - **Origin class:** observed execution handoff blocker
 - **Class:** fix-class
 - **Cluster:** docs/history/backlog/2026-10-10-landing-deleted-unclaimed-execution-ready-plan.md
-Cluster: docs/history/backlog/2026-10-05-execute-plan-reviewed-scope-recovery.md; docs/history/backlog/2026-10-09-execute-plan-live-claim-scope-widening.md; docs/history/backlog/2026-10-10-execute-plan-recovery-full-stem-resolution.md (shared surface: execute-plan scope and recovery transitions)
+Cluster: docs/history/backlog/2026-10-05-execute-plan-reviewed-scope-recovery.md (shared surface: execute-plan scope and recovery transitions)
 - **Driving force:** reliability + recoverability
 - **Skill/step:** `agents/skills/execute-plan/runtime-contract.md`, preflight and done-pending recovery; `scripts/execute_plan_runtime.py`
 - **Severity:** high; a reviewed task can reach `done-pending` while preflight refuses the run because the plan digest and task checkbox projection no longer match the manifest.

@@ -4,7 +4,7 @@ Class: formal-hardening
 Origin class: self-serving
 Quarantine: 2026-10-16
 Driving force: token-usage
-Cluster: docs/history/backlog/2026-10-10-review-loop-dispatch-closed-vocabulary.md (same surface: the review-loop skill's dispatch and staging contracts)
+Cluster: docs/history/plans/completed/2026-10-23-review-loop-staging-vocabularies.md (the covering plan; the dispatch-closed-vocabulary origin is folded in its Disposition section) (same surface: the review-loop skill's dispatch and staging contracts)
 Status: open
 Priority: low
 

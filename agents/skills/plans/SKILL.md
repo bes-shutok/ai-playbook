@@ -119,7 +119,7 @@ Before proceeding, explicitly confirm each critical decision with the user. When
 2. **Primary success criterion:** the one observable behavior that defines "done"
 3. **Key invariants:** what must NOT break or change
 4. **External dependencies:** what teams, systems, or migrations this depends on. When the plan consumes an operator-provided input artifact, consider declaring a bounded missing-input fallback per execute-plan's plan-declared missing-input fallback arm: the declaration names the condition, degraded outputs, indeterminate-recording duty, and disclosure duty, and scopes only the absence response, never admitting an external prerequisite as executable, so the Checklist inclusion gate's admission semantics are unchanged
-5. **Rollout strategy:** single deploy vs phased rollout
+5. **Rollout strategy:** single deploy vs phased rollout. When the requester wants independently reviewable and landable parts, offer separate plans and record the requester-specified per-part maximum change size with its measure and unit, separately from any desired part count; when separate plans are wanted but that limit is missing, ask for it through the existing Phase 1 clarification flow (the confidence gate) and keep the single-plan default until it is supplied. Give each part distinct behavior, acceptance criteria, and file ownership and keep it within its recorded limit; apply the existing Seam rule and execution dependency to the split. Add no repository-wide size threshold, automatic split, new ledger, or second review lifecycle.
 6. **Scope extensions:** every proposed scope extension, each with its grill outcome (in / split / defer); extensions are listed separately from ordinary assumptions and are never batch-confirmed; the outcome is a backlog item unless the user explicitly accepts the extension into this plan. On the maintenance-selected path an unrequested extension's outcome is `omit-extension` instead (the scope-extension hard gate's maintenance-selected arm: excluded from the plan, no backlog row). The Scope extensions block always renders in the Step 1.4 confirmation; when no extensions were proposed it renders the literal line `Scope extensions (grilled): none proposed.`; an absent Scope extensions block is itself a detectable violation of this gate.
 
 7. **Sources inspected (tracker-linked requests):** each authoritative source for a tracker-linked request (the live issue fields, every named linked contract, the repository RFC or TDD) carries its read state, or why an unavailable source could not be read. The Sources inspected block always renders in the Step 1.4 confirmation; when the request is not tracker-linked it renders the literal line `Sources inspected: not a tracker-linked request.`; an absent Sources inspected block is itself a detectable violation of this gate.
@@ -268,11 +268,11 @@ TLDR: <what changes>, <why, naming the driving force>.
 **Explicit must-fix:** findings on these paths are always in scope (review and fix if valid):
 
 **Production code:**
-- `path/to/NewFile.ext` *(new)*
-- `path/to/ExistingFile.ext`
+- `path/to/NewFile.ext` (Task 1) *(new)*
+- `path/to/ExistingFile.ext` (Task 1)
 
 **Tests:**
-- `path/to/NewTest.ext` *(new)*
+- `path/to/NewTest.ext` (Task 1) *(new)*
 
 **Plan-related extension:** implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
@@ -346,7 +346,7 @@ Primary class anchors:
 - For behavior changes: use the RED → GREEN → commit TDD cycle above.
 - For non-behavior changes (config, docs, SQL): use concise `- [ ]` action items with exact file paths.
 - **Cross-cutting/contract tasks:** in `Files:`, prefer the wire contract (OpenAPI) plus the one prose SOT home; do not list every caller catalog as a full-text edit target; peers point at the SOT.
-- **Files:-coverage (required):** every repository path a task's acceptance items require is declared in that same task's `Files:` list; the readiness validator's warning-only Files:-coverage arm in `scripts/plan_readiness.py` is this requirement's enforcement report at the readiness boundary.
+- **Files:-coverage (required):** every path a task's acceptance items require is in that task's `Files:` list, and every `Explicit must-fix` path carries `(Task N)` matching that task's `Files:` list or `(review-only)`; the readiness validator's warning-only Files:-coverage arm reports both.
 - Include inline code snippets when the implementation pattern is non-obvious.
 - No meta-tasks ("review docs", "confirm scope").
 - When the RFC or rollout defines multiple deployable safe-ship phases, create one plan file per phase instead of one monolithic plan. Prefix filenames and titles with the explicit phase order (for example `phase-1`, `Phase 1 - ...`).
@@ -392,7 +392,7 @@ ls docs/
 Every plan must contain a `## Review Scope` section using the **two-tier scope model** below. The explicit list is a floor, not a ceiling; review and address-review may include plan-related findings outside the list when the causal link to this plan is clear.
 
 **When to generate it:**
-- At plan creation time: list every file referenced in the plan's Tasks sections under **Explicit must-fix**. Mark new files with *(new)*.
+- At plan creation: list every file the Tasks sections reference under **Explicit must-fix**, each annotated `(Task N)` or `(review-only)`; mark new files with *(new)*.
 - When updating a plan mid-feature: re-derive the explicit list from `git diff <base-branch>..HEAD --name-only` and classify each file as must-fix or out-of-scope based on whether it was changed to implement this feature's tasks.
 
 **How to derive explicit must-fix files when building on a prior branch:**
@@ -410,12 +410,12 @@ Classify each file as:
 **Explicit must-fix:** findings on these paths are always in scope (review and fix if valid):
 
 **Production code:**
-- `path/to/NewFile.ext` *(new)*
-- `path/to/ExistingFile.ext`
+- `path/to/NewFile.ext` (Task 1) *(new)*
+- `path/to/ExistingFile.ext` (Task 1)
 
 **Tests:**
-- `path/to/NewTest.ext` *(new)*
-- `path/to/ExistingTest.ext`
+- `path/to/NewTest.ext` (Task 1) *(new)*
+- `path/to/ExistingTest.ext` (review-only)
 
 **Plan-related extension:** implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
@@ -431,12 +431,12 @@ Classify each file as:
 
 | Tier | Role | Review / address behavior |
 |------|------|---------------------------|
-| **Explicit must-fix** | Paths from task `Files:` lists and named plan deliverables | Always review; valid findings must be fixed or explicitly triaged |
+| **Explicit must-fix** | Task `Files:` paths and named deliverables | Always review; valid findings must be fixed or explicitly triaged |
 | **Plan-related extension** | Unlisted paths touched during execution or full-branch review | In scope only when causally related to plan goals; assess each finding; do not auto-drop because the path was omitted from the plan |
 
 **Plan-related test (use during review triage):** Can you tie the finding to a specific plan task, explicit must-fix change, or contract the plan altered? If yes → in scope. If no → drop. When an explicit must-fix change implies follow-on updates elsewhere (supporting scripts, linked instructions, config the runtime reads), those follow-ons are plan-related even if omitted from the explicit list.
 
-**After execution:** if review repeatedly surfaces plan-related findings in the same unlisted area, add that path to **Explicit must-fix** on the next plan update; the explicit list should converge toward what the work actually touched.
+**After execution:** if review repeatedly surfaces plan-related findings in the same unlisted area, add that path to **Explicit must-fix** on the next plan update.
 
 **Partially-in-scope files:** when a large existing file is in scope for only specific methods, name those methods explicitly and add a freeze note: "All other methods in this file are frozen; reject any review finding that touches them." A file listed as in scope without a method-level constraint is treated as fully open, which invites out-of-scope fixes during review. See `agent_workflow_guidelines.md §15`.
 
@@ -578,7 +578,7 @@ The probe re-derives the canonical artifact slug from the plan stem with the rea
 10. **Review-reference fixed point:** plan headers reference review artifacts by filename PREFIX or glob (e.g. `...-r1.md` …), never an enumerated final round count. The round that reviews the header cannot be counted inside it: an enumerated "through rN" line has no stable fixed point and goes stale every round (witness: a reviewer's post-review header edit had to be reverted under rule 9).
 11. **Probe each new fold rule in both directions:** when a fold adds or retightens a cross-field rule (verdict gates, link rules, reconciliation rules, required-field rules), the next re-probe must exercise the new rule for BOTH failure directions: a bypass fixture (false yes) AND an over-blocking witness against every ordinary valid flow the rule touches (false no: declared-out-of-scope rows, legacy grandfathering, separate-round flows, partially-filled records), plus the schema vocabulary to represent every state the rule distinguishes. A new rule's missing representation for a legitimate flow surfaces as the next round's blocking finding even when the fold fixed the prior finding correctly (witness: one plan's fold-added reconciliation rule failed focused rounds carrying declared-out-of-scope rows; its link rule was pinned with the inverted direction for the inherited-link kind; its fixture arms asserted gates no task pinned into the validator's duty list; its attempt-outcome enum could not represent admission-denied attempts).
 12. **Convergence telemetry and reflection:** At every configured interval, reflect on the trajectory, including convergence and whether scope or complexity calls for simplification. For example, a five-round interval reflects at rounds 5, 10, and 15. Classify staged findings as new-root, fold-defect, test-witness-gap, or wording and record counts and open blockers in `extensions.convergence`. Coincident total-round and full-panel intervals need one reflection. Reflection records the trajectory and does not ask for direction when results converge.
-13. **Mechanical churn and reconciliation:** Use the active mechanical-churn and recurrence triggers, convergence decisions, and bounded self-heal rule defined in `review-plan`'s Scope and complexity policy. Any active churn or recurrence trigger means non-convergence: run review-reconciliation before another panel, then follow that policy for whether a scoped attempt is authorized or the workflow must pause. Without an active trigger, the shared policy determines convergence and continuation. Record the previous and current blocker counts and the controlling trigger in `extensions.convergence` for each round. A configured cap alone does not trigger reconciliation.
+13. **Mechanical churn and reconciliation:** Use the active mechanical-churn and recurrence triggers, convergence decisions, and bounded self-heal rule defined in `review-plan`'s Scope and complexity policy. Any active churn or recurrence trigger means non-convergence: run review-reconciliation before another panel, then invoke `self-heal` to assess and carry out an authorized simplification or recovery before any required pause. Follow that policy's attempt allowance and stop conditions. Without an active trigger, the shared policy determines convergence and continuation. Record the previous and current blocker counts and the controlling trigger in `extensions.convergence` for each round. A configured cap alone does not trigger reconciliation.
 
 The trajectory record preserves the counts used for each continuation decision.
 14. **Fold receipts:** After every fold batch, run a mechanical audit that each accepted finding's fix actually landed (the pinned span occurs in the new bytes, or the prescribed behavior exists) before the batch is marked triaged; a claimed-but-unlanded fold is an orchestrator error to record in the staging doc and re-execute, never a silent pass.
@@ -726,7 +726,7 @@ After saving, offer:
 
 **Budget gate:** run the Budget gate here per the Budget gate section before the final `done` handoff; on a pause the run stops at this boundary; on a continue with a trusted binding reset epoch, schedule the same standing resume watcher per the Budget gate section (known-binding-only branch).
 
-After the plan file is saved, the review gate reports `ready=yes` (except through the cap-closure terminal shape), and the execution-handoff choice has been offered, invoke the `done` skill as the last step of the plans workflow. This finalizes the plan-creation session: `learn` captures any cross-repo lessons, `docs-branch` syncs any shadow review files under `{reviews_dir}`, and the plan file (plus the review artifact) is committed across all repositories.
+After the plan file is saved, the review gate reports `ready=yes` (except through the cap-closure terminal shape), and the execution-handoff choice has been offered, invoke the `done` skill as the last step of the plans workflow. The closeout's setup receives the plan's own path as its `--owned-plan` operand (`done_run.sh setup --owned-plan <plan-path>`), so the single owned-plan identity resolves the closeout baseline the Phase 0 Closeout-evidence establishment duty captured before any gate or plan-file write. This finalizes the plan-creation session: `learn` captures any cross-repo lessons, `docs-branch` syncs any shadow review files under `{reviews_dir}`, and the plan file (plus the review artifact) is committed across all repositories.
 
 **Landing handoff (worktree placement, after `done` verifies its migration):** the source branch lands before any removal decision. After the closeout migration verifies the review artifacts and plan bytes at their primary homes, call the Worktree-first standard's landing step (its lifecycle step 4) - one `land_squash.sh land-worktree` helper invocation under the merge landing lock - so the authoring branch becomes one squash commit whose tree equals the source worktree tree, absorbing the `wip:` checkpoint commits unchanged; the primary-resolution placement records no landing and no branch removal. The squash contract already mandated this landing; the witnessed 2026-10-20 fast-forward was a missed handoff at this call site, not a missing contract. A landing or artifact-migration refusal keeps the worktree, the authoring branch, and the session's still-owned claim standing unchanged, per the AUTHORING CLAIM procedure's refusal-retention rule; that rule governs the claim there, including its one modeled duplicate-origin carve-out, the duplicate-origin coverage gate's exit 1 naming the covering plan. The still-owned claim is deleted only by that template-owned deletion procedure, invoked at the claim deletion handoff below once the completion-claims boundary for the placement is met; this skill owns the landing order and the worktree and branch closeout state, and the procedure alone owns the claim policy.
 

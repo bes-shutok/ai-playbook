@@ -1,0 +1,5 @@
+# Backlog: review workers create ad-hoc /tmp base-comparison worktrees that outlive the run
+
+Driving force: code-quality (witnessed 2026-10-25, the 02:00 exec run: a pick-1 review lens worker created /private/tmp/dlg-base-wt (a detached-HEAD base worktree) and never removed it; the operator asked whether the session had cleaned all its worktrees, and it had to be found and removed in a follow-up turn)
+
+Review-phase workers are told to copy trees to /tmp for execution, and some create real `git worktree add` checkouts there instead. These residues sit outside the run worktree, outside the closeout migration's captured gitignored dirs, and outside the session tmp cleanup, so a run can end "clean" while a /tmp worktree survives. Candidate remedies: an explicit do-not-create-worktrees clause in review worker prompts, a cleanup sweep arm in the run closeout, or acceptance-with-documentation. Investigation should price each against the witnessed frequency (one occurrence in the founding audit's founding run) and the machinery admission protocol.

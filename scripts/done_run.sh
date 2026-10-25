@@ -36,11 +36,14 @@
 # the report inputs: the landing summary from the run's owned-commits ledger
 # and the report-only missing-review-record scan over the archived plans
 # (missing review records are reported, never blocking, never fabricated).
-# The advisory appends run last, never blocking: one landing-cost telemetry
+# The guard-liveness ledger rows append BEFORE the done-lock release (plan
+# 2026-10-24-description-length-gate-catch-promotion): every normal ledger
+# writer serializes under the existing done lock, the same lock the commit
+# path's pre-refusal catch holds, so the lock releases only after the
+# appends ran; a failed append is a warning line and the lock releases
+# anyway. The landing-cost telemetry line runs last, never blocking: one
 # line when this run landed work in the project repo (skip with --no-
-# landing-cost or when nothing landed; a failed append is a warning line),
-# and one guard-liveness ledger row per --guard-firing (a failed append is a
-# warning line).
+# landing-cost or when nothing landed; a failed append is a warning line).
 #
 # setup composes, in order: the rearm-on-touch echo (advisory), the done-lock
 # wait-acquire with the short agent wait (DONE_LOCK_AGENT_MAX_WAIT_SECS,
@@ -50,8 +53,13 @@
 # boundary continues to the fresh marker and manifest behind a one-line note,
 # an unresolved orphan takes the verbatim refusal remedies, an unreadable
 # record fails closed), the run-start marker write, and the run
-# manifest write bound to that marker via --run-marker. On success it prints
-# one status line on stdout followed by eval-able export lines for the
+# manifest write bound to that marker via --run-marker; a manifest whose
+# owned_plan_paths count is not exactly one also gets the run-ID-keyed
+# migration skip record (worktree-migrate-baseline-<run id>-skip.json)
+# written in the same session directory - the commit stage's only
+# zero/multi-plan skip evidence - and the explicit --from-manifest re-entry
+# completes the same producer duty for its adopted boundary. On success it
+# prints one status line on stdout followed by eval-able export lines for the
 # downstream consumers: DONE_LOCK_DIR, DONE_LOCK_TOKEN, DONE_RUN_MARKER,
 # DONE_RUN_MANIFEST, DONE_RUN_ID.
 #
@@ -69,8 +77,19 @@
 # resolves; findings report-only), the lesson-scope audit when the lessons
 # corpus is touched, the --learn-receipts-from ledger appends
 # (post-hoc-from-receipt, before the sweep), the landing sweep over the
-# final staged set, the docs-branch sync (the worktree migration precedes it
-# in an ad-hoc worktree; the sync holds its own runner-owned merge-lock
+# final staged set, and the description-length pre-refusal catch record: a
+# sweep result of gate=description-length with rc=1 is the one modeled
+# over-cap class, and its catch row (run identity in the existing note
+# field, deduplicated by the ledger writer for sequential retries) is
+# appended to scripts/gate_liveness_ledger.json while the done lock is
+# still held and before the commit refuses; that refusal names the ledger
+# path as a required declaration for the next successful retry (declare the
+# fixed description and the ledger JSON together so the catch lands with
+# the fix); a ledger append failure refuses naming the unrecorded catch;
+# sweep results with rc=2 (indeterminate) or rc=3 (tool error) refuse
+# without a catch. Then the docs-branch sync (the worktree migration precedes it
+# in an ad-hoc worktree, reusing the run's one pre-work Phase 0 baseline or
+# its valid skip record, never capturing a late baseline; the sync holds its own runner-owned merge-lock
 # span; --boundary-class per-task skips the sync as a final-closeout leg and
 # forwards the class to the landing sweep, whose per-task roster drops the
 # primary-checkout inspection; the default final-closeout keeps today's
@@ -174,9 +193,35 @@ marker_confirms() { # marker-path -> rc
   [ -n "$digest" ] && [ "$recorded" = "$digest" ]
 }
 
+# The zero/multi-plan producer half of the run-ID-keyed migration skip
+# record: a run manifest that does not select exactly one owned plan has no
+# plan baseline the commit stage's migration leg may reuse, and this record
+# is that leg's only skip evidence. Setup writes it beside its own session
+# resolution - the same directory the commit leg reads - so producer and
+# consumer never disagree on the location, and a single-plan run writes
+# nothing (its baseline route needs no skip evidence). Idempotent per run
+# id; returns non-zero only when the write itself fails.
+write_zero_multi_plan_skip_record() { # session manifest-path -> rc
+  local session="$1" manifest="$2" run_id count record
+  [ -n "$session" ] && [ -n "$manifest" ] && [ -f "$manifest" ] || return 0
+  run_id="$(manifest_scalar "$manifest" run_id)"
+  [ -n "$run_id" ] || return 0
+  count="$(manifest_field "$manifest" owned_plan_paths | grep -c .)"
+  [ "$count" -eq 1 ] && return 0
+  record="$session/worktree-migrate-baseline-$run_id-skip.json"
+  if [ ! -f "$record" ]; then
+    printf '%s\n' "{\"skip\": true, \"reason\": \"owned_plan_paths selects $count owned plan(s); no single plan baseline to reuse; the manual scoped copy is the session's before-commit duty\", \"fallback\": \"manual scoped copy\"}" \
+      > "$record" || return 1
+  fi
+  echo "done_run setup: zero/multi-plan run: migration skip record present: $(basename "$record")"
+  return 0
+}
+
 # Classify a found partial setup; print the remedy lines on stderr and, for
 # an explicit --from-manifest re-entry, the audit exports on stdout.
-# Read-only: writes nothing. The state verdict comes from the repo-local
+# Read-only except the re-entry arm's one zero/multi-plan skip-record write
+# (the same producer duty a fresh setup performs; a plain classification
+# writes nothing). The state verdict comes from the repo-local
 # sweep-gates lib's classify-run-boundary subcommand (the canonical
 # RunManifest parse plus the adopted-set orphan filter, read at run identity
 # over every run-manifest-*.json record sharing the newest file's payload run
@@ -254,6 +299,13 @@ classify_partial() { # from_manifest(empty allowed)
       RUN_MARKER_PATH=""
       [ -n "$newest_marker" ] && [ "$marker_name" = "$(basename "$newest_marker")" ] && RUN_MARKER_PATH="$newest_marker"
       echo "done_run setup: re-entering boundary run_id=$mid (explicit --from-manifest)"
+      # the adopted boundary completes the zero/multi-plan producer duty
+      # before its exports are handed back, so an interrupted setup never
+      # strands its run without the commit stage's skip evidence
+      write_zero_multi_plan_skip_record "$session" "$newest_manifest" || {
+        echo "done_run setup: the zero/multi-plan migration skip record write failed for the re-entered boundary" >&2
+        exit 1
+      }
       echo "export DONE_RUN_MANIFEST=$(printf '%q' "$newest_manifest")"
       echo "export DONE_RUN_ID=$mid"
       echo "export DONE_RUN_MARKER=$(printf '%q' "$RUN_MARKER_PATH")"
@@ -395,6 +447,18 @@ cmd_setup() {
     fail_partial "run manifest" "writer left no manifest/run_id echo to capture"
   fi
 
+  # 8. The zero/multi-plan migration skip record (the producer duty): a
+  #    manifest whose owned_plan_paths count is not exactly one gets its
+  #    run-ID-keyed skip record written at this setup's own session
+  #    resolution - the same directory the commit leg reads - so the
+  #    commit stage's zero/multi-plan closeout never dead-ends at its
+  #    refusal with no producer. A single-plan run writes nothing; its
+  #    baseline route needs no skip evidence.
+  write_zero_multi_plan_skip_record "$session" "$MANIFEST" || {
+    echo "done_run setup: the zero/multi-plan migration skip record write failed: $session/worktree-migrate-baseline-$RUN_ID-skip.json; re-enter with --from-manifest $RUN_ID to complete the duty" >&2
+    exit 1
+  }
+
   echo "done_run setup: ok run_id=$RUN_ID"
   echo "export DONE_LOCK_DIR=$(printf '%q' "$DONE_LOCK_DIR")"
   echo "export DONE_LOCK_TOKEN=$(printf '%q' "$DONE_LOCK_TOKEN")"
@@ -424,6 +488,35 @@ facts_toml_value() { # key -> value from the repo facts TOML block
   repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
   sed -En "/^${key} = [\"']/{s/^${key} = [\"'](.*)[\"']$/\\1/p;}" \
     "$repo_top/.ai-playbook/facts.md" 2>/dev/null | head -n 1
+}
+
+plan_session_slug() { # repo-relative plan path -> the canonical <PLAN_SLUG>
+  # The execute-plan canonical session-slug rule (Step 0.4): a dated plan
+  # file contributes the filename after removing the leading date and the
+  # .md extension; the PLAN.md charter of a dated plan directory contributes
+  # the directory name after removing the leading date.
+  local base name
+  base="${1##*/}"
+  if [ "$base" = "PLAN.md" ]; then
+    name="${1%/*}"
+    name="${name##*/}"
+  else
+    name="${base%.md}"
+  fi
+  printf '%s\n' "$name" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//'
+}
+
+valid_skip_record() { # path -> rc 0 when the file is a valid skip record
+  # A skip record is valid when it parses as a JSON object carrying
+  # "skip": true (the shape the execute-plan Phase 0 failure arm writes and
+  # the run-ID-keyed sibling mirrors); anything else is no skip evidence.
+  [ -n "$1" ] && [ -f "$1" ] || return 1
+  python3 -c 'import json, sys
+try:
+    payload = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(payload, dict) and payload.get("skip") is True else 1)' "$1"
 }
 
 manifest_field() { # manifest field -> one value per line (list field)
@@ -1315,32 +1408,126 @@ cmd_commit() {
   fi
   printf '%s\n' "$SWEEP_OUT"
   if [ "$SWEEP_RC" -ne 0 ]; then
+    # Description-length pre-refusal catch record (plan
+    # 2026-10-24-description-length-gate-catch-promotion, Task 1): the
+    # sweep's structured JSON gate and rc are the complete capture input.
+    # gate=description-length with rc=1 is the one measured over-cap class:
+    # append its catch row to the repo ledger (run identity in the existing
+    # note field; the ledger writer deduplicates it for sequential retries
+    # of the same run) while the done lock is still held, then refuse. The
+    # refusal names the ledger path as a required declaration for the next
+    # successful retry. An append failure refuses naming the unrecorded
+    # catch. rc=2 (indeterminate) and rc=3 (tool error, including a missing
+    # checker deployment or a checker operational exception) refuse without
+    # a catch.
+    DESC_CATCH=0
+    if printf '%s\n' "$SWEEP_OUT" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        row = json.loads(line)
+    except ValueError:
+        continue
+    if (
+        isinstance(row, dict)
+        and row.get("gate") == "description-length"
+        and row.get("rc") == 1
+    ):
+        sys.exit(0)
+sys.exit(1)
+'; then
+      DESC_CATCH=1
+    fi
+    if [ "$DESC_CATCH" -eq 1 ]; then
+      trace_stage guard-catch-record
+      LEDGER_SCRIPT="$(resolve_helper gate_liveness_ledger.py)"
+      CATCH_RUN_ID="$(resolve_run_id)"
+      if [ -n "$CATCH_RUN_ID" ]; then
+        CATCH_NOTE="run_id=$CATCH_RUN_ID; over-cap folded skill description refused before landing; declare scripts/gate_liveness_ledger.json on the fixing retry so this catch lands with the fix"
+      else
+        CATCH_NOTE="over-cap folded skill description refused before landing; no run manifest resolved, so this row carries no run-identity token and is never deduplicated"
+      fi
+      CATCH_OK=1
+      if [ -n "$LEDGER_SCRIPT" ]; then
+        GL_CATCH_OUT="$(python3 "$LEDGER_SCRIPT" --ledger scripts/gate_liveness_ledger.json record --guard description-length --kind catch --date "$(date -u +%F)" --evidence "landing sweep gate=description-length rc=1 at the done commit boundary" --note "$CATCH_NOTE" 2>&1)" || CATCH_OK=0
+        printf '%s\n' "$GL_CATCH_OUT"
+      else
+        CATCH_OK=0
+        echo "done_run commit: no gate_liveness_ledger.py resolved (repo-local scripts/ or deployed home); the catch could not be recorded" >&2
+      fi
+      rm -rf "$tmpd"
+      if [ "$CATCH_OK" -eq 1 ]; then
+        commit_die "$SWEEP_RC" "the landing sweep refused the staged set (rc=$SWEEP_RC); nothing committed; the description-length catch was recorded in scripts/gate_liveness_ledger.json (declare that path alongside the fixed description on the next successful retry so the catch lands with the fix); fix the over-cap description(s) and re-run"
+      else
+        commit_die "$SWEEP_RC" "the landing sweep refused the staged set (rc=$SWEEP_RC); nothing committed; the description-length catch could not be recorded in scripts/gate_liveness_ledger.json (the ledger append failed; read its output above); fix that failure, then fix the over-cap description(s) and re-run"
+      fi
+    fi
     rm -rf "$tmpd"
     commit_die "$SWEEP_RC" "the landing sweep refused the staged set (rc=$SWEEP_RC); nothing committed"
   fi
 
   # 13. The docs-branch sync at its today position; the migration precedes it
-  #     when this session runs in an ad-hoc worktree. Both mutating runners
-  #     hold their own repository-keyed merge lock inside their own process.
+  #     when this session runs in an ad-hoc worktree. The commit never
+  #     captures a baseline (plan
+  #     2026-10-18-worktree-closeout-single-start-baseline): exactly one
+  #     owned plan reuses that plan's canonical Phase 0 closeout baseline;
+  #     zero or multiple owned plans take the run-ID-keyed sibling skip
+  #     record whose manual scoped copy and recorded artifact list the
+  #     session completed before this commit; neither evidence keeps the
+  #     existing refusal. Both mutating runners hold their own
+  #     repository-keyed merge lock inside their own process.
   trace_stage docs-sync
   PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -n 1)"
   if [ -n "$PRIMARY" ] && [ "$repo_top" != "$PRIMARY" ]; then
     MIGRATE="$(resolve_helper worktree_closeout_migrate.py)"
     if [ -n "$MIGRATE" ]; then
-      echo "done_run commit: ad-hoc worktree: migrating review staging docs and session logs to the main checkout before the sync"
       RUN_ID_MIG="$(resolve_run_id)"
       MIG_MANIFEST="$session/worktree-migrate-manifest-${RUN_ID_MIG:-adhoc}.json"
-      MIG_BASELINE="$session/worktree-migrate-baseline-${RUN_ID_MIG:-adhoc}.json"
+      MIG_SKIP_RECORD="$session/worktree-migrate-baseline-${RUN_ID_MIG:-adhoc}-skip.json"
       mkdir -p "$session"
       MG_RC=0
-      MG_OUT="$(python3 "$MIGRATE" capture --out "$MIG_BASELINE" 2>&1)" || MG_RC=$?
-      if [ "$MG_RC" -eq 0 ]; then
-        MG_OUT="$(python3 "$MIGRATE" migrate --baseline "$MIG_BASELINE" --source "$repo_top" --target "$PRIMARY" --manifest "$MIG_MANIFEST" 2>&1)" || MG_RC=$?
+      MG_OUT=""
+      MIG_BYPASS=""
+      MIG_BYPASS_RECORD=""
+      MIG_BASELINE=""
+      OWNED_PLAN_LIST="$(manifest_field "${RUN_MANIFEST:-}" owned_plan_paths)"
+      OWNED_PLAN_COUNT="$(printf '%s\n' "$OWNED_PLAN_LIST" | grep -c .)"
+      if [ "$OWNED_PLAN_COUNT" -eq 1 ]; then
+        # Exactly one owned plan: that plan's canonical Phase 0 baseline is
+        # the only baseline this run may reuse; a valid plan-session skip
+        # sibling (the recorded Phase 0 capture failure) routes to the
+        # manual scoped-copy arm instead.
+        OWNED_PLAN_PATH="$(printf '%s\n' "$OWNED_PLAN_LIST")"
+        PLAN_SLUG="$(plan_session_slug "$OWNED_PLAN_PATH")"
+        MIG_TMP_ROOT="$(facts_toml_value tmp_dir)"
+        MIG_TMP_ROOT="${MIG_TMP_ROOT:-docs/tmp/}"
+        case "$MIG_TMP_ROOT" in /*) ;; *) MIG_TMP_ROOT="$repo_top/${MIG_TMP_ROOT#/}";; esac
+        MIG_BASELINE="${MIG_TMP_ROOT%/}/execute-plan/$PLAN_SLUG/closeout-baseline.json"
+        if [ ! -f "$MIG_BASELINE" ] && valid_skip_record "${MIG_BASELINE%.json}-skip.json"; then
+          MIG_BYPASS=1
+          MIG_BYPASS_RECORD="${MIG_BASELINE%.json}-skip.json"
+        fi
+      elif valid_skip_record "$MIG_SKIP_RECORD"; then
+        MIG_BYPASS=1
+        MIG_BYPASS_RECORD="$MIG_SKIP_RECORD"
       fi
-      printf '%s\n' "$MG_OUT"
-      if [ "$MG_RC" -ne 0 ]; then
+      if [ -n "$MIG_BYPASS" ]; then
+        echo "done_run commit: ad-hoc worktree: valid closeout skip record governs ($MIG_BYPASS_RECORD); baseline migration bypassed; the session recorded its manual scoped copy and artifact list as completed before this commit (the wrapper validates only the skip record)"
+      elif [ "$OWNED_PLAN_COUNT" -ne 1 ]; then
+        echo "done_run commit: ad-hoc worktree: owned_plan_paths selects $OWNED_PLAN_COUNT plan baseline(s); none is chosen arbitrarily and no valid skip record: $MIG_SKIP_RECORD" >&2
         rm -rf "$tmpd"
-        commit_die 2 "the worktree migration refused (rc=$MG_RC); resolve what it named before the sync; nothing committed"
+        commit_die 2 "the worktree migration refused (rc=2); resolve what it named before the sync; nothing committed"
+      else
+        echo "done_run commit: ad-hoc worktree: migrating review staging docs and session logs to the main checkout before the sync"
+        MG_OUT="$(python3 "$MIGRATE" migrate --baseline "$MIG_BASELINE" --source "$repo_top" --target "$PRIMARY" --manifest "$MIG_MANIFEST" 2>&1)" || MG_RC=$?
+        printf '%s\n' "$MG_OUT"
+        if [ "$MG_RC" -ne 0 ]; then
+          rm -rf "$tmpd"
+          commit_die 2 "the worktree migration refused (rc=$MG_RC); resolve what it named before the sync; nothing committed"
+        fi
       fi
     fi
   fi
@@ -1589,6 +1776,39 @@ cmd_finalize() {
     fi
   fi
 
+  # 3b. Guard-liveness ledger appends, BEFORE the done-lock release (plan
+  #     2026-10-24-description-length-gate-catch-promotion): every normal
+  #     ledger writer serializes under the existing done lock: the commit
+  #     path's pre-refusal catch holds the same lock, so the lock releases
+  #     only after this loop ran. Echo-and-continue: a failed append is a
+  #     warning line, the release still runs, and the lock is never stranded.
+  trace_stage guard-liveness-appends
+  local firing ledger_script GL_OUT=""
+  if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
+    ledger_script="$(resolve_helper gate_liveness_ledger.py)"
+    if [ -z "$ledger_script" ]; then
+      echo "done_run finalize: WARNING: no gate_liveness_ledger.py resolved; guard-liveness appends skipped (advisory)" >&2
+    fi
+    for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
+      local gname gkind gevidence gnote
+      gname="$(printf '%s' "$firing" | cut -d: -f1)"
+      gkind="$(printf '%s' "$firing" | cut -d: -f2)"
+      gevidence="$(printf '%s' "$firing" | cut -d: -f3)"
+      gnote="$(printf '%s' "$firing" | cut -d: -f4-)"
+      if [ -z "$gname" ] || [ -z "$gkind" ] || [ -z "$gevidence" ]; then
+        echo "done_run finalize: WARNING: malformed --guard-firing (want NAME:KIND:EVIDENCE[:NOTE]): $firing" >&2
+        continue
+      fi
+      GL_ARGS=(record --guard "$gname" --kind "$gkind" --date "$(date -u +%F)" --evidence "$gevidence")
+      [ -n "$gnote" ] && GL_ARGS+=(--note "$gnote")
+      if [ -n "$ledger_script" ]; then
+        GL_OUT="$(python3 "$ledger_script" ${GL_ARGS+"${GL_ARGS[@]}"} 2>&1)" \
+          || echo "done_run finalize: WARNING: guard-liveness append failed for $gname (advisory; the closeout and the lock release continue)" >&2
+        [ -n "$GL_OUT" ] && printf '%s\n' "$GL_OUT"
+      fi
+    done
+  fi
+
   # 4. Done-lock release: the env-token path by default; --from-holder (or
   #    lost exports) takes the lock script's metadata-sourced arm under its
   #    own recorded guards (pinned hold, same host, holder verifiably alive
@@ -1716,35 +1936,11 @@ for citing, record in missing:
 print(f"missing-review-record scan: {len(missing)} missing record(s)")
 PYEOF
 
-  # 8. Advisory appends: guard-liveness ledger rows and the landing-cost
-  #    telemetry line. Echo-and-continue: a failed append is a warning line
-  #    and never blocks the closeout.
+  # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:
+  #    a failed append is a warning line and never blocks the closeout. The
+  #    guard-liveness ledger rows moved before the done-lock release (step
+  #    3b) so every normal ledger writer serializes under the held lock.
   trace_stage advisory-appends
-  local firing ledger_script GL_OUT=""
-  if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
-    ledger_script="$(resolve_helper gate_liveness_ledger.py)"
-    if [ -z "$ledger_script" ]; then
-      echo "done_run finalize: WARNING: no gate_liveness_ledger.py resolved; guard-liveness appends skipped (advisory)" >&2
-    fi
-    for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
-      local gname gkind gevidence gnote
-      gname="$(printf '%s' "$firing" | cut -d: -f1)"
-      gkind="$(printf '%s' "$firing" | cut -d: -f2)"
-      gevidence="$(printf '%s' "$firing" | cut -d: -f3)"
-      gnote="$(printf '%s' "$firing" | cut -d: -f4-)"
-      if [ -z "$gname" ] || [ -z "$gkind" ] || [ -z "$gevidence" ]; then
-        echo "done_run finalize: WARNING: malformed --guard-firing (want NAME:KIND:EVIDENCE[:NOTE]): $firing" >&2
-        continue
-      fi
-      GL_ARGS=(record --guard "$gname" --kind "$gkind" --date "$(date -u +%F)" --evidence "$gevidence")
-      [ -n "$gnote" ] && GL_ARGS+=(--note "$gnote")
-      if [ -n "$ledger_script" ]; then
-        GL_OUT="$(python3 "$ledger_script" ${GL_ARGS+"${GL_ARGS[@]}"} 2>&1)" \
-          || echo "done_run finalize: WARNING: guard-liveness append failed for $gname (advisory; the closeout continues)" >&2
-        [ -n "$GL_OUT" ] && printf '%s\n' "$GL_OUT"
-      fi
-    done
-  fi
   if [ "$no_landing_cost" -eq 0 ] && [ -n "$landing_commit" ] && [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
     metrics_dir="$(facts_toml_value metrics_dir)"
     metrics_dir="${metrics_dir:-.ai-playbook/metrics}"
@@ -1837,7 +2033,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,140p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,154p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

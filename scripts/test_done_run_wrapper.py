@@ -11,6 +11,7 @@ docs-branch sync run hermetically against the fixture repo.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -23,6 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "scripts" / "done_run.sh"
 LOCK_SCRIPT = REPO_ROOT / "scripts" / "done-lock.sh"
+CLOSEOUT_MIGRATE = REPO_ROOT / "scripts" / "worktree_closeout_migrate.py"
 # The test venv resolves at runtime: the documented invocation prepends it to
 # PATH, and under that interpreter's pytest its own bin directory is the venv.
 VENV_BIN = os.environ.get("AI_PLAYBOOK_TEST_VENV") or str(Path(sys.executable).parent)
@@ -82,6 +84,7 @@ class FixtureMixin:
             "DONE_RUN_TRACE_FILE", "DONE_RUN_LINTER",
             "DONE_RUN_ID", "DONE_RUN_MANIFEST", "DONE_RUN_MARKER",
             "DONE_SWEEP_DECLARED_STAGE_PATHS",
+            "GATE_LIVENESS_LEDGER_PATH",
         ):
             env.pop(var, None)
         self.base_env = env
@@ -667,24 +670,53 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
 
     def test_per_task_boundary_skips_docs_sync_keeps_migration(self) -> None:
         """[class: REPOSITORY_TEST] Given a per-task commit in an ad-hoc
-        worktree, the docs-branch sync is skipped, the review-artifact
-        migration still runs (its stdout line present), and one trace line
-        names the skipped leg; the landing commit still lands."""
+        worktree whose run owns exactly one plan, the docs-branch sync is
+        skipped, the review-artifact migration still runs against the plan's
+        canonical Phase 0 baseline (a post-baseline review record transfers
+        to the primary checkout, and no run-ID baseline is captured at commit
+        time), and one trace line names the skipped leg; the landing commit
+        still lands."""
         self.init_fixture_repo()
+        plans = self.fixture / "docs" / "history" / "plans"
+        plans.mkdir(parents=True)
+        plan_rel = "docs/history/plans/2026-10-18-per-task-example.md"
+        (self.fixture / plan_rel).write_text("# plan\n")
+        self.git("add", plan_rel)
+        self.git("commit", "-qm", "plans: fixture owned plan")
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
         primary_head = self.git("rev-parse", "HEAD").stdout.strip()
         worktree = self.tmp / "per-task-wt"
         self.git("worktree", "add", "-b", "per-task-wt-branch", str(worktree))
         try:
+            # the run's declared work lives in the worktree
             (worktree / "seed.txt").write_text("seed\nwork\nper-task edit\n")
+            # the run's Step 0 setup precedes every run artifact: a review
+            # record already on disk is neither owned nor foreign and the
+            # write-manifest claim gate refuses it
             wt_env = self.runner_env()
             wt_env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
             setup = subprocess.run(
-                ["bash", str(RUNNER), "setup", "--owned-path", "seed.txt"],
+                ["bash", str(RUNNER), "setup", "--owned-path", "seed.txt",
+                 "--owned-plan", plan_rel],
                 cwd=str(worktree), env=wt_env,
                 capture_output=True, text=True, timeout=300,
             )
             self.assertEqual(setup.returncode, 0, setup.stderr)
+            # Phase 0: the run captures its closeout baseline before any
+            # transferable run artifact exists.
+            slug_dir = worktree / "docs" / "tmp" / "execute-plan" / "per-task-example"
+            slug_dir.mkdir(parents=True)
+            capture = subprocess.run(
+                [sys.executable, str(CLOSEOUT_MIGRATE), "capture",
+                 "--out", str(slug_dir / "closeout-baseline.json")],
+                cwd=str(worktree), capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(capture.returncode, 0, capture.stderr)
+            # the run then creates a review artifact the baseline predates
+            reviews = worktree / ".ai-playbook" / "reviews"
+            reviews.mkdir(parents=True, exist_ok=True)
+            record = reviews / "2026-10-18-per-task-example-code-review-r1.md"
+            record.write_text("# review record\n", encoding="utf-8")
             # the done-lock session fence is done-lock's status witness, not
             # fixture state under test: remove it so the commit's foreign-dirt
             # gate sees only the declared work
@@ -694,6 +726,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
             env = self.commit_env()
             env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
             env.update(self.eval_exports(setup.stdout))
+            run_id = self.eval_exports(setup.stdout)["DONE_RUN_ID"]
             proc = subprocess.run(
                 ["bash", str(RUNNER), "commit", "--stage", "seed.txt",
                  "--subject", "per-task landing",
@@ -710,17 +743,25 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
                 self.assertNotIn("merge-acquire", sync_trace.read_text())
             # the skip is visible: one trace line naming the skipped leg
             self.assertIn("per-task boundary: skipping the docs-branch sync", combined)
-            # the migration kept its position: its stdout line or manifest
-            migration_ran = (
-                "migrating review staging docs" in combined
-                or any(
-                    path.name.startswith("worktree-migrate-manifest")
-                    for path in (worktree / "docs" / "tmp" / "done-session").glob(
-                        "worktree-migrate-manifest-*.json"
-                    )
-                )
+            # the migration kept its position on the reused pre-work baseline:
+            # the post-baseline review record transferred to the primary
+            transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
+            self.assertTrue(transferred.is_file(), combined)
+            self.assertEqual(transferred.read_text(encoding="utf-8"), "# review record\n")
+            # the commit never captured a late run-ID baseline
+            wt_session = worktree / "docs" / "tmp" / "done-session"
+            self.assertFalse(
+                (wt_session / f"worktree-migrate-baseline-{run_id}.json").exists(),
+                "commit captured a late baseline",
             )
-            self.assertTrue(migration_ran, combined)
+            # the migration manifest records the transfer verified
+            manifests = list(wt_session.glob("worktree-migrate-manifest-*.json"))
+            self.assertEqual(len(manifests), 1)
+            data = json.loads(manifests[0].read_text(encoding="utf-8"))
+            migrated = {entry["source"] for entry in data["migrated"]}
+            self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
+            for entry in data["migrated"]:
+                self.assertTrue(entry["verified"])
             # the landing commit landed on the worktree branch
             self.assertNotEqual(
                 self.git("rev-parse", "HEAD", repo=worktree).stdout.strip(),
@@ -933,6 +974,229 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         self.assertIn("new-skill.md", shown)
         # the sensitive-data scan re-ran over the staged side-repo set
         self.assertIn("OUTCOME: pass", proc.stdout)
+
+
+class DoneRunDescriptionLengthCatchTest(FixtureMixin, unittest.TestCase):
+    """Plan 2026-10-24-description-length-gate-catch-promotion, Task 1: the
+    commit subcommand's pre-refusal catch recording: a structured sweep
+    result of gate=description-length rc=1 appends its deduplicated catch
+    row to the repo ledger before the commit refuses; rc=2/rc=3 refuse
+    without a catch; an append failure refuses naming the unrecorded catch;
+    the fixed retry declares the ledger JSON and lands the catch."""
+
+    OVER_SKILL = "agents/skills/over/SKILL.md"
+    LEDGER_REL = "scripts/gate_liveness_ledger.json"
+
+    def seed_ledger(self, payload: str | None = None) -> None:
+        scripts = self.fixture / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        if payload is None:
+            payload = json.dumps(
+                {
+                    "schema": 1,
+                    "window": {"started": "2026-10-05"},
+                    "guards": {},
+                }
+            )
+        (scripts / "gate_liveness_ledger.json").write_text(payload)
+
+    def write_over_skill(self, length: int = 1025) -> None:
+        path = self.fixture / self.OVER_SKILL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "---\nname: over\ndescription: " + "x" * length + "\n---\n\nbody\n"
+        )
+
+    def ledger_rows(self) -> list[dict]:
+        data = json.loads((self.fixture / self.LEDGER_REL).read_text())
+        return data["guards"].get("description-length", {}).get("rows", [])
+
+    def refusing_session(self) -> tuple[dict, str]:
+        """A fixture session whose declared over-cap skill refuses the
+        landing sweep at description-length rc=1 (the modeled catch class);
+        returns (exports, run_id)."""
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.write_over_skill()
+        self.seed_ledger()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", self.OVER_SKILL, "--owned-path", self.LEDGER_REL,
+        )
+        return exports, exports["DONE_RUN_ID"]
+
+    def test_over_cap_refusal_records_catch_before_refusing(self) -> None:
+        exports, run_id = self.refusing_session()
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--subject", "land the over-cap skill",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(
+            self.commit_count(), count_before, "nothing may land past the gate"
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertIn("the landing sweep refused the staged set (rc=1)", combined)
+        # The refusal names the ledger path as the next retry's required
+        # declaration and identifies the recorded catch.
+        self.assertIn("scripts/gate_liveness_ledger.json", combined)
+        self.assertIn("recorded in scripts/gate_liveness_ledger.json", combined)
+        rows = self.ledger_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "catch")
+        self.assertIn(f"run_id={run_id}", rows[0]["note"])
+
+    def test_repeat_refusal_does_not_duplicate_the_catch(self) -> None:
+        exports, run_id = self.refusing_session()
+        first = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--subject", "land the over-cap skill",
+        )
+        self.assertNotEqual(first.returncode, 0)
+        self.assertEqual(len(self.ledger_rows()), 1)
+        second = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--subject", "land the over-cap skill",
+        )
+        self.assertNotEqual(second.returncode, 0)
+        rows = self.ledger_rows()
+        self.assertEqual(
+            len(rows), 1, "the sequential retry must not duplicate the catch"
+        )
+        self.assertIn(f"run_id={run_id}", rows[0]["note"])
+        self.assertIn(
+            "no row appended: catch already recorded", second.stdout + second.stderr
+        )
+
+    def test_fixed_retry_declares_ledger_and_lands_the_catch(self) -> None:
+        exports, run_id = self.refusing_session()
+        refused = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--subject", "land the over-cap skill",
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        # Fix the description and declare the ledger JSON beside it: the
+        # successful retry lands the recorded catch with the fix.
+        (self.fixture / self.OVER_SKILL).write_text(
+            "---\nname: over\ndescription: short and fixed\n---\n\nbody\n"
+        )
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--stage", self.LEDGER_REL,
+            "--subject", "fix the over-cap skill description and land its catch",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        shown = self.git("show", "--name-only", "--format=", landing).stdout
+        self.assertIn(self.OVER_SKILL, shown)
+        self.assertIn(self.LEDGER_REL, shown)
+        landed_ledger = self.git(
+            "show", f"{landing}:{self.LEDGER_REL}"
+        ).stdout
+        self.assertIn(f"run_id={run_id}", landed_ledger)
+        rows = self.ledger_rows()
+        self.assertEqual(
+            len(rows), 1, "exactly one catch row for the refused run"
+        )
+        self.assertEqual(rows[0]["kind"], "catch")
+
+    def test_classified_tool_error_refusal_records_no_catch(self) -> None:
+        exports, _run_id = self.refusing_session()
+        for exit_code in (2, 3, 7):
+            stub = self.tmp / f"checker-exit{exit_code}.py"
+            stub.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('stub checker diagnostic')\n"
+                f"sys.exit({exit_code})\n"
+            )
+            env = self.commit_env()
+            env.update(exports)
+            env["DESCRIPTION_LENGTH_CHECK_SCRIPT"] = str(stub)
+            proc = self.run_commit(
+                "--stage", self.OVER_SKILL,
+                "--subject", "land the over-cap skill",
+                env=env,
+            )
+            self.assertNotEqual(proc.returncode, 0, exit_code)
+            combined = proc.stdout + proc.stderr
+            self.assertIn(
+                "the landing sweep refused the staged set (rc=3)", combined,
+                f"checker exit {exit_code} must classify as tool error rc=3",
+            )
+            self.assertNotIn(
+                "recorded in scripts/gate_liveness_ledger.json", combined,
+                "a tool-error refusal records no catch",
+            )
+            self.assertEqual(
+                self.ledger_rows(), [],
+                f"checker exit {exit_code} must not append a catch row",
+            )
+
+    def test_missing_ledger_helper_refuses_naming_the_unrecorded_catch(self) -> None:
+        exports, _run_id = self.refusing_session()
+        count_before = self.commit_count()
+        # A private runner copy whose resolve_helper sees a directory with
+        # every helper symlinked in EXCEPT gate_liveness_ledger.py, so the
+        # catch append has no checker to call and the append cannot happen.
+        runner_dir = self.tmp / "runner-no-ledger"
+        runner_dir.mkdir()
+        shutil.copy2(RUNNER, runner_dir / "done_run.sh")
+        for helper in REPO_ROOT.joinpath("scripts").iterdir():
+            if (helper.suffix in (".py", ".sh", ".json")
+                    and helper.name not in (
+                        "done_run.sh", "gate_liveness_ledger.py",
+                        "gate_liveness_ledger.json",
+                    )
+                    and not helper.name.startswith("test_")):
+                os.symlink(helper, runner_dir / helper.name)
+        env = self.commit_env()
+        env.update(exports)
+        # resolve_helper falls back to $HOME/.ai-playbook/scripts, where the
+        # deployed gate_liveness_ledger.py lives; an empty temp home makes
+        # the helper unresolvable from both arms.
+        empty_home = self.tmp / "empty-home"
+        (empty_home / ".ai-playbook").mkdir(parents=True)
+        env["HOME"] = str(empty_home)
+        proc = subprocess.run(
+            ["bash", str(runner_dir / "done_run.sh"), "commit",
+             "--stage", self.OVER_SKILL,
+             "--subject", "land the over-cap skill"],
+            cwd=str(self.fixture), env=env, capture_output=True, text=True,
+            timeout=300,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(
+            self.commit_count(), count_before,
+            "an unrecordable catch leaves the landing refused",
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertIn("no gate_liveness_ledger.py resolved", combined)
+        self.assertIn("could not be recorded", combined)
+
+    def test_ledger_append_failure_refuses_naming_the_unrecorded_catch(self) -> None:
+        exports, _run_id = self.refusing_session()
+        count_before = self.commit_count()
+        self.seed_ledger(payload="{not json")  # corrupt ledger: the append fails
+        proc = self.commit_session(
+            None, exports,
+            "--stage", self.OVER_SKILL,
+            "--subject", "land the over-cap skill",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(
+            self.commit_count(), count_before,
+            "an unrecordable catch leaves the landing refused",
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertIn("could not be recorded", combined)
+        self.assertIn("scripts/gate_liveness_ledger.json", combined)
 
 
 class DoneRunDeclaredStageChannelTest(FixtureMixin, unittest.TestCase):
@@ -1269,9 +1533,35 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
         self.fixture = worktree
         return worktree
 
+    def provision_skip_evidence(self, exports: dict) -> Path:
+        """Zero-plan runs own no plan baseline and the commit-time late
+        capture is removed: the run-ID-keyed sibling skip record is the
+        evidence the closeout contract requires before the docs-sync stage.
+        The fixture owns no transferable run artifact, so the recorded
+        scoped-copy inventory the skip arm's session duty requires is empty;
+        the populated-inventory witness lives in
+        DoneRunCloseoutBaselineArmTest."""
+        skip = self.fixture / "docs" / "tmp" / "done-session" / (
+            f"worktree-migrate-baseline-{exports['DONE_RUN_ID']}-skip.json"
+        )
+        skip.parent.mkdir(parents=True, exist_ok=True)
+        skip.write_text(
+            json.dumps(
+                {
+                    "skip": True,
+                    "reason": "zero owned plans; no plan baseline to reuse",
+                    "fallback": "manual scoped copy",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return skip
+
     def test_empty_declared_set_over_staged_foreign_file_refuses_at_landing_commit(self) -> None:
         self.worktree_fixture()
         setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        self.provision_skip_evidence(exports)
         # the foreign entry is staged AFTER setup, owned by no declared set
         (self.fixture / "foreign.txt").write_text("foreign staged work\n")
         self.git("add", "foreign.txt")
@@ -1296,6 +1586,7 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
     def test_clean_index_empty_declared_set_keeps_existing_skip_line(self) -> None:
         self.worktree_fixture()
         setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        self.provision_skip_evidence(exports)
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -1313,6 +1604,7 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
     def test_owned_declared_set_lands_exactly_its_paths_in_the_worktree(self) -> None:
         self.worktree_fixture()
         setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        self.provision_skip_evidence(exports)
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
         count_before = self.commit_count()
         proc = self.commit_session(
@@ -2340,6 +2632,91 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # The landing-cost telemetry stays advisory-absent when nothing landed.
         self.assertNotIn("landing-cost telemetry appended", proc.stdout)
 
+    # ---- guard-liveness append placement (plan 2026-10-24-description-
+    #      length-gate-catch-promotion): the append loop runs BEFORE the
+    #      done-lock release; append failure stays a warning and the lock
+    #      releases. ------------------------------------------------------- #
+
+    def seed_guard_ledger(self) -> Path:
+        ledger = self.fixture / "scripts" / "gate_liveness_ledger.json"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps(
+            {"schema": 1, "window": {"started": "2026-10-05"}, "guards": {}}
+        ))
+        return ledger
+
+    def ordering_lock_stub(self, ledger: Path) -> Path:
+        """A stub done-lock whose release-repo refuses unless the fixture
+        guard-liveness ledger already carries a run_id row: a passing
+        finalize proves the append loop ran before the release."""
+        stub = self.tmp / "ordering-lock.sh"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'LEDGER="%s"\n'
+            'case "$1" in\n'
+            "  release-repo)\n"
+            '    if grep -q "run_id=" "$LEDGER" 2>/dev/null; then\n'
+            '      echo "stub: released after the ledger row existed"\n'
+            '      echo "OUTCOME: pass"\n'
+            "    else\n"
+            '      echo "stub: no guard-liveness row at release time" >&2\n'
+            '      echo "OUTCOME: fail"\n'
+            "      exit 2\n"
+            "    fi ;;\n"
+            '  merge-status) echo "stub merge-lock: free" ;;\n'
+            '  status) echo "stub done-lock: free" ;;\n'
+            '  *) echo "OUTCOME: pass" ;;\n'
+            "esac\n" % ledger,
+            encoding="utf-8",
+        )
+        return stub
+
+    def test_guard_liveness_appends_run_before_done_lock_release(self) -> None:
+        self.init_fixture_repo()
+        ledger = self.seed_guard_ledger()
+        setup_proc, exports = self.setup_session("--label", "append-order-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        env = self.runner_env()
+        env.update(exports)
+        env["DONE_LOCK_SCRIPT"] = str(self.ordering_lock_stub(ledger))
+        env["GATE_LIVENESS_LEDGER_PATH"] = str(ledger)
+        proc = self.run_finalize(
+            "--guard-firing",
+            f"description-length:catch:fixture-evidence:run_id={run_id}",
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The release only succeeded because the row already existed: the
+        # append loop ran before the done-lock release.
+        self.assertIn("released after the ledger row existed", proc.stdout)
+        self.assertIn("done lock status: free", proc.stdout)
+        data = json.loads(ledger.read_text())
+        rows = data["guards"]["description-length"]["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "catch")
+        self.assertIn(f"run_id={run_id}", rows[0]["note"])
+
+    def test_guard_liveness_append_failure_warns_and_lock_releases(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "append-fail-fixture")
+        corrupt = self.tmp / "corrupt-ledger.json"
+        corrupt.write_text("{not json")
+        env = self.runner_env()
+        env.update(exports)
+        env["GATE_LIVENESS_LEDGER_PATH"] = str(corrupt)
+        proc = self.run_finalize(
+            "--guard-firing",
+            "description-length:catch:fixture-evidence:run_id=run-x",
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn(
+            "guard-liveness append failed for description-length", proc.stderr
+        )
+        # The real lock released anyway: the append failure is warning-only.
+        self.assertIn(": free", self.lock_status())
+        self.assertIn("done lock status: free", proc.stdout)
+
 
 class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
     """The declared tracked-deletion arms: the staging partition, the
@@ -3097,16 +3474,46 @@ class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
     the wrapper-test environment is cleared and the fixture-scoped config
     keeps host/global config overrides out of the fixture's Git calls."""
 
+    POISONED_SELECTORS = (
+        "GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+    )
+
     def setUp(self) -> None:
         # Simulate a host session's Git selectors arriving in the ambient
         # environment before the fixture harness runs; the harness must
-        # clear them so every Git call operates on the fixture only.
+        # clear them so every Git call operates on the fixture only. The
+        # real ambient values are captured BEFORE the poison and restored
+        # by a cleanup registered first (runs last, after the mixin's own
+        # restore, which otherwise re-applies the poison as its "prior").
+        real = {name: os.environ.get(name) for name in self.POISONED_SELECTORS}
+        self._real_ambient = real
+        self.addCleanup(self._restore_real_ambient, real)
         os.environ["GIT_DIR"] = "/nonexistent-host-git-dir"
         os.environ["GIT_INDEX_FILE"] = "/nonexistent-host-git-index"
         os.environ["GIT_CONFIG_COUNT"] = "1"
         os.environ["GIT_CONFIG_KEY_0"] = "user.name"
         os.environ["GIT_CONFIG_VALUE_0"] = "Host Override"
         super().setUp()
+
+    def tearDown(self) -> None:
+        # The restore fix is asserted, not trusted: run the registered
+        # cleanups now (the mixin's re-apply of the poison, then the
+        # real-ambient restore) and verify every poisoned selector ends up
+        # byte-equal to the captured real mapping before the fixture tmp
+        # tree is removed.
+        self.doCleanups()
+        for name, value in self._real_ambient.items():
+            self.assertEqual(os.environ.get(name), value, name)
+        super().tearDown()
+
+    @staticmethod
+    def _restore_real_ambient(real: dict) -> None:
+        for name, value in real.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def test_host_selectors_cleared_and_config_isolated_to_fixture(self) -> None:
         for var in (
@@ -3282,6 +3689,963 @@ class DoneRunCapturedTreeLandingFenceTest(FixtureMixin, unittest.TestCase):
         # the injected entry remains staged, excluded from any landing
         staged = self.git("diff", "--cached", "--name-only").stdout
         self.assertIn("stranger-window.txt", staged)
+
+
+class DoneRunCloseoutBaselineArmTest(FixtureMixin, unittest.TestCase):
+    """Task 1 (plan 2026-10-18-worktree-closeout-single-start-baseline):
+    the commit subcommand's ad-hoc-worktree migration reuses the run's one
+    pre-work Phase 0 baseline (exactly one owned plan) or a valid skip
+    record (zero or multiple owned plans, the manual scoped copy completed
+    before commit), and never captures a late baseline.
+
+    ``manual_scoped_copy`` below is the executable fixture mirror of the
+    documented manual scoped-copy procedure the skip arm relies on: it
+    enumerates every run-scoped inventory source class, verifies each copy
+    by independent digest re-read, records the complete artifact list, and
+    reports the transfer incomplete when a source is missing or any digest
+    differs."""
+
+    PLAN_REL = "docs/history/plans/2026-10-18-closeout-arm-example.md"
+    PLAN_SLUG = "closeout-arm-example"
+    PLAN2_REL = "docs/history/plans/2026-10-18-closeout-arm-second.md"
+    PLAN2_SLUG = "closeout-arm-second"
+
+    # ---- fixture helpers ------------------------------------------------- #
+
+    def seed_tracked_plan(self, plan_rel: str) -> None:
+        plans = self.fixture / "docs" / "history" / "plans"
+        plans.mkdir(parents=True, exist_ok=True)
+        (self.fixture / plan_rel).write_text("# plan\n", encoding="utf-8")
+        self.git("add", plan_rel)
+        self.git("commit", "-qm", "plans: fixture owned plan")
+
+    def worktree_session(self, *setup_args: str) -> tuple[Path, dict, dict]:
+        """An ad-hoc worktree beside the fixture primary with a setup
+        boundary run inside it; returns (worktree, exports, commit env). The
+        returned env is the hermetic commit env keyed to the worktree (the
+        sweep validators and sync pins ride the same overrides the in-place
+        commit tests pin)."""
+        worktree = self.tmp / "ad-hoc-wt"
+        self.git("worktree", "add", "-b", "closeout-arm-wt-branch", str(worktree))
+        (worktree / "seed.txt").write_text("seed\nwork\n", encoding="utf-8")
+        env = self.runner_env()
+        env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
+        setup = subprocess.run(
+            ["bash", str(RUNNER), "setup", *setup_args],
+            cwd=str(worktree), env=env, capture_output=True, text=True,
+            timeout=300,
+        )
+        self.assertEqual(setup.returncode, 0, setup.stderr)
+        # the done-lock session fence is done-lock's status witness, not
+        # fixture state under test: remove it so the commit's foreign-dirt
+        # gate sees only the declared work
+        fence = worktree / ".ai-playbook" / "done-lock.session"
+        if fence.exists():
+            fence.unlink()
+        exports = self.eval_exports(setup.stdout)
+        env = self.commit_env()
+        env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
+        env.update(exports)
+        return worktree, exports, env
+
+    def capture_phase0_baseline(self, worktree: Path, slug: str) -> Path:
+        slug_dir = worktree / "docs" / "tmp" / "execute-plan" / slug
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        baseline = slug_dir / "closeout-baseline.json"
+        capture = subprocess.run(
+            [sys.executable, str(CLOSEOUT_MIGRATE), "capture", "--out", str(baseline)],
+            cwd=str(worktree), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        return baseline
+
+    def write_run_review_record(self, worktree: Path, name: str) -> Path:
+        reviews = worktree / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        record = reviews / name
+        record.write_text("# review record\n", encoding="utf-8")
+        return record
+
+    def write_run_id_skip_record(self, worktree: Path, run_id: str) -> Path:
+        skip = (
+            worktree / "docs" / "tmp" / "done-session"
+            / f"worktree-migrate-baseline-{run_id}-skip.json"
+        )
+        skip.parent.mkdir(parents=True, exist_ok=True)
+        skip.write_text(
+            json.dumps(
+                {
+                    "skip": True,
+                    "reason": "no unique plan baseline; scoped copy recorded",
+                    "fallback": "manual scoped copy",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return skip
+
+    def manual_scoped_copy(
+        self,
+        worktree: Path,
+        primary: Path,
+        run_id: str,
+        owned_plans: list[str],
+        owned_reviews: list[str],
+        plan_slugs: list[str],
+        corrupt_destinations: set[str] | None = None,
+    ) -> dict:
+        """The documented manual scoped-copy procedure, as an executable
+        fixture mirror. Source-class enumeration follows the plan's
+        run-scoped inventory; the ignored-path listing only discovers
+        candidates under the configured migration roots (never a blanket
+        copy instruction); the skip record and every other control input
+        are excluded; every copied artifact is verified by source and
+        destination digest re-read; a missing source or digest mismatch
+        leaves the transfer incomplete with the source worktree untouched."""
+        corrupt_destinations = corrupt_destinations or set()
+        tmp_root = worktree / "docs" / "tmp"
+        reviews = worktree / ".ai-playbook" / "reviews"
+        certs = worktree / ".ai-playbook" / "review-certs"
+        metrics = tmp_root / "metrics"
+        done_session = tmp_root / "done-session"
+        entries: list[dict] = []
+        excluded: list[str] = []
+
+        def consider(rel: str, source: Path, klass: str) -> None:
+            if not source.is_file():
+                entries.append({"source": rel, "class": klass, "missing": True})
+                return
+            data = source.read_bytes()
+            destination = primary / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+            destination_digest = hashlib.sha256(
+                destination.read_bytes()
+            ).hexdigest()
+            if rel in corrupt_destinations:
+                # test injection: damage the copy before verification so the
+                # digest mismatch arm is observable end to end
+                destination.write_bytes(b"corrupted after copy\n")
+                destination_digest = hashlib.sha256(
+                    destination.read_bytes()
+                ).hexdigest()
+            entries.append(
+                {
+                    "source": rel,
+                    "destination": destination.as_posix(),
+                    "class": klass,
+                    "source_digest": hashlib.sha256(data).hexdigest(),
+                    "destination_digest": destination_digest,
+                    "verified": (
+                        hashlib.sha256(data).hexdigest() == destination_digest
+                    ),
+                }
+            )
+
+        selected: set[str] = set()
+        # Class 1: each owned plan's execute-plan session directory.
+        for slug in plan_slugs:
+            session_dir = tmp_root / "execute-plan" / slug
+            if session_dir.is_dir():
+                for path in sorted(session_dir.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    rel = path.relative_to(worktree).as_posix()
+                    if path.name == "closeout-baseline-skip.json":
+                        excluded.append(rel)
+                        continue
+                    selected.add(rel)
+                    consider(rel, path, "execute-plan-session")
+        # Class 2: the plan's authoring telemetry file.
+        for slug in plan_slugs:
+            telemetry = tmp_root / "authoring" / slug / "context.jsonl"
+            if telemetry.is_file():
+                rel = telemetry.relative_to(worktree).as_posix()
+                selected.add(rel)
+                consider(rel, telemetry, "authoring-telemetry")
+        # Class 3: the plan's metrics archive or its telemetry-absence
+        # record (both as applicable).
+        for slug in plan_slugs:
+            for name, klass in (
+                (f"{slug}-telemetry.json", "metrics-archive"),
+                (f"{slug}-telemetry-absent.txt", "telemetry-absence-record"),
+            ):
+                candidate = metrics / name
+                if candidate.is_file():
+                    rel = candidate.relative_to(worktree).as_posix()
+                    selected.add(rel)
+                    consider(rel, candidate, klass)
+        # Class 4: the plan-owned review-certification seal.
+        for slug in plan_slugs:
+            seal = certs / f"{slug}-seal.md"
+            if seal.is_file():
+                rel = seal.relative_to(worktree).as_posix()
+                selected.add(rel)
+                consider(rel, seal, "review-cert-seal")
+        # Class 5: explicitly owned review Markdown plus its required
+        # sidecar; a listed review absent from the worktree is a missing
+        # source, never silently skipped.
+        for review in owned_reviews:
+            source = worktree / review
+            selected.add(review)
+            consider(review, source, "owned-review")
+            sidecar = source.with_name(source.stem + ".stats.json")
+            if sidecar.is_file():
+                rel = sidecar.relative_to(worktree).as_posix()
+                selected.add(rel)
+                consider(rel, sidecar, "owned-review-sidecar")
+        # Class 6: complete review pairs whose extensions.plan_identity
+        # matches an owned plan path.
+        if reviews.is_dir():
+            for sidecar in sorted(reviews.glob("*.stats.json")):
+                try:
+                    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+                except ValueError:
+                    continue
+                identity = (payload.get("extensions") or {}).get(
+                    "plan_identity"
+                )
+                if identity not in owned_plans:
+                    continue
+                # the sidecar's record: <stem>.stats.json pairs <stem>.md
+                member = sidecar.parent / (
+                    sidecar.name[: -len(".stats.json")] + ".md"
+                )
+                if not member.is_file():
+                    continue
+                for path in (sidecar, member):
+                    rel = path.relative_to(worktree).as_posix()
+                    if rel not in selected:
+                        selected.add(rel)
+                        consider(rel, path, "identity-matched-review-pair")
+        # Class 7: done-session files whose names contain the exact RUN_ID;
+        # the skip record and the scoped-copy record itself stay control
+        # inputs, never transfer candidates.
+        if done_session.is_dir() and run_id:
+            for path in sorted(done_session.iterdir()):
+                if not path.is_file() or run_id not in path.name:
+                    continue
+                rel = path.relative_to(worktree).as_posix()
+                if path.name.endswith("-skip.json") or path.name.startswith(
+                    "worktree-scoped-copy-record-"
+                ):
+                    excluded.append(rel)
+                    continue
+                selected.add(rel)
+                consider(rel, path, "done-session")
+
+        # Control inputs: the plan-deliverables record contributes only
+        # entries exactly matching the current owned plan paths (and plan
+        # files are never transfer candidates), so a stale prior-run entry
+        # selects nothing; the record itself stays a control input and is
+        # never a transfer candidate either way.
+        deliverables = done_session / "plan-deliverables.txt"
+        if deliverables.is_file():
+            excluded.append(deliverables.relative_to(worktree).as_posix())
+            for row in deliverables.read_text(encoding="utf-8").splitlines():
+                row = row.strip()
+                if row and row not in owned_plans:
+                    excluded.append(row)
+
+        # Discovery, never instruction: the ignored-path listing names
+        # run-written candidates under the configured migration roots; a
+        # discovered path no class selected and no rule excluded is recorded
+        # as an unrelated artifact, never copied.
+        discovery = subprocess.run(
+            ["git", "-C", str(worktree), "status", "--ignored",
+             "--porcelain", "-uall", "--", ".ai-playbook/reviews", "docs/tmp",
+             ".ai-playbook/review-certs", ".ai-playbook/metrics"],
+            capture_output=True, text=True, check=False,
+        ).stdout
+        for line in discovery.splitlines():
+            raw = line[3:].strip()
+            if not raw or " -> " in raw or raw.endswith("/"):
+                continue
+            path = worktree / raw
+            if not path.is_file():
+                continue
+            rel = path.relative_to(worktree).as_posix()
+            if rel not in selected and rel not in excluded:
+                excluded.append(rel)
+
+        complete = bool(entries) and all(
+            entry.get("verified") and not entry.get("missing")
+            for entry in entries
+        )
+        record_lines = ["# Manual scoped-copy record", ""]
+        for entry in entries:
+            if entry.get("missing"):
+                record_lines.append(
+                    f"- MISSING source {entry['source']} ({entry['class']})"
+                )
+                continue
+            record_lines.append(
+                f"- {entry['class']}: {entry['source']} -> "
+                f"{entry['destination']} source {entry['source_digest']} "
+                f"destination {entry['destination_digest']} "
+                f"verified {str(entry['verified']).lower()}"
+            )
+        record_lines.append(f"complete: {str(complete).lower()}")
+        record_text = "\n".join(record_lines) + "\n"
+        if plan_slugs:
+            record_path = (
+                tmp_root / "execute-plan" / plan_slugs[0] / "manifest.md"
+            )
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            with record_path.open("a", encoding="utf-8") as handle:
+                handle.write(record_text)
+        else:
+            record_path = (
+                done_session / f"worktree-scoped-copy-record-{run_id}.md"
+            )
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            record_path.write_text(record_text, encoding="utf-8")
+        return {
+            "complete": complete,
+            "entries": entries,
+            "excluded": excluded,
+            "record": record_path,
+        }
+
+    def run_worktree_commit(
+        self, worktree: Path, env: dict, *args: str
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(RUNNER), "commit", *args],
+            cwd=str(worktree), env=env, capture_output=True, text=True,
+            timeout=300,
+        )
+
+    def wt_session(self, worktree: Path) -> Path:
+        return worktree / "docs" / "tmp" / "done-session"
+
+    def assert_no_late_baseline_and_no_migration(
+        self, worktree: Path, run_id: str
+    ) -> None:
+        self.assertFalse(
+            (self.wt_session(worktree) / f"worktree-migrate-baseline-{run_id}.json").exists(),
+            "commit captured a late run-ID baseline",
+        )
+        self.assertEqual(
+            list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json")),
+            [],
+            "baseline-based migrate ran on the skip arm",
+        )
+
+    # ---- baseline reuse arm (exactly one owned plan) --------------------- #
+
+    def test_single_plan_phase0_baseline_reuse_transfers_new_artifact(self) -> None:
+        """[class: REPOSITORY_TEST] A single-plan run's commit reuses the
+        plan's canonical Phase 0 baseline: a review record created after the
+        baseline and before commit transfers to the primary checkout with a
+        verified manifest entry, no run-ID baseline is captured at commit
+        time, and the docs sync follows the migration."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.capture_phase0_baseline(worktree, self.PLAN_SLUG)
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
+        self.assertTrue(transferred.is_file(), combined)
+        self.assertEqual(transferred.read_text(encoding="utf-8"), "# review record\n")
+        self.assertFalse(
+            (self.wt_session(worktree) / f"worktree-migrate-baseline-{run_id}.json").exists(),
+            "commit captured a late baseline",
+        )
+        manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
+        self.assertEqual(len(manifests), 1)
+        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        migrated = {entry["source"] for entry in data["migrated"]}
+        self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
+        for entry in data["migrated"]:
+            self.assertTrue(entry["verified"])
+        self.assertIn("docs-branch: sync complete", combined)
+
+    def test_dated_plan_directory_charter_baseline_reuse_transfers(self) -> None:
+        """[class: REPOSITORY_TEST] An owned plan that is a dated plan
+        directory's PLAN.md charter resolves the date-stripped directory
+        session slug: the commit reuses the Phase 0 baseline seeded under
+        docs/tmp/execute-plan/<date-stripped-dir-slug>/closeout-baseline.json
+        and a post-baseline review record transfers to the primary checkout,
+        pinning the wrapper's slug re-derivation against the canonical
+        session-directory rule and the charter arm together."""
+        plan_rel = "docs/history/plans/2026-10-18-closeout-charter/PLAN.md"
+        self.init_fixture_repo()
+        charter_dir = self.fixture / "docs" / "history" / "plans" / "2026-10-18-closeout-charter"
+        charter_dir.mkdir(parents=True)
+        (charter_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+        self.git("add", "docs/history/plans/2026-10-18-closeout-charter/PLAN.md")
+        self.git("commit", "-qm", "plans: fixture dated charter plan")
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", plan_rel,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.capture_phase0_baseline(worktree, "closeout-charter")
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-charter-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the charter run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
+        self.assertTrue(transferred.is_file(), combined)
+        manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
+        self.assertEqual(len(manifests), 1)
+        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        migrated = {entry["source"] for entry in data["migrated"]}
+        self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
+        for entry in data["migrated"]:
+            self.assertTrue(entry["verified"])
+        self.assertIn("docs-branch: sync complete", combined)
+        self.assertFalse(
+            (self.wt_session(worktree) / f"worktree-migrate-baseline-{run_id}.json").exists(),
+            "commit captured a late baseline",
+        )
+
+    def test_baseline_wins_over_valid_skip_sibling(self) -> None:
+        """[class: REPOSITORY_TEST] When both evidences exist (the canonical
+        Phase 0 baseline and a valid plan-session skip sibling), the baseline
+        wins: the migration runs on the baseline, a post-baseline artifact
+        transfers, and no skip-bypass line is printed - precedence pinned,
+        never silent."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.capture_phase0_baseline(worktree, self.PLAN_SLUG)
+        slug_dir = worktree / "docs" / "tmp" / "execute-plan" / self.PLAN_SLUG
+        (slug_dir / "closeout-baseline-skip.json").write_text(
+            json.dumps(
+                {
+                    "skip": True,
+                    "reason": "stale sibling from a repaired capture",
+                    "fallback": "scoped-copy enumeration at closeout",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("valid closeout skip record governs", combined)
+        transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
+        self.assertTrue(transferred.is_file(), combined)
+        manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
+        self.assertEqual(len(manifests), 1)
+        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        migrated = {entry["source"] for entry in data["migrated"]}
+        self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
+        self.assertIn("docs-branch: sync complete", combined)
+
+    def test_single_plan_missing_baseline_and_no_skip_refuses(self) -> None:
+        """[class: REPOSITORY_TEST] A single-plan run with neither a Phase 0
+        baseline nor a valid skip sibling keeps the existing migration
+        refusal: the helper's implicit-empty-baseline refusal is named and
+        nothing transfers."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("baseline file not found", combined)
+        self.assertIn("the worktree migration refused", combined)
+        self.assertFalse(
+            (self.fixture / ".ai-playbook" / "reviews").is_dir()
+            and any((self.fixture / ".ai-playbook" / "reviews").iterdir()),
+            "an unverified transfer landed at the primary checkout",
+        )
+
+    def test_single_plan_capture_failure_skip_sibling_bypasses_migrate(self) -> None:
+        """[class: REPOSITORY_TEST] A single-plan run whose Phase 0 capture
+        failed carries the sanctioned skip sibling; after the fixture's
+        manual scoped copy and its recorded artifact list exist, the wrapper
+        bypasses baseline-based migrate, reaches the docs sync, and never
+        takes a late baseline. The fixture plan is undated (stem equals the
+        canonical session slug), so the session directory stays active under
+        the landing sweep's pending-plan check."""
+        plan_rel = "docs/history/plans/closeout-arm-example.md"
+        self.init_fixture_repo()
+        self.seed_tracked_plan(plan_rel)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", plan_rel,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        slug_dir = worktree / "docs" / "tmp" / "execute-plan" / self.PLAN_SLUG
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        (slug_dir / "closeout-baseline-skip.json").write_text(
+            json.dumps(
+                {
+                    "skip": True,
+                    "reason": "capture failed",
+                    "fallback": "scoped-copy enumeration at closeout",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [plan_rel],
+            [".ai-playbook/reviews/2026-10-18-closeout-arm-example-code-review-r1.md"],
+            [self.PLAN_SLUG],
+        )
+        self.assertTrue(copy["complete"], copy)
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("valid closeout skip record governs", combined)
+        self.assertIn("docs-branch: sync complete", combined)
+        self.assert_no_late_baseline_and_no_migration(worktree, run_id)
+        # the manual scoped copy, not a migration, carried the artifact
+        transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
+        self.assertTrue(transferred.is_file())
+
+    # ---- skip-record arm (zero or multiple owned plans) ------------------ #
+
+    def test_zero_plan_valid_skip_record_bypasses_migrate_and_reaches_docs_sync(self) -> None:
+        """[class: REPOSITORY_TEST] A zero-plan run with a valid run-ID-keyed
+        skip record: the wrapper bypasses baseline migration after the
+        fixture's manual copy record exists, reaches the docs sync, and never
+        takes a late baseline."""
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_session("--owned-path", "seed.txt")
+        run_id = exports["DONE_RUN_ID"]
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [],
+            [".ai-playbook/reviews/2026-10-18-closeout-arm-example-code-review-r1.md"],
+            [],
+        )
+        self.assertTrue(copy["complete"], copy)
+        self.write_run_id_skip_record(worktree, run_id)
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("valid closeout skip record governs", combined)
+        self.assertIn("docs-branch: sync complete", combined)
+        self.assert_no_late_baseline_and_no_migration(worktree, run_id)
+        self.assertTrue(
+            (self.fixture / ".ai-playbook" / "reviews" / record.name).is_file()
+        )
+
+    def test_multi_plan_valid_skip_record_bypasses_migrate(self) -> None:
+        """[class: REPOSITORY_TEST] A multiple-plan run with a valid
+        run-ID-keyed skip record bypasses baseline migration (no plan
+        baseline is chosen arbitrarily, no migrate manifest is written) and
+        reaches the docs sync."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        self.seed_tracked_plan(self.PLAN2_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt",
+            "--owned-plan", self.PLAN_REL, "--owned-plan", self.PLAN2_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [],
+            [".ai-playbook/reviews/2026-10-18-closeout-arm-example-code-review-r1.md"],
+            [],
+        )
+        self.assertTrue(copy["complete"], copy)
+        self.write_run_id_skip_record(worktree, run_id)
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("valid closeout skip record governs", combined)
+        self.assertIn("docs-branch: sync complete", combined)
+        self.assert_no_late_baseline_and_no_migration(worktree, run_id)
+
+    def test_zero_plan_missing_skip_evidence_refuses(self) -> None:
+        """[class: REPOSITORY_TEST] A zero-plan run whose setup-written skip
+        record is deleted before commit keeps the existing migration refusal:
+        setup is the record's producer, and its absence at commit time is the
+        genuine refusal witness; nothing transfers and no late baseline is
+        captured."""
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_session("--owned-path", "seed.txt")
+        run_id = exports["DONE_RUN_ID"]
+        # the producer, not hand-provisioning, owns the record's presence;
+        # deleting it restores the refusal witness this test pins
+        skip = (
+            self.wt_session(worktree)
+            / f"worktree-migrate-baseline-{run_id}-skip.json"
+        )
+        self.assertTrue(skip.is_file(), "setup wrote no zero-plan skip record")
+        skip.unlink()
+        self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("the worktree migration refused", combined)
+        self.assertFalse(
+            (self.fixture / ".ai-playbook" / "reviews" / "2026-10-18-closeout-arm-example-code-review-r1.md").exists(),
+            "an unverified transfer landed at the primary checkout",
+        )
+        self.assertFalse(
+            (self.wt_session(worktree) / f"worktree-migrate-baseline-{run_id}.json").exists(),
+            "commit captured a late baseline",
+        )
+
+    def test_setup_writes_zero_plan_skip_record_and_commit_bypasses(self) -> None:
+        """[class: REPOSITORY_TEST] Setup is the zero-plan skip record's
+        producer: a zero-plan run's setup writes a valid run-ID-keyed skip
+        record at its own session resolution (the directory the commit leg
+        reads), and the commit bypasses baseline migration on that record
+        with no hand-provisioning, reaching the docs sync after the manual
+        scoped copy."""
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_session("--owned-path", "seed.txt")
+        run_id = exports["DONE_RUN_ID"]
+        skip = (
+            self.wt_session(worktree)
+            / f"worktree-migrate-baseline-{run_id}-skip.json"
+        )
+        self.assertTrue(skip.is_file(), "setup wrote no zero-plan skip record")
+        payload = json.loads(skip.read_text(encoding="utf-8"))
+        self.assertIs(payload.get("skip"), True)
+        self.assertEqual(payload.get("fallback"), "manual scoped copy")
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [],
+            [".ai-playbook/reviews/2026-10-18-closeout-arm-example-code-review-r1.md"],
+            [],
+        )
+        self.assertTrue(copy["complete"], copy)
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("valid closeout skip record governs", combined)
+        self.assertIn("docs-branch: sync complete", combined)
+        self.assert_no_late_baseline_and_no_migration(worktree, run_id)
+        self.assertTrue(
+            (self.fixture / ".ai-playbook" / "reviews" / record.name).is_file()
+        )
+
+    def test_multi_plan_missing_skip_evidence_refuses_despite_plan_baselines(self) -> None:
+        """[class: REPOSITORY_TEST] A multiple-plan run refuses even when both
+        plans carry canonical baselines and the setup-written skip record was
+        deleted: no plan baseline is ever chosen arbitrarily, the run-ID skip
+        record is the only skip evidence, and its absence at commit time is
+        the genuine refusal witness."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        self.seed_tracked_plan(self.PLAN2_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt",
+            "--owned-plan", self.PLAN_REL, "--owned-plan", self.PLAN2_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        skip = (
+            self.wt_session(worktree)
+            / f"worktree-migrate-baseline-{run_id}-skip.json"
+        )
+        self.assertTrue(skip.is_file(), "setup wrote no multi-plan skip record")
+        skip.unlink()
+        self.capture_phase0_baseline(worktree, self.PLAN_SLUG)
+        self.capture_phase0_baseline(worktree, self.PLAN2_SLUG)
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("the worktree migration refused", combined)
+        self.assertFalse(
+            (self.fixture / ".ai-playbook" / "reviews" / record.name).exists(),
+            "a plan baseline was chosen arbitrarily and used for migration",
+        )
+        self.assertFalse(
+            (self.wt_session(worktree) / f"worktree-migrate-baseline-{run_id}.json").exists(),
+            "commit captured a late baseline",
+        )
+
+    def test_invalid_skip_record_is_not_valid_skip_evidence(self) -> None:
+        """[class: REPOSITORY_TEST] A skip record that is not a JSON object
+        with skip true is not valid skip evidence: the existing refusal
+        stands for both a wrong-payload and a malformed record."""
+        for payload in ('{"skip": false, "reason": "not a skip"}', "not json at all"):
+            with self.subTest(payload=payload):
+                shutil.rmtree(self.fixture, ignore_errors=True)
+                shutil.rmtree(self.tmp / "ad-hoc-wt", ignore_errors=True)
+                self.init_fixture_repo()
+                worktree, exports, env = self.worktree_session(
+                    "--owned-path", "seed.txt",
+                )
+                run_id = exports["DONE_RUN_ID"]
+                skip = self.write_run_id_skip_record(worktree, run_id)
+                skip.write_text(payload, encoding="utf-8")
+                proc = self.run_worktree_commit(
+                    worktree, env, "--stage", "seed.txt",
+                    "--subject", "land the run work",
+                )
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn(
+                    "the worktree migration refused", proc.stdout + proc.stderr
+                )
+
+    # ---- manual scoped-copy inventory clauses ----------------------------- #
+
+    def test_manual_scoped_copy_transfers_every_named_source_class(self) -> None:
+        """[class: REPOSITORY_TEST] The manual scoped-copy inventory
+        enumerates every run-scoped source class (the execute-plan session
+        directory, the authoring telemetry file, the metrics archive and its
+        telemetry-absence record, the review-certification seal, the owned
+        review Markdown and its sidecar, an identity-matched complete review
+        pair, and exact-RUN_ID done-session files), copies each to the
+        primary checkout, and records every source and destination with
+        matching independently re-read digests."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        slug_dir = worktree / "docs" / "tmp" / "execute-plan" / self.PLAN_SLUG
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        (slug_dir / "task-1.log.md").write_text("# task log\n", encoding="utf-8")
+        authoring = worktree / "docs" / "tmp" / "authoring" / self.PLAN_SLUG
+        authoring.mkdir(parents=True, exist_ok=True)
+        (authoring / "context.jsonl").write_text('{"event": "open"}\n', encoding="utf-8")
+        metrics = worktree / "docs" / "tmp" / "metrics"
+        metrics.mkdir(parents=True, exist_ok=True)
+        (metrics / f"{self.PLAN_SLUG}-telemetry.json").write_text("{}\n", encoding="utf-8")
+        (metrics / f"{self.PLAN_SLUG}-telemetry-absent.txt").write_text(
+            "no telemetry this run\n", encoding="utf-8"
+        )
+        certs = worktree / ".ai-playbook" / "review-certs"
+        certs.mkdir(parents=True, exist_ok=True)
+        (certs / f"{self.PLAN_SLUG}-seal.md").write_text("seal\n", encoding="utf-8")
+        reviews = worktree / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        owned_review = reviews / "2026-10-18-closeout-arm-example-review.md"
+        owned_review.write_text("owned review\n", encoding="utf-8")
+        owned_stats = reviews / "2026-10-18-closeout-arm-example-review.stats.json"
+        owned_stats.write_text(
+            json.dumps({"extensions": {"plan_identity": self.PLAN_REL}}) + "\n",
+            encoding="utf-8",
+        )
+        pair_record = reviews / "2026-10-18-closeout-arm-example-pair-r1.md"
+        pair_record.write_text("pair review\n", encoding="utf-8")
+        (reviews / "2026-10-18-closeout-arm-example-pair-r1.stats.json").write_text(
+            json.dumps({"extensions": {"plan_identity": self.PLAN_REL}}) + "\n",
+            encoding="utf-8",
+        )
+        (self.wt_session(worktree) / f"owned-commits-{run_id}.txt").write_text(
+            "", encoding="utf-8"
+        )
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id,
+            [self.PLAN_REL],
+            [".ai-playbook/reviews/2026-10-18-closeout-arm-example-review.md"],
+            [self.PLAN_SLUG],
+        )
+        self.assertTrue(copy["complete"], copy)
+        by_source = {entry["source"]: entry for entry in copy["entries"]}
+        expected = {
+            f"docs/tmp/execute-plan/{self.PLAN_SLUG}/task-1.log.md",
+            f"docs/tmp/authoring/{self.PLAN_SLUG}/context.jsonl",
+            f"docs/tmp/metrics/{self.PLAN_SLUG}-telemetry.json",
+            f"docs/tmp/metrics/{self.PLAN_SLUG}-telemetry-absent.txt",
+            f".ai-playbook/review-certs/{self.PLAN_SLUG}-seal.md",
+            ".ai-playbook/reviews/2026-10-18-closeout-arm-example-review.md",
+            ".ai-playbook/reviews/2026-10-18-closeout-arm-example-review.stats.json",
+            ".ai-playbook/reviews/2026-10-18-closeout-arm-example-pair-r1.md",
+            ".ai-playbook/reviews/2026-10-18-closeout-arm-example-pair-r1.stats.json",
+            f"docs/tmp/done-session/run-manifest-{run_id}.json",
+            f"docs/tmp/done-session/owned-commits-{run_id}.txt",
+        }
+        self.assertEqual(set(by_source), expected)
+        classes = {entry["class"] for entry in copy["entries"]}
+        self.assertEqual(
+            classes,
+            {
+                "execute-plan-session", "authoring-telemetry", "metrics-archive",
+                "telemetry-absence-record", "review-cert-seal", "owned-review",
+                "owned-review-sidecar", "identity-matched-review-pair",
+                "done-session",
+            },
+        )
+        for rel, entry in by_source.items():
+            source = worktree / rel
+            destination = Path(entry["destination"])
+            self.assertTrue(destination.is_file(), rel)
+            self.assertEqual(
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+                hashlib.sha256(destination.read_bytes()).hexdigest(),
+                rel,
+            )
+        # the record lists every copied source and destination and the
+        # digests match an independent re-read
+        record_text = Path(copy["record"]).read_text(encoding="utf-8")
+        for rel, entry in by_source.items():
+            self.assertIn(entry["source"], record_text)
+            self.assertIn(entry["destination"], record_text)
+            self.assertIn(entry["source_digest"], record_text)
+            self.assertIn(entry["destination_digest"], record_text)
+    def test_manual_scoped_copy_excludes_control_inputs_and_unrelated(self) -> None:
+        """[class: REPOSITORY_TEST] The manual scoped-copy inventory never
+        copies control inputs or unrelated artifacts: the skip record, the
+        plan-deliverables record with its stale prior-run entry, foreign
+        reviews, and discovered-but-class-less artifacts stay excluded, and
+        tracked plan files are never transfer candidates."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.write_run_id_skip_record(worktree, run_id)
+        stale_plan = "docs/history/plans/2026-10-01-prior-run-example.md"
+        deliverables = (
+            worktree / "docs" / "tmp" / "done-session" / "plan-deliverables.txt"
+        )
+        deliverables.parent.mkdir(parents=True, exist_ok=True)
+        deliverables.write_text(
+            f"{self.PLAN_REL}\n{stale_plan}\n", encoding="utf-8"
+        )
+        prior_run = (
+            worktree / "docs" / "tmp" / "execute-plan" / "prior-run" / "x.log"
+        )
+        prior_run.parent.mkdir(parents=True, exist_ok=True)
+        prior_run.write_text("prior run log\n", encoding="utf-8")
+        reviews = worktree / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        foreign = reviews / "2026-10-18-foreign-session-review.md"
+        foreign.write_text("foreign review\n", encoding="utf-8")
+        (reviews / "2026-10-18-foreign-session-review.stats.json").write_text(
+            json.dumps(
+                {"extensions": {"plan_identity": "docs/history/plans/not-owned.md"}}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (reviews / "unrelated-scratch.md").write_text("unrelated\n", encoding="utf-8")
+        copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [self.PLAN_REL], [], [self.PLAN_SLUG],
+        )
+        sources = {entry["source"] for entry in copy["entries"]}
+        self.assertNotIn(
+            f"docs/tmp/done-session/worktree-migrate-baseline-{run_id}-skip.json",
+            sources,
+        )
+        self.assertNotIn(".ai-playbook/reviews/2026-10-18-foreign-session-review.md", sources)
+        self.assertNotIn(
+            ".ai-playbook/reviews/2026-10-18-foreign-session-review.stats.json", sources
+        )
+        self.assertNotIn(".ai-playbook/reviews/unrelated-scratch.md", sources)
+        self.assertNotIn(self.PLAN_REL, sources)
+        # the stale deliverables entry, the deliverables record itself, and
+        # the prior-run session artifact appear only in the excluded set
+        self.assertIn(stale_plan, copy["excluded"])
+        self.assertIn("docs/tmp/done-session/plan-deliverables.txt", copy["excluded"])
+        self.assertIn("docs/tmp/execute-plan/prior-run/x.log", copy["excluded"])
+        # discovered-but-unselected artifacts are recorded excluded, never copied
+        self.assertIn(".ai-playbook/reviews/unrelated-scratch.md", copy["excluded"])
+        # the tracked plan file, the foreign review, the stale deliverables
+        # entry, and the deliverables record never reached the primary
+        record_text = Path(copy["record"]).read_text(encoding="utf-8")
+        self.assertNotIn(self.PLAN_REL, record_text)
+        self.assertNotIn(foreign.name, record_text)
+        self.assertNotIn(stale_plan, record_text)
+        self.assertNotIn("plan-deliverables.txt", record_text)
+        self.assertFalse(
+            (self.fixture / ".ai-playbook" / "reviews" / foreign.name).exists()
+        )
+
+    def test_manual_scoped_copy_incomplete_transfer_keeps_source_worktree(self) -> None:
+        """[class: REPOSITORY_TEST] A missing listed source or a destination
+        digest mismatch leaves the transfer incomplete (the record names it)
+        and keeps every source artifact in the worktree available for
+        recovery; the incomplete transfer never presents as complete."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        review_rel = ".ai-playbook/reviews/2026-10-18-closeout-arm-example-review.md"
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-review.md"
+        )
+        # missing listed source: the owned-review manifest entry is absent
+        missing_copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [self.PLAN_REL],
+            [".ai-playbook/reviews/absent-from-worktree.md"], [self.PLAN_SLUG],
+        )
+        self.assertFalse(missing_copy["complete"])
+        self.assertTrue(
+            any(entry.get("missing") for entry in missing_copy["entries"])
+        )
+        self.assertIn("complete: false", Path(missing_copy["record"]).read_text(encoding="utf-8"))
+        # digest mismatch: the copy is damaged before verification
+        mismatch_copy = self.manual_scoped_copy(
+            worktree, self.fixture, run_id, [self.PLAN_REL], [review_rel],
+            [self.PLAN_SLUG], corrupt_destinations={review_rel},
+        )
+        self.assertFalse(mismatch_copy["complete"])
+        broken = next(
+            entry for entry in mismatch_copy["entries"] if entry["source"] == review_rel
+        )
+        self.assertFalse(broken["verified"])
+        self.assertNotEqual(
+            broken["source_digest"], broken["destination_digest"]
+        )
+        # every source artifact stays in the worktree for recovery
+        self.assertTrue(record.is_file())
+        self.assertEqual(record.read_text(encoding="utf-8"), "# review record\n")
+        self.assertTrue(worktree.is_dir())
 
 
 if __name__ == "__main__":

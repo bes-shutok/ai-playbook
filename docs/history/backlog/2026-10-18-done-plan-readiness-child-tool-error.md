@@ -10,7 +10,7 @@
 - **Skill/step:** `agents/skills/done/SKILL.md` Step 3 landing sweep; `scripts/done_sweep_gates_lib.py` `derive_plan_readiness_candidates` and `gate_plan_readiness`
 - **Related backlog:** `docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md` (the stale plan-review digest after checkbox updates is shared; this row owns the additional composed-gate tool-error and exemption mismatch)
 
-- **Cluster:** docs/history/backlog/2026-10-20-description-length-gate-true-catch-unledgered.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster)
+- **Cluster:** docs/history/plans/completed/2026-10-24-description-length-gate-catch-promotion.md (shared mechanism: same runner or gate family; investigate 2026-10-20 roster; origin row covered and deleted by that plan)
 - **Cluster:** (the shared-mechanism row docs/history/backlog/2026-10-20-description-length-checker-scans-gitignored-synced-cache.md was deleted 2026-10-22 by its covering plan's execution; the description-length family link now lives in that plan's disposition record)
 ## Problem
 

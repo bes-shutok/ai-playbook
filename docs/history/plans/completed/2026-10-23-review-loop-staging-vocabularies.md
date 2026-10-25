@@ -99,13 +99,13 @@ Files:
 - `agents/skills/review-staging/SKILL.md`
 - `agents/skills/review-agents/severity-calibration.md`
 
-- [ ] Given a finding with confidence, reachability, pattern ownership, and triage fields, expects the shared record guidance to state the same accepted pattern-owner, reachability, confidence, triage, and blast-radius values as the validator and to keep the validator as their authority. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a finding in the shared severity guide, expects the confidence field to name the accepted values `hypothesis`, `strong-evidence`, and `verified`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a zero-finding round, expects the staging shape to require Critical, High, Medium, and Low headings even when each group is empty. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run -> expect RED: check the current shared instructions against these cases and record the omissions witnessed by the backlog origin. [class: REPOSITORY_TEST]
-- [ ] Write the minimum documentation changes. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run -> expect GREEN: compare the updated guidance with the validator's current declarations and verify the zero-finding shape. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: document review staging closed values` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a finding with confidence, reachability, pattern ownership, and triage fields, expects the shared record guidance to state the same accepted pattern-owner, reachability, confidence, triage, and blast-radius values as the validator and to keep the validator as their authority. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a finding in the shared severity guide, expects the confidence field to name the accepted values `hypothesis`, `strong-evidence`, and `verified`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a zero-finding round, expects the staging shape to require Critical, High, Medium, and Low headings even when each group is empty. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run -> expect RED: check the current shared instructions against these cases and record the omissions witnessed by the backlog origin. [class: REPOSITORY_TEST]
+- [x] Write the minimum documentation changes. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run -> expect GREEN: compare the updated guidance with the validator's current declarations and verify the zero-finding shape. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: document review staging closed values` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Carry the shared values into every review-loop dispatch
 
@@ -115,9 +115,13 @@ Files:
 - `agents/skills/doing-code-review/SKILL.md`
 - `agents/skills/review-loop/SKILL.md`
 
-- [ ] Given review workers are dispatched and the sidecar is composed, expects the worker prompts and sidecar instructions in `doing-code-review` and the loop recipe in `review-loop` to carry the current pattern-owner, reachability, confidence, triage, and blast-radius values and the four required severity groups. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the validator declarations change, expects the prompt and sidecar owners to direct the author to refresh those values from the validator before workers launch, instead of preserving stale prompt copies. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run -> expect RED: follow the current dispatch recipe and show that it does not provide at least one value or required group named in this task. [class: REPOSITORY_TEST]
-- [ ] Write the minimum dispatch-recipe change. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run -> expect GREEN: trace the worker-prompt and sidecar-composition instructions and confirm each names the current values and zero-finding shape in both `doing-code-review` and `review-loop`. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: include closed values in review dispatch` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given review workers are dispatched and the sidecar is composed, expects the worker prompts and sidecar instructions in `doing-code-review` and the loop recipe in `review-loop` to carry the current pattern-owner, reachability, confidence, triage, and blast-radius values and the four required severity groups. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the validator declarations change, expects the prompt and sidecar owners to direct the author to refresh those values from the validator before workers launch, instead of preserving stale prompt copies. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run -> expect RED: follow the current dispatch recipe and show that it does not provide at least one value or required group named in this task. [class: REPOSITORY_TEST]
+- [x] Write the minimum dispatch-recipe change. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run -> expect GREEN: trace the worker-prompt and sidecar-composition instructions and confirm each names the current values and zero-finding shape in both `doing-code-review` and `review-loop`. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: include closed values in review dispatch` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-10-review-loop-dispatch-closed-vocabulary.md` (filed 2026-10-10; surface the staging-record closed vocabularies in the review-loop dispatch recipe): implemented by this plan (Tasks 1 and 2); the row was flipped `Status: covered` at authoring, its disposition is folded here, and the file is deleted in this archive commit per the repository's fold-then-delete lifecycle. The one gap the execution's review surfaced (the pattern-owner and triage mirror segments have no vocabulary-equality guard in the validator selftest; a validator change is outside this plan's scope) continues as the open row `docs/history/backlog/2026-10-25-closed-enums-mirror-pattern-owner-triage-unguarded.md`, which also carries the pre-existing `softened-reaffirmed` discard-code drift.

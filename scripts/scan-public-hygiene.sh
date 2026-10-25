@@ -57,6 +57,7 @@ GLOB_BODIES=(
   'docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md'
   'docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md'
   'docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md'
+  'docs/history/plans/completed/2026-10-18-review-runtime-sibling-module-deployment.md'
   'docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md'
   'docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md'
   'docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md'

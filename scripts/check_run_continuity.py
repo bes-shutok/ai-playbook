@@ -4,8 +4,9 @@
 At every task boundary the orchestrator runs the ``check`` subcommand over
 the run's recorded identity (the Phase 0 worktree root and run branch) and
 reads the outcome contract. A fail stops the boundary into the existing
-repair arms (re-transfer inputs from the primary checkout, re-capture or
-skip-record the baseline) instead of letting mid-run state loss surface at
+repair arms (re-transfer inputs from the primary checkout; a surviving
+baseline stays unchanged and is never re-captured, a failed capture records
+the baseline skip record) instead of letting mid-run state loss surface at
 closeout.
 
 Six checks, one line each (``<name>: pass <evidence>`` /
@@ -34,7 +35,13 @@ Six checks, one line each (``<name>: pass <evidence>`` /
 - baseline    In --manifest-dir (default docs/tmp under --repo),
               closeout-baseline.json exists, or closeout-baseline-skip.json
               exists (the baseline-less closeout arm's skip sibling passes
-              the check); neither fails.
+              the check); neither fails. This probe's baseline check is an
+              existence witness only; the done wrapper's commit-time skip
+              validation (done_run.sh valid_skip_record) is the payload
+              witness requiring a JSON object with "skip": true - a
+              deliberate difference, so the probe flags a missing sibling
+              early at every boundary while the wrapper refuses an
+              unparsable or non-skipping payload at the closeout itself.
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md):
 

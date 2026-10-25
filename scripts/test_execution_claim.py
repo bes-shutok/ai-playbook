@@ -442,6 +442,10 @@ class TestExecutionClaim(unittest.TestCase):
                 return line[len("updated: "):]
         self.fail("claim carries no updated: line")
 
+    def _hash_file(self, path) -> str:
+        import hashlib
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
     # -- take ----------------------------------------------------------- #
 
     def test_take_cold_start_creates_both(self):
@@ -832,7 +836,9 @@ class TestExecutionClaim(unittest.TestCase):
 
     def test_conversion_refuses_symlinked_manifest(self):
         # A symlinked run manifest is never followed: the conversion
-        # refuses unchanged.
+        # refuses unchanged, naming the registered worktree and the
+        # symlinked manifest path; the claim, the link itself, and the
+        # link target's bytes stay untouched.
         wt, manifest = self._conversion_fixture()
         target = self.scratch / "elsewhere-manifest.md"
         target.write_text("not the manifest\n", encoding="utf-8")
@@ -840,11 +846,23 @@ class TestExecutionClaim(unittest.TestCase):
         os.symlink(str(target), str(manifest))
         self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
         before = self.claim.read_text(encoding="utf-8")
+        target_before = self._hash_file(target)
         proc = self._conversion_take("session-b")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("symlink", proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("registered-manifest scan is inconclusive", combined)
+        self.assertIn("symlink", combined)
+        # The refusal names the registered worktree and the manifest path
+        # in git's stored physical form (the porcelain entry the scan read).
+        physical_wt = os.path.realpath(str(wt))
+        self.assertIn(physical_wt, combined)
+        self.assertIn(
+            os.path.join(physical_wt, "run-tmp", "execute-plan", SLUG, "manifest.md"),
+            combined,
+        )
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
         self.assertTrue(manifest.is_symlink())
+        self.assertEqual(self._hash_file(target), target_before)
 
     def test_conversion_refuses_ambiguous_manifests(self):
         # The manifest exists at the take target AND at another registered
@@ -869,6 +887,222 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_unusable_worktree_facts_names_cause(self):
+        # Registered-worktree facts that are missing, unreadable, or lack
+        # the tmp_dir key each make the scan inconclusive naming the
+        # worktree and the specific discovery failure, with no guessed
+        # manifest path; the claim and manifest bytes stay unchanged.
+        def _unlink(path):
+            path.unlink()
+
+        def _chmod_zero(path):
+            os.chmod(path, 0)
+
+        def _drop_tmp_dir(path):
+            path.write_text('other_key = "x"\n', encoding="utf-8")
+
+        for shape, corrupt in (
+            ("missing facts", _unlink),
+            ("unreadable facts", _chmod_zero),
+            ("no tmp_dir", _drop_tmp_dir),
+        ):
+            with self.subTest(shape=shape):
+                if shape == "unreadable facts" and os.geteuid() == 0:
+                    self.skipTest("root reads anything")
+                wt, manifest = self._conversion_fixture()
+                facts = wt / ".ai-playbook" / "facts.md"
+                corrupt(facts)
+                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+                claim_before = self._hash_file(self.claim)
+                manifest_before = self._hash_file(manifest)
+                proc = self._conversion_take("session-b")
+                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+                combined = proc.stdout + proc.stderr
+                self.assertIn("registered-manifest scan is inconclusive", combined)
+                self.assertIn(shape, combined)
+                self.assertIn(os.path.realpath(str(wt)), combined)
+                # No guessed fallback path: the worktree's facts-resolved
+                # run path is never printed when discovery refused.
+                self.assertNotIn(
+                    os.path.join(os.path.realpath(str(wt)), "run-tmp"), combined
+                )
+                self.assertEqual(self._hash_file(self.claim), claim_before)
+                self.assertEqual(self._hash_file(manifest), manifest_before)
+                # Reset the fixture state the next iteration rebuilds.
+                if facts.exists():
+                    os.chmod(facts, 0o644)
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                # Restore the facts baseline: the fixture appends the
+                # provider line, so a stale duplicate key would refuse the
+                # next iteration's provider resolution.
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
+
+    def _plant_primary_mirror(self, manifest, *, differing=False):
+        """The primary-side mirror: a copy of the canonical registered
+        manifest under the primary checkout's matching run path (the
+        primary facts resolve tmp_dir to docs/tmp)."""
+        mirror_dir = self.repo / "docs" / "tmp" / "execute-plan" / SLUG
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        mirror = mirror_dir / "manifest.md"
+        if differing:
+            mirror.write_text(
+                "# Execute-plan session: " + SLUG + "\n\na differing copy\n",
+                encoding="utf-8",
+            )
+        else:
+            shutil.copy(manifest, mirror)
+        return mirror
+
+    def test_conversion_accepts_byte_identical_primary_mirror(self):
+        # A byte-identical copy under the primary checkout's matching run
+        # path is the same manifest identity: the scan reports one identity
+        # retained at the canonical registered worktree, so the conversion
+        # proceeds through it (the mirror copy itself is never rewritten).
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest)
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        mirror_before = self._hash_file(mirror)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertEqual(self._claim_session(), "session-b")
+        self.assertIn("session_id: session-b", manifest.read_text(encoding="utf-8"))
+        self.assertEqual(self._hash_file(mirror), mirror_before)
+
+    def test_conversion_refuses_differing_primary_mirror(self):
+        # A primary-side copy whose bytes differ from the canonical
+        # registered manifest stays ambiguous: the multiple-manifest
+        # refusal keeps the claim and all three records byte-for-byte.
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest, differing=True)
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        mirror_before = self._hash_file(mirror)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(mirror), mirror_before)
+
+    def test_conversion_refuses_mirror_plus_second_worktree_manifest(self):
+        # The mirror collapse admits one primary-side copy beside the
+        # canonical manifest, never a third identity: an additional
+        # non-primary worktree manifest keeps the multiple refusal and
+        # the claim preserved.
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest)
+        other_branch = "fixture/other-branch"
+        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
+        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
+        other_run.mkdir(parents=True)
+        (other_run / "manifest.md").write_text("a third identity\n", encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        mirror_before = self._hash_file(mirror)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(mirror), mirror_before)
+
+    def test_conversion_refuses_two_nonprimary_byte_identical_manifests(self):
+        # Two non-primary registered worktrees carrying byte-identical
+        # manifests stay multiple: the one admitted collapse requires a
+        # primary-side copy (either the current or the retained find at
+        # the primary checkout), so with no primary-side manifest the
+        # refusal holds and the claim plus both manifests keep their
+        # bytes.
+        wt, manifest = self._conversion_fixture()
+        other_branch = "fixture/other-branch"
+        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
+        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
+        other_run.mkdir(parents=True)
+        other_manifest = other_run / "manifest.md"
+        shutil.copy(manifest, other_manifest)
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        other_manifest_before = self._hash_file(other_manifest)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(other_manifest), other_manifest_before)
+
+    def test_sweep_inconclusive_scan_names_worktree_and_cause(self):
+        # The stale-sweep skip reason carries the same attribution as the
+        # take refusal: a spendable claim (landed plan, branch gone) whose
+        # scan is inconclusive is skipped untouched, naming the registered
+        # worktree and the discovery cause; the claim bytes stay unchanged.
+        for shape in ("missing facts", "unreadable facts", "no tmp_dir", "symlink"):
+            with self.subTest(shape=shape):
+                if shape == "unreadable facts" and os.geteuid() == 0:
+                    self.skipTest("root reads anything")
+                wt, manifest = self._conversion_fixture()
+                facts = wt / ".ai-playbook" / "facts.md"
+                if shape == "missing facts":
+                    facts.unlink()
+                elif shape == "unreadable facts":
+                    os.chmod(facts, 0)
+                elif shape == "no tmp_dir":
+                    facts.write_text('other_key = "x"\n', encoding="utf-8")
+                else:
+                    target = self.scratch / "elsewhere-sweep-manifest.md"
+                    target.write_text("not the manifest\n", encoding="utf-8")
+                    manifest.unlink()
+                    os.symlink(str(target), str(manifest))
+                completed = self.repo / "docs" / "history" / "plans" / "completed"
+                completed.mkdir(parents=True, exist_ok=True)
+                shutil.copy(self.plan, completed / PLAN_NAME)
+                self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
+                claim_before = self._hash_file(self.claim)
+                manifest_before = self._hash_file(manifest)
+                proc = self._run("sweep", "--session", "session-sweeper")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                combined = proc.stdout + proc.stderr
+                self.assertIn("preservation scan inconclusive", combined)
+                self.assertIn(shape, combined)
+                self.assertIn(os.path.realpath(str(wt)), combined)
+                if shape == "symlink":
+                    # The symlinked manifest path is named in the reason,
+                    # in git's stored physical form (the take-side twin
+                    # asserts the same attribution on its refusal).
+                    self.assertIn(
+                        os.path.join(
+                            os.path.realpath(str(wt)),
+                            "run-tmp", "execute-plan", SLUG, "manifest.md",
+                        ),
+                        combined,
+                    )
+                self.assertTrue(
+                    self.claim.exists(), "inconclusive scan let sweep delete the claim"
+                )
+                self.assertEqual(self._hash_file(self.claim), claim_before)
+                self.assertEqual(self._hash_file(manifest), manifest_before)
+                # Reset the fixture state the next iteration rebuilds.
+                if facts.exists():
+                    os.chmod(facts, 0o644)
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
 
     def test_conversion_refuses_run_base_conflict(self):
         # The manifest's run_base branch token disagrees with the claim's

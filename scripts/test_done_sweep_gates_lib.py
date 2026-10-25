@@ -346,6 +346,7 @@ def sweep_env(tmp_path, monkeypatch):
         "REVIEW_STAGING_VALIDATOR",
         "CHECK_NO_EM_DASH_SCRIPT",
         "INSTRUCTION_SIZE_CHECK_SCRIPT",
+        "DESCRIPTION_LENGTH_CHECK_SCRIPT",
         "DONE_SWEEP_REPO_ROOT",
         "DONE_SWEEP_DECLARED_STAGE_PATHS",
     ):
@@ -408,9 +409,10 @@ def test_gate_registry_matches_absorbed_steps(capsys):
     """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly
     seventeen implemented gate ids, and the landing phase carries the retained
     fifteen-gate roster (the done target-state flip): backlog-inbox and
-    vim-swap-sweep are off the roster, plan-readiness, instruction-size and
-    description-length ride in warning posture, and plans-archive-twin is
-    deduped to one slot."""
+    vim-swap-sweep are off the roster, plan-readiness and instruction-size
+    ride in warning posture while description-length is blocking (the
+    catch-promotion plan removed it from the warning roster), and
+    plans-archive-twin is deduped to one slot."""
     # The flip: the deleted phases are gone from the registry.
     assert not hasattr(lib, "PRE_DOCS_GATES")
     assert not hasattr(lib, "PRE_COMMIT_GATES")
@@ -420,8 +422,10 @@ def test_gate_registry_matches_absorbed_steps(capsys):
     for demoted in ("backlog-inbox", "vim-swap-sweep"):
         assert demoted not in lib.LANDING_GATES
     assert lib.LANDING_WARNING_GATES == frozenset(
-        {"plan-readiness", "instruction-size", "description-length"}
+        {"plan-readiness", "instruction-size"}
     )
+    assert "description-length" in lib.LANDING_GATES
+    assert "description-length" not in lib.LANDING_WARNING_GATES
     # Every registry entry has an implementation.
     assert set(lib.GATES.keys()) == set(EXPECTED_GATE_ORDER)
     # The dead READ_ONLY_GATES set stays deleted (sequential execution).
@@ -9545,6 +9549,187 @@ def test_description_length_gate(tmp_path, sweep_env):
 
 
 # --------------------------------------------------------------------------- #
+# Checker-outcome classification and posture (plan 2026-10-24-description-
+# length-gate-catch-promotion, Task 1): checker exit 1 is the only modeled
+# over-cap result (rc=1, the catch class); a missing checker deployment and
+# every other checker exit (2 = the checker's operational-exception class,
+# anything else unexpected) map to tool-error rc=3 and never a catch; a
+# raised gate helper stays indeterminate rc=2; the docs-tmp helper exception
+# is warning-only (rc=0, later gates run, phase rc=0).
+# --------------------------------------------------------------------------- #
+def _desc_fixture_repo(tmp_path, name: str) -> Path:
+    """A fixture repo with a tracked over-cap skill and no repo-local
+    checker copy (the checker arrives only via the env pin below)."""
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    write_facts(root)
+    skill_dir = root / "agents" / "skills" / "overcap"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: overcap\ndescription: " + "x" * 1025 + "\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    git(root, "add", "agents")
+    git(root, "commit", "-m", "skill", "-q")
+    return root
+
+
+def _checker_stub(tmp_path, name: str, body: str) -> Path:
+    stub = tmp_path / name
+    stub.write_text(body, encoding="utf-8")
+    return stub
+
+
+def test_description_length_gate_classifies_checker_outcomes(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Given the promoted gate, expects the
+    classification arms: checker exit 1 keeps rc=1 (the only catch class);
+    the checker's operational-exception exit 2 maps to tool-error rc=3; any
+    other nonzero checker exit maps to rc=3; and a missing checker
+    deployment is rc=3 naming the deployment gap. None of the rc=3 arms is
+    a measured over-cap result, so none is a catch."""
+    root = _desc_fixture_repo(tmp_path, "desc-classification")
+
+    # Arm 1: measured over-cap result (checker exit 1) keeps rc=1.
+    monkeypatch.setenv(
+        "DESCRIPTION_LENGTH_CHECK_SCRIPT",
+        str(SCRIPTS_DIR / "check_skill_description_length.py"),
+    )
+    measured = run_gate("description-length", ctx_for(root))
+    assert measured.rc == 1
+    assert "overcap" in measured.message
+    assert "1025" in measured.message
+
+    # Arm 2: the checker's operational-exception class (exit 2) is a tool
+    # error carrying the checker's diagnostic tail, never rc=1.
+    stub2 = _checker_stub(
+        tmp_path, "checker-exit2.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('description-length: operational exception: agents/skills/overcap/SKILL.md: unreadable')\n"
+        "sys.exit(2)\n",
+    )
+    monkeypatch.setenv("DESCRIPTION_LENGTH_CHECK_SCRIPT", str(stub2))
+    operational = run_gate("description-length", ctx_for(root))
+    assert operational.rc == 3
+    assert "tool error" in operational.message
+    assert "operational exception" in operational.message
+
+    # Arm 3: any other nonzero checker exit (neither 0 nor 1 nor 2) is a
+    # tool error too.
+    stub7 = _checker_stub(
+        tmp_path, "checker-exit7.py",
+        "#!/usr/bin/env python3\nimport sys\nsys.exit(7)\n",
+    )
+    monkeypatch.setenv("DESCRIPTION_LENGTH_CHECK_SCRIPT", str(stub7))
+    other = run_gate("description-length", ctx_for(root))
+    assert other.rc == 3
+    assert "exit 7" in other.message
+
+    # Arm 4: missing checker deployment (no env override, no repo-local
+    # copy, empty runtime home) is a tool error naming the deployment gap.
+    monkeypatch.delenv("DESCRIPTION_LENGTH_CHECK_SCRIPT")
+    missing = run_gate("description-length", ctx_for(root))
+    assert missing.rc == 3
+    assert "deployment gap" in missing.message
+    assert "check_skill_description_length.py" in missing.message
+
+
+def test_description_length_pass_keeps_warning_band(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A passing checker run keeps the checker's
+    warning-band stderr rows as gate warnings (unchanged pass shape)."""
+    root = make_repo(tmp_path, "desc-pass", gitignore_docs=True)
+    write_facts(root)
+    stub = _checker_stub(
+        tmp_path, "checker-pass.py",
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('warning: somewhere: over the warning band', file=sys.stderr)\n"
+        "sys.exit(0)\n",
+    )
+    monkeypatch.setenv("DESCRIPTION_LENGTH_CHECK_SCRIPT", str(stub))
+    result = run_gate("description-length", ctx_for(root))
+    assert result.rc == 0
+    assert any("warning band" in w for w in result.warnings)
+
+
+def test_description_length_raised_helper_stays_indeterminate(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A raised description-length gate helper is
+    captured as indeterminate rc=2 by the phase runner (never a modeled
+    rc=1 catch, never a pass), and later gates still run."""
+    import done_sweep_gates_lib as lib
+
+    root = make_repo(tmp_path, "desc-raised", gitignore_docs=True)
+    write_facts(root)
+    ctx = ctx_for(root)
+    executed: list[str] = []
+
+    def raising_gate(_ctx):
+        executed.append("description-length")
+        raise RuntimeError("checker subprocess exploded")
+
+    def stub_zero(gate):
+        def _run(_ctx):
+            executed.append(gate)
+            return lib.GateResult(gate, 0, "stub ok", warnings=[])
+        return _run
+
+    for gate in lib.LANDING_GATES:
+        if gate == "description-length":
+            monkeypatch.setitem(lib.GATES, gate, raising_gate)
+        else:
+            monkeypatch.setitem(lib.GATES, gate, stub_zero(gate))
+    results = lib.run_phase("landing", ctx)
+    by_gate = {r.gate: r for r in results}
+    assert by_gate["description-length"].rc == 2
+    assert "raised RuntimeError" in by_gate["description-length"].message
+    assert lib.phase_exit(results) == 2
+    assert executed == lib.LANDING_GATES, "later gates still run after the raised helper"
+
+
+def test_docs_tmp_helper_exception_is_warning_only(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] The paired demotion: an unexpected
+    docs-tmp-sweep helper exception warns (rc=0 with a warning line), later
+    gates run, and the landing phase exits rc=0, instead of the generic
+    indeterminate refusal. The gate's normal conservative keep behavior is
+    unchanged (exercised by the docs-tmp sweep keep tests)."""
+    import done_sweep_gates_lib as lib
+
+    root = make_repo(tmp_path, "docs-tmp-raised", gitignore_docs=True)
+    write_facts(root)
+    ctx = ctx_for(root)
+    executed: list[str] = []
+
+    def raising_gate(_ctx):
+        executed.append("docs-tmp-sweep")
+        raise RuntimeError("tmp sweep exploded")
+
+    def stub_zero(gate):
+        def _run(_ctx):
+            executed.append(gate)
+            return lib.GateResult(gate, 0, "stub ok", warnings=[])
+        return _run
+
+    for gate in lib.LANDING_GATES:
+        if gate == "docs-tmp-sweep":
+            monkeypatch.setitem(lib.GATES, gate, raising_gate)
+        else:
+            monkeypatch.setitem(lib.GATES, gate, stub_zero(gate))
+    results = lib.run_phase("landing", ctx)
+    by_gate = {r.gate: r for r in results}
+    assert by_gate["docs-tmp-sweep"].rc == 0
+    assert "warning-only" in by_gate["docs-tmp-sweep"].message
+    assert any(
+        "cleanup retried in a later session" in w
+        for w in by_gate["docs-tmp-sweep"].warnings
+    )
+    assert lib.phase_exit(results) == 0
+    assert executed == lib.LANDING_GATES, "later gates still run after the docs-tmp helper exception"
+
+
+# --------------------------------------------------------------------------- #
 # Plan checkbox: description-length default-scan scope  [class: REPOSITORY_TEST]
 # (plan docs/history/plans/2026-10-21-description-length-checker-scope-and-
 # admission.md, Task 1). These drive the checker directly (default scan vs
@@ -14997,7 +15182,10 @@ def test_landing_roster_membership_and_absence():
     assert lib.PHASES["landing"] == lib.LANDING_GATES
     for gate in ("instruction-size", "description-length"):
         assert gate in lib.LANDING_GATES
-        assert gate in lib.LANDING_WARNING_GATES
+    # The promotion: instruction-size keeps the warning posture;
+    # description-length is blocking (a measured over-cap rc=1 refuses).
+    assert "instruction-size" in lib.LANDING_WARNING_GATES
+    assert "description-length" not in lib.LANDING_WARNING_GATES
 
 
 def test_landing_warning_posture_run_path(tmp_path, monkeypatch):
@@ -15005,15 +15193,16 @@ def test_landing_warning_posture_run_path(tmp_path, monkeypatch):
 
     root = _landing_repo(tmp_path)
     ctx = ctx_for(root)
-    warning = ("instruction-size", "description-length")
+    warning = ("instruction-size",)
 
     def fake_gate(gate, rc):
         def _g(_ctx):
             return lib.GateResult(gate, rc, f"{gate} fixture verdict", warnings=[])
         return _g
 
-    # Landing run: the two warning-posture breaches downgrade to rc 0 with a
-    # warning line naming each gate; every other gate deterministic pass.
+    # Landing run: the remaining warning-posture breach (instruction-size)
+    # downgrades to rc 0 with a warning line naming the gate; every other
+    # gate deterministic pass.
     for gate in lib.LANDING_GATES:
         monkeypatch.setitem(
             lib.GATES, gate, fake_gate(gate, 1 if gate in warning else 0)
@@ -15031,6 +15220,21 @@ def test_landing_warning_posture_run_path(tmp_path, monkeypatch):
     for gate in warning:
         monkeypatch.setitem(lib.GATES, gate, fake_gate(gate, 1))
         assert lib.run_gate(gate, ctx).rc == 1
+
+    # The promotion (plan 2026-10-24-description-length-gate-catch-
+    # promotion): a description-length rc=1 keeps its rc through the phase
+    # run, no warning-posture downgrade, and the phase refuses (exit 1).
+    for gate in lib.LANDING_GATES:
+        monkeypatch.setitem(
+            lib.GATES, gate, fake_gate(gate, 1 if gate == "description-length" else 0)
+        )
+    results = lib.run_phase("landing", ctx)
+    by_gate = {r.gate: r for r in results}
+    assert by_gate["description-length"].rc == 1
+    assert not any(
+        "warning posture" in w for w in by_gate["description-length"].warnings
+    )
+    assert lib.phase_exit(results) == 1
 
 
 # --------------------------------------------------------------------------- #

@@ -349,8 +349,11 @@ The threshold is judged per constructor: a type with several constructors is rea
 constructor at a time. Where Lombok is available, put `@Builder` on the record, or on
 the class (on its explicit constructor when the class declares one), so the builder
 covers the canonical constructor, and keep the validation of the canonical or compact
-constructor. Without Lombok, write the builder as a hand-written static nested builder
-class. Construction call sites in production and test sources follow the same rule.
+constructor. When the class has one over-threshold constructor beside below-threshold
+convenience constructors, put `@Builder` on that constructor alone; the builder covers
+it, and its validation remains. Without Lombok, write the builder as a hand-written
+static nested builder class. Construction call sites in production and test sources
+follow the same rule.
 
 Framework construction is exempt. A dependency-injection or configuration-binding
 constructor keeps a plain constructor or `@RequiredArgsConstructor` over `final` fields:

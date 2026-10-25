@@ -2405,6 +2405,102 @@ class SingleCommitSweepTest(unittest.TestCase):
                          "--repo", str(repo.root))
         self.assertEqual(proc.returncode, 0, proc.stdout.decode())
 
+    # Widened landing-claim grammar fixtures (plan
+    # docs/history/plans/2026-10-23-landing-subject-grammar-end-to-end.md
+    # Task 1): the two witnessed landing families join the two original
+    # prefixes in LANDING_CLAIM_PREFIXES.
+
+    def test_widened_prefixes_recognized_as_landing_claims(self):
+        self.assertTrue(
+            rsg.is_landing_claim("execute-plan: land witnessed-plan (the landing)"))
+        self.assertTrue(
+            rsg.is_landing_claim("author: land witnessed-plan (the landing)"))
+        # Existing controls stay recognized; a free-form subject does not.
+        self.assertTrue(rsg.is_landing_claim("plans: land witnessed-plan"))
+        self.assertTrue(rsg.is_landing_claim("done: execute witnessed-plan"))
+        self.assertFalse(rsg.is_landing_claim("wip: unrelated work"))
+
+    def test_widened_prefixes_map_to_lane_kinds(self):
+        self.assertEqual(
+            rsg.anchor_kind("execute-plan: land witnessed-plan (the landing)"),
+            "execution")
+        self.assertEqual(
+            rsg.anchor_kind("author: land witnessed-plan (the landing)"),
+            "authoring")
+        # Existing mappings stay byte-identical in behavior.
+        self.assertEqual(rsg.anchor_kind("plans: land witnessed-plan"),
+                         "authoring")
+        self.assertEqual(rsg.anchor_kind("done: execute witnessed-plan"),
+                         "execution")
+        self.assertIsNone(rsg.anchor_kind("wip: unrelated work"))
+
+    def test_execute_plan_landing_anchors_with_execution_kind(self):
+        # The witnessed execute-plan landing subject anchors the sweep with
+        # the execution kind: a slug-linked closeout follow-up flags (an
+        # execution-only class) and the anchor is never refused as not a
+        # landing-claiming commit, the refusal whose hand-run
+        # rev-list fallback this fixture retires.
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        repo.write("l.txt", "l\n")
+        landing = repo.commit_all(
+            "execute-plan: land witnessed-plan (the landing)")
+        repo.write("a.txt", "a\n")
+        hit = repo.commit_all("done: archive witnessed-plan to completed")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[archive]", out)
+        self.assertIn(hit[:12], out)
+        self.assertNotIn("not a landing-claiming commit", out)
+
+    def test_author_landing_anchors_with_authoring_kind(self):
+        # The witnessed authoring self-landing subject anchors with the
+        # authoring kind: a flip-class follow-up flags (an authoring-only
+        # class) and the anchor is never refused as not a landing-claiming
+        # commit.
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        repo.write("l.txt", "l\n")
+        landing = repo.commit_all(
+            "author: land witnessed-plan (the authoring landing)")
+        repo.write("a.txt", "a\n")
+        hit = repo.commit_all(
+            "done: mark witnessed-plan origin covered by the landed plan")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[flip]", out)
+        self.assertIn(hit[:12], out)
+        self.assertNotIn("not a landing-claiming commit", out)
+
+    def test_batch_walk_classifies_widened_subject_shapes_as_anchors(self):
+        # A batch walk over a history carrying the witnessed subject shapes
+        # classifies both as anchors: each prints its anchor line and the
+        # clean window keeps the run green.
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        repo.write("t1.txt", "t1\n")
+        exec_landing = repo.commit_all(
+            "execute-plan: land witnessed-plan (the landing)")
+        repo.write("t2.txt", "t2\n")
+        author_landing = repo.commit_all(
+            "author: land witnessed-plan (the authoring landing)")
+        proc = run_guard("check-single-commit", "--scan-window", "5",
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("anchor %s execute-plan: land witnessed-plan "
+                      "(the landing)" % exec_landing[:12], out)
+        self.assertIn("anchor %s author: land witnessed-plan "
+                      "(the authoring landing)" % author_landing[:12], out)
+        self.assertIn("ok: no follow-up residue (2 anchor(s) scanned)", out)
+
     def test_prev_landing_of_resolves_nearest_claim_below_tip(self):
         repo, shas = self._repo_with_history()
         # tip is itself a landing claim (done: execute); the window below it

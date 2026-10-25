@@ -86,6 +86,10 @@ Context surface: the plan's Terms, this task, and the stated assumptions.
 Files:
 - `projects/.ai-playbook/java_guidelines.md`
 
-- [ ] Clarify only the class arm for the selected case: given a class with one above-threshold constructor and one or more below-threshold convenience constructors, expect rule 27 to place `@Builder` on the above-threshold constructor, say the builder covers that constructor and its validation remains, and keep the record arm's canonical-constructor wording and existing class-level no-constructor arm. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the Validation Commands and expect both to pass. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: clarify Java rule 27 builder placement`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Clarify only the class arm for the selected case: given a class with one above-threshold constructor and one or more below-threshold convenience constructors, expect rule 27 to place `@Builder` on the above-threshold constructor, say the builder covers that constructor and its validation remains, and keep the record arm's canonical-constructor wording and existing class-level no-constructor arm. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the Validation Commands and expect both to pass. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: clarify Java rule 27 builder placement`. [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-20-java-guideline-builder-placement-multi-constructor.md`: implemented by this plan (rule 27 names the `@Builder` target for one over-threshold constructor beside below-threshold convenience constructors); the origin row carried `Status: covered` and is deleted in this landing change, this archived plan being the witness. The excluded multi-over-threshold arrangement is tracked by `docs/history/backlog/2026-10-25-java-guideline-builder-placement-multiple-over-threshold.md`.

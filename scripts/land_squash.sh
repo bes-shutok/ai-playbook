@@ -164,6 +164,43 @@ tool_error() {
   exit 3
 }
 
+emit_grammar_notice() {
+  # The compose-time landing-claim grammar notice (warning-only): the
+  # message's first line is judged against the guard's LANDING_CLAIM_PREFIXES
+  # read through a module import over the already-resolved REVERSE_GUARD path
+  # (the constant is the grammar's single source; no copy of the prefix set
+  # lives here). A non-conformant subject prints one warning line naming the
+  # recognized prefixes; a conformant one prints nothing; a guard import
+  # failure prints one note line and continues. The notice never changes an
+  # exit code or an outcome.
+  local first_line notice_out
+  first_line="${MESSAGE%%$'\n'*}"
+  notice_out="$(python3 - "$REVERSE_GUARD" "$first_line" 2>/dev/null <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "reverse_squash_guard", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+if module.is_landing_claim(sys.argv[2]):
+    print("conformant")
+else:
+    print("grammar: " + ", ".join(
+        repr(prefix) for prefix, _kind in module.LANDING_CLAIM_PREFIXES))
+PY
+)" || true
+  case "$notice_out" in
+    conformant) : ;;
+    "grammar: "*)
+      echo "warning: landing message subject matches no recognized landing-claim grammar prefix (recognized: ${notice_out#grammar: }); rephrase the --message subject into the grammar before the landing commit is composed"
+      ;;
+    *)
+      echo "note: the landing-claim grammar notice could not import the guard module (${REVERSE_GUARD}); the landing proceeds without the grammar warning"
+      ;;
+  esac
+}
+
 meta_field() {
   # Read KEY=value from the lock record without sourcing it.
   local meta="$1" key="$2" line=""
@@ -726,6 +763,12 @@ if [[ "$MODE" == "land-worktree" ]]; then
   fi
   [[ "$WTGUARD_RC" -eq 0 ]] || tool_error "check-landing failed (exit ${WTGUARD_RC})"
 
+  # The compose-time landing-claim grammar notice, before the landing commit
+  # is composed. The wired check-landing gate above already refused any run
+  # whose guard copy is missing from every resolved path, so the notice's
+  # import-failure note line is not reachable in this mode.
+  emit_grammar_notice
+
   # The base tip resolved after check-landing passes: the compare-and-swap
   # old-value and both parentage base arguments feed from here, never from
   # the source tip.
@@ -1047,6 +1090,11 @@ if [[ -n "$INTERSECT" ]]; then
   emit_outcome fail
   exit 1
 fi
+
+# The compose-time landing-claim grammar notice, before the landing commit
+# is composed: warning-only, the landing outcome and exit code unchanged; a
+# guard import failure here is one note line and the landing continues.
+emit_grammar_notice
 
 # The guarded squash merge.
 MERGE_RC=0

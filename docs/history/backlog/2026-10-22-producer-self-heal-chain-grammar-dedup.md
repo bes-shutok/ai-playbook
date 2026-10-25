@@ -1,6 +1,7 @@
 # Producer self-heal chain grammar duplicates validator privates
 
 Added: 2026-10-22, execute-plan Task 2 intermediate review (plan exec-review-records-at-round-close), correctness-completeness lens, minor finding folded forward.
+Cluster: docs/history/backlog/2026-10-22-producer-review-findings-followups.md (same script: `scripts/produce_exec_review_record.py` follow-up family)
 
 Driving force: maintainability - `scripts/produce_exec_review_record.py`'s self-heal chain block (`_well_formed_self_heal_state`, `_valid_prior_chain_state`, `self_heal_chain_state`) re-encodes the shared self-heal gate's chain grammar and predecessor-index rules (~60 lines) and reaches into validator privates (`_date_fence`, `_calendar_valid_record_date`, `ValidationResult`, `validate_usage_mint_gate`), making it the file's principal drift surface: any change to the gate's grammar must be mirrored there or production of round N>1 records fails late at the validator instead of at the producer.
 

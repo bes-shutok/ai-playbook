@@ -18,7 +18,7 @@ Driving force: reliability (the guard's central resolution rules ship correct bu
 Task 2 captures (Step 1.2b):
 - F1/T2-5: add REVERSE_SQUASH_GUARD_SCRIPT to sweep_env's delenv list (fixture hermeticity parity with the seven sibling overrides).
 - F2: converge the battery's absent-script posture (review-staging rc 1 named deployment gap vs this gate's rc 3) or name the rc-3 arm in the done enumeration prose.
-- **Cluster:** docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md; docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md
+- **Cluster:** docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/plans/completed/2026-10-10-coordination-single-writer-ttl.md; docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md; docs/history/backlog/2026-10-25-claim-release-operand-after-covered-row-deletion.md
 - F3: append the scanned range target to the contradiction arm's message, matching the sibling indeterminate arm's "target {base}..HEAD" shape.
 - T2-1: fixture with the plans tree gone at HEAD and base (and one with the dir absent pre-run), asserting the named warning skip; also assert the keep-scan nuance (own commit emptied the plans root keeps its scan).
 - T2-2: fixture for the no-manifest skip arm asserting the named reason.

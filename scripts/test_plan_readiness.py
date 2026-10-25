@@ -501,7 +501,30 @@ def _coverage_plan_text(*tasks: str) -> str:
 _COVERAGE_LOUD_ITEM = "Update `src/module.py` now"
 
 
-class PlanFilesCoverageTest(unittest.TestCase):
+# The inherited Git repository and index overrides the CLI fixture
+# classes clear, one module-level fact shared by both clearing mechanics.
+GIT_OVERRIDE_NAMES = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+)
+
+
+class _GitOverrideIsolationMixin:
+    """Clears inherited Git repository and index overrides for the CLI
+    fixture repositories, so a runner launched from a linked worktree or
+    with GIT_DIR exported never redirects the fixture's git reads; the
+    prior values are restored at teardown."""
+
+    def _isolate_git_overrides(self) -> None:
+        saved = {
+            name: os.environ.pop(name)
+            for name in GIT_OVERRIDE_NAMES
+            if name in os.environ
+        }
+        self.addCleanup(os.environ.update, saved)
+
+
+class PlanFilesCoverageTest(_GitOverrideIsolationMixin, unittest.TestCase):
     """The Files:-coverage arm at the CLI boundary: the loud warning
     naming task, path, and quoting item and the softened sibling variant
     fire on BOTH entries with unchanged exits; the silent boundaries (a
@@ -510,6 +533,7 @@ class PlanFilesCoverageTest(unittest.TestCase):
     prints zero warning lines."""
 
     def setUp(self) -> None:
+        self._isolate_git_overrides()
         self.root = Path(tempfile.mkdtemp(prefix="files-coverage-fixture-"))
         self.addCleanup(shutil.rmtree, self.root, True)
         (self.root / ".ai-playbook").mkdir()
@@ -831,6 +855,287 @@ class PlanFilesCoverageTest(unittest.TestCase):
         rc, out, err = self._run_main([str(plan)])
         self.assertEqual(rc, 1, (out, err))
         self.assertIn("cannot read plan bytes", err)
+        self.assertNotIn("FILES-COVERAGE", err)
+
+
+def _must_fix_plan_text(scope_items: list, *tasks: str) -> str:
+    """Plan text whose Review Scope lists ``scope_items`` under the
+    Explicit must-fix tier (Production code category), followed by a
+    plan-related extension and an out-of-scope block that the ownership
+    check must never read, then the given task sections."""
+    return (
+        "# P\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: none remain.\n\n"
+        "## Review Scope\n\n"
+        "**Explicit must-fix:** findings on these paths are always in scope.\n\n"
+        "**Production code:**\n"
+        + "".join(f"- {item}\n" for item in scope_items)
+        + "\n**Plan-related extension:**\n"
+        "- `src/extension.py` - unannotated by design\n\n"
+        "**Out of scope; reject unless plan-related:**\n"
+        "- `src/outside.py`\n\n"
+        "## Tasks\n\n" + "".join(tasks)
+    )
+
+
+class PlanMustFixOwnershipTest(_GitOverrideIsolationMixin, unittest.TestCase):
+    """The explicit must-fix ownership source of the Files:-coverage arm
+    at the CLI boundary: a missing, malformed, mismatched, or
+    nonexistent-task annotation warns on BOTH entries with unchanged
+    exits even when a sibling task declares the path; a covered
+    ``(Task N)`` path, a ``(review-only)`` path absent from every Files:
+    list, and the non-must-fix categories stay silent; the acceptance
+    item warnings keep their wording beside the new lines."""
+
+    def setUp(self) -> None:
+        self._isolate_git_overrides()
+        self.root = Path(tempfile.mkdtemp(prefix="must-fix-ownership-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def test_superscript_digit_annotation_warns_malformed(self):
+        # str.isdigit() accepts non-ASCII digits int() rejects; the
+        # malformed branch must fire, never crash, on either entry.
+        plan_text = _must_fix_plan_text(
+            ["`src/a.py` (Task 1) - owned", "`src/b.py` (Task \u00b2) - superscript"],
+            *self._two_tasks(),
+        )
+        plan = self._write_fixture(plan_text)
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("`src/b.py`", lines[0])
+            self.assertIn("malformed ownership annotation", lines[0])
+
+    def test_duplicate_path_checked_once_by_first_item(self):
+        # The documented first-item-wins dedupe: a duplicated path whose
+        # second item carries a conflicting annotation emits one warning,
+        # from the first item only.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                [
+                    "`src/a.py` (Task 1) - owned",
+                    "`src/b.py` - unowned first listing",
+                    "`src/b.py` (Task 9) - conflicting second listing",
+                ],
+                *self._two_tasks(),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("lacks an ownership annotation", lines[0])
+            self.assertIn("unowned first listing", lines[0])
+
+    def test_annotation_inside_leading_span_not_an_annotation(self):
+        # The annotation is read only from the item text after the leading
+        # path span: an annotation inside the span stays a missing
+        # annotation, never a satisfied one.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                ["`src/a.py` (Task 1) - owned", "`src/b.py (Task 2)` - inside"],
+                *self._two_tasks(),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("lacks an ownership annotation", lines[0])
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_fixture(self, plan_text: str) -> Path:
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=plan_text,
+            date="2026-10-23",
+            slug="must-fix-ownership",
+        )
+        return plan
+
+    @staticmethod
+    def _ownership_lines(text: str) -> list:
+        return [
+            line
+            for line in text.splitlines()
+            if line.startswith(
+                "readiness FILES-COVERAGE WARNING: explicit must-fix path"
+            )
+        ]
+
+    def _two_tasks(self, *extra_task2: str) -> tuple:
+        # Every declared Files: path must also appear in the Review Scope
+        # text (the inventory check), so callers list src/a.py and
+        # src/b.py in the scope and pass any extra Task 2 path they list.
+        return (
+            _coverage_task("Task 1: Write a", ["src/a.py"], ["Write a"]),
+            _coverage_task(
+                "Task 2: Write b", ["src/b.py", *extra_task2], ["Write b"]
+            ),
+        )
+
+    def _run_both_entries(self, plan_text: str):
+        plan = self._write_fixture(plan_text)
+        results = []
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            self.assertNotIn("FILES-COVERAGE", out)
+            results.append((out, err))
+        self.assertIn("readiness PRE-ROUND OK", results[0][0])
+        self.assertTrue(results[1][0].rstrip().endswith("OUTCOME: pass"))
+        return results
+
+    def test_sibling_listed_path_warns_without_annotation(self):
+        # Task 2 declares src/b.py; the must-fix item still lacks its
+        # owner, so the sibling declaration never satisfies the check.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                ["`src/a.py` (Task 1) - owned", "`src/b.py` - unowned"],
+                *self._two_tasks(),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("`src/b.py`", lines[0])
+            self.assertIn("lacks an ownership annotation", lines[0])
+
+    def test_task_annotated_path_absent_from_named_task_warns(self):
+        # Annotated (Task 1) while only Task 2 lists it: the warning names
+        # the named task and the declaring sibling.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                ["`src/a.py` (Task 1) - owned", "`src/b.py` (Task 1) - wrong"],
+                *self._two_tasks(),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("`src/b.py`", lines[0])
+            self.assertIn("absent from Task 1's Files: list", lines[0])
+            self.assertIn("declared by Task 2's Files: list", lines[0])
+
+    def test_named_warnings_for_mismatched_and_malformed_on_both_entries(self):
+        # The acceptance pair the plan pins: a Task 2-only path annotated
+        # (Task 1) and a sibling-listed path marked (Task one).
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                [
+                    "`src/a.py` (Task 1) - owned",
+                    "`src/b.py` (Task 1) - mismatched",
+                    "`src/d.py` (Task one) - malformed",
+                ],
+                *self._two_tasks("src/d.py"),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 2, err)
+            self.assertTrue(
+                any(
+                    "`src/b.py`" in line
+                    and "annotated (Task 1) but is absent from Task 1's"
+                    in line
+                    for line in lines
+                ),
+                lines,
+            )
+            self.assertTrue(
+                any(
+                    "`src/d.py`" in line
+                    and "malformed ownership annotation `(Task one)`" in line
+                    for line in lines
+                ),
+                lines,
+            )
+
+    def test_nonexistent_task_target_warns(self):
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                ["`src/a.py` (Task 1) - owned", "`src/b.py` (Task 9) - gone"],
+                *self._two_tasks(),
+            )
+        ):
+            lines = self._ownership_lines(err)
+            self.assertEqual(len(lines), 1, err)
+            self.assertIn("`src/b.py`", lines[0])
+            self.assertIn("no Task 9 section exists", lines[0])
+
+    def test_covered_and_review_only_paths_silent(self):
+        # Every must-fix path is either annotated to the task that lists
+        # it or marked (review-only) while absent from every Files: list.
+        # The non-must-fix categories carry unannotated paths and never
+        # warn.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                [
+                    "`src/a.py` (Task 1) - owned",
+                    "`src/b.py` (Task 2) - owned",
+                    "`docs/readme.md` (review-only) - nobody edits it",
+                ],
+                *self._two_tasks(),
+            )
+        ):
+            self.assertEqual(self._ownership_lines(err), [], err)
+
+    def test_acceptance_item_warning_unchanged_beside_ownership_line(self):
+        # The existing acceptance-item warning keeps its wording while the
+        # ownership line fires for the same plan.
+        for out, err in self._run_both_entries(
+            _must_fix_plan_text(
+                ["`src/a.py` (Task 2) - owned", "`src/b.py` - unowned"],
+                _coverage_task("Task 1: Write b", ["src/b.py"], ["Write b"]),
+                _coverage_task(
+                    "Task 2: Write a", ["src/a.py"], ["Update `src/b.py` now"]
+                ),
+            )
+        ):
+            coverage = [
+                line
+                for line in err.splitlines()
+                if line.startswith("readiness FILES-COVERAGE WARNING:")
+            ]
+            self.assertEqual(len(coverage), 2, err)
+            self.assertTrue(
+                any(
+                    "Task 2 acceptance item quotes `src/b.py`, already "
+                    "declared by Task 1's Files: list" in line
+                    for line in coverage
+                ),
+                coverage,
+            )
+            self.assertEqual(len(self._ownership_lines(err)), 1, err)
+
+    def test_failure_path_prints_no_ownership_lines(self):
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=_must_fix_plan_text(
+                ["`src/a.py` (Task 1) - owned", "`src/b.py` - unowned"],
+                *self._two_tasks(),
+            ),
+            verdict="no",
+            date="2026-10-23",
+            slug="must-fix-ownership",
+        )
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness FAILED:", err)
         self.assertNotIn("FILES-COVERAGE", err)
 
 

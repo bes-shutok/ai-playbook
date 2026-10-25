@@ -1188,10 +1188,52 @@ def _plan_acceptance_path_token(span: str) -> str | None:
     return token
 
 
+# Ownership annotations on explicit must-fix Review Scope items: ``(Task N)``
+# assigns the path to the task that edits it; ``(review-only)`` records that
+# no task edits it. Both are read from the item text after its leading path
+# span, so a parenthesized note inside the span is never mistaken for one.
+_MUST_FIX_TASK_ANNOTATION_RE = re.compile(r"\(\s*Task\s+([^()]*?)\s*\)")
+_MUST_FIX_REVIEW_ONLY_RE = re.compile(r"\(\s*review-only\s*\)")
+
+
+def _plan_must_fix_items(stripped: str) -> list[str]:
+    """List items under the ``Explicit must-fix`` tier of ``## Review
+    Scope``, in document order.
+
+    The tier opens at the category line whose label starts with
+    ``explicit must-fix`` (hyphen-insensitive, case-insensitive) and
+    closes at the ``Plan-related extension`` or ``Out of scope`` label;
+    the category labels inside the tier (``Production code``, ``Tests``,
+    ``Documentation and records``) group the items without ending it.
+    An absent section or tier yields no items.
+    """
+    scope = md_section(stripped, "Review Scope")
+    if not scope:
+        return []
+    items: list[str] = []
+    inside = False
+    for line in scope.splitlines():
+        label_match = _REVIEW_SCOPE_CATEGORY_RE.match(line)
+        if label_match:
+            label = label_match.group(1).strip().lower().replace("-", " ")
+            if label.startswith("explicit must fix"):
+                inside = True
+            elif "plan related extension" in label or "out of scope" in label:
+                inside = False
+            continue
+        item_match = re.match(r"^-\s+(.+?)\s*$", line)
+        if item_match and inside:
+            items.append(item_match.group(1))
+    return items
+
+
 def plan_files_coverage_warnings(plan_text: str) -> list[str]:
     """Warning-only Files:-coverage arm (machinery registry row
     ``script:plan-files-coverage-arm``): one line per acceptance-item path
-    token missing from task ``Files:`` lists.
+    token missing from task ``Files:`` lists, plus one line per explicit
+    must-fix path whose ownership annotation is missing, malformed, names
+    a task that does not exist, or names a task whose ``Files:`` list
+    omits the path.
 
     The shared check surface both gate paths call: the pre-round gate
     (``run_pre_round``) prints the lines on stderr after all probes pass,
@@ -1225,6 +1267,19 @@ def plan_files_coverage_warnings(plan_text: str) -> list[str]:
     Known limitation: an acceptance item that mentions another task's
     path for context produces a warning the author adjudicates; the
     warning posture keeps that cost at one read.
+
+    Second token source, the explicit must-fix scope: each path-shaped,
+    scheme-free list item under the ``Explicit must-fix`` tier of
+    ``## Review Scope`` (``_plan_must_fix_items``) must carry ``(Task
+    N)`` naming the task whose ``Files:`` list declares it, or
+    ``(review-only)`` recording that no task edits it. A missing
+    annotation, a malformed ``(Task ...)`` marker, a task number with no
+    section, or a named task whose ``Files:`` list omits the path each
+    emit one line; a sibling task's declaration never satisfies a
+    ``(Task N)`` annotation (the warning names the sibling). Only the
+    must-fix tier is read: plan-related extensions and out-of-scope
+    paths carry different review semantics. A path listed more than
+    once in the tier is checked once, by its first item.
     """
     warnings: list[str] = []
     stripped = _strip_fences(plan_text)
@@ -1270,6 +1325,66 @@ def plan_files_coverage_warnings(plan_text: str) -> list[str]:
                         f"Files: list declares it (Files:-coverage "
                         f"contract; quoting item: {item})"
                     )
+    # Explicit must-fix ownership: the annotation is read from the item
+    # text after its leading path span, and only the exact named task's
+    # Files: list satisfies a (Task N) marker.
+    files_of_ordinal: dict[int, set[str]] = {}
+    for (title, _), (_, tokens) in zip(sections, per_task):
+        ordinal = _plan_task_ordinal(title)
+        if ordinal is not None:
+            files_of_ordinal.setdefault(ordinal, set()).update(tokens)
+    checked: set[str] = set()
+    for item in _plan_must_fix_items(stripped):
+        token = _review_scope_path_token(item)
+        if (
+            not token
+            or not _plan_path_shaped(token)
+            or _PLAN_URL_SCHEME_RE.match(token)
+            or token in checked
+        ):
+            continue
+        checked.add(token)
+        lead = re.match(r"\s*`+[^`]+`+", item)
+        rest = item[lead.end():] if lead else item
+        if _MUST_FIX_REVIEW_ONLY_RE.search(rest):
+            continue
+        marker = _MUST_FIX_TASK_ANNOTATION_RE.search(rest)
+        prefix = (
+            f"readiness FILES-COVERAGE WARNING: explicit must-fix path "
+            f"`{token}`"
+        )
+        if marker is None:
+            warnings.append(
+                f"{prefix} lacks an ownership annotation ((Task N) or "
+                f"(review-only)); item: {item}"
+            )
+            continue
+        number = marker.group(1)
+        if not (number.isascii() and number.isdigit()):
+            warnings.append(
+                f"{prefix} carries a malformed ownership annotation "
+                f"`{marker.group(0)}` (expected (Task N) with a task "
+                f"number); item: {item}"
+            )
+            continue
+        ordinal = int(number)
+        if ordinal not in files_of_ordinal:
+            warnings.append(
+                f"{prefix} is annotated (Task {ordinal}) but no Task "
+                f"{ordinal} section exists; item: {item}"
+            )
+        elif token not in files_of_ordinal[ordinal]:
+            declarer = declarer_of.get(token)
+            sibling = (
+                f" (declared by {declarer}'s Files: list, which does not "
+                f"satisfy the annotation)"
+                if declarer is not None
+                else ""
+            )
+            warnings.append(
+                f"{prefix} is annotated (Task {ordinal}) but is absent from "
+                f"Task {ordinal}'s Files: list{sibling}; item: {item}"
+            )
     return warnings
 
 

@@ -191,7 +191,9 @@ never a hand-composed sequence; under the acquired merge lock it runs
 primary-checkout landing duty; the optional `--expected-base <sha>` passthrough
 carries the recorded base pin to the pre-swap leg), and the pre-lock
 `scripts/land_squash.sh probe --branch <branch>` duty gates lock acquisition.
-On a landing kept after the helper's outcome contract, the post-landing sweep
+The `--message` text's subject line follows the landing-claim grammar pinned
+by the Worktree-first standard's landing step, in both landing modes' helper
+invocations. On a landing kept after the helper's outcome contract, the post-landing sweep
 runs per the landing closeout's post-landing sweep implementation in the
 Worktree-first standard section of agents/skills/execute-plan/SKILL.md; on the
 rollback arm the sweep does not run and the deferred-landing record carries the

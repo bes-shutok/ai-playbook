@@ -12,7 +12,9 @@ judgment steps around it stay in the skill):
   plan-readiness, confluence-hygiene, doc-registry, review-staging,
   docs-tmp-sweep, plans-archive-twin (deduped to one run slot),
   sensitive-data-scan, em-dash-scan, instruction-size (warning posture),
-  description-length (warning posture), foreign-staging,
+  description-length (blocking: a measured over-cap rc=1 refuses the
+  landing, and the commit path records its guard catch before refusing),
+  foreign-staging,
   post-landing-staging, plans-root-claim-fence, archive-ceremony,
   execute-plan-closeout. backlog-inbox and vim-swap-sweep are not on the
   roster (receiving-review capture step and the periodic survey advisory own
@@ -147,9 +149,13 @@ OUTCOME_LINE_PREFIX = "OUTCOME:"
 
 # Registry: the landing phase, the closeout's one sweep run (the retained
 # roster from the done target-state classification, the plan's Outcome
-# table). plan-readiness, instruction-size and description-length ride in
-# warning posture: they report, never block (no ledger catches; the demotion
-# program's landing-dated rows own the evidence). backlog-inbox and vim-swap-sweep
+# table). plan-readiness and instruction-size ride in warning posture: they
+# report, never block. description-length left the warning roster with the
+# catch-promotion plan (docs/history/plans/2026-10-24-description-length-
+# gate-catch-promotion.md): a measured over-cap result keeps rc=1 through the
+# structured phase report and refuses the landing, and the commit path
+# records its guard catch in scripts/gate_liveness_ledger.json before
+# refusing. backlog-inbox and vim-swap-sweep
 # left the per-run roster entirely: the filing duty stays with
 # receiving-review's capture step, the sweep became a periodic survey
 # advisory (docs/maintenance/demoted-sweep-arms.md).
@@ -170,9 +176,7 @@ LANDING_GATES = [
     "archive-ceremony",
     "execute-plan-closeout",
 ]
-LANDING_WARNING_GATES = frozenset(
-    {"plan-readiness", "instruction-size", "description-length"}
-)
+LANDING_WARNING_GATES = frozenset({"plan-readiness", "instruction-size"})
 
 # The per-task boundary roster: LANDING_GATES minus post-landing-staging
 # alone (plan: worktree-done-boundary-gate-roster-split, Task 1). Subtraction
@@ -3344,6 +3348,17 @@ def gate_instruction_size(ctx: GateContext) -> GateResult:
 
 
 def gate_description_length(ctx: GateContext) -> GateResult:
+    """Blocking landing gate (plan
+    docs/history/plans/2026-10-24-description-length-gate-catch-promotion.md):
+    the folded skill-description 1024-character cap. The checker's outcome
+    classes are classified, never collapsed: exit 1 is a measured over-cap
+    result and keeps rc=1 (the one result the commit path records as a
+    description-length guard catch before refusing the landing); exit 0
+    passes with the checker's warning-band rows; a missing checker
+    deployment and every other checker exit (2 = the checker's own
+    operational-exception class; anything else unexpected) are tool errors
+    (rc=3) and never catches. A raised gate helper stays indeterminate
+    (rc=2) through the phase runner's capture."""
     gate = "description-length"
     script = ctx.resolve_script(
         "DESCRIPTION_LENGTH_CHECK_SCRIPT", "check_skill_description_length.py"
@@ -3356,11 +3371,14 @@ def gate_description_length(ctx: GateContext) -> GateResult:
             "scripts/ directory; never use the recorded-stop exception for a "
             "deployment gap"
         )
-        return GateResult(gate, 1, message, warnings=[])
+        # A deployment gap cannot answer the check, so it is a tool error
+        # (rc=3), never a modeled over-cap failure (rc=1) and never a catch.
+        return GateResult(gate, 3, message, warnings=[])
     proc = ctx.run([sys.executable, str(script)], cwd=ctx.repo_root)
-    if proc.returncode != 0:
-        # The checker names over-cap files on stderr and warns on stderr;
-        # tail both so the failure message carries the named files.
+    if proc.returncode == 1:
+        # Measured over-cap result: the checker names over-cap files on
+        # stderr; tail both streams so the failure message carries the named
+        # files. This is the only catch-classified checker outcome.
         tail_rows = [
             row
             for row in (
@@ -3372,6 +3390,25 @@ def gate_description_length(ctx: GateContext) -> GateResult:
             gate,
             1,
             "description length gate failed: " + " | ".join(tail_rows),
+            warnings=[],
+        )
+    if proc.returncode != 0:
+        # Exit 2 is the checker's own operational-exception class; every
+        # other non-zero exit is an unexpected checker failure. Neither is a
+        # measured over-cap result, so neither is a catch: tool error rc=3
+        # (the commit path refuses rc=2/rc=3 without recording a catch).
+        tail_rows = [
+            row
+            for row in (
+                (proc.stdout or "") + "\n" + (proc.stderr or "")
+            ).strip().splitlines()
+            if row.strip()
+        ][-10:]
+        return GateResult(
+            gate,
+            3,
+            f"description length checker tool error (exit {proc.returncode}): "
+            + " | ".join(tail_rows),
             warnings=[],
         )
     warn_rows = [
@@ -6191,7 +6228,14 @@ def run_phase(
     captured as an indeterminate gate result naming the failed gate (outcome
     contract exit 2: the gate could not answer, so its evidence is neither a
     pass nor a modeled violation); the run continues so every gate still
-    reports."""
+    reports. The one demotion (plan
+    docs/history/plans/2026-10-24-description-length-gate-catch-promotion.md):
+    an unexpected docs-tmp-sweep helper exception is warning-only (rc=0 with
+    a warning line, later gates still run, and the phase can still exit 0):
+    scratch cleanup is retryable in a later session, though the sweep may
+    have been interrupted mid-run: entries it had already classified as
+    removable may be gone and its removal report was lost; the gate's
+    normal conservative keep behavior is unchanged."""
     if phase not in PHASES:
         raise ValueError(f"unknown phase: {phase}")
     if boundary_class not in BOUNDARY_CLASSES:
@@ -6214,6 +6258,32 @@ def run_phase(
                 )
             results.append(result)
         except Exception as exc:
+            if gate_id == "docs-tmp-sweep":
+                # Demoted class: an unexpected docs-tmp helper exception
+                # warns and never blocks; cleanup retries in a later
+                # session. The sweep may have been interrupted mid-run, so
+                # entries it already classified as removable may be gone
+                # and its removal report was lost; re-derive docs/tmp
+                # state from disk before trusting the keeps.
+                results.append(
+                    GateResult(
+                        gate_id,
+                        0,
+                        f"docs-tmp-sweep helper raised {type(exc).__name__}: "
+                        f"{exc}; warning-only: the exception does not block "
+                        "the landing, and cleanup can retry in a later "
+                        "session (the sweep was interrupted mid-run: entries "
+                        "it had already classified as removable may be gone "
+                        "and its removal report was lost; re-derive docs/tmp "
+                        "state from disk before trusting the keeps)",
+                        warnings=[
+                            f"docs-tmp-sweep helper raised "
+                            f"{type(exc).__name__}: {exc}; cleanup retried "
+                            "in a later session"
+                        ],
+                    )
+                )
+                continue
             results.append(
                 GateResult(
                     gate_id,
@@ -6253,10 +6323,13 @@ def _usage() -> str:
         "disposition-manifest|recover-manifest|checkpoint-manifest|"
         "classify-run-boundary|list-interrupted-manifests>\n"
         "phases: landing (the closeout's one landing sweep run: the "
-        "retained roster with instruction-size and description-length in "
-        "warning posture; backlog-inbox and vim-swap-sweep are not on the "
-        "roster - receiving-review capture step and the periodic survey "
-        "advisory own their duties)\n"
+        "retained roster with instruction-size in warning posture and "
+        "description-length blocking - a measured over-cap result refuses "
+        "the landing, the commit path records its guard catch before "
+        "refusing, and checker deployment gaps plus operational-exception "
+        "exits answer tool error, never a catch; backlog-inbox and "
+        "vim-swap-sweep are not on the roster - receiving-review capture "
+        "step and the periodic survey advisory own their duties)\n"
         "list-gates [phase] prints that phase's roster one gate per line "
         "with warning-posture gates suffixed \" (warning)\"\n"
         "write-manifest writes the done Step 0 run manifest record "

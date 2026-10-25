@@ -81,3 +81,6 @@ Consumer. learn's Step 1.9 (project issue backlog capture) invokes this skill an
 
 ### With `plans` skill
 Downstream consumer of the emitted prompt: a later plans session authors from the log entry as design input, per the Boundary line above; the routing bounds this section, because only a plan-worthy entry (routed to `docs/history/backlog/PLAN-PROMPTS.md`) is a plans session's design input, while an ad-hoc-able entry routes to `docs/history/backlog/EXEC-PROMPTS.md` and is consumed by an exec-mode session's ad-hoc run, never by plans. Investigate never authors the plan file itself.
+
+### With `self-heal` skill
+Consumer. For an unresolved blocker, self-heal uses this skill's committed log entry as investigation evidence, then continues its own authorized workaround and resumption flow. That continuation belongs to self-heal after this skill's boundary; it does not dispatch or execute the emitted authoring prompt.

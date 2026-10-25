@@ -13,5 +13,6 @@ Two non-blocking wording candidates from the focused intermediate review of the 
 - Candidate 2 (per Phase 3 r1 F2): the AGENTS.md re-arm bullet carries no cross-reference to the owning zcode.md bullet; a parallel pointer (sibling of the delete-own-spawner clause's pointer) keeps the contract-to-recipe wiring visible in both directions; Task 2 has landed, so the pointer can land now.
 
 Cluster: docs/history/plans/completed/2026-10-23-loop-carrier-restore-surface-for-reduced-toolset-carriers.md (archive lands with this plan's execution landing)
+Cluster: docs/history/backlog/2026-10-25-scheduling-ask-clock-time-confirmation.md (same Scheduling-asks verb-contract surface; different clause)
 
 - Candidate 3 (Phase 3 r1 F3): the AGENTS.md re-arm bullet says "restores the maintenance carrier" without the recurring-form qualifier the zcode.md and duties-core surfaces carry; a later wording pass can add "recurring" for precision against the preserved-recurring-form axis.

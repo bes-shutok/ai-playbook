@@ -10,7 +10,11 @@
 #      stdout export-free, and still exits 1 with `OUTCOME: fail`.
 #   2. done wait-acquire blocked likewise names the holder (`done lock held: ...`).
 #   3. The no-contention wait prints no holder lines at all.
-#   4. A meta-less lock record produces the one unreadable-record line and
+#   4. A vanished directory after a failed mkdir retries the atomic acquire
+#      for both direct acquire and the wait-acquire deadline edge.
+#   5. A holder released immediately after the retry check is reacquired by
+#      the same bounded atomic retry.
+#   6. A meta-less lock record produces the one unreadable-record line and
 #      the documented ambiguous timeout outcome (exit 2, indeterminate).
 set -euo pipefail
 
@@ -88,6 +92,23 @@ run_merge() {
   )
 }
 
+# Interpose one failed mkdir for a lock path without creating it, then use the
+# real mkdir on the retry. Parent-directory mkdir -p calls always pass through.
+MKDIR_SHIM_BIN="${TMP}/mkdir-shim-bin"
+MKDIR_SHIM_STATE="${TMP}/mkdir-shim-state"
+mkdir -p "$MKDIR_SHIM_BIN"
+cat >"${MKDIR_SHIM_BIN}/mkdir" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" != "-p" && $# -eq 1 \
+    && "$1" == "${DONE_LOCK_ROOT}/"* \
+    && -n "${MKDIR_SHIM_STATE:-}" && ! -e "$MKDIR_SHIM_STATE" ]]; then
+  : > "$MKDIR_SHIM_STATE"
+  exit 1
+fi
+exec /bin/mkdir "$@"
+SH
+chmod +x "${MKDIR_SHIM_BIN}/mkdir"
+
 EXPECTED_REPO_ROOT="$(cd "$REPO" && pwd -P)"
 
 # ---- 1) merge-wait-acquire names the merge holder ----
@@ -161,7 +182,111 @@ grep -q '^export DONE_LOCK_DIR=' "${TMP}/noconf.out" || fail "uncontended wait p
 eval "$(cat "${TMP}/noconf.out")"
 run_done release-repo >/dev/null 2>&1 || fail "release of the uncontended wait's lock failed"
 
-# ---- 4) unreadable holder record: one line, then the ambiguous timeout ----
+# ---- 4) vanished directory: retry the atomic acquisition after mkdir loses ----
+rm -f "$MKDIR_SHIM_STATE"
+VANISHED_ACQUIRE_RC=0
+MKDIR_SHIM_STATE="$MKDIR_SHIM_STATE" PATH="${MKDIR_SHIM_BIN}:$PATH" \
+  DONE_LOCK_DIR= DONE_LOCK_TOKEN= DONE_LOCK_HOLDER_PID= \
+  run_done acquire --label vanished-direct \
+  >"${TMP}/vanished-acquire.out" 2>"${TMP}/vanished-acquire.err" || VANISHED_ACQUIRE_RC=$?
+[[ "$VANISHED_ACQUIRE_RC" -eq 0 ]] || fail "vanished-directory direct acquire rc=${VANISHED_ACQUIRE_RC}, want 0"
+[[ -e "$MKDIR_SHIM_STATE" ]] || fail "direct acquire fixture did not force the first mkdir failure"
+[[ "$(tail -n1 "${TMP}/vanished-acquire.err")" == "OUTCOME: pass" ]] \
+  || fail "vanished-directory direct acquire stderr does not end with OUTCOME: pass"
+grep -q '^export DONE_LOCK_DIR=' "${TMP}/vanished-acquire.out" || fail "vanished-directory direct acquire printed no exports"
+eval "$(cat "${TMP}/vanished-acquire.out")"
+run_done release-repo >/dev/null 2>&1 || fail "vanished-directory direct acquire release failed"
+
+rm -f "$MKDIR_SHIM_STATE"
+VANISHED_WAIT_RC=0
+MKDIR_SHIM_STATE="$MKDIR_SHIM_STATE" PATH="${MKDIR_SHIM_BIN}:$PATH" \
+  DONE_LOCK_DIR= DONE_LOCK_TOKEN= DONE_LOCK_HOLDER_PID= \
+  run_done wait-acquire --label vanished-waiter --max-wait 0 \
+  >"${TMP}/vanished-wait.out" 2>"${TMP}/vanished-wait.err" || VANISHED_WAIT_RC=$?
+[[ "$VANISHED_WAIT_RC" -eq 0 ]] || fail "vanished-directory wait-acquire rc=${VANISHED_WAIT_RC}, want 0"
+[[ -e "$MKDIR_SHIM_STATE" ]] || fail "wait-acquire fixture did not force the first mkdir failure"
+[[ "$(tail -n1 "${TMP}/vanished-wait.err")" == "OUTCOME: pass" ]] \
+  || fail "vanished-directory wait-acquire stderr does not end with OUTCOME: pass"
+grep -q '^export DONE_LOCK_DIR=' "${TMP}/vanished-wait.out" || fail "vanished-directory wait-acquire printed no exports"
+eval "$(cat "${TMP}/vanished-wait.out")"
+run_done release-repo >/dev/null 2>&1 || fail "vanished-directory wait-acquire release failed"
+
+# ---- 5) holder removal after the retry check still permits acquisition ----
+start_holder
+RACE_HOLDER_PID="$HOLDER_PID"
+eval "$(DONE_LOCK_HOLDER_PID="$RACE_HOLDER_PID" run_done acquire --label vanished-race-holder)"
+RACE_HOLDER_DIR="$DONE_LOCK_DIR"
+RACE_HOLDER_TOKEN="$DONE_LOCK_TOKEN"
+RACE_STATE="${TMP}/vanished-race-mkdir-failed"
+RACE_RELEASED="${TMP}/vanished-race-holder-released"
+RACE_BASH_ENV="${TMP}/vanished-race-bash-env"
+cat >"$RACE_BASH_ENV" <<'SH'
+set -o functrace
+_vanished_race_released=0
+_vanished_race_debug() {
+  local caller="${FUNCNAME[1]:-}"
+  local parent="${FUNCNAME[2]:-}"
+  local command="$BASH_COMMAND"
+  if [[ "$_vanished_race_released" -eq 0 \
+      && -e "${VANISH_RACE_STATE:-}" \
+      && ( ( "$caller" == "retry_acquire_if_lock_vanished" \
+              && "$command" == "return 1" ) \
+        || ( "$caller" == "try_acquire" \
+              && "$parent" == "retry_acquire_if_lock_vanished" \
+              && "$command" == "mkdir -p "* ) ) ]]; then
+    _vanished_race_released=1
+    trap - DEBUG
+    BASH_ENV= DONE_LOCK_DIR="$VANISH_RACE_HOLDER_DIR" \
+      DONE_LOCK_TOKEN="$VANISH_RACE_HOLDER_TOKEN" \
+      bash "$VANISH_RACE_LOCK_SCRIPT" release-repo >/dev/null 2>&1 \
+      || exit 91
+    : >"$VANISH_RACE_RELEASED"
+    trap _vanished_race_debug DEBUG
+  fi
+}
+trap _vanished_race_debug DEBUG
+SH
+
+cat >"${MKDIR_SHIM_BIN}/mkdir" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" != "-p" && $# -eq 1 \
+    && "$1" == "${VANISH_RACE_TARGET:-}" \
+    && -n "${VANISH_RACE_STATE:-}" && ! -e "$VANISH_RACE_STATE" ]]; then
+  /bin/mkdir "$1" >/dev/null 2>&1 && exit 90
+  : > "$VANISH_RACE_STATE"
+  exit 1
+fi
+exec /bin/mkdir "$@"
+SH
+chmod +x "${MKDIR_SHIM_BIN}/mkdir"
+
+RACE_ACQUIRE_RC=0
+VANISH_RACE_STATE="$RACE_STATE" \
+  VANISH_RACE_RELEASED="$RACE_RELEASED" \
+  VANISH_RACE_LOCK_SCRIPT="$LOCK_SCRIPT" \
+  VANISH_RACE_HOLDER_DIR="$RACE_HOLDER_DIR" \
+  VANISH_RACE_HOLDER_TOKEN="$RACE_HOLDER_TOKEN" \
+  VANISH_RACE_TARGET="$RACE_HOLDER_DIR" \
+  BASH_ENV="$RACE_BASH_ENV" PATH="${MKDIR_SHIM_BIN}:$PATH" \
+  DONE_LOCK_DIR= DONE_LOCK_TOKEN= DONE_LOCK_HOLDER_PID= \
+  run_done acquire --label vanished-race-waiter \
+  >"${TMP}/vanished-race.out" 2>"${TMP}/vanished-race.err" \
+  || RACE_ACQUIRE_RC=$?
+
+[[ "$RACE_ACQUIRE_RC" -eq 0 ]] \
+  || fail "holder-removal retry rc=${RACE_ACQUIRE_RC}, want 0 (post-check release should be reacquired)"
+[[ -e "$RACE_STATE" ]] || fail "holder-removal fixture did not force the first mkdir failure"
+[[ -e "$RACE_RELEASED" ]] || fail "holder-removal fixture did not release the original token-fenced holder"
+[[ "$(tail -n1 "${TMP}/vanished-race.err")" == "OUTCOME: pass" ]] \
+  || fail "holder-removal retry stderr does not end with OUTCOME: pass"
+grep -q '^export DONE_LOCK_DIR=' "${TMP}/vanished-race.out" \
+  || fail "holder-removal retry printed no lock exports"
+eval "$(cat "${TMP}/vanished-race.out")"
+run_done release-repo >/dev/null 2>&1 || fail "holder-removal retry release failed"
+kill "$RACE_HOLDER_PID" 2>/dev/null || true
+wait "$RACE_HOLDER_PID" 2>/dev/null || true
+
+# ---- 6) unreadable holder record: one line, then the ambiguous timeout ----
 REPO_ID="$(cd "$REPO" && printf '%s' "$(git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
 METALESS_DIR="${DONE_ROOT}/${REPO_ID}"
 rm -rf "$METALESS_DIR"
@@ -186,4 +311,4 @@ grep -qF "$METALESS_DIR" "${TMP}/unreadable.err" || fail "unreadable-record line
 
 rm -rf "$METALESS_DIR"
 
-echo "selftest OK: acquire-wait holder visibility (merge, done, uncontended, unreadable)"
+echo "selftest OK: acquire-wait holder visibility (merge, done, uncontended, vanished retry, holder-removal retry, unreadable)"

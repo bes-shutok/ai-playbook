@@ -99,13 +99,17 @@ Primary class anchors:
 - `build_parser` in `scripts/worktree_closeout_migrate.py`
 - `main` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] Given the generic `--help` invocation, expose `gate-removal`, `owned-files-clean`, and `sweep` alongside the existing three commands through help-only catalog entries; do not add new runtime dispatch or option parsing to these entries. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given each direct command `--help` invocation, expect successful usage output from that command's existing parser; preserve the current `sweep` usage spelling. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep `main()`'s specialized dispatch before the generic parser and retain the existing legacy parser behavior. Given an invalid specialized or legacy invocation, expect its current exit class and `OUTCOME:` behavior. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add focused regression assertions that generic help names all six supported commands and all six direct `--help` routes remain usable, without rewriting the existing operational contract tests. [class: REPOSITORY_TEST]
-- [ ] Run the focused closeout-helper test scope selected from the repository's current test harness and confirm the existing relevant tests remain green. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: list all closeout helper commands in help` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the generic `--help` invocation, expose `gate-removal`, `owned-files-clean`, and `sweep` alongside the existing three commands through help-only catalog entries; do not add new runtime dispatch or option parsing to these entries. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given each direct command `--help` invocation, expect successful usage output from that command's existing parser; preserve the current `sweep` usage spelling. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep `main()`'s specialized dispatch before the generic parser and retain the existing legacy parser behavior. Given an invalid specialized or legacy invocation, expect its current exit class and `OUTCOME:` behavior. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add focused regression assertions that generic help names all six supported commands and all six direct `--help` routes remain usable, without rewriting the existing operational contract tests. [class: REPOSITORY_TEST]
+- [x] Run the focused closeout-helper test scope selected from the repository's current test harness and confirm the existing relevant tests remain green. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: list all closeout helper commands in help` [class: IMPLEMENTATION_REQUIRED]
 
 ## Documentation Impact Assessment
 
 No README or skill catalog changes: the helper already supports all six commands, and this plan changes only its command-help catalog and regression coverage.
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-24-closeout-helper-command-discovery.md`: covered by this plan; the origin row was already archived under `docs/history/backlog/completed/` with the covered flip by the authoring correction commit (PLAN-PROMPTS-PRUNE entry, landing 2e878813a), so this landing deletes no open row. Task 1 delivers the help catalog and regression coverage.

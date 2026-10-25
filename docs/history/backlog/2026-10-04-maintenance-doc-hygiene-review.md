@@ -21,3 +21,7 @@ A standing maintenance arm (scheduler-turn monitor or per-cycle duty) reviews li
 ## Ship when
 
 - A routine maintenance turn surfaces em-dash, repetition, and SOT findings by path without operator prompting; the witnessed live residue is cleaned in the first pass; the arm's contract names its excluded surfaces (archives, `synced/`) and its cadence.
+
+## Witness updates
+
+- 2026-10-25 (worktree-closeout exec run, Task 2 boundary): `docs/maintenance/development_lessons.md`, a live `docs/maintenance/` surface inside this arm's scan scope, carries 9 committed em-dash lines as of the witness date (corpus lines 2363, 2365, 3312, 3328, 3335, 3350, 3485, 3487, 3519; lesson #107's witness prose onward). The residue surfaced as a parked `check-no-em-dash.sh touched` hit only because the corpus file was dirty with a parallel learn pass's appends; on a committed clean tree the touched leg scans zero files (the vacuous-leg shape tracked in `2026-10-17-rearm-ladder-guards-certification-residuals.md`, which owns the scanner leg while this row owns the residue), so committed corpus prose reaches the operator only through this arm's per-cycle sweep or an explicit-file-set invocation. Priority re-affirmed: medium.

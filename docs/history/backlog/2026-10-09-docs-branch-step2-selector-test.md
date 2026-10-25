@@ -24,7 +24,7 @@ Remove the obsolete selector test and any registration that invokes it. Keep its
 
 - The focused canonical sync suite passes against the single-runner contract.
 - Running `python3 -m unittest discover -s scripts -p 'test_docs_branch_step2_selector.py' -v` fails because the test still expects the removed selector.
-- The live execute-plan task's `Files:` declaration does not include this path; see [the live-claim scope recovery backlog](2026-10-09-execute-plan-live-claim-scope-widening.md).
+- The live execute-plan task's `Files:` declaration does not include this path; the pre-launch warning half landed via [the execute-plan live-claim scope-widening plan](../plans/completed/2026-10-23-execute-plan-live-claim-scope-widening.md).
 
 ## Acceptance
 

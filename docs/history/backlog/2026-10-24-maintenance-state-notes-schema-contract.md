@@ -8,7 +8,7 @@
 - **Class:** fix-class
 - **Driving force:** code-quality
 - **Skill/step:** `agents/skills/maintenance/state-file.md`, schema-v4 example and Step 6 carry-forward
-- **Cluster:** docs/history/plans/2026-10-24-scheduler-state-decision-shape-drift.md
+- **Cluster:** docs/history/plans/2026-10-24-scheduler-state-decision-shape-drift.md; docs/history/backlog/2026-10-25-state-file-children-schema-reconciliation.md (same surface and defect class: canonical schema declarations lagging the live contract; that row owns the outcome enum and the worktree-field writer enumeration, this row the omitted notes field)
 
 ## Problem
 

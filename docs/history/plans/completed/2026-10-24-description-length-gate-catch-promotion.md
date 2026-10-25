@@ -116,16 +116,16 @@ Primary class anchors:
 - `cmd_finalize` in `scripts/done_run.sh`
 - `append_row` in `scripts/gate_liveness_ledger.py`
 
-- [ ] Given measured over-cap descriptions, expects the checker to return 1; given an operational exception, expects a diagnostic and return 2; the sweep maps missing checker deployment and checker exits 2 or any other nonzero except 1 to rc=3, while a raised gate helper remains rc=2. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Remove `description-length` from the landing warning roster so the same task's structured sweep result preserves rc=1 for a measured over-cap result. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given `gate=description-length, rc=1`, expects `cmd_commit` to append a catch with `run_id=<id>` in the existing note field before refusing the commit; results with rc=2 or rc=3 refuse without a catch. The refusal names `scripts/gate_liveness_ledger.json` as a required path for the next successful retry. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a catch for the same guard and run identity already exists, expects the ledger append to be a no-op with unchanged rows and tally. Given an over-cap description is fixed on retry, expects the retry to declare the ledger JSON path and the successful landing to contain the catch row. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a ledger append error, expects the commit to remain refused and the error to identify that the catch could not be recorded. Given normal finalize has guard-liveness rows, expects the append loop to run before the existing done-lock release; append failure remains a warning and the lock is released. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given sweep tests run with an ambient `DESCRIPTION_LENGTH_CHECK_SCRIPT`, expects the fixture to pin or clear it and exercise explicit over-cap, missing-checker, and runtime-error cases. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the docs-tmp helper raises unexpectedly, expects a warning, later gates to run, and the landing phase to exit `rc=0`; normal conservative keep behavior remains unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Update the `scripts/done_run.sh` wrapper comments, sweep module comments, gate comments, and CLI help to describe pre-refusal catch recording, refusal on ledger error, classified checker outcomes, and warning-only docs-tmp helper exceptions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run focused checker, wrapper, sweep, and ledger tests for classification, capture order, exclusions, retry idempotence, hermeticity, helper-exception non-refusal, and append failure. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: promote description-length with recorded catches` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given measured over-cap descriptions, expects the checker to return 1; given an operational exception, expects a diagnostic and return 2; the sweep maps missing checker deployment and checker exits 2 or any other nonzero except 1 to rc=3, while a raised gate helper remains rc=2. [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove `description-length` from the landing warning roster so the same task's structured sweep result preserves rc=1 for a measured over-cap result. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given `gate=description-length, rc=1`, expects `cmd_commit` to append a catch with `run_id=<id>` in the existing note field before refusing the commit; results with rc=2 or rc=3 refuse without a catch. The refusal names `scripts/gate_liveness_ledger.json` as a required path for the next successful retry. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a catch for the same guard and run identity already exists, expects the ledger append to be a no-op with unchanged rows and tally. Given an over-cap description is fixed on retry, expects the retry to declare the ledger JSON path and the successful landing to contain the catch row. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a ledger append error, expects the commit to remain refused and the error to identify that the catch could not be recorded. Given normal finalize has guard-liveness rows, expects the append loop to run before the existing done-lock release; append failure remains a warning and the lock is released. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given sweep tests run with an ambient `DESCRIPTION_LENGTH_CHECK_SCRIPT`, expects the fixture to pin or clear it and exercise explicit over-cap, missing-checker, and runtime-error cases. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the docs-tmp helper raises unexpectedly, expects a warning, later gates to run, and the landing phase to exit `rc=0`; normal conservative keep behavior remains unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Update the `scripts/done_run.sh` wrapper comments, sweep module comments, gate comments, and CLI help to describe pre-refusal catch recording, refusal on ledger error, classified checker outcomes, and warning-only docs-tmp helper exceptions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run focused checker, wrapper, sweep, and ledger tests for classification, capture order, exclusions, retry idempotence, hermeticity, helper-exception non-refusal, and append failure. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: promote description-length with recorded catches` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Update the machinery admission record
 
@@ -138,10 +138,10 @@ Primary class anchors:
 - `script:check_skill_description_length.py` in `scripts/machinery_registry.json`
 - `main` in `scripts/machinery_inventory.py`
 
-- [ ] Replace the active checker registry note's warning-only and unledgered-catch claims with its blocking posture, the existing October 20 catch, expected frequency, false-positive cost, the observed 1:0 catch-to-incident ratio, and review date 2027-01-24. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The active registry note pre-registers removal criteria for review by 2027-01-24: remove or re-demote the gate only with a complete firing census and no further catches; if completeness is unknown, retain the current posture and require operator review. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run focused inventory tests and `python3 scripts/machinery_inventory.py --check`. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: record description-length gate admission` [class: IMPLEMENTATION_REQUIRED]
+- [x] Replace the active checker registry note's warning-only and unledgered-catch claims with its blocking posture, the existing October 20 catch, expected frequency, false-positive cost, the observed 1:0 catch-to-incident ratio, and review date 2027-01-24. [class: IMPLEMENTATION_REQUIRED]
+- [x] The active registry note pre-registers removal criteria for review by 2027-01-24: remove or re-demote the gate only with a complete firing census and no further catches; if completeness is unknown, retain the current posture and require operator review. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run focused inventory tests and `python3 scripts/machinery_inventory.py --check`. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: record description-length gate admission` [class: IMPLEMENTATION_REQUIRED]
 
 ## Disposition of migrated backlog items
 

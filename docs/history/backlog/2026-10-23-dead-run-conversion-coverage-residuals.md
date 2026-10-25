@@ -1,6 +1,8 @@
 # Dead-run conversion coverage and containment residuals
 
 - Cluster: dead-run-resume-claim-conversion
+- Cluster: docs/history/backlog/completed/2026-10-25-dead-run-conversion-zcode-runtime-gap.md (runtime reachability gap: session channel + status provider unconfigured; this row owns the refusal-path test coverage)
+- Cluster: docs/history/backlog/2026-10-25-manifest-scan-cause-derivation-and-primary-symlink-coverage.md (manifest-scan cause derivation + primary-side symlink coverage)
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)

@@ -3067,6 +3067,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Newline-delimited file of record paths the boundary claims.",
     )
     verify.set_defaults(func=cmd_verify_records)
+
+    # Help-only catalog entries (plan
+    # 2026-10-24-closeout-helper-command-discovery): the three specialized
+    # commands are routed by main() to their own parsers before this parser
+    # runs, so these entries carry no arguments and no handler: they exist
+    # only so the generic --help lists every routed command; no runtime
+    # dispatch or option parsing is added here.
+    subparsers.add_parser(
+        "gate-removal",
+        help="Gate a worktree removal on the plan's owned review records "
+        "being present under the primary reviews home.",
+    )
+    subparsers.add_parser(
+        "owned-files-clean",
+        help="Refuse a worktree removal while it holds uncommitted owned "
+        "files; verify an owned plan file's byte-identical transfer.",
+    )
+    subparsers.add_parser(
+        "sweep",
+        help="Sweep ad-hoc worktree residue beside the primary checkout: "
+        "report every candidate, remove only on fully verified preconditions.",
+    )
     return parser
 
 
@@ -3123,7 +3145,16 @@ def main(argv: list[str] | None = None) -> int:
             return 3
     parser = build_parser()
     args = parser.parse_args(tokens)
-    return args.func(args)
+    func = getattr(args, "func", None)
+    if func is None:
+        # A help-only catalog token reached the generic parser (the `--`
+        # separator bypasses main()'s tokens[0] dispatch); answer the legacy
+        # argparse invalid-choice exit class instead of a traceback.
+        parser.error(
+            f"invalid choice: {args.command!r} (a routed closeout command "
+            "must be invoked without the '--' separator)"
+        )
+    return func(args)
 
 
 if __name__ == "__main__":

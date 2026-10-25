@@ -306,5 +306,127 @@ class GateLivenessLedgerTest(unittest.TestCase):
             self.assertEqual(proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error", argv)
 
 
+# --------------------------------------------------------------------------- #
+# Catch dedup by guard and exact run identity (plan
+# 2026-10-24-description-length-gate-catch-promotion, Task 1): a catch row
+# whose note carries run_id=<id> appends once per guard; a sequential retry
+# of the same run is a no-op with unchanged rows and tally.
+# --------------------------------------------------------------------------- #
+class CatchRunIdentityDedupTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ledger = str(Path(self.tmp.name) / "ledger.json")
+        Path(self.ledger).write_text(json.dumps(SEED), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def record_catch(self, evidence: str, note: str) -> subprocess.CompletedProcess:
+        return run_cli(
+            "--ledger", self.ledger, "record", "--guard", "description-length",
+            "--kind", "catch", "--date", "2026-10-25",
+            "--evidence", evidence, "--note", note,
+        )
+
+    def ledger_rows(self) -> list[dict]:
+        data = json.loads(Path(self.ledger).read_text())
+        return data["guards"]["description-length"]["rows"]
+
+    def test_same_guard_and_run_identity_is_a_no_op(self) -> None:
+        first = self.record_catch("evidence-1", "run_id=run-abc; over-cap refusal")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("row appended", first.stdout)
+        self.assertEqual(len(self.ledger_rows()), 1)
+        tally = [ln for ln in first.stdout.splitlines() if ln.startswith("description-length:")][0]
+        self.assertIn("catches=1", tally)
+        second = self.record_catch("evidence-2", "run_id=run-abc; sequential retry")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("no row appended: catch already recorded", second.stdout)
+        self.assertIn("run_id=run-abc", second.stdout)
+        self.assertEqual(
+            self.ledger_rows(), [self.ledger_rows()[0]],
+            "the retry must leave the rows byte-identical (still one row)",
+        )
+        retry_tally = [
+            ln for ln in second.stdout.splitlines()
+            if ln.startswith("description-length:")
+        ][0]
+        self.assertIn("catches=1", retry_tally)
+        self.assertEqual(
+            tally.split(" (")[0], retry_tally.split(" (")[0],
+            "the tally stays unchanged (only the appended/no-op note differs)",
+        )
+        self.assertEqual(second.stdout.strip().splitlines()[-1], "OUTCOME: pass")
+
+    def test_catch_without_run_identity_never_deduplicates(self) -> None:
+        self.record_catch("evidence-1", "no token here")
+        second = self.record_catch("evidence-2", "also no token")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("row appended", second.stdout)
+        self.assertEqual(len(self.ledger_rows()), 2)
+
+    def test_dedup_is_per_guard(self) -> None:
+        self.record_catch("evidence-1", "run_id=run-abc; over-cap refusal")
+        other = run_cli(
+            "--ledger", self.ledger, "record", "--guard", "other-guard",
+            "--kind", "catch", "--date", "2026-10-25",
+            "--evidence", "evidence-2", "--note", "run_id=run-abc; other guard",
+        )
+        self.assertEqual(other.returncode, 0, other.stderr)
+        self.assertIn("row appended", other.stdout)
+        data = json.loads(Path(self.ledger).read_text())
+        self.assertEqual(len(data["guards"]["description-length"]["rows"]), 1)
+        self.assertEqual(len(data["guards"]["other-guard"]["rows"]), 1)
+
+    def test_dedup_is_catch_scoped(self) -> None:
+        self.record_catch("evidence-1", "run_id=run-abc; over-cap refusal")
+        incident = run_cli(
+            "--ledger", self.ledger, "record", "--guard", "description-length",
+            "--kind", "incident", "--date", "2026-10-25",
+            "--evidence", "evidence-2", "--note", "run_id=run-abc; incident",
+        )
+        self.assertEqual(incident.returncode, 0, incident.stderr)
+        self.assertIn("row appended", incident.stdout)
+        kinds = [row["kind"] for row in self.ledger_rows()]
+        self.assertEqual(kinds, ["catch", "incident"])
+
+    def test_append_row_unit_contract(self) -> None:
+        data = json.loads(json.dumps(SEED))
+        guard_name = "description-length"
+        row = {"kind": "catch", "date": "2026-10-25", "evidence": "e",
+               "time_lost_minutes": None, "note": "run_id=run-abc; n"}
+        guard, appended = MODULE.append_row(data, guard_name, row)
+        self.assertTrue(appended)
+        self.assertEqual(len(guard["rows"]), 1)
+        guard, appended = MODULE.append_row(data, guard_name, dict(row))
+        self.assertFalse(appended)
+        self.assertEqual(len(guard["rows"]), 1, "the duplicate must not append")
+        # A row without a run identity never deduplicates.
+        bare = {"kind": "catch", "date": "2026-10-25", "evidence": "e2",
+                "time_lost_minutes": None}
+        guard, appended = MODULE.append_row(data, guard_name, bare)
+        self.assertTrue(appended)
+        self.assertEqual(len(guard["rows"]), 2)
+
+    def test_committed_ledger_keeps_single_october_catch_and_promotion_row(self) -> None:
+        # The existing 2026-10-20 true catch is the promotion's admission
+        # witness: exactly one such row, never duplicated, and the promotion
+        # is recorded as a change row naming its plan.
+        data = json.loads(COMMITTED_LEDGER.read_text(encoding="utf-8"))
+        rows = data["guards"]["description-length"]["rows"]
+        catches = [r for r in rows if r.get("kind") == "catch"]
+        self.assertEqual(len(catches), 1)
+        self.assertEqual(catches[0]["date"], "2026-10-20")
+        self.assertIn("execute-plan/SKILL.md", catches[0]["evidence"])
+        changes = [r for r in rows if r.get("kind") == "change"]
+        self.assertTrue(
+            any(
+                "2026-10-24-description-length-gate-catch-promotion" in str(r.get("evidence", ""))
+                for r in changes
+            ),
+            "the posture promotion is recorded as a change row naming its plan",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

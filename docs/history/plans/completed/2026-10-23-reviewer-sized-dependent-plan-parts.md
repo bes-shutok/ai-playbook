@@ -83,8 +83,8 @@ Context surface: the plan's Terms, this task, and `## Standing constraints` when
 Files:
 - `agents/skills/plans/SKILL.md`
 
-- [ ] `agents/skills/plans/SKILL.md` offers the optional separate-plan choice in the existing Phase 1 rollout-strategy question: given a request for independently reviewable landings, expects the author to record a requester-specified per-part maximum change size with its measure and unit, separately from any desired part count [class: IMPLEMENTATION_REQUIRED]
-- [ ] When a requester wants separate plans but has not given a per-part maximum, the existing Phase 1 clarification flow asks for the limit while preserving the single-plan default [class: IMPLEMENTATION_REQUIRED]
-- [ ] Each requested part has distinct behavior, acceptance criteria, and file ownership and stays within its recorded size limit; separate plans use the existing execution dependency [class: IMPLEMENTATION_REQUIRED]
-- [ ] Tasks editing the same production or test file remain in one plan; no repository-wide size threshold, automatic split, ledger, or review lifecycle is added [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: offer dependent plan parts for review boundaries` [class: IMPLEMENTATION_REQUIRED]
+- [x] `agents/skills/plans/SKILL.md` offers the optional separate-plan choice in the existing Phase 1 rollout-strategy question: given a request for independently reviewable landings, expects the author to record a requester-specified per-part maximum change size with its measure and unit, separately from any desired part count [class: IMPLEMENTATION_REQUIRED]
+- [x] When a requester wants separate plans but has not given a per-part maximum, the existing Phase 1 clarification flow asks for the limit while preserving the single-plan default [class: IMPLEMENTATION_REQUIRED]
+- [x] Each requested part has distinct behavior, acceptance criteria, and file ownership and stays within its recorded size limit; separate plans use the existing execution dependency [class: IMPLEMENTATION_REQUIRED]
+- [x] Tasks editing the same production or test file remain in one plan; no repository-wide size threshold, automatic split, ledger, or review lifecycle is added [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: offer dependent plan parts for review boundaries` [class: IMPLEMENTATION_REQUIRED]

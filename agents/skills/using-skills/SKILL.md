@@ -39,7 +39,7 @@ Before path-dependent skill work in a target repository:
 
 Sessions apply the following principles by reading this guide:
 
-1. **Don't wait for user requests** - Proactively invoke relevant skills when the context matches
+1. **Don't wait for user requests** - Proactively invoke relevant skills when the context matches. Before stopping a skill workflow on a recoverable blocker, invoke `self-heal`; preserve hard gates and ask only for a decision or authorization that belongs to the user.
 2. **Check guidelines before writing code** - Read `coding_guidelines.md` and stack-specific files (`jvm_guidelines.md`, `java_guidelines.md`, `kotlin_guidelines.md`, or `python_guidelines.md` as applicable) from `shared_docs_dir` in `~/.ai-playbook/facts.md`.
 3. **Analyze before adding new components** - Read existing module patterns and align with those guideline files before introducing new types or packages
 4. **Always run tests after writing code** - Use `unit-test-runner` (see language guidelines for runner commands)

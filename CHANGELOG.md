@@ -1,3 +1,34 @@
+## 2026-10-26
+
+This release lands one week of maintenance-loop work (2026-10-18 to 2026-10-26): plan reviews, executions, and closeouts now carry stronger evidence, clearer recovery paths, and more machine-checked gates.
+
+### Planning and reviews
+- Certification seals now survive squash landings, so an executed plan no longer fails readiness over byte-identical content.
+- Plan authoring gains a per-part review-size limit and dependent plan parts, so large plans split into reviewable pieces.
+- Review staging lists every validator-enforced vocabulary in one place, and the hard validator reports all errors at once instead of stopping at the first.
+- Review records are selected by family and identity, so legacy records without identity no longer block readiness.
+- Landing conflicts resolve by the union of both sides' intents, with a re-verification pass after resolution.
+
+### Execution and closeout
+- Done closeouts reuse one start baseline per owned plan instead of re-capturing late, and a stale gate-ledger append retries once before failing.
+- Dead runs convert to a live claim in their own worktree, and a done-lock acquire that vanishes mid-race retries atomically.
+- Operator-authorized correction paths let a closeout land a captured tree or restore an ancestor blob, each bound to its invocation.
+- Worktree transfers now carry the review-certs seal directory along with facts and reviews.
+- The release workflow gains an operator-authorized recovery mode for merge-containing or diverged unpushed history.
+
+### Scripts and gates
+- The description-length gate is now blocking and records its catch before refusing, so an over-cap skill description cannot land unledgered.
+- Tracked files inside ignored audit homes are reported at the landing probe and the done sweep.
+- The sensitive-data scan skips private-repository content families by visibility instead of by project exemption lists.
+- Plan validation commands must run from their documented directory with every variable assigned, and the readiness matcher strips interpreter prefixes before comparing paths.
+- The prune audit accepts a same-commit landing receipt as its witness, and the stale check treats an origin deleted on the base branch as served.
+
+### Skills and docs
+- Java guidelines add builder and top-level interface conventions, wired into the Java review overlay.
+- The unit-test-runner skill separates its Maven adapter, and the handoff and i-have-adhd skills carry a portable slash-only gate.
+- Testing guidelines name pytest as the collector for plain-function suites, since unittest discovery silently under-collects them.
+- Lessons 86 through 235 record the week's witnessed failures and their fixes, and backlog investigations route each one to an owner.
+
 ## 2026-10-18
 
 This release makes workflow rules easier to apply and reduces repeat work on routine changes.

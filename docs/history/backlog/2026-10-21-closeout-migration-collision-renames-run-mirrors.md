@@ -5,7 +5,7 @@
 - **Workflow:** backlog
 - **Priority:** moderate (every worktree run that mirrors records at boundaries hits it; the staleness is silent)
 - **Cluster:** (sibling row removed 2026-10-22, covered by the facts-resolved capture landing) (same script: the closeout migration's baseline dirs and its collision arm are the two witnessed closeout stranding shapes)
-- **Cluster:** docs/history/backlog/2026-10-08-worktree-closeout-baseline-fallback.md (same script: baseline fallback versus the collision arm)
+- **Cluster:** (sibling row removed 2026-10-25, covered by docs/history/plans/completed/2026-10-18-worktree-closeout-single-start-baseline.md) (same script: baseline fallback versus the collision arm)
 - **Cluster:** docs/history/backlog/completed/ (removed 2026-10-22, covered by the dedupe landing) (same defect class: a closed record resurfacing as live on the consult surface)
 - **Origin class:** self-serving
 - **Class:** fix-class (the primary canonical copies go stale while newer run-side bytes sit under collision-renamed twins; default shape simplify the flow so the newest same-run bytes win)

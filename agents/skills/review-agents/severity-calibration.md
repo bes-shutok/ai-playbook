@@ -9,7 +9,7 @@ Canonical severity, blocking, ordering, and output-budget rules for every review
 1. Set `severity` explicitly to one of: `Critical`, `High`, `Medium`, `Low`.
 2. When uncertain after applying the decision procedure, choose **`Low`** (same default as upstream `MINOR` when no tag is present).
 3. Set `blocking` independently from severity.
-4. Include `consequence`, `reachability`, `blast_radius`, and `confidence`.
+4. Include `consequence`, `reachability` (`expected`, `common`, `plausible-edge`, `theoretical`), `blast_radius` (`global`, `multi-service`, `single-service`, `local`), and `confidence` (`hypothesis`, `strong-evidence`, `verified`) (`scripts/review_staging_calibration.py` and `scripts/validate_review_staging.py` declare these closed values; this guide only mirrors them, refreshed from those scripts when they change).
 5. Explain why the consequence meets the selected tier.
 
 Orchestrators may **upgrade** or **downgrade** after verification; record deltas in staging **Severity calibration** with a reason tied to this file.

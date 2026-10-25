@@ -1,6 +1,7 @@
 # Producer review follow-ups from the exec-review-records-at-round-close r1 panel
 
 Added: 2026-10-22, execute-plan Phase 3 r1 fresh-adversarial panel over the branch delta (plan exec-review-records-at-round-close); valid non-blocking findings folded forward as durable backlog capture.
+Cluster: docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md (same script: `scripts/produce_exec_review_record.py` follow-up family)
 
 Driving force: maintainability and test-surface completeness for `scripts/produce_exec_review_record.py` and its skill-text consumers; none of these block the plan's Outcome (all fail safe at the validator's hard-mode arbitration).
 
@@ -29,3 +30,13 @@ Findings carried (each with its r2 pattern id):
 - quality#validator-toolerror-conflation: the producer maps a validator run that ends `OUTCOME: tool_error` to its own fail refusal (exit 1), one disposition class off; map that final line to the producer's exit-3 arm in `validate_generated_pair`.
 
 Correction to the r1 capture above (testing#backlog-row-accuracy): the r1 pre-flight bullet lists a "clean+prior-filter-yes inconsistency" among the small pre-write pre-flights in `build_context`. No such pre-write check exists in `build_context`: it validates `--prior-findings-filter` for the yes/no vocabulary only, and the clean+prior-filter-yes contradiction is gated only downstream, by the validator on the generated pair (which deletes both halves on refusal). Executors should not hunt for a pre-write check; treat that one clause of the bullet as validator-owned grammar, and fold it into `docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md`'s seam scope as validator-side. The clean+last-fix precondition named by the same bullet is real and does refuse pre-write.
+
+## Exec-run witness 2026-10-25 (digest-family mismatch between the producer and the selection verifier)
+
+Added: 2026-10-25, learn Step 1.8 over the 01:18 exec carrier run (two execute-plan picks, both landed); re-affirms this row's priority and widens the `security#exec-token-naming` bullet with a mechanical consequence.
+
+Observed: an execute-plan Phase 3 round that writes its staging record with `scripts/produce_exec_review_record.py` gets a record whose `Source digest` is the SHA-256 of the plan file bytes (the producer's `--plan` help text says so), named with the hardcoded `-plan-review-` infix. `scripts/review_record_selection.py verify-digest` then refuses that record in every round, because it recomputes the digest from the `git diff <base>...<head>` bytes of the round's reviewed range. The refusal is structural, not a stale record: the two scripts hash different sources, so an exec run has no mechanical digest-freshness check over producer-emitted records and falls back to the code-family seal (`.ai-playbook/review-certs/<slug>.md`, `family: code`, `range_digest`) as the only operative freshness instrument. Both picks hit this on r1 and r2; neither could be unblocked without hand-deriving the range digest for the seal.
+
+Expected: either the producer emits an exec-shaped record (an `-exec`/`-code-review` token, the range digest over the reviewed diff bytes, the reviewed base and head) when invoked for an execute-plan round, or the skill text of execute-plan Step 3.1 names the producer as plan-review-only and routes exec rounds to the selector plus seal path explicitly, so a run never spends rounds on a verifier that cannot accept the record it just wrote.
+
+Suggested fix (smallest arm first): a one-paragraph skill-text routing note in execute-plan Step 3.1 and in the producer's module docstring naming the digest family each tool owns; the producer flag change (`--range <base>...<head>` emitting a code-family digest) is the larger arm and rides this row's refactor change if the routing note proves insufficient.

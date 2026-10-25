@@ -215,7 +215,7 @@ Each worker receives:
 5. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
 6. The base and head branch names
 7. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
-8. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
+8. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`; paste review-staging's `Closed enums` line into the prompt verbatim so `confidence`, `reachability`, `blast_radius`, the `pattern` owner, and `triage` take only those values; the refresh duty lives in review-staging's Enum authority bullet beside that line.
 9. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`, preferring inline backtick spans for short snippets and keeping any fenced snippet free of heading-like lines (lines starting with `#`). Include one sentence why the chosen severity applies (`severity-calibration.md`)."
 10. **Scratch / truncation (mandatory on every worker and on any sub-agent whose job is to return full `git diff` output):** "Never write `git diff` or review captures to the repo root (see **Diff access** / `agent_workflow_guidelines.md` §50.3.2). If a tool truncates stdout, read the runtime's saved capture for the command or write only under `{tmp_dir}/code-review/<slug>/`. Prefer re-running `git diff` and reading sources over inventing a root scratch file."
 11. **Coverage-claim audit (when the worker builds or updates a mutator/failure-mode matrix):** a cell that cites an out-of-container constructor test for a request-boundary component cannot mark production wiring as `checked: yes`. Leave unchecked or stage `testing#coverage-claim-unchecked` / `testing#harness-fidelity-gap` until a Guideline Pack–conformant full-context harness proof exists.
@@ -255,7 +255,7 @@ Each worker returns a JSON array plus `descendant_launches`. Fully expanded find
 ]
 ```
 
-**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; the clean-verdict rules, the min-date fences (`EXTENDED_SIDECAR_MIN_DATE`, `RECORD_KIND_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`; field types and the descriptor-bound values live in the validator's schema descriptor, whose structural shapes `--scaffold` renders; the remaining allowed values (the findings-row enums, the discard codes, the panel statuses) stay documented in `review-staging`.
+**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc; every canonical record carries all four `## Findings` severity headings (`None` when empty), zero-finding rounds included. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; the clean-verdict rules, the min-date fences (`EXTENDED_SIDECAR_MIN_DATE`, `RECORD_KIND_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`; field types and the descriptor-bound values live in the validator's schema descriptor, whose structural shapes `--scaffold` renders; the remaining allowed values (the findings-row enums, the discard codes, the panel statuses) stay documented in `review-staging`.
 
 **Conditional lenses:** load premortem and concurrency inside `risk` per `review-panel-selection.md`.
 
@@ -602,7 +602,7 @@ Branch names are sanitized: slashes replaced with dashes, max 30 chars. No prefi
 
 Write all findings to the staging document instead of posting directly. This allows the reviewer to inspect, edit, or drop findings before they reach the PR author.
 
-**Document format** (hierarchy and `## Review Statistics` per `review-staging`; code-review severities and optional `Status` below):
+**Document format** (hierarchy, `## Review Statistics`, and the finding closed values per `review-staging`'s `Closed enums` line; code-review severities and optional `Status` below):
 
 ```markdown
 # Code Review: <PR #<number>; <title> OR Branch <head> → <base>>
