@@ -1,7 +1,7 @@
 # Backlog: authoring stopped after explicit operator reauthorization instead of resuming
 
 - **Filed:** 2026-10-25, observed while resuming the done-finalize plan authoring lane
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-26-authoring-resume-after-operator-reauthorization.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** session-witnessed execution friction

@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # done_run.sh - thin orchestrator composing the done closeout's mechanical
-# steps. Subcommands: setup, commit, finalize. The runner adds no gate, no
-# ledger, and no new refusal class: every
-# refusal it prints is one of the composed commands' own named errors, or the
-# relocated one-for-one setup refusals below (the empty-echo abort and the
-# partial-setup classification stop), each moved verbatim from the done
-# skill's Step 0 text.
+# steps. Subcommands: setup, commit, finalize. The runner adds no gate and no
+# ledger, and it authors exactly one refusal class of its own: incompatible
+# transition inputs for setup (--from-manifest with ownership options or with
+# --adopt, and an --adopt target that names no adoptable boundary); every
+# other refusal it prints is one of the composed commands' own named errors,
+# the parse-time usage errors (an unknown argument or an empty flag operand),
+# or the relocated one-for-one setup refusals below (the empty-echo abort and
+# the partial-setup classification stop), each moved verbatim from the done
+# skill's Step 0 text (plan
+# docs/history/plans/completed/2026-10-25-done-run-resume-ownership-gap.md).
 #
 # Usage:
 #   done_run.sh setup [--label TEXT] [--from-manifest RUN_ID]
+#        [--adopt RUN_ID]
 #        [--owned-plan PATH]... [--owned-review PATH]... [--owned-path PATH]...
 #        [--foreign-review PATH]... [--foreign-review-from FILE] [--claim-none]
 #   done_run.sh commit --stage PATH... --subject TEXT
+#        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
 #        [--side-commit REPO_PATH]... [--manifest PATH] [--run-id RUN_ID]
 #        [--authorize-ancestor-restoration PATH BLOB_ID]
@@ -36,12 +42,17 @@
 # the report inputs: the landing summary from the run's owned-commits ledger
 # and the report-only missing-review-record scan over the archived plans
 # (missing review records are reported, never blocking, never fabricated).
-# The guard-liveness ledger rows append BEFORE the done-lock release (plan
-# 2026-10-24-description-length-gate-catch-promotion): every normal ledger
-# writer serializes under the existing done lock, the same lock the commit
-# path's pre-refusal catch holds, so the lock releases only after the
-# appends ran; a failed append is a warning line and the lock releases
-# anyway. The landing-cost telemetry line runs last, never blocking: one
+# The guard-firing rows finalize receives never append directly and never
+# append twice after a successful landing (plan
+# 2026-10-24-done-run-lock-span-and-append-ordering): with a prior landing
+# commit they are reported as already carried by it; with no prior landing
+# they land through the checked commit subcommand as a child while the done
+# lock is still held, the child writing them before its declared staging and
+# landing the ledger bytes in its own commit; a child failure before its
+# landing restores the prior ledger bytes and index, a failure after the
+# landing preserves the committed row and reports without rollback; every
+# outcome is a warning line and the release still runs. The landing-cost
+# telemetry line runs last, never blocking: one
 # line when this run landed work in the project repo (skip with --no-
 # landing-cost or when nothing landed; a failed append is a warning line).
 #
@@ -58,10 +69,27 @@
 # migration skip record (worktree-migrate-baseline-<run id>-skip.json)
 # written in the same session directory - the commit stage's only
 # zero/multi-plan skip evidence - and the explicit --from-manifest re-entry
-# completes the same producer duty for its adopted boundary. On success it
+# completes the same producer duty for its re-entered boundary. An explicit
+# --adopt RUN_ID continues the classified interrupted boundary: it routes to
+# the writer's existing adoption only when it names the classified orphan run
+# ID (an orphan-verdict mismatch, a classified terminal or already-adopted
+# boundary's own ID, or --from-manifest combined with ownership options or
+# --adopt each refuse before any new marker or manifest; a mismatched target
+# against a terminal-newest boundary is not refused here - the fresh boundary
+# carries it to the writer's own adoption validations, and a refused write
+# rolls the fresh marker back), and the writer carries the prior start
+# commit and ownership claims into the new linked manifest. On success it
 # prints one status line on stdout followed by eval-able export lines for the
 # downstream consumers: DONE_LOCK_DIR, DONE_LOCK_TOKEN, DONE_RUN_MARKER,
 # DONE_RUN_MANIFEST, DONE_RUN_ID.
+#
+# Every terminal classification and fail-closed exit after the acquire
+# releases only the lock generation that invocation acquired (the env-token
+# release arm; the token compare-and-swap never releases a newer generation,
+# and a refused release is one warning line) before exiting with the
+# original refusal outcome and remedy text, so the remedy-and-retry path
+# never waits on the stopped attempt's own hold; the successful
+# --from-manifest re-entry keeps the acquired lock.
 #
 # commit owns the collapsed Step 3 (the plan's authoritative composed order):
 # stage by explicit pathspec from the run's owned set (--stage, gitignored
@@ -146,7 +174,15 @@
 # classifier. When DONE_RUN_TRACE_FILE
 # is set the subcommand appends
 # one `stage <name>` line per composed stage, so a run's trace shows the
-# order the plan fixes.
+# order the plan fixes. The invocation's repeated --guard-firing
+# NAME:KIND:EVIDENCE[:NOTE] rows append to scripts/gate_liveness_ledger.json
+# BEFORE the declared-path staging and the landing sweep (plan
+# 2026-10-24-done-run-lock-span-and-append-ordering): accepted rows stage the
+# ledger path into the declared set so the bytes ride the landing commit
+# exactly once; a malformed firing or a failed append is one warning line;
+# the writer's pre-write public-hygiene screen leaves the canonical ledger
+# bytes unchanged and skips a flagged advisory row without refusing the
+# landing.
 #
 # Env: DONE_LOCK_SCRIPT overrides the lock script (default: this repo's
 # scripts/done-lock.sh, then the deployed home copy); the sweep-gates lib is
@@ -168,9 +204,40 @@ resolve_helper() { # name -> prints path or nothing
   elif [ -f "$HOME_SCRIPTS/$1" ]; then printf '%s\n' "$HOME_SCRIPTS/$1"; fi
 }
 
+# Release the done-lock generation this setup invocation acquired, on the
+# terminal exits below. The env-token release-repo arm is the same path
+# finalize composes: the acquire's own exports name the hold and the token
+# compare-and-swap releases only that generation, never a newer one, so no
+# reentrant or holder-ancestry semantics are added. The release output is
+# echoed; a refused release is one warning line and the caller's original
+# refusal outcome and remedy text stay the exit of record. The exports-lost
+# acquire corner keeps its own refusal: no token, no generation to name.
+# The no-OUTCOME-pass acquire corner is the second tokenless corner (an
+# acquire that holds but emits no final OUTCOME line discards its exports
+# unadopted before this arm runs), so its hold waits for the lock script's
+# stale-clean or the operator; this arm names no token to release it with.
+setup_release_acquired_lock() { # -> prints the release output; never refuses
+  local rel_out rel_rc=0
+  [ -n "${LOCK_SCRIPT:-}" ] && [ -n "${DONE_LOCK_DIR:-}" ] && [ -n "${DONE_LOCK_TOKEN:-}" ] || return 0
+  rel_out="$(DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" \
+    bash "$LOCK_SCRIPT" release-repo 2>&1)" || rel_rc=$?
+  printf '%s\n' "$rel_out"
+  if [ "$rel_rc" -ne 0 ]; then
+    echo "done_run setup: WARNING: the acquired done lock did not release (rc=$rel_rc); the refusal above still stands; re-derive the hold with the lock script's status" >&2
+  fi
+  return 0
+}
+
+# A terminal setup exit after the acquire: release this invocation's
+# generation, then exit with the original refusal code.
+setup_die() { # rc
+  setup_release_acquired_lock
+  exit "$1"
+}
+
 fail_partial() { # step evidence
   echo "done Step 0 partial-setup: $1; $2; no manifest bound" >&2
-  exit 1
+  setup_die 1
 }
 
 # Compose the CWD repo's facts-resolved done-session directory; print nothing.
@@ -218,10 +285,14 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
 }
 
 # Classify a found partial setup; print the remedy lines on stderr and, for
-# an explicit --from-manifest re-entry, the audit exports on stdout.
+# an explicit --from-manifest re-entry, the audit exports on stdout, and for
+# an explicit --adopt of the classified orphan a routing note before the
+# fresh adopting boundary (the refusal class below never writes).
 # Read-only except the re-entry arm's one zero/multi-plan skip-record write
 # (the same producer duty a fresh setup performs; a plain classification
-# writes nothing). The state verdict comes from the repo-local
+# writes nothing). Its terminal exits release the acquired lock generation
+# through setup_die before exiting with the original refusal. The state
+# verdict comes from the repo-local
 # sweep-gates lib's classify-run-boundary subcommand (the canonical
 # RunManifest parse plus the adopted-set orphan filter, read at run identity
 # over every run-manifest-*.json record sharing the newest file's payload run
@@ -229,10 +300,11 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
 # (finalized | adopted | dispositioned | shadow-closed) continues to the
 # fresh boundary behind a one-line note, an orphan verdict takes the verbatim
 # remedy refusals, and an unreadable record fails closed naming the file.
-classify_partial() { # from_manifest(empty allowed)
-  local session from_manifest newest_marker newest_manifest mid marker_name verdict
+classify_partial() { # from_manifest(empty allowed) adopt_target(empty allowed)
+  local session from_manifest adopt_target newest_marker newest_manifest mid marker_name verdict
   session="$(session_dir)" || return 1
   from_manifest="$1"
+  adopt_target="${2:-}"
   newest_marker=""
   for f in "$session"/run-start-*; do
     [ -f "$f" ] || continue
@@ -255,12 +327,12 @@ classify_partial() { # from_manifest(empty allowed)
     lib="$(resolve_helper done_sweep_gates_lib.py)"
     if [ -z "$lib" ]; then
       echo "done_run setup: no done_sweep_gates_lib.py resolved (repo-local scripts/ or deployed home); cannot classify: $(basename "$newest_manifest")" >&2
-      exit 3
+      setup_die 3
     fi
     class_out="$(python3 "$lib" classify-run-boundary --session-dir "$session" --manifest "$newest_manifest" 2>&1)" || {
       printf '%s\n' "$class_out" >&2
       echo "done_run setup: the manifest-state classifier failed; no new boundary written (fail-closed)" >&2
-      exit 3
+      setup_die 3
     }
     verdict="$(printf '%s\n' "$class_out" | sed -n 's/^verdict: //p')"
     mid="$(printf '%s\n' "$class_out" | sed -n 's/^run_id: //p')"
@@ -268,12 +340,20 @@ classify_partial() { # from_manifest(empty allowed)
     if [ "$verdict" = "unreadable" ]; then
       echo "done_run setup: found an unparseable run manifest record: $(basename "$newest_manifest") (corrupt or schema-invalid; run_id unreadable)" >&2
       echo "done_run setup: no new boundary written (fail-closed; repair or remove the named record explicitly)" >&2
-      exit 2
+      setup_die 2
     fi
     case "$verdict" in
       finalized|adopted|dispositioned|shadow-closed)
         if [ -z "$from_manifest" ]; then
-          echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); continuing with a fresh marker and manifest"
+          if [ -n "$adopt_target" ] && [ "$adopt_target" = "$mid" ]; then
+            echo "done_run setup: --adopt $adopt_target names the classified boundary run_id=$mid, which is $verdict (closed; only an interrupted orphan boundary is adoptable); no new boundary written" >&2
+            exit 1
+          fi
+          if [ -n "$adopt_target" ]; then
+            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); --adopt $adopt_target is not the classified boundary and is forwarded to the writer's own adoption validations behind the fresh marker (a refused write rolls that marker back)"
+          else
+            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); continuing with a fresh marker and manifest"
+          fi
           return 1
         fi
         ;;
@@ -281,30 +361,43 @@ classify_partial() { # from_manifest(empty allowed)
         ;;  # the unadopted-boundary remedies below, verbatim
       *)
         echo "done_run setup: unknown boundary verdict from the classifier: $verdict" >&2
-        exit 3
+        setup_die 3
         ;;
     esac
+    # Explicit adoption routing (plan 2026-10-25-done-run-resume-ownership-gap):
+    # a classified orphan boundary is adoptable only by its own run ID, and a
+    # matching --adopt continues past the remedies to the writer's existing
+    # adoption below, which preserves the prior start commit and ownership
+    # claims; both refusals here precede any new marker or manifest.
+    if [ -z "$from_manifest" ] && [ -n "$adopt_target" ]; then
+      if [ "$adopt_target" != "$mid" ]; then
+        echo "done_run setup: --adopt $adopt_target names no classified interrupted boundary (classified run_id: ${mid:-none}); only the classified orphan boundary may be adopted; no new boundary written" >&2
+        exit 1
+      fi
+      echo "done_run setup: adopting the classified interrupted boundary run_id=$mid via --adopt (the manifest writer carries its start commit and ownership claims into the new manifest)" >&2
+      return 1
+    fi
     if [ -n "$newest_marker" ] && [ "$marker_name" = "$(basename "$newest_marker")" ]; then
       echo "done_run setup: found an unadopted current-boundary manifest run_id=$mid bound to the newest content-confirmed marker" >&2
-      echo "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py recover-manifest --run-id $mid | re-enter with --from-manifest $mid (adopt) | python3 scripts/done_sweep_gates_lib.py finalize-manifest --run-id $mid" >&2
+      echo "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py recover-manifest --run-id $mid | re-enter exactly with --from-manifest $mid | adopt via setup --adopt $mid | python3 scripts/done_sweep_gates_lib.py finalize-manifest --run-id $mid" >&2
     else
       echo "done_run setup: found a stale-marker or markerless interrupted manifest run_id=${mid:-unknown}" >&2
-      echo "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py recover-manifest --run-id ${mid:-<id>} | adopt via --from-manifest ${mid:-<id>} | python3 scripts/done_sweep_gates_lib.py finalize-manifest --run-id ${mid:-<id>} | python3 scripts/done_sweep_gates_lib.py disposition-manifest --run-id ${mid:-<id>} (dead root only)" >&2
+      echo "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py recover-manifest --run-id ${mid:-<id>} | adopt via setup --adopt ${mid:-<id>} | re-enter exactly with --from-manifest ${mid:-<id>} | python3 scripts/done_sweep_gates_lib.py finalize-manifest --run-id ${mid:-<id>} | python3 scripts/done_sweep_gates_lib.py disposition-manifest --run-id ${mid:-<id>} (dead root only)" >&2
     fi
     if [ -n "$from_manifest" ]; then
       if [ "$from_manifest" != "$mid" ]; then
         echo "done_run setup: --from-manifest $from_manifest names no found boundary (found: ${mid:-none})" >&2
-        exit 1
+        setup_die 1
       fi
       RUN_MARKER_PATH=""
       [ -n "$newest_marker" ] && [ "$marker_name" = "$(basename "$newest_marker")" ] && RUN_MARKER_PATH="$newest_marker"
       echo "done_run setup: re-entering boundary run_id=$mid (explicit --from-manifest)"
-      # the adopted boundary completes the zero/multi-plan producer duty
+      # the re-entered boundary completes the zero/multi-plan producer duty
       # before its exports are handed back, so an interrupted setup never
       # strands its run without the commit stage's skip evidence
       write_zero_multi_plan_skip_record "$session" "$newest_manifest" || {
         echo "done_run setup: the zero/multi-plan migration skip record write failed for the re-entered boundary" >&2
-        exit 1
+        setup_die 1
       }
       echo "export DONE_RUN_MANIFEST=$(printf '%q' "$newest_manifest")"
       echo "export DONE_RUN_ID=$mid"
@@ -312,7 +405,7 @@ classify_partial() { # from_manifest(empty allowed)
       return 0
     fi
     echo "done_run setup: no new boundary written (read-only classification; pass --from-manifest to re-enter explicitly)" >&2
-    exit 2
+    setup_die 2
   fi
   # Marker without manifest: the interrupted attempt died inside the marker
   # recipe or before the writer; the marker-boundary remedy is a fresh write
@@ -320,24 +413,56 @@ classify_partial() { # from_manifest(empty allowed)
   echo "done_run setup: found a content-confirmed marker with no manifest (partial marker write)" >&2
   echo "done_run setup: remedy: re-run setup to write the manifest bound to that marker, or remove the marker to discard the attempt" >&2
   echo "done_run setup: no new boundary written" >&2
-  exit 2
+  setup_die 2
 }
 
 cmd_setup() {
-  local label="" from_manifest=""
+  # WM_ARGS and ADOPT_ARGS are function-local so an environment-inherited
+  # WM_ARGS can neither satisfy the mixed-input probe below nor leak into the
+  # writer call (a declared-empty bash array reads unset under ${var+set}).
+  local label="" from_manifest="" adopt_target="" ownership_opts=""
+  local WM_ARGS=() ADOPT_ARGS=()
   shift # subcommand
   while [ $# -gt 0 ]; do
     case "$1" in
       --label) label="$2"; shift 2;;
-      --from-manifest) from_manifest="$2"; shift 2;;
+      --from-manifest)
+        if [ -z "${2:-}" ]; then
+          echo "done_run setup: --from-manifest requires a run-id operand (got an empty operand)" >&2
+          exit 3
+        fi
+        from_manifest="$2"; shift 2;;
+      --adopt)
+        if [ -z "${2:-}" ]; then
+          echo "done_run setup: --adopt requires a run-id operand (got an empty operand)" >&2
+          exit 3
+        fi
+        adopt_target="$2"; shift 2;;
       --owned-plan|--owned-review|--owned-path|--foreign-review)
         WM_ARGS+=("$1" "$2"); shift 2;;
-      --foreign-review-from|--adopt)
+      --foreign-review-from)
         WM_ARGS+=("$1" "$2"); shift 2;;
       --claim-none) WM_ARGS+=("$1"); shift;;
       *) echo "done_run setup: unknown argument: $1" >&2; exit 3;;
     esac
   done
+
+  # Incompatible transition inputs (one refusal class, plan
+  # 2026-10-25-done-run-resume-ownership-gap): --from-manifest is exact
+  # re-entry and never carries ownership options or an adoption target. Both
+  # mixed forms refuse here, before any advisory, lock, marker, or manifest,
+  # and the refusal names setup --adopt as the supported transition.
+  if [ -n "$from_manifest" ]; then
+    if [ -n "$adopt_target" ]; then
+      echo "done_run setup: --from-manifest $from_manifest and --adopt $adopt_target are conflicting modes; --from-manifest is exact re-entry and changes no claims; to add ownership claims to that boundary, run setup --adopt $from_manifest with them" >&2
+      exit 3
+    fi
+    if [ "${WM_ARGS+set}" = "set" ]; then
+      ownership_opts="$(printf '%s ' ${WM_ARGS+"${WM_ARGS[@]}"})"
+      echo "done_run setup: --from-manifest is exact re-entry and cannot carry ownership options (${ownership_opts% }); to add those claims to boundary $from_manifest, run setup --adopt $from_manifest with them" >&2
+      exit 3
+    fi
+  fi
 
   # 1. Rearm-on-touch echo (advisory, echo-and-continue).
   REARM="$(resolve_helper rearm_on_touch.py)"
@@ -409,11 +534,12 @@ cmd_setup() {
     printf 'done_run setup: residue sweep (fail-open): %s\n' "$(printf '%s' "$SWEEP_OUT" | grep -E '^(OUTCOME|remove|registration|branch-report):')"
   fi
 
-  # 5. Partial-setup classification (read-only unless --from-manifest).
-  classify_partial "$from_manifest" && return 0
+  # 5. Partial-setup classification (read-only unless --from-manifest; an
+  #    explicit --adopt of the classified orphan also continues from here).
+  classify_partial "$from_manifest" "$adopt_target" && return 0
 
   # 6. Run-start marker (content-bearing recipe, moved verbatim).
-  session="$(session_dir)" || { echo "done-run: cannot resolve the repo root" >&2; exit 3; }
+  session="$(session_dir)" || { echo "done-run: cannot resolve the repo root" >&2; setup_die 3; }
   mkdir -p "$session"
   REPO_TOP="$(git rev-parse --show-toplevel)"
   MARKER="$session/run-start-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -429,13 +555,18 @@ cmd_setup() {
     fail_partial "run-start marker" "resolved path is not the expected done-session root; stray marker removed"
   fi
 
-  # 7. Run manifest write bound to the marker (fail-atomic block).
+  # 7. Run manifest write bound to the marker (fail-atomic block). An
+  #    explicit --adopt rides the writer's existing adoption path: the writer
+  #    keeps its own validations (root identity, completion state,
+  #    start-commit resolvability) and a refused write rolls the fresh
+  #    marker back below.
   LIB="$(resolve_helper done_sweep_gates_lib.py)"
   if [ -z "$LIB" ]; then
     rm -f "$MARKER"
     fail_partial "run manifest" "no sweep-gates lib resolved (repo-local scripts/ or deployed home)"
   fi
-  WM_OUT="$(python3 "$LIB" write-manifest --run-marker "$MARKER" ${WM_ARGS+"${WM_ARGS[@]}"} 2>&1)" || {
+  [ -n "$adopt_target" ] && ADOPT_ARGS+=(--adopt "$adopt_target")
+  WM_OUT="$(python3 "$LIB" write-manifest --run-marker "$MARKER" ${WM_ARGS+"${WM_ARGS[@]}"} ${ADOPT_ARGS+"${ADOPT_ARGS[@]}"} 2>&1)" || {
     rm -f "$MARKER"
     fail_partial "run manifest" "the writer refused: $(printf '%s' "$WM_OUT" | tail -n 3)"
   }
@@ -456,7 +587,7 @@ cmd_setup() {
   #    baseline route needs no skip evidence.
   write_zero_multi_plan_skip_record "$session" "$MANIFEST" || {
     echo "done_run setup: the zero/multi-plan migration skip record write failed: $session/worktree-migrate-baseline-$RUN_ID-skip.json; re-enter with --from-manifest $RUN_ID to complete the duty" >&2
-    exit 1
+    setup_die 1
   }
 
   echo "done_run setup: ok run_id=$RUN_ID"
@@ -953,7 +1084,8 @@ side_facts_value() { # key -> value from the user facts markdown table
 
 cmd_commit() {
   local subject="" receipts_file="" path row
-  STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=()
+  STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=(); GUARD_FIRINGS=()
+  DECLARED=()
   COMMIT_MANIFEST=""; RUN_ID_ARG=""; BOUNDARY_CLASS="final-closeout"
   AUTH_PATH=""; AUTH_BLOB=""
   AUTH_MARKER=""; AUTH_MANIFEST=""; AUTH_RUN_ID=""; AUTH_MANIFEST_DIGEST=""
@@ -964,6 +1096,7 @@ cmd_commit() {
     case "$1" in
       --boundary-class) BOUNDARY_CLASS="$2"; shift 2;;
       --stage) STAGE_ARGS+=("$2"); shift 2;;
+      --guard-firing) GUARD_FIRINGS+=("$2"); shift 2;;
       --revert-formatting) REVERT_FMT_ARGS+=("$2"); shift 2;;
       --side-commit) SIDE_COMMIT_ARGS+=("$2"); shift 2;;
       --subject) subject="$2"; shift 2;;
@@ -1025,6 +1158,57 @@ cmd_commit() {
     resolve_authorized_run_tuple
   fi
 
+  # 0b. Guard-firing appends: the advisory rows supplied for this landing are
+  #     written BEFORE the declared-path staging and the landing sweep (plan
+  #     2026-10-24-done-run-lock-span-and-append-ordering), then the ledger
+  #     path is staged into the declared set so the accepted bytes ride the
+  #     landing commit exactly once. Echo-and-continue: a malformed firing, a
+  #     missing writer, or a failed append is one warning line and the
+  #     landing continues; the writer's pre-write public-hygiene screen leaves
+  #     the canonical ledger bytes unchanged and skips a flagged row. Guard
+  #     rows stay advisory: no step here refuses the landing over them except
+  #     an actual staging failure of the ledger path itself.
+  if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
+    trace_stage guard-firing-appends
+    GUARD_LEDGER_REL="scripts/gate_liveness_ledger.json"
+    GUARD_LEDGER_STAGED=0
+    local gname gkind gevidence gnote firing glf_out
+    GLF_LEDGER_SCRIPT="$(resolve_helper gate_liveness_ledger.py)"
+    if [ -z "$GLF_LEDGER_SCRIPT" ]; then
+      echo "done_run commit: WARNING: no gate_liveness_ledger.py resolved (repo-local scripts/ or deployed home); guard-firing appends skipped (advisory)" >&2
+    fi
+    for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
+      gname="$(printf '%s' "$firing" | cut -d: -f1)"
+      gkind="$(printf '%s' "$firing" | cut -d: -f2)"
+      gevidence="$(printf '%s' "$firing" | cut -d: -f3)"
+      gnote="$(printf '%s' "$firing" | cut -d: -f4-)"
+      if [ -z "$gname" ] || [ -z "$gkind" ] || [ -z "$gevidence" ]; then
+        echo "done_run commit: WARNING: malformed --guard-firing (want NAME:KIND:EVIDENCE[:NOTE]): $firing" >&2
+        continue
+      fi
+      if [ -n "$GLF_LEDGER_SCRIPT" ]; then
+        GLF_ARGS=(--ledger "$GUARD_LEDGER_REL" record --guard "$gname" --kind "$gkind" \
+          --date "$(date -u +%F)" --evidence "$gevidence")
+        [ -n "$gnote" ] && GLF_ARGS+=(--note "$gnote")
+        glf_out="$(python3 "$GLF_LEDGER_SCRIPT" ${GLF_ARGS+"${GLF_ARGS[@]}"} 2>&1)" \
+          || echo "done_run commit: WARNING: guard-firing append failed for $gname (advisory; the landing continues; read the writer's output above)" >&2
+        [ -n "$glf_out" ] && printf '%s\n' "$glf_out"
+      fi
+    done
+    if [ -f "$GUARD_LEDGER_REL" ]; then
+      if git check-ignore -q "$GUARD_LEDGER_REL"; then
+        echo "done_run commit: WARNING: the ledger path is gitignored; the guard-firing bytes cannot ride the commit (advisory)" >&2
+      else
+        git add -- "$GUARD_LEDGER_REL" || \
+          commit_die 3 "guard-firing ledger staging refused for $GUARD_LEDGER_REL; stage it deliberately in a follow-up invocation or fix the staging failure; nothing committed"
+        GUARD_LEDGER_STAGED=1
+      fi
+    fi
+    if [ "$GUARD_LEDGER_STAGED" -eq 1 ]; then
+      DECLARED+=("$GUARD_LEDGER_REL")
+    fi
+  fi
+
   # 1. Stage by explicit pathspec from the run's owned set (the declared
   #    --stage paths). Gitignored paths are reported and never staged.
   #    The declared set partitions into three arms: worktree-existing or
@@ -1033,7 +1217,6 @@ cmd_commit() {
   #    staging operation; a path tracked nowhere refuses so a typo never
   #    silently vanishes from the declared set.
   trace_stage staging
-  DECLARED=()
   STAGE_LIST=()
   for path in ${STAGE_ARGS+"${STAGE_ARGS[@]}"}; do
     if git check-ignore -q "$path"; then
@@ -1696,6 +1879,41 @@ finalize_die() { # rc message...: fail loud with the named evidence
   exit "$rc"
 }
 
+landing_pending_state() { # <session-dir> <run-id>; sets LANDING_PENDING, LANDING_TIP, BASE_BRANCH
+  # The deferred-squash witness (backlog 2026-10-26-finalize-deferred-squash-
+  # silent-success): the run's owned-commits ledger carries a landing commit
+  # that is not on the base branch, so the squash to the default branch never
+  # ran and a success-shaped summary would lie. Landed means either the
+  # commit is an ancestor of the base branch (direct and merge landings) or
+  # a recent base-history commit carries an equal tree (the squash proof,
+  # the worktree-first standard's squash arm: a squash landing changes the
+  # sha, so ancestry alone never sees it). The base branch resolves from the
+  # facts base_branch key, then origin/HEAD's short name; an unresolvable
+  # base fails open to the current success shape (the caller warns), never
+  # blocking the release ceremony. Quiet: callers own every emission.
+  LANDING_PENDING=0; LANDING_TIP=""; BASE_BRANCH=""
+  local ledger="$1/owned-commits-$2.txt" tip_tree
+  [ -f "$ledger" ] || return 0
+  LANDING_TIP="$(tail -n 1 "$ledger" 2>/dev/null)"
+  [ -n "$LANDING_TIP" ] || { LANDING_TIP=""; return 0; }
+  git cat-file -e "$LANDING_TIP" 2>/dev/null || { LANDING_TIP=""; return 0; }
+  BASE_BRANCH="$(facts_toml_value base_branch)"
+  if [ -z "$BASE_BRANCH" ]; then
+    BASE_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+  fi
+  if [ -z "$BASE_BRANCH" ] || ! git rev-parse --verify --quiet "refs/heads/$BASE_BRANCH" >/dev/null 2>&1; then
+    LANDING_TIP=""; BASE_BRANCH=""; return 0
+  fi
+  if git merge-base --is-ancestor "$LANDING_TIP" "refs/heads/$BASE_BRANCH" 2>/dev/null; then
+    return 0
+  fi
+  tip_tree="$(git rev-parse "$LANDING_TIP^{tree}" 2>/dev/null)" || { LANDING_TIP=""; BASE_BRANCH=""; return 0; }
+  if git log --format='%T' -n 500 "refs/heads/$BASE_BRANCH" 2>/dev/null | grep -qxF "$tip_tree"; then
+    return 0
+  fi
+  LANDING_PENDING=1
+}
+
 cmd_finalize() {
   # Invocation telemetry start stamp (plan
   # docs/history/plans/2026-10-14-script-runtime-cost-telemetry.md, Task 3):
@@ -1731,7 +1949,7 @@ cmd_finalize() {
 
   RUN_MANIFEST="$(resolve_manifest_path)" || RUN_MANIFEST=""
   RUN_ID="$(resolve_run_id)"
-  local finalize_rc=0 release_rc=0
+  local finalize_rc=0 release_rc=0 marking_withheld=0
 
   # 1. Checkpoint refresh at the finalize preamble: a no-checkpoint refusal
   #    falls back to create-then-refresh; an already-finalized manifest is
@@ -1760,53 +1978,133 @@ cmd_finalize() {
     # 2. Manifest finalize: a missing manifest answers exit 0 with the lib's
     #    own note; any other non-zero exit is a real failure recorded for the
     #    final exit (the releases below still run; never stranded).
-    FM_OUT="$(python3 "$LIB" finalize-manifest --run-id "$RUN_ID" 2>&1)" || finalize_rc=$?
-    printf '%s\n' "$FM_OUT"
-    if [ "$finalize_rc" -ne 0 ]; then
-      echo "done_run finalize: FAILED (exit $finalize_rc); the run manifest finalize did not complete; running the releases so no lock strands" >&2
-    else
-      # 3. Checkpoint remove (only after the successful finalize).
-      CR_OUT="$(python3 "$LIB" checkpoint-manifest --run-id "$RUN_ID" --mode remove 2>&1)"
-      if [ $? -ne 0 ]; then
-        printf '%s\n' "$CR_OUT" >&2
-        echo "done_run finalize: WARNING: checkpoint remove refused; the sibling stays for a resume continuation" >&2
+    #    Deferred-squash withholding: when the ledger's landing commit is not
+    #    on the base branch (ancestry or the squash proof; the squash never
+    #    ran), the complete marking is withheld and the deferral prints loud
+    #    while the boundary stays continuable (rc 0, releases below run): the
+    #    kept checkpoint and the incomplete manifest are the resumable state
+    #    a re-run finalize consumes once the squash lands.
+    if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ]; then
+      landing_pending_state "$session" "$RUN_ID"
+      if [ "$LANDING_PENDING" -eq 1 ]; then
+        marking_withheld=1
+        local ms_out ms_state ms_label
+        ms_out="$(bash "$LOCK_SCRIPT" merge-status 2>/dev/null)"
+        if [ -z "$ms_out" ]; then
+          ms_state="unreadable"
+        elif printf '%s\n' "$ms_out" | grep -qE ': held( |$)'; then
+          ms_label="$(printf '%s\n' "$ms_out" | sed -En 's/^[[:space:]]*label: (.*)$/\1/p' | head -n 1)"
+          ms_state="held by ${ms_label:-unknown}"
+        else
+          ms_state="free"
+        fi
+        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; merge lock $ms_state; re-run finalize or the landing helper's land-worktree mode after the lock frees; the branch tip is $LANDING_TIP" >&2
+        echo "done_run finalize: run manifest complete marking withheld until the squash lands (the checkpoint is kept for the resume)"
+      elif [ -z "$LANDING_TIP" ] && [ -z "$BASE_BRANCH" ]; then
+        echo "done_run finalize: WARNING: the deferred-squash honesty check is skipped (unresolvable base branch or unreadable ledger tip); the summary is not landing-verified" >&2
+      fi
+    fi
+    if [ "$marking_withheld" -eq 0 ]; then
+      FM_OUT="$(python3 "$LIB" finalize-manifest --run-id "$RUN_ID" 2>&1)" || finalize_rc=$?
+      printf '%s\n' "$FM_OUT"
+      if [ "$finalize_rc" -ne 0 ]; then
+        echo "done_run finalize: FAILED (exit $finalize_rc); the run manifest finalize did not complete; running the releases so no lock strands" >&2
       else
-        printf '%s\n' "$CR_OUT"
+        # 3. Checkpoint remove (only after the successful finalize).
+        CR_OUT="$(python3 "$LIB" checkpoint-manifest --run-id "$RUN_ID" --mode remove 2>&1)"
+        if [ $? -ne 0 ]; then
+          printf '%s\n' "$CR_OUT" >&2
+          echo "done_run finalize: WARNING: checkpoint remove refused; the sibling stays for a resume continuation" >&2
+        else
+          printf '%s\n' "$CR_OUT"
+        fi
       fi
     fi
   fi
 
-  # 3b. Guard-liveness ledger appends, BEFORE the done-lock release (plan
-  #     2026-10-24-description-length-gate-catch-promotion): every normal
-  #     ledger writer serializes under the existing done lock: the commit
-  #     path's pre-refusal catch holds the same lock, so the lock releases
-  #     only after this loop ran. Echo-and-continue: a failed append is a
-  #     warning line, the release still runs, and the lock is never stranded.
+  # 3b. Guard-firing rows, BEFORE the done-lock release, never appended twice
+  #     after a successful landing (plan
+  #     2026-10-24-done-run-lock-span-and-append-ordering): rows known at
+  #     landing time ride the landing commit through the commit subcommand's
+  #     own --guard-firing, so a run with a prior landing commit has nothing
+  #     left to append here. With no prior landing commit, the rows land
+  #     through the checked commit subcommand as a child while the parent
+  #     retains the done lock: the child writes them before its declared
+  #     staging, stages the ledger path, and lands the bytes in its own
+  #     captured-tree commit. A child failure before its landing restores the
+  #     prior ledger bytes and index; a failure after the landing preserves
+  #     the committed row and reports without rollback. Every outcome stays
+  #     advisory: warnings only, and the release and status checks below run
+  #     regardless.
   trace_stage guard-liveness-appends
-  local firing ledger_script GL_OUT=""
+  local guard_ledger_rel guard_snapshot child_pre_head child_post_head child_out firing
   if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
-    ledger_script="$(resolve_helper gate_liveness_ledger.py)"
-    if [ -z "$ledger_script" ]; then
-      echo "done_run finalize: WARNING: no gate_liveness_ledger.py resolved; guard-liveness appends skipped (advisory)" >&2
+    guard_ledger_rel="scripts/gate_liveness_ledger.json"
+    if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ] \
+       && [ -s "$session/owned-commits-$RUN_ID.txt" ]; then
+      # The carried claim is verified before printing: each firing's evidence
+      # must appear in the landing commit's ledger bytes, else the message
+      # says so instead of over-claiming (r1 residual item 2).
+      landing_head="$(tail -n 1 "$session/owned-commits-$RUN_ID.txt")"
+      carried_unverified=0
+      for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
+        firing_evidence="$(printf '%s' "$firing" | cut -d: -f3)"
+        if [ -z "$firing_evidence" ] || ! git show "$landing_head:$guard_ledger_rel" 2>/dev/null | grep -qF -- "$firing_evidence"; then
+          carried_unverified=1
+          break
+        fi
+      done
+      if [ "$carried_unverified" -eq 0 ]; then
+        echo "done_run finalize: guard-liveness rows verified in this run's landing commit $landing_head; never appended twice after a successful landing"
+      else
+        echo "done_run finalize: WARNING: a guard-firing row's evidence was not found in the landing commit $landing_head ledger bytes; the rows are not verified as carried; re-append them with --guard-firing on a follow-up invocation if they are still owed" >&2
+      fi
+    elif [ ! -f "$guard_ledger_rel" ]; then
+      echo "done_run finalize: WARNING: no $guard_ledger_rel in this repository; the guard-liveness rows are skipped (advisory)" >&2
+    else
+      trace_stage guard-firing-child-commit
+      GUARD_CHILD_ARGS=()
+      for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
+        GUARD_CHILD_ARGS+=(--guard-firing "$firing")
+      done
+      guard_snapshot="$(mktemp)" || guard_snapshot=""
+      guard_snapshot_ok=0
+      guard_existed_before=0
+      if [ -f "$guard_ledger_rel" ]; then
+        guard_existed_before=1
+        if [ -n "$guard_snapshot" ] && cp "$guard_ledger_rel" "$guard_snapshot" 2>/dev/null; then
+          guard_snapshot_ok=1
+        fi
+      fi
+      child_pre_head="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+      GUARD_CHILD_RC=0
+      child_out="$(bash "$SCRIPT_DIR/done_run.sh" commit \
+        --stage "$guard_ledger_rel" \
+        --subject "telemetry: land guard-liveness ledger rows for run ${RUN_ID:-no-manifest}" \
+        ${GUARD_CHILD_ARGS+"${GUARD_CHILD_ARGS[@]}"} 2>&1)" || GUARD_CHILD_RC=$?
+      printf '%s\n' "$child_out"
+      if [ "$GUARD_CHILD_RC" -ne 0 ]; then
+        child_post_head="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+        # The reset is unconditional on child failure: a peer immediate-commit
+        # in the classification window must not leave the child's staged
+        # ledger entry behind in either arm (r1 residual item 3).
+        git reset -q -- "$guard_ledger_rel" 2>/dev/null || true
+        if { [ -z "$child_pre_head" ] && [ -z "$child_post_head" ]; } || \
+           { [ -n "$child_pre_head" ] && [ "$child_post_head" = "$child_pre_head" ]; }; then
+          if [ "$guard_snapshot_ok" -eq 1 ]; then
+            cp "$guard_snapshot" "$guard_ledger_rel" 2>/dev/null || true
+          elif [ "$guard_existed_before" -eq 0 ]; then
+            rm -f "$guard_ledger_rel"
+          else
+            echo "done_run finalize: WARNING: the prior ledger bytes could not be snapshotted; the child's ledger bytes are left in the worktree" >&2
+          fi
+          echo "done_run finalize: WARNING: the guard-liveness child commit failed (rc=$GUARD_CHILD_RC) before landing; the prior ledger bytes and index were restored; the advisory rows are skipped; the release and status checks continue" >&2
+        else
+          echo "done_run finalize: WARNING: the guard-liveness child commit reported rc=$GUARD_CHILD_RC after landing; the committed ledger row is preserved (no rollback); read the child output above" >&2
+        fi
+      fi
+      [ -n "$guard_snapshot" ] && rm -f "$guard_snapshot"
     fi
-    for firing in ${GUARD_FIRINGS+"${GUARD_FIRINGS[@]}"}; do
-      local gname gkind gevidence gnote
-      gname="$(printf '%s' "$firing" | cut -d: -f1)"
-      gkind="$(printf '%s' "$firing" | cut -d: -f2)"
-      gevidence="$(printf '%s' "$firing" | cut -d: -f3)"
-      gnote="$(printf '%s' "$firing" | cut -d: -f4-)"
-      if [ -z "$gname" ] || [ -z "$gkind" ] || [ -z "$gevidence" ]; then
-        echo "done_run finalize: WARNING: malformed --guard-firing (want NAME:KIND:EVIDENCE[:NOTE]): $firing" >&2
-        continue
-      fi
-      GL_ARGS=(record --guard "$gname" --kind "$gkind" --date "$(date -u +%F)" --evidence "$gevidence")
-      [ -n "$gnote" ] && GL_ARGS+=(--note "$gnote")
-      if [ -n "$ledger_script" ]; then
-        GL_OUT="$(python3 "$ledger_script" ${GL_ARGS+"${GL_ARGS[@]}"} 2>&1)" \
-          || echo "done_run finalize: WARNING: guard-liveness append failed for $gname (advisory; the closeout and the lock release continue)" >&2
-        [ -n "$GL_OUT" ] && printf '%s\n' "$GL_OUT"
-      fi
-    done
   fi
 
   # 4. Done-lock release: the env-token path by default; --from-holder (or
@@ -1866,7 +2164,22 @@ cmd_finalize() {
   landing_commit=""
   if [ -n "$ledger" ]; then
     landing_commit="$(tail -n 1 "$ledger")"
-    echo "done_run finalize: landing summary: run_id=$RUN_ID ledger=$ledger commits=$(wc -l < "$ledger" | tr -d ' ') landing_commit=$landing_commit"
+    # Fresh recompute: the guard-firing child commit above may have appended
+    # the ledger's first line after the marking decision, so the summary
+    # names the commit by its own current state; a commit not on the base
+    # branch is a branch commit, never landing_commit=.
+    landing_pending_state "$session" "$RUN_ID"
+    if [ "$LANDING_PENDING" -eq 1 ]; then
+      if [ "$marking_withheld" -eq 0 ]; then
+        # The guard-firing child commit created the ledger's first line after
+        # the marking decision: the manifest reads complete while the squash
+        # pends, so the deferral prints here with the marking-consistent duty.
+        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; the complete marking above predates this ledger line; re-run finalize or the landing helper's land-worktree mode after the squash lands; the branch tip is $LANDING_TIP" >&2
+      fi
+      echo "done_run finalize: landing summary: run_id=$RUN_ID ledger=$ledger commits=$(wc -l < "$ledger" | tr -d ' ') branch_commit=$landing_commit (not on $BASE_BRANCH; squash pending)"
+    else
+      echo "done_run finalize: landing summary: run_id=$RUN_ID ledger=$ledger commits=$(wc -l < "$ledger" | tr -d ' ') landing_commit=$landing_commit"
+    fi
   else
     echo "done_run finalize: landing summary: no owned-commits ledger for this run; nothing landed in the project repo through the commit subcommand"
   fi
@@ -1938,10 +2251,13 @@ PYEOF
 
   # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:
   #    a failed append is a warning line and never blocks the closeout. The
-  #    guard-liveness ledger rows moved before the done-lock release (step
-  #    3b) so every normal ledger writer serializes under the held lock.
+  #    guard-firing rows ran before the done-lock release (step 3b), the
+  #    landing-carried ones never appended again and the rest landed through
+  #    the checked child commit under the held lock.
   trace_stage advisory-appends
-  if [ "$no_landing_cost" -eq 0 ] && [ -n "$landing_commit" ] && [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
+  # A pending (unsquashed) landing commit records no cost line: the resume
+  # re-run that completes the boundary appends the line once at completion.
+  if [ "$no_landing_cost" -eq 0 ] && [ "${LANDING_PENDING:-0}" -eq 0 ] && [ -n "$landing_commit" ] && [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
     metrics_dir="$(facts_toml_value metrics_dir)"
     metrics_dir="${metrics_dir:-.ai-playbook/metrics}"
     case "$metrics_dir" in /*) ;; *) metrics_dir="$repo_top/$metrics_dir";; esac
@@ -2033,7 +2349,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,154p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,182p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

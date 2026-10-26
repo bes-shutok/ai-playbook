@@ -4,6 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
+- **Cluster:** docs/history/backlog/2026-10-26-plan-authoring-stand-down-before-charter.md (same gate-removal surface; this row covers an existing plan with no owned review claims)
 - **Origin class:** unremediable refusal remedy
 - **Class:** fix-class
 - **Driving force:** correctness; secondary: code-quality

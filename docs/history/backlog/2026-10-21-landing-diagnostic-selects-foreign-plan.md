@@ -5,6 +5,7 @@
 - **Workflow:** backlog
 - **Priority:** low (warning-only diagnostic; no block, but most receipts diagnose an unrelated plan)
 - **Cluster:** docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md (same surface: the post-squash certification diagnostic and its receipt ledger)
+- **Cluster:** EXEC-PROMPTS entry seal-receipt-placeholder-path-contract (covered 2026-10-26: the receipt path-masking contract landed in the ledger header; origin row deleted per the covered-row rule)
 - **Origin class:** self-serving
 - **Class:** fix-class (the receipt's plan selection resolves a corpus-wide highest-ready record instead of the landing's own archived plan, so the receipt certifies nothing about the landing it rode; default shape remove the false target)
 - **Driving force:** reliability (primary), correctness (secondary)

@@ -128,11 +128,11 @@ Primary class anchors:
 - `classify_partial` in `scripts/done_run.sh`
 - `cmd_setup` in `scripts/done_run.sh`
 
-- [ ] On every terminal classification and fail-closed exit after setup acquires the done lock, release only the generation acquired by this invocation before returning the original refusal outcome and remedy text. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the successful `--from-manifest` arm unchanged: it re-enters the named boundary under the acquired lock. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add wrapper cases for terminal classification and tool failure; assert the original refusal outcome and remedy, a free lock, and held lock on explicit re-entry. [class: REPOSITORY_TEST]
-- [ ] Update Step 0 to state the stop-release order and preserve the existing setup remedies and outcome classes. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `fix: release done lock on setup classification stop` [class: IMPLEMENTATION_REQUIRED]
+- [x] On every terminal classification and fail-closed exit after setup acquires the done lock, release only the generation acquired by this invocation before returning the original refusal outcome and remedy text. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the successful `--from-manifest` arm unchanged: it re-enters the named boundary under the acquired lock. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add wrapper cases for terminal classification and tool failure; assert the original refusal outcome and remedy, a free lock, and held lock on explicit re-entry. [class: REPOSITORY_TEST]
+- [x] Update Step 0 to state the stop-release order and preserve the existing setup remedies and outcome classes. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `fix: release done lock on setup classification stop` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Land guard-firing rows through the checked commit path
 
@@ -152,12 +152,19 @@ Primary class anchors:
 - `record` in `scripts/gate_liveness_ledger.py`
 - `save_ledger` in `scripts/gate_liveness_ledger.py`
 
-- [ ] Add repeated `--guard-firing` to `commit`; write accepted rows before declared-path staging and the landing sweep, then stage the ledger path so those bytes ride the commit. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Before replacing the canonical ledger, scan the serialized candidate using the existing public-hygiene scanner. On a hit, leave ledger bytes unchanged, warn that the advisory row was skipped, and continue the closeout without a new refusal class. [class: IMPLEMENTATION_REQUIRED]
-- [ ] With no prior landing, run the checked commit subcommand as a child under the parent lock; capture output/status, warn on failure, continue finalize release/status checks, and never append twice. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Before the project commit, child failure restores prior ledger bytes/index; after it lands, preserve the committed row and report later failure without rollback. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Test the landing row is written before staging/sweep and committed exactly once; retain clean-append and hygiene-hit checks. [class: REPOSITORY_TEST]
-- [ ] Test fallback success observes the committed row while locked, then asserts exactly one matching row after finalize and verifies release and free status. [class: REPOSITORY_TEST]
-- [ ] Inject pre-commit failure: preserve prior bytes/index, warn, continue cleanup, and release the lock; inject post-commit failure: report it, preserve the committed row, and release the lock. [class: REPOSITORY_TEST]
-- [ ] Update Steps 3 and 6 to describe the selected commit and fallback order, the pre-write scan, and the still-nonblocking advisory behavior. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `fix: land guard firing rows with done closeout` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add repeated `--guard-firing` to `commit`; write accepted rows before declared-path staging and the landing sweep, then stage the ledger path so those bytes ride the commit. [class: IMPLEMENTATION_REQUIRED]
+- [x] Before replacing the canonical ledger, scan the serialized candidate using the existing public-hygiene scanner. On a hit, leave ledger bytes unchanged, warn that the advisory row was skipped, and continue the closeout without a new refusal class. [class: IMPLEMENTATION_REQUIRED]
+- [x] With no prior landing, run the checked commit subcommand as a child under the parent lock; capture output/status, warn on failure, continue finalize release/status checks, and never append twice. [class: IMPLEMENTATION_REQUIRED]
+- [x] Before the project commit, child failure restores prior ledger bytes/index; after it lands, preserve the committed row and report later failure without rollback. [class: IMPLEMENTATION_REQUIRED]
+- [x] Test the landing row is written before staging/sweep and committed exactly once; retain clean-append and hygiene-hit checks. [class: REPOSITORY_TEST]
+- [x] Test fallback success observes the committed row while locked, then asserts exactly one matching row after finalize and verifies release and free status. [class: REPOSITORY_TEST]
+- [x] Inject pre-commit failure: preserve prior bytes/index, warn, continue cleanup, and release the lock; inject post-commit failure: report it, preserve the committed row, and release the lock. [class: REPOSITORY_TEST]
+- [x] Update Steps 3 and 6 to describe the selected commit and fallback order, the pre-write scan, and the still-nonblocking advisory behavior. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `fix: land guard firing rows with done closeout` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-10-20-done-setup-classification-stop-holds-lock-blocks-retry.md: covered by Task 1 (terminal setup stops release the acquired generation; wrapper cases witness free-lock stops and held re-entry). Flipped covered in place at authoring closeout; origin file deleted by this completion pass.
+- docs/history/backlog/2026-10-20-finalize-ledger-append-after-landing-strands-dirt.md: covered by Task 2 (guard rows ride the checked commit path; finalize child fallback under the parent lock; pre-write hygiene screen; no post-landing append). Same disposition.
+- docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md: covered by the Serialization decision (plain-commit window accepted with compensating controls; revisit 2027-01-24 or on a witnessed stale-index revert). Same disposition.
+Execution residuals captured as new rows: docs/history/backlog/2026-10-26-setup-no-outcome-pass-acquire-corner.md, docs/history/backlog/2026-10-26-guard-firing-task2-review-candidates.md, docs/history/backlog/2026-10-26-done-lock-span-r1-panel-residuals.md.

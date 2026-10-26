@@ -11,6 +11,7 @@
 - **Environment:** playbook repo, ad-hoc exec worktree landings, 2026-10-22
 - **Suspected root area:** the arm's landing sentence names the lock and the receipt contract but never names `scripts/land_squash.sh land` as the mechanism, so exec sessions hand-compose the landing (manual rebase, `git commit-tree` or `merge --squash`, manual `git update-ref`) and skip the helper's parentage, tree-equality, and reconciliation gates
 Cluster: docs/history/backlog/2026-10-15-codex-stale-worktree-pins-landing-recovery (same surface: the squash-landing route and its helper)
+Cluster: docs/history/backlog/2026-10-26-exec-entry-prompt-shadows-adhoc-arm-machinery.md (same surface: the Ad-hoc arm's landing machinery skipped by dispatching sessions; that row's prompt-shadowing fix composes with this row's helper-pointer fix)
 
 ## Observed vs expected
 

@@ -349,6 +349,61 @@ pin() { # pin <description> <command...>
   return 1
 }
 
+EXEC_PRUNE_RECEIPT_RE='^EXEC-PROMPTS-PRUNE: [[:alnum:]-]+ -> (landing in this commit \(.+\)|[0-9a-f]{7,40}( \((ad-hoc reviewed landing[;:] .+|ad-hoc-superseded repair: .+|mooted-by-events repair: .+)\))?|supersession cleanup \(this commit\): .+)$'
+exec_prune_receipt_matches() { # $1 = complete EXEC-PROMPTS-PRUNE receipt line
+  [[ "$1" =~ $EXEC_PRUNE_RECEIPT_RE ]]
+}
+exec_prune_receipt_file_matches() { # $1 = EXEC-PROMPTS.md path
+  local receipt
+  receipt="$(awk '/^EXEC-PROMPTS-PRUNE:/ { receipt=$0 } END { print receipt }' "$1")"
+  exec_prune_receipt_matches "$receipt"
+}
+exec_prune_receipt_selftest() {
+  local receipt fixture
+  for receipt in \
+    'EXEC-PROMPTS-PRUNE: sample -> landing in this commit (ad-hoc landing)' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742ef' \
+    'EXEC-PROMPTS-PRUNE: sample -> b34c20c4e3def76fdb14780ad1a5eea0486c1504' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (ad-hoc-superseded repair: source row removed)' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (mooted-by-events repair: source row obsolete)' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (ad-hoc reviewed landing; review passed with nested (details) recorded)' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (ad-hoc reviewed landing: review passed with nested (details) recorded)' \
+    'EXEC-PROMPTS-PRUNE: sample -> supersession cleanup (this commit): source row removed'; do
+    exec_prune_receipt_matches "$receipt" || return 1
+  done
+  for receipt in \
+    'EXEC-PROMPTS-PRUNE: sample -> mooted-by-events repair: missing commit witness' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742e' \
+    'EXEC-PROMPTS-PRUNE: sample -> b34c20c4e3def76fdb14780ad1a5eea0486c1504a' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (unknown suffix)' \
+    'EXEC-PROMPTS-PRUNE: sample -> 1b742efd2 (ad-hoc reviewed landing; missing close' \
+    'EXEC-PROMPTS-PRUNE: sample -> landing in this commit (truncated' \
+    'EXEC-PROMPTS-PRUNE: sample -> supersession cleanup (this commit):' \
+    'EXEC-PROMPTS-PRUNE: sample -> unknown receipt form'; do
+    if exec_prune_receipt_matches "$receipt"; then
+      return 1
+    fi
+  done
+  fixture="$(mktemp "${TMPDIR:-/tmp}/pins-exec-prune-receipt.XXXXXX")" || return 1
+  printf '%s\n' \
+    'EXEC-PROMPTS-PRUNE: older -> 1b742efd2' \
+    'EXEC-PROMPTS-PRUNE: newest -> 1b742efd2 (unknown suffix)' > "$fixture"
+  if exec_prune_receipt_file_matches "$fixture"; then
+    rm -f "$fixture"
+    return 1
+  fi
+  printf '%s\n' \
+    'EXEC-PROMPTS-PRUNE: older -> 1b742efd2 (unknown suffix)' \
+    'EXEC-PROMPTS-PRUNE: newest -> 1b742efd2' > "$fixture"
+  if ! exec_prune_receipt_file_matches "$fixture"; then
+    rm -f "$fixture"
+    return 1
+  fi
+  rm -f "$fixture" || return 1
+  return 0
+}
+
 expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, rc >= 2 = grep error (fail), rc 1 = pass
   local desc="$1" pat="$2" f="$3" out rc
   out="$(grep -nF -- "$pat" "$f" 2>&1)"; rc=$?
@@ -549,12 +604,11 @@ pin "deferred slot fit-checked before pricing deferral" grep -qF 'before deferri
 pin "starvation beats pricing never fit" grep -qF 'starvation beats pricing, never the runtime-fit rule' "$QP"
 # quota-aware authoring primitive selection (plan
 # 2026-09-20-quota-aware-scheduling-semantics, Task 5): the D2 quota-signal
-# decision input in SKILL.md and the authoring blueprint's stand-down gate
-# span in prompt-templates.md (the acceptance countability; the plan's
-# Validation block pins the sibling G6 spans author in-session, quota_signal,
-# still plan-uncovered, and in-session authoring primitive)
+# decision input in SKILL.md and the stand-down check now owned by
+# maintenance/template-authoring.md; pin the repeated pre-authoring check so
+# the blocking assertion follows the source that governs this authoring gate.
 pin "D2 quota-signal decision input" grep -qF "quota leg's probe report as a required decision input" "$DE"
-pin "authoring stand-down gate span" grep -qF 're-check the assigned backlog item is still plan-uncovered under the resolved plans directory' "$TA"
+pin "authoring stand-down gate span" grep -qF 'Before authoring, repeat the check.' "$TA"
 # --- clocked operator order pins (plan
 # 2026-10-05-authoring-clocked-resume-order, Task 2) ---
 # The maintenance-side spans the clocked-order machinery rides on: the
@@ -2051,9 +2105,11 @@ heredoc_settle "${PIPESTATUS[0]}"
 # --- quota-blind dispatch primitive choice pins (plan
 # 2026-09-21-quota-blind-dispatch-primitive-choice, Task 4) ---
 # Pins for the quota-state-aware authoring carrier selection, the grep-able
-# quota_signal record token, and the idle authoring payload's
-# re-verification stand-down gate. Presence pins are fixed-string greps in
-# the file's standard idiom. Two pins deviate from plain whole-file greps,
+# quota_signal record token, and the template-owned top-level-uncovered
+# preflight in maintenance/template-authoring.md. This assertion follows that
+# source because it owns the current re-verification gate. Presence pins are
+# fixed-string greps in the file's standard idiom. Two pins deviate from
+# plain whole-file greps,
 # each for a reason this plan's own Task 4 wording requires, implemented in
 # the file's closest established idiom:
 #   - "carrier-selection rule present": the Revisions ledger entry quotes the
@@ -2066,7 +2122,7 @@ heredoc_settle "${PIPESTATUS[0]}"
 #     required (the SKILL.md machine-test prescription and the blueprint's
 #     write prescription must not drift), so the carve-out block's count
 #     idiom is used, one count pin per file, instead of an exists-style grep.
-pin "authoring payload re-verification gate" grep -qF 're-verify the target backlog item still sits at the backlog top level and is still plan-uncovered' "$TA"
+pin "authoring payload re-verification gate" grep -qF 'Before any plan work, top-level uncovered: preflight; no run manifest/claim. Missing: gone.' "$TA"
 pin "quota signal token documented" grep -qF 'quota_signal=' "$QP"
 pin "in-session marker documented" grep -qF '(in-session)' "$SA"
 pin "decision-time probe binding" grep -qF 'the signal is derived at decision time' "$DE"
@@ -3311,7 +3367,10 @@ pin "adhoc kind enum extended append-only" grep -qF '"kind": "execute|author|aud
 pin "PLAN-PROMPTS ad-hoc-superseded prune witness class" grep -qF 'ad-hoc-superseded' "$R"
 pin "PLAN-PROMPTS freeze reopen ad-hoc case" grep -qF 'a freeze recorded for an ad-hoc run claim clears' "$R"
 pin "EXEC-PROMPTS log exists" test -f "$X"
-pin "EXEC-PROMPTS receipt delta named in the log header" grep -qF 'EXEC-PROMPTS-PRUNE: <slug> -> <landing commit>' "$X"
+# The newest EXEC-PROMPTS-PRUNE row is the live receipt witness. Accept each
+# receipt form already used by the log while rejecting unknown header shapes.
+pin "EXEC-PROMPTS receipt grammar examples" exec_prune_receipt_selftest
+pin "EXEC-PROMPTS receipt delta named in the log header" exec_prune_receipt_file_matches "$X"
 pin "investigate work-type verdict span" grep -qF 'work-type verdict' "$I"
 pin "investigate stage 4 re-aimed self-check invocation" grep -qF 'check_investigate_entries.py --log' "$I"
 

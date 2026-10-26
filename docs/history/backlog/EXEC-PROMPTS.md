@@ -1,57 +1,37 @@
 Tracked rolling log of ready-to-dispatch ad-hoc work entries, most urgent first, fed by investigate's work-type verdict and consumed by exec-mode sessions. This log is the exec-mode sibling of `docs/history/backlog/PLAN-PROMPTS.md`: its entries follow that file's Entry template unchanged, and its standing rules apply here by their established labels, with only the deltas stated below.
 
-## scheduling-ask-clock-time-confirmation-clause
+## finalize-honesty-test-coverage-residuals
 
-Added: 2026-10-25, learn+investigate over the 2026-10-24 9h17pm carrier-arming session (origin row below)
+Added: 2026-10-26, learn+investigate over the 2026-10-26 finalize-honesty ad-hoc exec run (the landing panel's watchlist; origin row below); widened 2026-10-26 by a second exec session's witness (the row's item 5: the squash proof fails after a pre-landing rebase; project lesson 256)
 
-Work-type verdict: ad-hoc-able because the arm is one interpretive clause added to an existing guidelines section; no gate, validator, or guard-bearing path is touched, and the ad-hoc eligibility test's small-single-surface shape admits it directly.
-
-Origins:
-- docs/history/backlog/2026-10-25-scheduling-ask-clock-time-confirmation.md
-- docs/history/backlog/2026-10-23-scheduling-asks-rearm-wording-candidates.md (cluster sibling; same verb-contract surface, different clause - its own candidates are separate work)
-
-Urgency: medium - two witnessed correction rounds in one scheduling session (a compact "9-17 pm" token read first as a single 21:00 fire, then as an hourly 21:00-16:59 window, before the intended 21:17 surfaced via operator correction); every future schedule ask carrying the same shorthand re-bites without the clause.
-
-Scope arms:
-- Confirmation clause: the "Scheduling asks (verb contract)" section in `AGENTS.md` gains one sentence: when the ask's time token is a compact `H-M`/`HhMM` form or is otherwise ambiguous, read it as the single time `H:MM` with the am/pm marker applied, and confirm by asking one question whose options each name the CONCRETE resolved clock time (for example "21:17"), never a restatement of the shorthand; no carrier is armed on an inferred reading.
-- Lesson witness cross-link: the clause cites lesson 220 in `docs/maintenance/development_lessons.md` as its witness; no second home is created.
-
-Orientation: read lesson 220 (the 2026-10-24 witness: two avoidable misreads, each patched in place after an operator correction), then the "Scheduling asks (verb contract)" section in `AGENTS.md`; disk re-derivation confirmed that section carries no existing clock-time confirmation rule.
-
-Prompt: Land the one clause per the scope arms; this is removal-shaped prose with no machinery, so no admission wording is owed; run the em-dash added-lines gate and the public hygiene scan; keep the anti-growth balance by not restating the lesson's narrative in the contract.
-
-Rejected alternatives:
-- A pre-arm validation script that parses the ask's time token and refuses ambiguous forms: rejected under the machinery admission protocol for missing incident class - the two witnessed misreads were caught by one clarifying question, not by a checkable artifact, and the false-positive cost is added friction on every schedule ask ("no witnessed incident" of script-catchable misfires beyond the conversational fix) (docs/history/backlog/2026-10-25-scheduling-ask-clock-time-confirmation.md)
-- Route the clause to the runtime overlay recipe in `agents/skills/maintenance/zcode.md` instead: rejected because the witnessed misread happened in an interactive scheduling session whose first-read surface is the verb contract, not a maintenance scheduler turn; the overlay paragraph is the wrong first reader (agents/skills/maintenance/zcode.md)
-- Rely on the private memory note only (no contract text): rejected because a session-private memory does not reach a fresh session's scheduling read set on another host or runtime, which is exactly the repeat surface; the one-clause cost is the smallest arm that removes the witnessed cost (docs/maintenance/development_lessons.md lesson 220)
-- A full time-parsing vocabulary section in the contract: rejected as text over-growth - the shorthand is one notation habit, priced by the repository guidelines' anti-growth rules; one clause covers it (AGENTS.md, Scheduling asks section; witnessed 2026-10-24 operator corrections, lesson 220)
-
-## producer-record-digest-family-routing-note
-
-Added: 2026-10-25, learn+investigate over the 2026-10-25 01:18 exec carrier run (two execute-plan picks; origin row's exec-run witness section)
-
-Work-type verdict: ad-hoc-able because the recommended arm is a body-named routing note on two tracked text surfaces (execute-plan Step 3.1 skill text and the producer's module docstring) with no open design choice; no gate, validator, guard-bearing path, dependency, or state schema changes, so the eligibility test's small-single-surface shape admits it. The row's remaining refactor bullets (self-heal arms, lens-table dedup, flag narrowing) stay open on the row and are NOT consumed by this entry.
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (agents/skills/maintenance/decisions.md): the row's item 5 is a body-named single-surface fix (the squash proof's comparison key in scripts/done_run.sh landing_pending_state, no open design choice once the patch-id comparison is named, no guard-bearing edit path since the arm is warning-grade honesty output, no new dependency, no state-schema or machinery change), and items 1-4 are body-named test additions on a single tracked test surface (scripts/test_done_run_wrapper.py DoneRunFinalizeTest, plus at most one warning-wording line); all five members classify uniformly, so the group routes as one entry to this log.
 
 Origins:
-- docs/history/backlog/2026-10-22-producer-review-findings-followups.md
-- docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md (cluster sibling; same script, internal seam work that is separate from this routing note)
+- docs/history/backlog/2026-10-26-finalize-honesty-test-coverage-residuals.md
 
-Urgency: medium-low - two picks in one exec run each spent a round on `review_record_selection.py verify-digest` refusing producer-emitted records before falling back to the code-family seal; the fallback exists, so no landing was lost, but every exec run that reaches for the producer at Phase 3 re-bites until the routing is written.
+Urgency: medium-high - the squash proof keys on the pre-rebase ledger tip's tree, and the base-freshness gate forces a rebase whenever a peer lands first, so on every rebased landing finalize prints LANDING DEFERRED and withholds the manifest's complete marking for a landing that is on the base branch (witnessed 2026-10-26 after two forced rebases in one closeout); the printed resume duty can never succeed on that ledger, so the honesty arm's false negative now inverts the silent-success defect it closed; the four coverage items ride behind it as before.
 
-Scope arms:
-- Routing note (skill side): execute-plan Step 3.1 names the digest family each instrument owns: `scripts/produce_exec_review_record.py` emits plan-family records (SHA-256 of the plan bytes, `-plan-review-` series, the Phase 4 exec receipt) and `scripts/review_record_selection.py verify-digest` checks code-family records (SHA-256 of `git diff <base>...<head>` bytes); an exec round reviewing the code delta records freshness through the code-family seal (`.ai-playbook/review-certs/<slug>.md`, `family: code`, `range_digest`) and never runs verify-digest over a producer record.
-- Routing note (script side): the producer's module docstring states the same family ownership in one sentence, so a reader of the script learns the boundary without the skill text.
+Scope arms (urgency order):
+0. Rebase-proof squash detection: in landing_pending_state compare content, not identity: derive the branch delta's patch-id (`git diff <merge-base>..<ledger tip> | git patch-id --stable`) and compare it against each scanned base commit's first-parent delta patch-id, so a run branch rebased after its ledger lines were written still proves its squash; keep the tree-identity match as the fast path; add one regression that rebases the run branch onto an advanced base before the squash and asserts the complete marking and the landing_commit= summary (the smaller alternative, rewriting the ledger lines at the rebase step, is the fallback if the patch-id arm cannot be made exact).
+1. Fail-open arm test: finalize with a ledger landing commit and an unresolvable base (no facts base_branch key, no origin/HEAD) or an unreadable ledger tip asserts the "honesty check is skipped" warning, the complete marking, and the landing_commit= summary.
+2. origin/HEAD fallback test: the deferred shape resolved through refs/remotes/origin/HEAD without the facts key still prints LANDING DEFERRED naming the short-name branch (the symbolic-ref fixture pattern exists in test_already_staged_branch_added_deletion_lands_end_to_end).
+3. Child-corner test: the guard-firing child-commit path with a resolvable base on a run branch asserts the summary's branch_commit= naming and the summary-block LANDING DEFERRED emission ("the complete marking above predates this ledger line").
+4. Window bound disposition: pin the 500-commit tree-scan boundary with a boundary test, or amend the deferral warning's wording to name the window and its recovery; do not leave the bound undocumented.
 
-Orientation: read the exec-run witness section of the origin row, then `docs/history/plans/completed/2026-10-20-exec-review-records-at-round-close.md` (the producer's motivating plan: its Why scopes the producer to the execution receipt and findings-bearing plan-family records), then `scripts/review_record_selection.py` module docstring lines on `verify-digest` (the diff-bytes derivation), then lesson 30's 2026-10-25 extension in `docs/maintenance/development_lessons.md` (the producer is single-worker and plan-series named; multi-worker code-review records are hand-composed).
+Orientation: read the origin row (item 5 first), then the landed arms (scripts/done_run.sh landing_pending_state plus the cmd_finalize marking and summary steps; the tree scan is the proof whose key the rebase invalidates, introduced 2026-10-26 by landing 976aca51a to close lesson 247's silent-deferral defect) and the four existing regressions in DoneRunFinalizeTest; the fixture pieces each need already exist in the class (facts_with_base_branch, write_ledger, the commit-tree squash simulation, and the acquire-then-finalize resume shape from test_finalize_rerun_after_squash_lands_consumes_withheld_state).
 
-Prompt: Land the two routing-note arms per the scope arms; the change is prose only, so no admission wording is owed; pay for the skill-text growth in the same file per the repository guidelines' anti-growth rules (collapse a restatement in Step 3.1 of equal size); run `python3 scripts/validate_review_staging.py --selftest`, the em-dash added-lines gate, and the public hygiene scan before the commit; do not touch `scripts/review_record_selection.py` behavior.
+Prompt: Land item 0 first (the patch-id comparison in landing_pending_state plus its rebase regression), then the four coverage arms as focused regressions in DoneRunFinalizeTest in urgency order (items 1-3 are test additions; item 4 is a test or a one-line warning amendment in scripts/done_run.sh); run the wrapper suite, the em-dash added-lines gate, and the public hygiene scan; delete the origin row per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section in the same change.
 
 Rejected alternatives:
-- Extend the producer with a `--range <base>...<head>` arm emitting code-family records: rejected as the larger arm with open design choices (the `-code-review-` naming grammar, the multi-worker panel shape the single-worker producer cannot render) that this witness does not price; it stays on the origin row's refactor list (docs/history/backlog/2026-10-22-producer-review-findings-followups.md)
-- Teach `verify-digest` to accept plan-family records by reading the sidecar's digest kind: rejected because the verifier's value is diff freshness over the reviewed range, and accepting a plan-bytes digest would pass a stale code round whose plan did not change (scripts/review_record_selection.py)
-- Remove `verify-digest` (remove-or-keep axis): rejected because it is a landed mechanism with independent protective value for code-family records, and the witnessed cost is misrouting, not a false refusal (scripts/review_record_selection.py)
-- Add a pre-flight gate in execute-plan that refuses running verify-digest over a `-plan-review-` record: rejected under the machinery admission protocol for missing incident class; no witnessed incident shows a wrong landing, only wasted rounds, and the routing note removes the cost without a blocker (docs/history/backlog/2026-10-22-producer-review-findings-followups.md)
-- Leave the knowledge in the private memory note only: rejected because a fresh exec session on another host never reads it, which is the exact repeat surface witnessed twice in one run (docs/maintenance/development_lessons.md)
+- Remove the deferred-squash honesty arm because its proof misfires after a rebase: rejected on the remove-or-keep axis; the arm closed a witnessed silent-success defect that cost a full manual re-land (project lesson 247, landing 976aca51a), so the correct shape is keep-and-widen the proof's key, not removal (scripts/done_run.sh landing_pending_state)
+- Refresh the owned-commits ledger at every rebase instead of changing the proof: kept only as the fallback because it adds a duty to every rebase site (the deferred-landing restart path, the pre-lock probe rebase) while the patch-id comparison fixes the proof once at its one consumer (agents/skills/execute-plan/worktree-first.md lifecycle step 4 names both rebase sites)
+- Read landedness from the land-worktree receipt under docs/tmp/landing-receipts instead of scanning: rejected because the receipt is a gitignored session artifact written by the landing helper's reconcile step and absent for primary-checkout landings, so finalize would gain a second proof path with its own absence arm (scripts/land_squash.sh land-worktree reconcile-receipt line)
+- A gate refusing finalize when the ledger tips are not ancestors of the branch tip: rejected under the machinery admission protocol - the witnessed incident is a false warning, not a wrong landing, and the false-positive cost is every legitimately rebased closeout ("no witnessed incident" of a wrong landing from the proof)
+- Fold the four arms in the landing run itself: rejected because that run was operator-bounded to one pick and its blocking-class and silent-success-class findings already folded; the row is the sanctioned non-blocking watchlist home (docs/history/backlog/2026-10-26-finalize-honesty-test-coverage-residuals.md, Suggested fix)
+- A coverage validator asserting the finalize test matrix mechanically: rejected under the machinery admission protocol - no witnessed incident of a coverage gap hiding a wrong landing (the uncovered arms fail as loud warnings), and the false-positive surface is every future finalize arm change ("no witnessed incident" of script-catchable misfires)
+- Leave the asks on the row with no log entry: rejected because a backlog row is not a dispatch surface - an exec-mode session consumes this log's entries, and the row's four asks stay invisible to the lane that would run them (agents/skills/maintenance/decisions.md, Exec-mode selection rule)
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arms are test additions and at most one warning-wording line; the machinery arm is rejected with the missing-incident absence named above.
 
 ## claim-release-operand-source-flag
 
@@ -107,6 +87,62 @@ Rejected alternatives:
 Standing pre-authorization: the table repair arm.
 
 Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the change is a data repair of one tracked file; the gate alternative is rejected with the missing-incident absence named above.
+
+## docs-branch-stale-selector-and-closeout-row
+
+Added: 2026-10-26, investigate over the open docs-branch sync cluster surfaced by the current learn pass
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the selector origin names one obsolete test on the tracked docs-branch test surface, and the closeout origin's producer-agnostic mirror-before-closeout sentence is already landed in `agents/skills/done/SKILL.md` Step 3; deleting the stale test and closing the origin rows require no design choice, dependency, guard-bearing change, or machinery change. The cluster's runtime-floor origin routes separately to the plan log because it retains an open choice between interpreter selection and an actionable minimum-version refusal.
+
+Origins:
+- docs/history/backlog/2026-10-09-docs-branch-step2-selector-test.md
+- docs/history/backlog/2026-10-22-done-docs-restore-untracked-record-loss.md
+
+Urgency: medium - one row's only remaining candidate is a new loudness mechanism without recurrence evidence, while the producer-agnostic record mirror is already part of the done closeout; the other is a known stale test for a removed selector (the two origin rows).
+
+Scope arms (urgency order):
+1. Re-derive the current mirror-before-closeout rule and the selector's obsolete expectations, then remove the selector test and close both origin rows in the same reviewed ad-hoc landing.
+2. Keep the selector test and rewrite it to assert only the canonical runner behavior if the current focused suite does not already cover that contract.
+
+Orientation: read both origin rows, the completed docs-branch scope-and-tmp-retention plan (which replaced selector-based execution with the canonical sync runner), `scripts/test_docs_branch_step2_selector.py`, the focused docs-branch sync tests, and `agents/skills/done/SKILL.md` Step 3's already-landed mirror-before-closeout sentence; the current session's restore observation is expected add-only archive restoration and does not establish a new deletion defect.
+
+Prompt: Using the Ad-hoc backlog arm, verify that the docs-branch selector is retired and its useful canonical-runner behavior is covered by the focused sync suite; remove the obsolete selector test if so. Verify the done Step 3 mirror rule covers the closeout row's producer-agnostic preservation arm, and that no later loss witness supersedes its evidence; then delete both origin rows as covered by the same landing. Do not add a loudness check, validator, or other machinery for the unattributed single incident. Run the focused existing sync suite, the em-dash added-lines gate, and the public hygiene scan; run the focused review panel required by the ad-hoc arm and land through its declared scope.
+
+Rejected alternatives:
+- Add a closeout-time watcher that detects a record disappearing between reads: rejected under the Machinery admission protocol because the row has one unattributed historical witness and no demonstrated recurrence or expected catch rate; the mirror-before-closeout rule already preserves records independently of producer attribution (witnessed in `docs/history/backlog/2026-10-22-done-docs-restore-untracked-record-loss.md`).
+- Retain the selector test unchanged: rejected because it asserts a removed backend-selection contract and is recorded as failing against the canonical single-runner design (witnessed in `docs/history/backlog/2026-10-09-docs-branch-step2-selector-test.md`).
+- Rewrite the selector test around behavior already owned by the focused canonical sync suite: rejected if the focused suite confirms the coverage, because that leaves duplicate coverage of the retired selector surface (witnessed in `docs/history/backlog/2026-10-09-docs-branch-step2-selector-test.md`).
+
+Machinery admission: no gate, validator, lock, ledger, or required ceremony is added; the new closeout watcher is rejected because no witnessed recurring incident or catch-frequency evidence supports it (the closeout origin row).
+
+
+## worktree-survey-live-peer-hold-clean-committed
+
+Added: 2026-10-26, learn+investigate over the 2026-10-26 interactive exec mandate session (the session that landed the survey arm's ad-hoc sentence in 68599a00e; origin row below)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (agents/skills/maintenance/decisions.md): a body-named single-surface fix (one clause on the survey arm's ad-hoc sentence in agents/skills/execute-plan/worktree-first.md) on a tracked skill surface, no open design choice (the clause names the git-derivable liveness witness project lesson 233 already states), no guard-bearing path, no new dependency, no state-schema or machinery change, and no plans-root coverage; the origin is a singleton, so it routes as one entry to this log.
+
+Origins:
+- docs/history/backlog/2026-10-26-worktree-survey-live-peer-hold-clean-committed.md
+
+Stage 1 roster: the singleton origin above. The adhoc-run-pick-time-freeze-mark entry in this log shares the parallel-session target-collision class but owns the log-side freeze surface, not the survey arm, and is already represented, so it is adjacent context, not a member.
+
+Urgency: medium-low - the witnessed shape (two clean peer worktrees holding unlanded post-review commits) read as unheld under the landed signal, and only a runtime-specific session-store probe produced the skip; a reader without that probe provisions a parallel branch and collides at landing; both witnessed occurrences were caught before any edit, so no landing was lost, and the pick-time freeze entry narrows the window from the log side.
+
+Scope arms:
+- Hold-signal clause: the survey arm's ad-hoc sentence gains one clause: a same-subject worktree holding uncommitted edits, or whose HEAD commit postdates the worktree's creation and is not yet an ancestor of the base branch (project lesson 233's re-point witness), is a live peer hold, and the run skips the target and reports.
+
+Orientation: read the origin row, then the ad-hoc sentence in the survey arm of agents/skills/execute-plan/worktree-first.md lifecycle step 1 (landed 68599a00e), project lesson 233 in docs/maintenance/development_lessons.md (the three-conjunct liveness test whose third conjunct is the signal), and the Exec-mode selection rule's held-candidate fall-through in agents/skills/maintenance/decisions.md, which the survey-time skip composes with. Disk re-derivation at the witnessed HEAD: the sentence names only the uncommitted-edits signal.
+
+Prompt: Using the ad-hoc backlog arm, land the one clause per the scope arm in agents/skills/execute-plan/worktree-first.md; prose only, no machinery, so no admission wording is owed; run the em-dash added-lines gate and the public hygiene scan; keep the byte change inside the survey arm's ad-hoc sentence; delete the origin row per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section in the same change.
+
+Rejected alternatives:
+- Name a host session-store probe in the survey arm: rejected because skill text stays tool-agnostic and the store is runtime-specific, while the git-derivable re-point witness yields the same verdict without a runtime dependency (the repository guidelines' tool-agnostic design rule; docs/maintenance/development_lessons.md lesson 233)
+- Rely on the pick-time freeze mark alone: rejected as the single owner because the freeze lands only when a session reaches its mark step, so a worktree created before that landing or by a session that skipped the step still needs the survey-side signal (docs/history/backlog/EXEC-PROMPTS.md, the adhoc-run-pick-time-freeze-mark entry)
+- Treat every same-subject worktree as a hold regardless of state: rejected because a stale strand (clean, committed, its session dead, lesson 233's conjuncts failing) is exactly the shape the recovery path must remain able to adopt (agents/skills/execute-plan/worktree-first.md, the Recovery path's restored-worktree resume)
+- A gate refusing provisioning when a same-subject worktree exists: rejected under the machinery admission protocol - "no witnessed incident" of a duplicate landing, both near-misses having been caught by reading before any edit, and the false-positive cost is every legitimate distinct-run second worktree the survey arm already sanctions
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arm is one prose clause; the gate alternative is rejected with the missing-incident absence named above.
 
 ## review-worker-scratch-worktree-cleanup-clause
 
@@ -217,6 +253,8 @@ EXEC-PROMPTS-PRUNE: worktree-transfer-in-copies-review-certs-dir -> landing in t
 
 EXEC-PROMPTS-PRUNE: child-outcome-evidence-resolution -> landing in this commit (ad-hoc landing: the fast re-dispatch bullet and the rate-limited ingestion bullet in agents/skills/maintenance/failure-cap.md gained the claim-derived worktree tier as a one-sentence resolution order (recorded worktree, then the claim file branch-line worktree via git worktree list with first-observation backfill onto the entry worktree field, then the primary checkout tmp fallback last), and the two early outcome checks now evaluate the progress predicate for children whose outcome is pending or in_progress with the six-hour horizon, vanished-from-listing rule, and provider-stop exception unchanged; growth paid by consolidating the module restated manifest path resolution in the fast re-dispatch bullet into the by-reference form, net +435 bytes; em-dash added-lines gate and public hygiene scan pass; pins suite fails at HEAD on the pre-existing authoring stand-down gate span pin, unrelated; origin row deleted per the covered-row rule with the claims-dir-resolution sibling Cluster pointer retargeted to the landed surface in the same change)
 
+EXEC-PROMPTS-PRUNE: scheduling-ask-clock-time-confirmation-clause -> landing in this commit (ad-hoc reviewed landing: the AGENTS.md Scheduling asks (verb contract) section gained one confirmation bullet reading a compact H-M/HhMM or otherwise ambiguous time token as the single time H:MM with the am/pm marker applied and requiring one CONCRETE-clock-time confirmation question whose options name the resolved time before any carrier is armed on an inferred reading, citing lesson 220 as its witness with no second home created; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule, sibling Cluster pointer removed in the same change)
+
 ## state-file-schema-declaration-reconciliation
 
 Added: 2026-10-25, learn+investigate over the 2026-10-25 interactive exec run (the child-outcome-evidence-resolution landing's deferred r1 finding) and the 2026-10-24 plan-review certification residual
@@ -243,3 +281,117 @@ Rejected alternatives:
 - Remove the outcome enum values so the example stops drifting: rejected because the value list is the contract's machine-readable form and the failure-cap predicates cite it by name; removing it widens the ambiguity the reconciliation closes (agents/skills/maintenance/state-file.md)
 - Keep the knowledge in the review record's watchlist only: rejected because a watchlist row is session-scoped reading, while a fresh implementer reads the module, which is the exact misdirection surface (agents/skills/maintenance/failure-cap.md)
 - Split the two rows into separate entries: rejected because the members share one surface, one defect class (declarations lagging live state), and one edit session, the grouping being the Stage 1 roster (docs/history/backlog/2026-10-24-maintenance-state-notes-schema-contract.md)
+
+## release-sibling-report-orphan-branch-guard
+
+Added: 2026-10-26, learn+investigate over the 2026-10-26 release run (Step 3 report output)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named single-surface fix (one guard clause in the report-only loop of `agents/skills/release/SKILL.md` Step 3) on a tracked skill surface; the loop runs after publish and reports only, so no guard-bearing path, state schema, or machinery is touched, and no design choice is open.
+
+Origins:
+- docs/history/backlog/2026-10-26-release-sibling-loop-flags-orphan-branch.md
+
+Urgency: low - cosmetic noise in an otherwise clean release summary (one stray `fatal:` line and one false sibling report per release in any repository carrying the docs-branch skill's orphan branch); no decision depends on it.
+
+Scope arms:
+- Guard clause: in the Step 3 block's `while read -r ref sha` loop, compute `git merge-base "$sha" "$BACKUP_REF"` into a variable first; when it is empty (no common ancestor), `continue` or print one line naming the branch as unrelated history this release did not scan, and run the `--is-ancestor` check only on a non-empty value.
+- Anti-growth: the loop's surrounding comment is tightened by the bytes the clause adds.
+
+Orientation: `agents/skills/release/SKILL.md` Step 3 block (loop from ed4a0ff55); `agents/skills/docs-branch/SKILL.md` maintains the orphan `docs` branch that triggers the case on every release (disk re-derivation: `git merge-base docs main` exits non-zero at HEAD); the 2026-10-26 run's Step 3 output is quoted in the origin row.
+
+Prompt: Using the ad-hoc backlog arm, land the one guard clause per the scope arms in `agents/skills/release/SKILL.md` Step 3; the change is skill text with no machinery, so no admission wording is owed; keep the Step 3 summary item 5 wording unchanged; run the em-dash added-lines gate and the public hygiene scan; delete the origin row per the covered-row rule.
+
+Rejected alternatives:
+- Leave the loop and read past the fatal: rejected because the skill asks the agent to relay the sibling list verbatim and the false report misstates what publishing the orphan branch would do (agents/skills/release/SKILL.md)
+- Move the loop into `scripts/release-rewrite.sh` or the push script: rejected because the report is intentionally outside the gated scripts and the move would grow a guard-bearing path for a cosmetic fix (scripts/release-rewrite.sh)
+- Exclude the `docs` branch by name: rejected because the defect is the missing no-ancestor case, which any orphan branch triggers (agents/skills/docs-branch/SKILL.md)
+
+## boundary-plan-write-persistence-verification
+
+Added: 2026-10-26, learn+investigate over the 2026-10-26 03:34 exec run (three silent plan-file checkbox-write losses in one execution run; lesson 241 records the per-run remedy, this entry lands it as operative skill text)
+
+Work-type verdict: ad-hoc-able because the member carries a body-named single-surface fix with no open design choice: one persistence-verification clause appended to the light boundary's plan-edit step in `agents/skills/execute-plan/SKILL.md` (Step 1.4, Light boundary, line ~494), a tracked skill surface, no guard-bearing path, no new dependency, no state-schema change, no machinery (the eligibility test's body-named-fix clause, the Ad-hoc backlog arm bullet in `agents/skills/maintenance/decisions.md`, admits it). Group split: the roster's second member (`2026-10-10-execute-plan-plan-digest-handoff-drift.md`) is plan-worthy - its expected fix is a receipt-backed manifest-transition mechanism in `scripts/execute_plan_runtime.py`, a validator-adjacent surface - so it does not ride this entry; its reciprocal Cluster line records the grouping.
+
+Origins:
+- docs/history/backlog/2026-10-26-boundary-plan-write-persistence-verification.md
+- docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md (plan-worthy member, split out per the composition rule)
+
+Urgency: low - the witnessed cost is one re-mark plus one re-commit per occurrence (three in one run), and lesson 241's per-boundary advice already bounds the damage; the residual cost is that the verification lives only in a lessons row a fresh implementer never reads.
+
+Scope arms:
+- Verification arm: the Step 1.4 light boundary's plan-edit step gains one clause: after the boundary commit, re-derive the plan's box state from disk and from the commit (`git show --stat HEAD` names the plan file; the unchecked-box count dropped by the number of boxes just marked), and on a mismatch re-apply the edit as its own verified commit before the boundary stands as resumable state.
+- Mirror arm: where the boundary contract is restated by reference only, no text changes (the Reference contract rule); the clause lands once in the boundary's own home.
+
+Orientation: read lesson 241 in `docs/maintenance/development_lessons.md`, then the light boundary's four legs at `agents/skills/execute-plan/SKILL.md` Step 1.4 (disk re-derivation: `grep -c '^### Step 1.4' agents/skills/execute-plan/SKILL.md` returns 1 at HEAD, and no persistence-verification wording exists there yet: `grep -c 'unchecked-box count' agents/skills/execute-plan/SKILL.md` returns 0). Introduction story: the boundary's commit leg trusts whatever the staging call picked up; the 2026-10-26 run witnessed three boundary calls where a successful in-call plan-file write produced a commit without the plan file and a clean worktree at HEAD, and the loss surfaced only at a Phase 3 review lens.
+
+Prompt: Land the verification arm in `agents/skills/execute-plan/SKILL.md` Step 1.4 only; one clause, no narrative, no restatement of lesson 241's story; run the em-dash added-lines gate and the public hygiene scan over the changed file; pay growth by trimming one restated sentence in the same section; no admission wording is owed because no gate, validator, or ceremony is added.
+
+Rejected alternatives:
+- Move plan-file edits out of shell calls into the host write-tool path: rejected because the loss mechanism is unresolved (a plan-protection hook and a racing peer process are both unproven suspects), so rerouting the write path prices a workflow change against an unlocated cause; the verification clause catches the loss regardless of mechanism (witness: lesson 241, docs/maintenance/development_lessons.md)
+- A post-commit plan-box counter validator gate on every boundary: rejected under the machinery admission protocol - no witnessed incident of a loss that survived the verification clause's detection, and the false-positive surface is every legitimate mid-run plan edit (docs/history/backlog/2026-10-26-boundary-plan-write-persistence-verification.md)
+- Instrument the harness to root-cause the reverting mechanism first: rejected as premature pricing - one witnessed run, one pattern; the smallest arm that removes the witnessed cost (detect and re-apply at the boundary) outranks the architectural one; revisit if the loss re-witnesses after the clause lands (docs/maintenance/development_lessons.md lesson 241)
+- Fix only the manifest projection (the plan-worthy sibling's shape): rejected for this member because the runtime manifest is not implicated in the witnessed losses - the boxes were lost from the plan bytes and the commit, not from `runtime_state.json` (docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md, split disposition)
+
+## investigate-cross-run-fix-recurrence
+
+Added: 2026-10-26, operator-directed workflow-loop analysis
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/SKILL.md`): one clause in the existing Stage 2 text of `agents/skills/investigate/SKILL.md`, a single tracked skill surface with no open design choice; it adds no gate, validator, lock, ledger, or required ceremony.
+
+Origins:
+- docs/history/backlog/2026-10-26-investigate-cross-run-fix-recurrence.md
+
+Stage 1 roster: the singleton origin above; the Stage 0 corpus survey found no open, uncovered sibling sharing this cross-run classification mechanism.
+
+Urgency: low - the recent history contains adjacent follow-ups but does not prove a same-root recurrence; the October 26 lock-release change completed a missing recovery path after the October 25 closeout landing, while existing review-plan and execute-plan rules already handle recurrence within their respective runs.
+
+Scope arms:
+- Cross-run comparison: add one concise instruction to Stage 2 for cases where the new issue plausibly overlaps prior workflow work: compare the prior origin and landed fix with later incident or landing evidence, then record in the existing Orientation or recommendation whether the relationship is recurrence after a fix, regression from a fix, a missing complement, a separate root, or inconclusive. Cite the earlier fix and later witness for recurrence claims. Keep the comparison bounded to relevant history; add no record surface or ceremony. Pay for the added bytes by trimming equivalent wording in Stage 2.
+
+Orientation: read the origin row; `agents/skills/investigate/SKILL.md` Stages 2-3; the covered review-plan nonconvergence origin and completed execute-plan recurrence plan; `docs/history/backlog/2026-10-19-dated-record-stamp-audit-arm.md`, `docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md`, and `docs/history/backlog/2026-10-04-maintenance-doc-hygiene-review.md`; then inspect commits `058bbb7e0` and `3005cda9b`. The dated-stamp and landing-route rows own specific producer and consumer defects, while the October 25/26 closeout pair is a missing recovery complement, not proof of the same bug recurring.
+
+Prompt: Land the bounded cross-run comparison clause in `agents/skills/investigate/SKILL.md` Stage 2 only if the investigation confirms the current stage leaves the relationship decision materially implicit; otherwise record that Stage 2 is already adequate and leave the skill unchanged. Keep the instruction limited to plausibly related history and the existing Orientation or recommendation field. Add no machinery or required ceremony. Balance any skill-file growth by deleting equivalent bytes in the same change under the repository's skill text anti-growth rules. Run the public hygiene scan and the em-dash added-lines gate over touched files; do not broaden scope to the specific dated-stamp, landing-route, or maintenance-hygiene mechanisms.
+
+Rejected alternatives:
+- Add a cross-run recurrence ledger, validator, or gate: rejected under the Machinery admission protocol - no witnessed incident shows existing history cannot support the comparison, no repeated-root catch frequency is established, and the false-positive cost is durable classification noise on unrelated neighboring issues (origin: `docs/history/backlog/2026-10-26-investigate-cross-run-fix-recurrence.md`).
+- Merge this item with the dated-stamp audit or landing-route omission: rejected because those rows name specific field and consumer-skill mechanisms with narrow remedies, while this item concerns how investigations relate potentially connected incidents across runs (`docs/history/backlog/2026-10-19-dated-record-stamp-audit-arm.md`; `docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md`)
+- Rely only on the run-local recurrence policies: rejected because the review-plan and execute-plan policies scope their comparisons to one review or execution run and do not classify a later incident against an earlier landed fix (`agents/skills/review-plan/SKILL.md`; `agents/skills/execute-plan/SKILL.md`)
+
+## weekly-workflow-loop-review
+Frozen: ad-hoc worktree `2026-10-26-weekly-workflow-loop-review` (2026-10-26)
+
+Added: 2026-10-26, operator-directed decision to make workflow reflection recurring
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): one body-named, single-surface change adding a tracked task procedure under `docs/maintenance/recurring-tasks/`, with the cadence, report location, read-only boundary, and pilot decision already chosen; the existing registry supplies scheduling and task state, so no guard, state-schema, dependency, or gate change is needed.
+
+Origins:
+- docs/history/backlog/2026-10-26-weekly-workflow-loop-review.md
+
+Stage 1 roster: singleton origin above. The prior cross-run recurrence item is already represented in `EXEC-PROMPTS.md` and concerns classification within an individual investigation, so it is not a sibling of this portfolio-level report task.
+
+Urgency: low - the user requested the review, but one manually requested reflection does not establish a recurring same-root failure; the audit is read-only, though each run consumes the existing audit dispatch and authoring-lane slot.
+
+Scope arms:
+- Weekly portfolio reflection: add one `kind = "audit"` task file at a seven-day cadence. It uses the registry's default per-task state and `next_due`, writes one dated report under the facts-resolved `metrics_dir`, and reads only repository backlog rows, both prompt logs, relevant plans/dispositions, and commit history. On cold start, analyze the prior 30 complete days; afterward, analyze the interval since the previous report. Count work by distinct origin groups and separately count associated or unclassified commits. Categorize work as new capability, defect fix, workflow follow-up, or unknown; for plausible follow-ups, record recurrence, regression, missing complement, separate root, or inconclusive with origin and landing witnesses. End with an evidence-rated conclusion of improving, repeat-root pattern, mixed, or insufficient evidence; compare counts only when their windows and denominators match. Never infer recurrence from timing alone. After four reports, include a pilot-usefulness recommendation for the operator; do not change priorities, file backlog items, or introduce a gate.
+
+Orientation: read the origin; `docs/maintenance/recurring-tasks/weekly-skill-review.md` and `docs/maintenance/recurring-tasks/friction-audit.md`; the generic registry consult in `agents/skills/maintenance/survey-arms.md`; the registry's configuration and state defaults in `agents/skills/maintenance/SKILL.md`; completed plan `docs/history/plans/completed/2026-10-03-recurring-task-registry.md` (especially its weekly-skill-review registration decision); completed plan `docs/history/plans/completed/2026-09-23-ai-harness-friction-audit.md`; the per-item cross-run treatment in `docs/history/backlog/2026-10-26-investigate-cross-run-fix-recurrence.md`; and the standard `metrics_dir` key and `.ai-playbook/metrics/` fallback in `agents/skills/docs-branch/SKILL.md`. The registry's default state record already supplies the due anchor.
+
+Prompt: Add only `docs/maintenance/recurring-tasks/weekly-workflow-loop-review.md` with the header `id = "weekly-workflow-loop-review"`, `cadence_days = 7`, and `kind = "audit"`; use the registry's default state record, whose `next_due` is the due anchor, and resolve the dated local report home from `metrics_dir`. Keep the first report's window to the prior 30 complete days and later windows to the time since the previous report. Read repository artifacts only, state denominators and unclassified work explicitly, and make every recurrence or regression claim cite the earlier origin/fix and later witness; mark unresolved relations inconclusive. End each report with an evidence-rated conclusion of improving, repeat-root pattern, mixed, or insufficient evidence; compare counts only when windows and denominators match. The report is read-only and report-only: at report four, recommend whether to keep, narrow, or remove the pilot task for the operator to decide; never alter priorities or create backlog items. Do not add a skill, script, scheduler field, separate ledger, gate, or task-specific runtime machinery; the generic registry already lists, schedules, and records task state. Run the public hygiene scan and em-dash added-lines gate on the task file. Do not broaden the task to skill-text audits or the separate ad-hoc review-path issue.
+
+Rejected alternatives:
+- Create a workflow-reflection skill called by every investigate run: rejected because investigate's existing unit is one backlog group and emits one dispatch prompt, so a corpus-wide reflection would be repeated per item instead of run on its own cadence (`agents/skills/investigate/SKILL.md`)
+- Fold the reflection into weekly-skill-review: rejected because that task rotates a bounded skill-text corpus and reports skill defects, while this review needs a whole-portfolio time window and task/landing relationships; combining them couples distinct report scopes to the skill rotation cursor (`docs/maintenance/recurring-tasks/weekly-skill-review.md`)
+- Add a separate trend ledger, database reader, or causal dashboard: rejected under the Machinery admission protocol - no witnessed incident shows the existing backlog, prompt logs, plans, commits, and task state cannot support this report, and the false-positive cost is durable causal labels from incomplete telemetry (`docs/history/plans/completed/2026-09-23-ai-harness-friction-audit.md`)
+- Keep reflection on demand only: rejected because it leaves the requested weekly cadence dependent on the operator remembering to ask, while the existing registry already provides a weekly due signal (`agents/skills/maintenance/survey-arms.md`)
+
+EXEC-PROMPTS-PRUNE: reduced-toolset-rearm-park-broadcast-clause -> landing in this commit (ad-hoc landing: the Reduced-toolset terminal rung in agents/skills/maintenance/zcode.md gained one sentence requiring a session parking pending_rearm on absent mutation primitives to also append one memory-index line naming the park and the missing primitives, so a primitive-capable session sees the discharge duty without reading the state file first; em-dash added-lines gate and public hygiene scan pass; pins suite fails at HEAD on the pre-existing authoring stand-down gate span pin, unrelated; focused panel (panel_mode: focused, docs-only normative prose) contract-docs + correctness-completeness, r1 ready=yes final 0 blocking, three Lows on the record watchlist; origin row deleted per the covered-row rule)
+
+EXEC-PROMPTS-PRUNE: seal-receipt-placeholder-path-contract -> landing in this commit (ad-hoc landing: the Receipt content contract paragraph in docs/history/certification-seal-landing-diagnostics.md gained the masking contract sentence - every embedded path, command string, and captured output uses the procedure's placeholder tokens or a repo-relative path, never a resolved filesystem root, with malformed receipts expressed compliantly before appending; paid by trimming the warning-value parenthetical and compressing the fallback narration the outcome matrix owns, header net -39 bytes vs base; em-dash added-lines gate and public hygiene --files scan over the ledger pass; focused panel (panel_mode: focused, docs-only normative prose) contract-docs + correctness-completeness, r1 one blocking fold (write-failures routing collided with the fallback ledger's append-failure-only contract, replaced by the mask-before-append duty; token parenthetical made illustrative), r2 ready=yes final 0 blocking; origin row deleted per the covered-row rule and its two 2026-10-21 sibling Cluster pointers retargeted to this entry)
+
+EXEC-PROMPTS-PRUNE: unattended-ambiguous-clock-ask-disposition -> landing in this commit (ad-hoc landing: the AGENTS.md clock-time confirmation bullet gained the unanswerable-operator disposition sentence - an automation-born or otherwise unattended session records the ambiguity, arms no carrier, and reports the ask as unscheduled per the section's convention; em-dash added-lines gate and public hygiene scan pass; focused panel (panel_mode: focused, docs-only normative prose) contract-docs + correctness-completeness, r1 ready=yes zero blocking, one minor fold (the covered annotation names itself as the candidate's requested wording pass) plus three Lows on the record watchlist; origin row 2026-10-23-scheduling-asks-rearm-wording-candidates.md stays open for candidates 1-3 with Candidate 4 annotated COVERED, no row deletion)
+
+EXEC-PROMPTS-PRUNE: done-finalize-deferred-squash-silent-success -> landing in this commit (ad-hoc landing: the finalize leg in scripts/done_run.sh gained the deferred-squash honesty arms - a ledger landing commit not on the base branch (ancestry check or the squash-proof tree scan; base from the facts base_branch key, then origin/HEAD) prints the refusal-grade LANDING DEFERRED warning naming the merge-lock holder label and the resume duty with the branch tip, the landing summary names branch_commit= instead of landing_commit= while the squash pends (the child-commit corner prints the same deferral when the ledger's first line postdates the marking), the landing-cost telemetry line waits for the landed state, and the run manifest's complete marking is withheld with the checkpoint kept until the squash lands; a landed commit keeps the current success shape; wrapper suite regressions pin the held-lock deferral, the resume completion of the withheld state, the direct-base landed shape, and the squash-proof tree match, suite 151 passed; origin row deleted per the covered-row rule and the residuals row's stale Cluster pointer to it removed in the same change)
+
+EXEC-PROMPTS-PRUNE: worktree-adhoc-provisioning-text-gaps -> landing in this commit (ad-hoc landing: the lifecycle step 1 survey arm gained the ad-hoc topic-key sentence (match each origin row name, the entry's own slug, and their abbreviated variants; a same-subject worktree holding uncommitted edits is a live peer hold, skip and report), the Transfer-in implementation block gained the mirror-skip sentence (a run writing its review records directly to the primary reviews home skips the fence's two copy legs while keeping its resolution and mkdir legs; the copy legs are for plan runs whose readiness gate and review workers read the worktree-side copy), and the lifecycle step 4 closeout-rider enumeration gained the receipt-paired removal clause (an EXEC-PROMPTS-PRUNE receipt lands in the same change that removes the entry section the receipt names) with its opening conditional widened to ad-hoc maintenance landings so the clause binds the class that appends the receipt; prose only, no machinery; em-dash added-lines gate and public hygiene scan pass; focused panel (panel_mode: focused, docs-only normative prose) contract-docs + correctness-completeness, r1 one blocking fold (the rider conditional excluded ad-hoc landings) plus one Medium and three Low wording folds, r2 confirm; all three origin rows deleted per the covered-row rule and this entry's section removed in the same change)
+
+EXEC-PROMPTS-PRUNE: producer-record-digest-family-routing-note -> landing in this commit (ad-hoc landing: execute-plan Step 3.1 gained the Digest-family ownership paragraph naming the digest family each freshness instrument owns (producer = plan-family -plan-review- records over the plan-bytes SHA-256, plan-review record freshness owned by the review-plan mechanical gate's --source-plan check, the Phase 4 exec receipt sharing that digest domain; verify-digest = code-family over the git diff <base>...<head> bytes SHA-256, never accepting a producer record; exec rounds record code freshness through the Round-close seal), the Round-close seal paragraph's duplicated checker clause collapsed in the same file as the growth payment, and the producer module docstring states the same family boundary in one sentence; focused panel (panel_mode: focused, docs-only) contract-docs + correctness-completeness r1 6 raw / 4 staged (two echo pairs), all four folded (receipt clause recast to a shared-digest-domain statement, plan-family checker pointer restored, docstring exec-round prescription dropped, seal facts replaced by a Round-close-seal pointer), r2 both workers confirm all four resolved, verdict ready=yes final 0 blocking; validate_review_staging --selftest, em-dash added-lines gate, public hygiene scan pass; origin row 2026-10-22-producer-review-findings-followups.md stays open with its routing-note bullet annotated landed in the same change)

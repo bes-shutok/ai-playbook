@@ -1,6 +1,6 @@
 # Resumed closeout runs cannot update ownership claims through the setup wrapper
 
-- **Status:** open
+- **Status:** covered (docs/history/plans/completed/2026-10-25-done-run-resume-ownership-gap.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Skill/step:** `agents/skills/done/SKILL.md` Step 0; `scripts/done_run.sh` setup and `scripts/done_sweep_gates_lib.py` write-manifest

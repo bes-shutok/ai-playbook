@@ -37,10 +37,20 @@ guard, appending it when the same guard already holds a catch row with the
 exact same run identity is a no-op (rows and tally unchanged), so sequential
 retries of the same refused run never duplicate their catch. Rows without a
 run-identity token never deduplicate. The identity rides the existing note
-field; no new row field. The normal writers (the done commit path's
-pre-refusal catch and the finalize append loop) serialize under the done
-lock; arbitrary concurrent direct ledger callers are outside this
-guarantee.
+field; no new row field. The normal writer (the done commit path's
+pre-refusal catch) serializes under the done lock, and the finalize
+guard-firing rows land through a checked commit child while the parent
+retains that lock; arbitrary concurrent direct ledger callers are outside
+this guarantee.
+
+Pre-write hygiene screen (plan
+docs/history/plans/2026-10-24-done-run-lock-span-and-append-ordering.md,
+Machinery admission): before an appended row may replace the canonical
+tracked ledger, the serialized candidate bytes are screened with the
+existing public-hygiene scanner (``scan-public-hygiene.sh`` beside this
+script, its configured deny patterns); a hit or an unusable scanner is a
+tool_error that leaves the ledger bytes unchanged and skips the advisory
+row with a warning, never a closeout refusal.
 
 Hermeticity knob (tests; harmless in production): ``GATE_LIVENESS_LEDGER_PATH``
 overrides the default ledger path (the JSON beside this script).
@@ -54,7 +64,11 @@ import argparse
 import json
 import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -110,11 +124,23 @@ def load_ledger(path: Path) -> tuple[dict, str]:
 def save_ledger(path: Path, data: dict) -> None:
     # Atomic write (red-on-main-baseline-repair-and-auto-demote plan, Task 3):
     # a concurrent reader (the pins suite's recorded-red consult) must never
-    # observe a torn file, so the payload lands in a sibling temp file and is
-    # os.replace'd into place; replace is atomic within one directory.
-    tmp_path = path.with_name(path.name + ".tmp")
+    # observe a torn file, so the payload lands in a mkstemp sibling in the
+    # same directory (a fixed .tmp name collides across concurrent writers)
+    # and is os.replace'd into place; replace is atomic within one directory.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
     try:
-        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        # mkstemp creates the sibling 0600; restore the target's existing
+        # mode so the tracked ledger stays readable the way the file it
+        # replaces was (a peer user in a shared checkout reads it too).
+        try:
+            os.chmod(tmp_path, stat.S_IMODE(path.stat().st_mode))
+        except OSError:
+            pass
         os.replace(tmp_path, path)
     except OSError as exc:
         try:
@@ -130,6 +156,60 @@ def snapshot_is_current(path: Path, loaded_bytes: str) -> bool:
         return path.read_text(encoding="utf-8") == loaded_bytes
     except OSError:
         return False
+
+
+HYGIENE_SCAN_SCRIPT = "scan-public-hygiene.sh"
+
+
+def candidate_hygiene_rejection(candidate_bytes: str) -> str | None:
+    """Screen the serialized candidate with the existing public-hygiene
+    scanner (the one beside this script, its configured deny patterns) before
+    it may replace the canonical tracked ledger.
+
+    Returns None when the scan passes and the write may proceed; a
+    tool_error message when it must not (a deny-pattern hit, or a scanner
+    that could not run). The caller turns a message into the tool_error that
+    leaves the ledger bytes unchanged and skips the advisory row (plan
+    2026-10-24-done-run-lock-span-and-append-ordering, Machinery admission:
+    one advisory row skipped and reported, the closeout never blocked).
+    """
+    scanner = Path(__file__).resolve().parent / HYGIENE_SCAN_SCRIPT
+    if not scanner.is_file():
+        return (
+            f"no {HYGIENE_SCAN_SCRIPT} beside the ledger writer; the candidate "
+            "was not scanned and the advisory row is skipped"
+        )
+    tmp_dir = Path(tempfile.mkdtemp(prefix="gate-ledger-hygiene-"))
+    try:
+        candidate_path = tmp_dir / "candidate.json"
+        candidate_path.write_text(candidate_bytes, encoding="utf-8")
+        env = dict(os.environ)
+        env["PUBLIC_HYGIENE_REPO_ROOT"] = str(tmp_dir)
+        try:
+            proc = subprocess.run(
+                ["bash", str(scanner), "--files", candidate_path.name],
+                capture_output=True, text=True, env=env, cwd=str(tmp_dir),
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return (
+                f"the public-hygiene scan could not run ({exc}); the candidate "
+                "was not written and the advisory row is skipped"
+            )
+        if proc.returncode == 0:
+            return None
+        if proc.returncode == 1:
+            hits = "\n".join(proc.stdout.splitlines()[:10])
+            return (
+                "the public-hygiene scan flagged the serialized candidate; the "
+                f"advisory row is skipped (reword the row text to record it):\n{hits}"
+            )
+        return (
+            f"the public-hygiene scan could not run (rc={proc.returncode}); the "
+            "candidate was not written and the advisory row is skipped"
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def guard_tally(guard: dict) -> dict:
@@ -275,6 +355,28 @@ def cmd_record(args: argparse.Namespace) -> int:
                 "rerun the same record command to append the row"
             )
     if appended:
+        # Pre-write hygiene screen (plan
+        # 2026-10-24-done-run-lock-span-and-append-ordering): the serialized
+        # candidate replaces the canonical tracked ledger only when the
+        # existing public-hygiene scanner passes it; a hit is a tool_error
+        # that leaves the on-disk bytes unchanged and skips the advisory row.
+        rejection = candidate_hygiene_rejection(
+            json.dumps(data, indent=2, sort_keys=False) + "\n"
+        )
+        if rejection is not None:
+            guard["rows"].pop()  # the screened row never lands
+            raise ToolError(rejection)
+        # The screen's scanner subprocess sits inside the check-to-replace
+        # window, so the freshness check re-runs before the replacement; a
+        # peer append that landed during the screen is never saved over
+        # (r1 residual: guard-firing task 2 review candidates, item 1).
+        if not snapshot_is_current(path, loaded_bytes):
+            guard["rows"].pop()  # the screened row never lands on stale bytes
+            raise ToolError(
+                "ledger changed while the hygiene screen ran; "
+                "latest ledger bytes were left unchanged; "
+                "rerun the same record command to append the row"
+            )
         save_ledger(path, data)
     t = guard_tally(guard)
     outcome_note = (

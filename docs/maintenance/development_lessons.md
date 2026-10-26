@@ -2285,7 +2285,7 @@ repair had to satisfy).
 
 ## 96. Scope Worktree Reviews Transfer-In To The Consumed Series
 
-A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first standard's step 2 copy) seats thousands of foreign staging docs in the worktree, and the done setup's write-manifest claim-or-foreign gate then refuses them all as "neither owned nor foreign" (witnessed 2026-10-18, done-setup-task-owned-start-dirt-claims execution). The gate's own bulk answers are the remedy: pass `--claim-none` when the run owns no staging doc in the reviews home, and scope the transferred copy to the review series the run actually consumes so the readiness gate still resolves. The primary checkout's staging docs are never touched by the trim; they are copies.
+A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first standard's step 2 copy) seats thousands of foreign staging docs in the worktree, and the done setup's write-manifest claim-or-foreign gate then refuses them all as "neither owned nor foreign" (witnessed 2026-10-18, done-setup-task-owned-start-dirt-claims execution). The gate's own bulk answers are the remedy: pass `--claim-none` when the run owns no staging doc in the reviews home, and scope the transferred copy to the review series the run actually consumes so the readiness gate still resolves. The primary checkout's staging docs are never touched by the trim; they are copies. Second witness (2026-10-26, interactive exec mandate): the wholesale `cp -Rs` mirror of the reviews and seal homes also broke the commit run's docs-branch sync, which refuses any archive symlink escaping the checkout root: a primary-corpus entry that is itself a symlink is mirrored as a symlink naming the primary checkout's absolute path, and the sync refused the worktree-side copy twice in one run (the seal home first, then the reviews home). Remedy arm: a run that writes its review records directly to the primary corpus home needs no corpus mirror at all; skip the reviews and seal transfer-in entirely (the sync skips an absent home) and let the canonical home hold the records.
 
 ## 97. Compose an Exact-Match Edit Anchor From a Fresh Read, Never From an Earlier View
 
@@ -3628,9 +3628,9 @@ Rule: a live execute-plan run must treat the primary-checkout session home as vo
 
 **Trigger:** closing out an execute-plan run whose done-session scratch (`docs/tmp/done-session/`) lives in the run worktree, while the shell's cwd has reset to the primary checkout.
 
-**Rule:** run `done_run.sh finalize` from the checkout that holds the run's `docs/tmp/done-session/` scratch (the run worktree), or pass `--manifest <path>`; re-export the acquire-step lock tokens in the same command, since the release arms read them from env. The finalize's checkpoint-refresh arm resolves the done-session directory from cwd even when `DONE_RUN_MANIFEST` is exported, so a primary-checkout invocation refuses "no run manifest found for run_id" and degrades the closeout to warning-only skips that leave a resume-shaped checkpoint behind.
+**Rule:** run `done_run.sh finalize` from the checkout that holds the run's `docs/tmp/done-session/` scratch (the run worktree); the `--manifest <path>` alternative is dead guidance (finalize parses the flag but no arm reads it), so the owner-checkout rerun is the sole remedy; re-export the acquire-step lock tokens in the same command, since the release arms read them from env. The finalize's checkpoint-refresh arm resolves the done-session directory from cwd even when `DONE_RUN_MANIFEST` is exported, so a primary-checkout invocation refuses "no run manifest found for run_id" and degrades the closeout to warning-only skips that leave a resume-shaped checkpoint behind.
 
-**Why:** witnessed 2026-10-23 (playbook repo, exec mandate pick 1 closeout): the first finalize ran from the primary checkout with `DONE_RUN_ID` and `DONE_RUN_MANIFEST` exported and still refused the checkpoint refresh, remove, and manifest finalize (all warning-only, nothing mutated); re-running the identical command from the run worktree resolved the manifest and finalized cleanly. The manifest resolver itself honors the env and `--manifest` first; only the checkpoint arm's session-dir scan is cwd-relative.
+**Why:** witnessed 2026-10-23 (playbook repo, exec mandate pick 1 closeout): the first finalize ran from the primary checkout with `DONE_RUN_ID` and `DONE_RUN_MANIFEST` exported and still refused the checkpoint refresh, remove, and manifest finalize (all warning-only, nothing mutated); re-running the identical command from the run worktree resolved the manifest and finalized cleanly. The `DONE_RUN_MANIFEST` env path resolves from any checkout, but the checkpoint arm's session-dir scan is cwd-relative, so the env alone never completes the closeout.
 
 **See also:** #65 (run a validator from the checkout owning its state; the same checkout-scoping family), the lock-export lesson at the env-per-shell rule (acquire exports are absent in later tool calls).
 
@@ -3911,3 +3911,255 @@ Rule: a live execute-plan run must treat the primary-checkout session home as vo
 **Why:** witnessed 2026-10-26 (playbook repo, execute-plan Phase 4 archive pass): the editor reported the disposition section written, but the same turn's `git mv` staged pre-edit bytes and the archive commit landed as a 100% rename without the fold; the amend re-staged the real bytes. The same session saw `ls` report a populated directory as empty minutes before listing it in full, so the stale view is real, not hypothetical.
 
 **See also:** #108 (an evidence digest comes from the bytes on disk), #43 (per-call shell resets mask which checkout staged a write).
+
+## 237. A Mandated Scan Is Green Only Over Its Own Roots
+
+**Principle:** Family H (verify the real thing, not the abstraction: a gate's pass covers the paths that gate reads, and a publish-time gate over a wider set is the real check for everything outside those roots).
+
+**Trigger:** a per-commit hygiene or lint mandate whose scanner reads a declared subset of the tree (roots or globs), beside a release or publish gate that scans the whole published result.
+
+**Rule:** before trusting a commit-time pass for a file, check whether the file sits inside the scan's declared roots; when it does not, run the publish-scope mode (the explicit file list or the full tree) over that file before committing. Treat the scope gap itself as a backlog row; do not widen the exclusion list at release time to make the publish gate pass.
+
+**Why:** witnessed 2026-10-26 (playbook repo, release of 620 commits): the default public hygiene scan reads `agents/skills` and `projects` only, so six tracked ledger receipts under `docs/history/` carrying absolute home paths passed seven mandated pre-commit scans across four days and surfaced only at the release privacy gate, which scans every published blob. The gate's failure line named all 1342 scanned paths, so the real two hits took a manual reproduction to find.
+
+**See also:** #238 (the record contract that let the receipts leak), #178 (a pre-existing scan failure at the merge base reorders a run).
+
+## 238. A Record Contract Masks Every Field, Not One Named Path
+
+**Principle:** Family C (shared-artifact coordination: a tracked record's content contract is the producer's whole output surface, and a clause binding one field leaves every other field to the writer's habit).
+
+**Trigger:** a tracked ledger or receipt whose header contract says one field is repo-relative (a plan path) while other fields carry command strings, captured stdout, or paths copied from the environment.
+
+**Rule:** write the contract over the whole record: every embedded path, command string, and captured output uses the ledger's placeholder tokens (`<primary-checkout>`, `<source-worktree>`) or a repo-relative form, and the producer step says so. When some receipts already mask and others do not, fix the contract sentence, not only the receipts; the next writer reads the header, not the history.
+
+**Why:** witnessed 2026-10-26 (playbook repo): the certification-seal landing diagnostic ledger's contract named only `plan_path` as repo-relative. Receipts written from the procedure's placeholder commands resolved `git -C <primary-checkout>` to real sibling-worktree paths in six of eleven receipts while five kept the token, and the release privacy gate refused the whole publish until the six were masked.
+
+**See also:** #237 (the commit-time scan that never read the ledger), #148 (a stated shape contract binds the scan to the type level).
+
+## 239. Recover a Mid-Run Branch From a Peer Base-Branch Rewrite With a Cherry-Pick of the Branch Range
+
+**Principle:** Family D (state-first: the branch's commits survive in object storage even after the base rewrite unreachables them; recovery re-derives from git, not from rebase mechanics).
+
+**Trigger:** mid-run, the base branch tip moves via a peer history rewrite (amend-style), so the run branch's old base is no longer reachable, its already-landed twin commits vanished from the base ancestry, and their content survived.
+
+**Rule:** do not rebase the run branch onto the rewritten base: the merge-base predates the rewrite, so rebase replays the whole shared history (hundreds of commands) and must be aborted. Recover with `git cherry-pick <old-base>..<branch>` onto the rewritten base: the range resolves to the run's own commits regardless of the rewrite, applies cleanly when content was preserved, and yields a fast-forwardable chain. Verify preservation per file and keep the base's newer bytes for files the plan never touches (a tracked ledger is the witnessed instance). Re-derive the branch tip from the worktree's branch reflog before the CAS landing: `git rev-parse HEAD` lies after HEAD has been re-pointed at the base during recovery attempts, and a sha typed from session memory fails with `nonexistent object` (the cheap failure; a plausible-but-wrong sha that passes is the expensive one the two-value update-ref exists to catch).
+
+**Why:** witnessed 2026-10-26 (playbook repo, exec run): a peer rewrote main mid-run, discarding the run's first-plan landing commit and turning `git rebase main` into a 619-command replay (aborted). The cherry-pick of the run range applied all five commits cleanly; the only delta was a ledger file the plan never touches, where the base's newer bytes were kept. A first CAS landing attempt failed on a memory-quoted sha, a second on `rev-parse HEAD` after HEAD had moved; the reflog-derived tip landed the two-value update-ref first try.
+
+**See also:** #6 (base-branch immutability and the amend guard that names the rewrite), #227 (a landing's recorded sha comes from the landing receipt, never from the moving base tip).
+
+## 240. A Lock Token Lost Across Shells Is Freed by a Fresh Acquire's Dead-Holder Auto-Clean, Then a Token-Fenced Release in the Same Shell
+
+**Principle:** Family D (state-first: the lock's liveness is a property of its recorded holder, re-derived at acquire time; an exported token is shell state, not durable record).
+
+**Trigger:** the landing-critical-section lock was acquired in one tool-call shell and the critical section runs in a later shell, so the token export is gone while the hold remains.
+
+**Rule:** a hold whose recorded holder is dead and past the grace window is not stolen: a fresh `acquire` auto-removes it as an abandoned hold and prints the removal, after which an immediate token-fenced `release` in the SAME shell frees the lock cleanly. Never split the acquire and release across tool-call shells, and never release by deleting lock files by hand.
+
+**Why:** witnessed twice 2026-10-26 (playbook repo, one exec run): the merge-landing-lock token exports died with their tool-call shells, leaving dead-holder holds that blocked the next landing; a fresh `merge-acquire` in each case printed `removed abandoned lock` and the same-shell fenced `merge-release` restored the free state, confirmed by `status`.
+
+**See also:** #212 (run closeout tooling from the checkout holding its scratch - the same shell-lifetime boundary), the dead-holder grace contract in `scripts/done-lock.sh` usage text.
+
+## 241. Plan-file checkbox writes can silently vanish before the boundary commit
+
+**Rule:** a plan-file edit made inside a boundary shell call (checkbox marking, marker refresh, manifest append) is not done until the commit proves it: after `git add`, check `git diff --cached --stat` names the plan file, commit, then re-verify with `git show --stat HEAD` and `grep -c '\- \[ \]' <plan>` (expect the unchecked count to drop). If the plan file is missing from the staged set or the count did not drop, re-apply the edit as its own verified commit before any later phase reads the boxes; never batch the re-mark into a later commit and never trust the earlier write.
+
+**Why:** witnessed three times in one execution run 2026-10-26 (playbook repo, plan `landing-subject-grammar-end-to-end`): python checkbox edits printed success inside the boundary call, but the boundary commits carried only the code files, the worktree read clean at HEAD, and a Phase 3 review lens later found all 22 boxes unchecked. Cause unresolved (suspect: a plan-protection hook or a racing peer process reverting unstaged plan bytes mid-call); the cheap per-boundary verification above catches the loss at the boundary where the rewrite is one command.
+
+## 242. Size an Anti-Growth Byte Payment Before Drafting the Addition
+
+**Principle:** Family D (state-first: the deletion budget is a disk-measurable quantity, derived before the addition is drafted, not discovered by iterating).
+
+**Trigger:** a landing into text governed by a byte-neutral anti-growth rule (a change that grows a file must delete equivalent bytes in the same change), where the payable bytes are restated clauses in the target paragraphs.
+
+**Rule:** first grep the target paragraphs for restated clauses (duplicated pointers, parentheticals restating a canonical section, recaps of rules owned elsewhere), sum their bytes with `wc -c` against the pre-change baseline, then draft the addition to fit the measured budget, and verify parity once. Never draft the addition first and discover parity through repeated measure-trim-measure loops.
+
+**Why:** witnessed 2026-10-26 (playbook repo, ad-hoc exec landing): the byte payment was drafted first and took three successive measure-trim-measure `wc -c` iterations to reach parity; measuring the payable restated clauses up front sized the budget in one pass and the addition could have been written to it directly.
+
+**See also:** #237 (a scan is green only over its own roots - the same derive-from-disk discipline applied to verification scopes).
+
+## 243. A Branch Stranded by a Diverged Base Re-Lands by Cherry-Pick
+
+**Principle:** Family D (recover and land through the owning machinery against current state).
+
+**Trigger:** a rebase or landing against the base branch when the branch's fork point is no longer an ancestor of the base tip (the base was force-moved to a divergent line while work sat on the abandoned line).
+
+**Rule:** when the fork point fails the ancestor check against the base tip, a plain rebase replays every unlanded commit since the true merge base - in a squash-landing repository, the whole abandoned line. Abort it, re-point the run branch to the current base tip (`git checkout -B <branch> <base-tip>`), and cherry-pick only the run's own commits, resolving shared rolling-log conflicts by union of intents (the run's removals and insertions apply onto the target's fresh layout; peer content stays byte-identical). At the retry the base pin and `--expected-base` must equal the newly computed merge base (#34), and the freshness gate re-refuses each tip race, so the retry-under-held-lock discipline (#128) applies. A panel digest over the merge-base-form diff survives the re-point while peer commits touch none of the run's paths, so the reviewed verdict and digest stay valid across replays.
+
+**Why:** witnessed 2026-10-26 (playbook repo, ad-hoc exec landing): a branch forked hours before the base moved to a divergent line; the plain rebase computed a ~600-commit replay, the cherry-pick landed through one more tip race, and a stale base pin was refused once by the parentage gate before the refresh.
+
+**See also:** #128 (rebase boundaries below an old fork; the plain form after a completed rebase), #34 (base-tip and base-pin argument semantics after a sanctioned replay).
+## 244. Adding the Denied Class Falsifies the No-New-Class Sentence and Its Skill Twin
+
+**Principle:** Family D (single source of truth: a footprint-denial sentence describes the change rather than the artifact, so the diff adding the denied class falsifies it, and the mirrored twin in the owning skill is the same claim's second copy).
+
+**Trigger:** adding a refusal class, gate, or lock to a wrapper whose header contract sentence, or whose owning skill's mirrored prose, denies exactly that footprint ("adds no new refusal class").
+
+**Rule:**
+1. Treat the denial sentence as falsified by the same diff; rewrite it, in that diff, from denial to exact admission (the one class, its shapes, plus a one-line plan citation).
+2. Rewrite the owning-skill twin to the same admission in the same change; grepping only the edited file never surfaces the twin.
+3. Do not impose a same-length constraint on the rewrite: a sentence that denied a class must now admit one, so information strictly grows and length parity is unsatisfiable by construction.
+
+**Why:** witnessed 2026-10-26 (playbook repo, execute-plan Phase 3 r1): `scripts/done_run.sh`'s header claimed the runner added no new refusal class while the same diff added the incompatible-transition-inputs class, and the twin in `agents/skills/done/SKILL.md` denied the same class; the blocking fix rewrote both to the one-class admission with the three shapes enumerated.
+
+**See also:** #151 (the same-change sweep over disclaimers and case-space inventories; this is the behavior-edit variant, where the code, not a prose edit, is the source the prose must follow), #145 (a deliberate duplicate is one contract in two copies; a prose twin without a parity pin drifts silently).
+
+## 245. A Preservation Assertion Needs the Fixture to Move the Preserved Value
+
+**Principle:** Family H (verify the real thing, not the abstraction: while the seeded value and the current value are identical, an operation that preserves the seeded value and one that re-derives it fresh are observationally equivalent, so the assertion pins nothing).
+
+**Trigger:** writing or reviewing a test that asserts an operation preserves an earlier-captured identity (a start commit, a digest, a record id) when the fixture performs no step between seeding that identity and running the operation.
+
+**Rule:**
+1. Make the fixture move the preserved value between seed and operation: commit new work so HEAD advances, or rewrite the bytes so a digest changes.
+2. Assert the pair: the operation's output equals the seeded value and differs from the value's current form; the wrong implementation that re-derives the identity fresh at operation time then fails the second half instead of passing the whole suite.
+
+**Why:** witnessed 2026-10-26 (playbook repo, execute-plan Phase 3 r1): both adoption tests asserted the adopted record preserved the interrupted boundary's start commit, but no fixture committed between seeding the boundary and adopting it, so the mutation "start commit = fresh HEAD" survived the entire suite while start-commit resolvability still passed; the fix commits post-boundary work in each fixture and asserts adopted equals prior and differs from new HEAD.
+
+**See also:** lesson 79 in the user corpus (the guard-binding member of the family: neutralize the guard, confirm RED), lesson 80 in the user corpus (the restore member: assert the intermediate mutation, not the restored final state), lesson 330 in the user corpus (one mutation-killing witness per conjunct), #162 (grade pin claims with a mutation matrix; run the hypothesized wrong implementation rather than trusting the pins).
+
+## 246. A Twin-Pinned Test Failing Only on a Branch Is Base Drift
+
+**Principle:** Family H (verify the real thing, not the abstraction: a test comparing branch bytes against a vendored or deployed twin compares against a surface that tracks the default branch, so the failure can localize to the base rather than to the change).
+
+**Trigger:** a receipt-pin or vendored-twin test fails on a run branch in an authoring worktree while the branch's own diff does not touch the pinned source.
+
+**Rule:**
+1. Run the same test on the default branch and again after rebasing the branch onto it.
+2. Green on both localizes base drift: the twin holds default-branch bytes that the fork-point branch predates.
+3. The remedy is the rebase, never an edit to the test, the pin, or the twin; record the drift in the round record as environment, not defect.
+
+**Why:** witnessed 2026-10-26 (playbook repo, execute-plan Phase 3 r1): before the sanctioned rebase the lib suite showed one failure in the execute-plan skill receipt pins and vendored-twin test because main had advanced `agents/skills/execute-plan/SKILL.md` while the branch held fork-point bytes; the test passed on main and after the rebase, and the round record classifies it as base drift, not a defect of the change.
+
+**See also:** lesson 476 in the user corpus (twin identity: a same-inode twin is one deployment surface, not a copy to synchronize), #6 (land a squash only from a tree merged with the current default branch; the same base-freshness discipline at the landing side).
+
+## 247. A Closeout Helper's rc 0 Is Not a Landing Witness
+
+**Principle:** Family H (verify the real thing, not the abstraction: a helper's exit status covers the legs it ran, and a deferred leg is still a success at the process level).
+
+**Trigger:** a finalize-style closeout helper whose landing leg (a squash under the merge lock) can be deferred while the helper still exits 0, followed by any step that records terminal receipts or reports a landed hash.
+
+**Rule:** after a closeout helper returns, re-derive the landing from the default branch itself (the squash subject naming the plan slug, or the archived destination's presence and bytes) before recording any terminal receipt or reporting a hash; never read the helper's landing summary line as the witness. When the landing was deferred behind a peer's held merge lock, complete it by hand under a fresh acquire, and note the egress gate's ack shape: `--ack-egress` must name the detected egress's old path (never the pointer record), and no ack is needed at all when the plans-egress pointer record already sits in the anchored reviews home the gate reads.
+
+**Why:** witnessed 2026-10-26 (playbook repo, done closeout): finalize exited 0, marked the run manifest complete, released the done lock, and printed a landing summary naming the branch commit, while the squash itself had been skipped behind a live peer's merge lock; the default branch did not contain the archive until the landing was re-derived from main's history, confirmed absent, and completed by hand. Two landing retries then failed on the egress ack before the pointer record's evidence legs were recognized as already sufficient.
+
+**See also:** #240 (a lock token lost across shells; the token-fenced release arm), #243 (the cherry-pick re-land when the base was rewritten), #34 (base-tip and expected-tip argument semantics).
+
+## 248. A Peer Plan's Byte Pin Colliding With Reworded Remedies Resolves to the New Canonical Text
+
+**Principle:** Family D (single source of truth: union-of-intents merges keep both prose sides because prose describes; a byte pin is not prose - it asserts the artifact's current canonical bytes, so when two plans collide on those bytes the newer rewording wins and the older pin moves).
+
+**Trigger:** a replayed or cherry-picked re-land where the run reworded a remedy or contract string that a peer plan's test pins byte-for-byte.
+
+**Rule:** resolve the collision by updating the peer pin to the new canonical text (the pin's own witnessing intent - the behavior dimension it checks - is unchanged), and re-run the full suite after any replay whose peer commits touch the run's own paths: the re-land lesson's digest-survival condition (peer commits touching none of the run's paths) does not hold there, so the reviewed verdict does not carry across the replay.
+
+**Why:** witnessed 2026-10-26 (playbook repo, done closeout): the re-land kept a peer plan's terminal-release test pinning the old orphan-classification remedy line while the run's plan had reworded that remedy into a multi-arm form; the focused adoption class stayed green and the full wrapper suite failed once post-merge. Updating the pin's expected bytes to the new canonical line and re-running the class and the suite closed it.
+
+**See also:** #243 (the cherry-pick re-land and its digest-survival condition), #244 (the no-new-class sentence and its twin), #128 (rebase forms).
+
+## 249. A Compare-and-Swap Squash Landing Can Leave the Primary Checkout's Index and Worktree Holding Stale Pre-Landing Bytes
+
+**Principle:** Family A (state re-derivation at validation time: a ref-move landing advances the branch pointer only; every index and working-tree surface in the primary checkout is stale until a restore pass proves otherwise).
+
+**Trigger:** a worktree-complete squash landing (the compare-and-swap ref update) just landed through the landing helper, and the primary checkout's status is about to be read to report cleanliness, to stage follow-up work, or to attribute dirt.
+
+**Rule:** after every compare-and-swap squash landing, read `git status --porcelain` in the primary checkout before any staging, commit, or cleanliness claim; a staged or unstaged modification whose diff against HEAD is exactly the reverse of the just-landed change (the landed paths' pre-landing bytes) is the landing's stale-bytes phantom, not peer dirt: restore the named paths from HEAD after verifying the diff names nothing the landing did not touch, and never revert or re-land from the phantom. A phantom whose diff names paths the landing did not touch is peer state: touch nothing and report it.
+
+**Why:** witnessed twice in this repo. 2026-10-22 (exec carrier closeout, state-file note): the primary index held a phantom after a landing, refreshed after exact parent-tree verification. 2026-10-26 (interactive exec mandate): after a three-commit branch squashed to one landing commit, the primary's index and working tree for the rolling prompt log held the pre-landing bytes (the newest prune receipt line missing), presenting as a staged modification whose diff removed exactly that line, while the landing's reconcile pass restore count had not covered the path; restoring from HEAD re-anchored the file with only the landed line added, and the final status ran clean.
+
+**See also:** #100 (a ref-only landing into a peer-held checkout leaves reversal-shaped staged residue: the peer-held variant of reversal-shaped bytes), #89 (a value quoted from conversation context is not evidence).
+
+## 250. Re-Derive Queue Coverage From Disk at Pick Time Under Parallel Lanes
+
+**Principle:** Family A (state re-derivation at validation time: an observation made when work was selected is not the state at the moment work starts).
+
+**Trigger:** any session about to start work on a queued item (a rolling-log entry, a backlog row, a plan) in a repository where parallel sessions dispatch from the same queue, after the session's own snapshot of the queue was taken earlier (at session start or an earlier survey).
+
+**Rule:** immediately before starting work on the item, re-derive its coverage state from disk with fresh commands: the item still present and unfrozen in its log, no landing receipt for its origins in the default branch's history, no peer worktree, branch, or claim holding the item, and no live sibling run recorded against it. A peer-completed item is reported and skipped, never re-executed; a peer-in-flight item is stood down with the peer's commit or worktree named, never raced; and when the session already built partial work, the stand-down records the supersession (the surviving implementation identified) before its own worktree and branch are removed.
+
+**Why:** witnessed 2026-10-26 (playbook repo, interactive exec mandate): three entries of one queue were concurrently covered by peer sessions; a session that planned from its session-start snapshot implemented one entry in full before discovering a peer's committed implementation of the same scope arms, stood the duplicate down (work committed for the record, then the worktree and branch removed), and executed the next uncovered entry instead. The same day's peer landings moved the default branch twice under in-flight work, forcing a rebase whose conflicts were tractable only because the duplicate had already been surrendered. The freeze marks and landing receipts exist as the disk-truth instruments; the cost lands entirely in sessions that skip the pick-time read.
+
+**See also:** #89 (re-run the origin's own probe before authoring its fix; the verification-at-action-time family), #249 (a CAS squash landing leaves the primary checkout stale; the same family at the landing boundary), #100 (a ref-only landing into a peer-held checkout; the peer-held variant).
+
+## 251. A Mid-Turn Interrupt Cancels In-Flight Sub-Agent Launches
+
+**Principle:** Family A (state re-derivation at validation time: after an interrupt, the fan-out's true state is what already returned, never what was launched).
+
+**Trigger:** a parallel worker fan-out (a review panel, lens workers, helper agents) with launches still in flight when a new operator message interrupts the turn.
+
+**Rule:** treat a cancelled launch as recoverable, never as a failed review: triage the surviving workers' returned output first and land the folds it ordered, then relaunch the cancelled worker one-for-one with the original prompt over the post-fold bytes, and record the relaunch in the panel row. Sequence deliberately: a fold landing while a worker still reads the diff shifts its line numbers, so the replacement launch should read the final bytes and its run becomes the record's review instead of a stale-byte pass.
+
+**Why:** witnessed 2026-10-26 (playbook repo, ad-hoc exec run): the operator's stop-after-current-pick message arrived mid-panel and cancelled one of two parallel workers before it returned; the other worker's findings were triaged and folded first, the cancelled worker was relaunched over the folded head, and its run anchored the landing record.
+
+**See also:** #250 (re-derive from disk at pick time; the same family under parallel lanes).
+
+## 252. An Ancestry Check Never Sees a Squash Landing; Pair It With the Tree Proof
+
+**Principle:** Family H (verify the real thing, not the abstraction: "reachable from the base branch" is the abstraction of landed, and a squash landing is the real shape the abstraction misses).
+
+**Trigger:** code that classifies a commit as on or off the base branch (deferred-landing detection, completion gates, landing-witness checks) in a repository whose landings squash.
+
+**Rule:** use merge-base ancestry as the first arm, never the only one: a squash landing composes a new commit on the base with a different sha, so the source branch's commit is never an ancestor of the base even after its work fully landed. Pair ancestry with a bounded tree-equality scan of recent base history (the commit's tree equal to some base commit's tree, the same squash proof the branch-deletion arm uses), and fail open with a warning when the base branch itself cannot be resolved.
+
+**Why:** witnessed 2026-10-26 (playbook repo, the finalize deferred-squash honesty landing): the new landed/pending classification needed a test that recognizes direct and merge landings through ancestry and squash landings through the tree scan; ancestry alone would classify every legitimately squashed run as pending forever, so a re-run finalize could never complete the withheld state.
+
+**See also:** #247 (a closeout helper's rc 0 is not a landing witness), #73 (post-squash follow-up deltas live on the default tip).
+
+## 253. Re-Derive a Stale Classification at the Emission Point
+
+**Principle:** Family A (state re-derivation at validation time: a classification is only as fresh as the point that emits it).
+
+**Trigger:** a multi-step ceremony with an early check-then-act split whose later steps (a child commit, a rider append, a peer landing) can create or change the state the early check classified.
+
+**Rule:** when an early classification gates an action, re-derive it fresh at every later point that emits user-visible output or a durable record, and word a late emission's duty clause for what the later position can actually know: the lock state, the marking outcome, and the ledger content may all have moved since the early check. An early check's duty wording repeated verbatim at a late emission point is a lie about the resumed state.
+
+**Why:** witnessed 2026-10-26 (playbook repo, the finalize honesty landing's panel): the guard-firing child commit could create the ledger's first line after the marking decision, leaving the manifest complete while the summary said squash-pending with no deferral line; the fold re-derived the classification at the summary block and worded the late line's duty "the complete marking above predates this ledger line".
+
+**See also:** #247 (rc 0 is not a landing witness), #252 (the landed classification's two arms).
+
+## 254. The Shell's grep Is ugrep on This Host
+
+**Principle:** Family H (verify the real thing, not the abstraction: the `grep` name on this host resolves to a different engine whose regex dialect differs).
+
+**Trigger:** any locator pattern using GNU basic-regex escapes (a literal paren group like `name\)` in a grep argument) in this harness's shell.
+
+**Rule:** on this host the shell's grep resolves to ugrep: patterns GNU grep accepts can error with shapes like "mismatched ( )". Prefer `-F` for fixed-string locators or restructure the pattern without escaped groups; read a ugrep error line as a dialect mismatch, never as evidence that the target text is absent.
+
+**Why:** witnessed 2026-10-26 (playbook repo): a `grep -n "subcommand\)"` locator failed with a ugrep mismatched-parenthesis error while auditing a shell script, costing one retry round.
+
+
+## 255. A Requested Clause Landed Inside an Existing Enumeration Must Clear That Enumeration's Governing Conditional
+
+**Principle:** Family C (reachability: a rule is landed only where the surrounding structure lets its operative case reach it; verbatim fidelity to the request is not reachability).
+
+**Trigger:** landing a sentence or clause "beside" or "inside" an existing list, enumeration, or parenthetical whose lead-in carries a `where`, `when`, or `for` conditional, especially when the wording came verbatim from a backlog row scoped to one named span.
+
+**Rule:** before placing the clause, read the enumeration's lead-in conditional and ask whether the clause's operative case (the class of run or landing it governs) satisfies it; when it does not, widen the conditional in the same change (naming the new class and keeping per-item applicability explicit) or scope the clause to its class in its own words. A pre-existing item under the same misfit is evidence that the conditional, not the clause, is the thing to fix.
+
+**Why:** witnessed 2026-10-26 (playbook repo): a receipt-paired-removal clause for the ad-hoc rolling log landed verbatim inside the worktree-first closeout-rider enumeration, whose lead-in named only plan and plan-execution landings; ad-hoc landings, the only class that appends the receipt, could never reach it. Both focused-panel workers staged it blocking; the fold widened the conditional to ad-hoc maintenance landings with a per-class qualifier, which also made the pre-existing origin-row-deletion rider coherent.
+
+**See also:** #199 (a fixture for a shape the enumeration universe cannot produce is dead weight: the same reachability test applied to test fixtures).
+
+## 256. A Pre-Landing Rebase Invalidates Every Landedness Proof Keyed on Recorded Branch Shas or Their Trees
+
+**Principle:** Family D (state-first: a rebase rewrites the branch's commit and tree identities while leaving the content delta intact, so any sha or tree recorded before it names a commit that will never appear on the base branch).
+
+**Trigger:** a closeout or honesty check that decides "landed" by asking whether a recorded branch commit (an owned-commits ledger line, a run manifest tip) is an ancestor of the base branch, or whether its tree appears among the base branch's recent trees, in a repository whose base-freshness gate forces a rebase whenever peers land first.
+
+**Rule:** prove landedness from the content delta or the landing receipt, never from a pre-rebase identity: check `git diff <base> <branch>` for emptiness after the landing, or read the `land-worktree` receipt's new tip (#227); when a check must stay sha-keyed, refresh the recorded shas as part of the rebase step (rewrite the ledger lines with the post-rebase tips before finalize runs). Read a "landing deferred" verdict that follows a rebase as a candidate false negative and re-derive before acting on its resume duty.
+
+**Why:** witnessed 2026-10-26 (playbook repo): an ad-hoc landing rebased twice while peers advanced the base, then squash-landed; the finalize leg's day-old deferred-squash honesty arm scanned the base for the ledger tip's tree, found the pre-rebase tree absent, printed LANDING DEFERRED, and withheld the manifest's complete marking although `git diff main <branch>` was empty and the landing receipt named the new tip. The resume duty it printed (re-run finalize) can never succeed on that ledger.
+
+**See also:** #78 (prove landedness from witnesses, not diff metrics), #227 (the landing sha comes from the receipt, never the base tip), #123 and #128 (what a rebase does to a branch under squash landings).
+
+## 257. A Dispatch Payload That Restates a Subset of a Standing Contract's Gates Silently De-Scope the Contract
+
+**Principle:** Family C (reachability: a standing contract's machinery binds a run only where the payload the session actually follows lets it reach; an instruction that names fewer gates than the owning contract is read as the complete gate list, not as a subset).
+
+**Trigger:** authoring or executing a dispatch payload (a log entry's prompt field, a task brief, a carrier instruction) for work whose surface already carries a standing contract (a mandatory panel, an isolation standard, a landing route), especially when the payload's gate list was written to be "helpfully concrete" for the specific pick.
+
+**Rule:** a payload inherits its surface's standing contract by reference and may add specificity on top, never subtract beneath it: do not enumerate a gate list that shadows the owning contract's machinery; when a payload does restate gates, read the discrepancy as a defect in the payload (or in the emission contract that allowed it), not as permission. Symmetrically, when executing a payload, re-derive the full duty set from the owning contract before starting, and treat "the payload did not name it" as never a reason to skip a mandated step.
+
+**Why:** witnessed 2026-10-26 (playbook repo, interactive exec mandate): the picked ad-hoc entry's prompt named exactly three gates (pins suite, em-dash gate, hygiene scan) while the owning ad-hoc arm mandated the focused review panel, the panel receipt, the ad-hoc worktree, and the squash-landing route; the run followed the prompt verbatim and landed with the arm's machinery absent, and the operator corrected it in-session. The fix is emission-side (the investigate contract forbidding shadowing gate lists in ad-hoc payloads) plus a mandate-wording clause; row and plan entry landed the same day.
+
+**See also:** #255 (a landed clause is only operative where its governing conditional lets its class reach it: the same reachability test applied to payload text instead of placed clauses), #199.

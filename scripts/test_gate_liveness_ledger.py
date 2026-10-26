@@ -7,6 +7,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -103,13 +105,45 @@ def rows_with_evidence(ledger_path: str, evidence: str) -> list[dict]:
     ]
 
 
+HYGIENE_ENV_KEYS = ("PUBLIC_HYGIENE_PATTERNS_FILE", "PUBLIC_HYGIENE_REPO_ROOT")
+
+
+def pin_hermetic_hygiene_env(tmp_dir: Path) -> dict[str, str | None]:
+    """Point the pre-write hygiene screen's scanner at a hermetic fixture
+    patterns file (one active deny token) for the duration of a test, so no
+    run reads the host's personal patterns file. Returns the prior values for
+    restoration."""
+    prior = {key: os.environ.get(key) for key in HYGIENE_ENV_KEYS}
+    patterns = tmp_dir / "hygiene-patterns"
+    patterns.write_text(
+        "# fixture deny patterns\n\\bFORBIDDEN-LEDGER-TOKEN\\b\n",
+        encoding="utf-8",
+    )
+    os.environ["PUBLIC_HYGIENE_PATTERNS_FILE"] = str(patterns)
+    os.environ.pop("PUBLIC_HYGIENE_REPO_ROOT", None)
+    return prior
+
+
+def restore_hygiene_env(prior: dict[str, str | None]) -> None:
+    for key, value in prior.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 class GateLivenessLedgerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.ledger = str(Path(self.tmp.name) / "ledger.json")
         Path(self.ledger).write_text(json.dumps(SEED), encoding="utf-8")
+        # The pre-write hygiene screen (plan
+        # 2026-10-24-done-run-lock-span-and-append-ordering) runs on every
+        # record: pin its scanner's patterns file to the hermetic fixture.
+        self._prior_hygiene_env = pin_hermetic_hygiene_env(Path(self.tmp.name))
 
     def tearDown(self) -> None:
+        restore_hygiene_env(self._prior_hygiene_env)
         self.tmp.cleanup()
 
     def test_show_reports_ratio_and_pass(self) -> None:
@@ -317,8 +351,11 @@ class CatchRunIdentityDedupTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.ledger = str(Path(self.tmp.name) / "ledger.json")
         Path(self.ledger).write_text(json.dumps(SEED), encoding="utf-8")
+        # The pre-write hygiene screen runs on every record: hermetic pin.
+        self._prior_hygiene_env = pin_hermetic_hygiene_env(Path(self.tmp.name))
 
     def tearDown(self) -> None:
+        restore_hygiene_env(self._prior_hygiene_env)
         self.tmp.cleanup()
 
     def record_catch(self, evidence: str, note: str) -> subprocess.CompletedProcess:
@@ -425,6 +462,147 @@ class CatchRunIdentityDedupTest(unittest.TestCase):
                 for r in changes
             ),
             "the posture promotion is recorded as a change row naming its plan",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Pre-write public-hygiene screen (plan
+# 2026-10-24-done-run-lock-span-and-append-ordering, Task 2): the serialized
+# candidate is screened with the existing scanner before it may replace the
+# canonical tracked ledger; a hit or an unusable scanner leaves the canonical
+# bytes unchanged and skips the advisory row, and clean input still appends
+# atomically.
+# --------------------------------------------------------------------------- #
+class CandidateHygieneScreenTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ledger = str(Path(self.tmp.name) / "ledger.json")
+        self.seed_bytes = json.dumps(SEED, indent=2) + "\n"
+        Path(self.ledger).write_text(self.seed_bytes, encoding="utf-8")
+        self._prior_hygiene_env = pin_hermetic_hygiene_env(Path(self.tmp.name))
+
+    def tearDown(self) -> None:
+        restore_hygiene_env(self._prior_hygiene_env)
+        self.tmp.cleanup()
+
+    def record(self, evidence: str) -> subprocess.CompletedProcess:
+        return run_cli(
+            "--ledger", self.ledger, "record", "--guard", "example-guard",
+            "--kind", "incident", "--date", "2026-10-25", "--evidence", evidence,
+        )
+
+    def test_hygiene_hit_leaves_canonical_bytes_unchanged_and_warns(self) -> None:
+        proc = self.record("flagged FORBIDDEN-LEDGER-TOKEN evidence")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            Path(self.ledger).read_text(encoding="utf-8"), self.seed_bytes,
+            "a screened row must never replace the canonical bytes",
+        )
+        self.assertIn("public-hygiene", proc.stderr)
+        self.assertIn("FORBIDDEN-LEDGER-TOKEN", proc.stderr)
+        self.assertIn("advisory row is skipped", proc.stderr)
+        self.assertEqual(proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertEqual(rows_with_evidence(self.ledger, "flagged FORBIDDEN-LEDGER-TOKEN evidence"), [])
+
+    def test_clean_candidate_still_appends_atomically_under_the_screen(self) -> None:
+        evidence = "docs/history/backlog/2026-10-24-clean-evidence.md"
+        proc = self.record(evidence)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("row appended", proc.stdout)
+        self.assertEqual(proc.stdout.strip().splitlines()[-1], "OUTCOME: pass")
+        doc = json.loads(Path(self.ledger).read_text(encoding="utf-8"))
+        rows = doc["guards"]["example-guard"]["rows"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[-1]["evidence"], evidence)
+
+    def test_unscannable_candidate_skips_row_and_keeps_bytes(self) -> None:
+        os.environ["PUBLIC_HYGIENE_PATTERNS_FILE"] = str(
+            Path(self.tmp.name) / "absent-patterns"
+        )
+        evidence = "docs/history/backlog/2026-10-24-unscannable.md"
+        proc = self.record(evidence)
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            Path(self.ledger).read_text(encoding="utf-8"), self.seed_bytes,
+            "an unscannable candidate must not replace the canonical bytes",
+        )
+        self.assertIn("public-hygiene scan could not run", proc.stderr)
+        self.assertIn("advisory row is skipped", proc.stderr)
+        self.assertEqual(proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertEqual(rows_with_evidence(self.ledger, evidence), [])
+
+    def test_peer_write_during_screen_is_never_saved_over(self) -> None:
+        # The screen's scanner subprocess sits inside the check-to-replace
+        # window: a peer append landing during the screen leaves its fresher
+        # bytes on disk and the stale append is skipped (r1 residual item 1).
+        original_screen = MODULE.candidate_hygiene_rejection
+        peer_evidence = "docs/history/backlog/2026-10-26-peer-during-screen.md"
+        row_evidence = "docs/history/backlog/2026-10-26-screen-window-row.md"
+        fired = {"n": 0}
+
+        def screen_with_peer_write(candidate_bytes: str) -> str | None:
+            if fired["n"] == 0:
+                peer_append(Path(self.ledger), peer_evidence)
+                fired["n"] += 1
+            return original_screen(candidate_bytes)
+
+        MODULE.candidate_hygiene_rejection = screen_with_peer_write
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = MODULE.main([
+                    "--ledger", self.ledger, "record", "--guard", "example-guard",
+                    "--kind", "incident", "--date", "2026-10-25",
+                    "--evidence", row_evidence,
+                ])
+        finally:
+            MODULE.candidate_hygiene_rejection = original_screen
+        self.assertEqual(code, 3)
+        self.assertIn("changed while the hygiene screen ran", err.getvalue())
+        self.assertEqual(rows_with_evidence(self.ledger, row_evidence), [],
+                         "the stale append never lands over fresher peer bytes")
+        on_disk = json.loads(Path(self.ledger).read_text(encoding="utf-8"))
+        self.assertIn(
+            peer_evidence,
+            [row["evidence"] for row in on_disk["guards"]["peer-writer"]["rows"]],
+            "the fresher peer bytes stay on disk",
+        )
+
+    def test_save_ledger_uses_mkstemp_sibling_and_cleans_up_on_failure(self) -> None:
+        # r1 residual item: the fixed <name>.tmp sibling name collides across
+        # concurrent writers; the temp file is a mkstemp sibling and a failed
+        # replace leaves nothing behind.
+        ledger_path = Path(self.ledger)
+        original_replace = MODULE.os.replace
+        used_names: list[str] = []
+
+        def failing_replace(src: str, dst: str) -> None:
+            used_names.append(Path(src).name)
+            raise OSError(28, "injected no-space")
+
+        MODULE.os.replace = failing_replace
+        try:
+            with self.assertRaises(MODULE.ToolError):
+                MODULE.save_ledger(ledger_path, json.loads(self.seed_bytes))
+        finally:
+            MODULE.os.replace = original_replace
+        self.assertEqual(len(used_names), 1, "the replace must fire exactly once")
+        self.assertNotEqual(
+            used_names[0], ledger_path.name + ".tmp",
+            "the temp sibling must not use the fixed .tmp name",
+        )
+        leftovers = [
+            p for p in ledger_path.parent.iterdir()
+            if p.name != ledger_path.name and p.name.endswith(".tmp")
+        ]
+        self.assertEqual(leftovers, [], "a failed save leaves no temp sibling behind")
+        # A successful save restores the target's existing mode (mkstemp
+        # creates the sibling 0600; the tracked ledger keeps its 0644 shape).
+        os.chmod(ledger_path, 0o644)
+        MODULE.save_ledger(ledger_path, json.loads(self.seed_bytes))
+        self.assertEqual(
+            stat.S_IMODE(ledger_path.stat().st_mode), 0o644,
+            "the replaced ledger keeps its prior mode",
         )
 
 

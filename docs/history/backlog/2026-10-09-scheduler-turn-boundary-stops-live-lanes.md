@@ -24,6 +24,8 @@ One clause, single-homed: the FINAL STEP paragraphs in `prompt-templates.md` (sc
 
 ## Evidence
 
+- 2026-10-26 friction-audit rider recovery completed: the due audit ran in-session per the task file's procedure (quant pass 163 tool_usage / 16 session_input rows, digest read, guard-liveness read, state advanced, `next_due` 2026-11-02); the parked audit dispatch is now stale by its own target. The row's D-6 continuation-clause fix remains open.
+- 2026-10-26 interactive maintenance recovery: a user-directed authoring turn found the due `friction-audit` item parked in `.ai-playbook/scheduler-state.json` after an idle-queue refusal, then stopped because no automation controls were exposed without checking the in-session recurring-task procedure or invoking the already-required `self-heal` path. The task file `docs/maintenance/recurring-tasks/friction-audit.md` explicitly supplies an in-session quantitative procedure; the earlier stop therefore did not establish that recovery was unavailable.
 - The 2026-10-09 turn's state record: execution child complete (landed b48ddd7a3), authoring deferred with a dispatchable target of record, turn ended at the designed boundary.
 - The operator correction, 2026-10-09 ~12:15 WEST, verbatim in `docs/maintenance/operator-directives.md` D-6.
 - The continuation proof: the same session dispatched the authoring lane in-session under the in-session authoring primitive immediately after filing this row (the primary-class-anchors-grammar-drift authoring cycle), the first application of D-6.

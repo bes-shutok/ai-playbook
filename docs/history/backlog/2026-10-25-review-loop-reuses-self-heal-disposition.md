@@ -1,7 +1,9 @@
 # Backlog: reduce duplicate self-heal recovery guidance
 
+Cluster: docs/history/backlog/2026-10-26-review-plan-self-heal-invocation-disposition-gap.md (shared self-heal invocation/disposition contract: this row records duplicate assessment after a disposition; the sibling records a skipped required assessment)
+
 - **Filed:** 2026-10-25, review-loop r12 F1 and r13 F1
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-26-review-plan-self-heal-invocation-disposition-gap.md)
 - **Workflow:** backlog
 - **Priority:** low
 - **Owner:** self-heal and review-loop skill maintainers

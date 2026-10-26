@@ -4146,6 +4146,103 @@ def test_adopt_copies_prior_boundary(
     assert third["adopted_from"] is None
 
 
+def test_adopt_preserves_ownership_and_adds_post_setup_review(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given an interrupted manifest owning one
+    review and marking one peer review foreign, and a review created after
+    that setup, expects ``write-manifest --adopt <id> --owned-review <new>``
+    to preserve the prior start commit, owned plan, and foreign markings, and
+    to add the new owned review claim (the claim-or-foreign gate is satisfied
+    by the inherited claims and the new claim together, so the adoption is the
+    supported way a later review joins an interrupted run's owned set)."""
+    root = mktemp_repo("adopt-join")
+    start = git(root, "rev-parse", "HEAD").stdout.strip()
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    orphan_id = "run-orphan-join"
+    plan_rel = "docs/history/plans/2026-10-25-joined-plan.md"
+    owned_rel = ".ai-playbook/reviews/2026-10-25-joined-own-review-r1.md"
+    foreign_rel = ".ai-playbook/reviews/2026-10-25-joined-peer-review-r1.md"
+    (root / ".ai-playbook/reviews").mkdir(parents=True)
+    (root / owned_rel).write_text("orphan-owned staging review\n", encoding="utf-8")
+    (root / foreign_rel).write_text("peer staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root,
+        orphan_id,
+        prev.name,
+        str(root),
+        time.time() - 10,
+        start_commit=start,
+        owned_plan_paths=[plan_rel],
+        owned_review_paths=[owned_rel],
+        foreign_review_paths=[foreign_rel],
+    )
+    # The review created after the interrupted setup: the adoption's new claim.
+    new_rel = ".ai-playbook/reviews/2026-10-25-joined-late-review-r2.md"
+    (root / new_rel).write_text(
+        "review created after the interrupted setup\n", encoding="utf-8"
+    )
+    make_marker(root, time.time(), os.getpid())
+    # Move HEAD past the orphan's start commit so the preserved-start
+    # assertion has a discriminating witness (seed HEAD must not equal
+    # adopt HEAD).
+    (root / "late.txt").write_text("post-boundary work\n", encoding="utf-8")
+    git(root, "add", "late.txt")
+    git(root, "commit", "-qm", "post-boundary work")
+    new_head = git(root, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["write-manifest", "--adopt", orphan_id, "--owned-review", new_rel])
+
+    assert rc == 0, capsys.readouterr().err
+    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
+    assert payload["adopted_from"] == orphan_id
+    assert payload["start_commit"] == start
+    assert payload["start_commit"] != new_head
+    assert payload["owned_plan_paths"] == [plan_rel]
+    assert payload["owned_review_paths"] == [new_rel, owned_rel]
+    assert payload["foreign_review_paths"] == [foreign_rel]
+
+
+def test_write_manifest_adopt_validations_refuse_missing_and_complete_targets(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] The writer's explicit-adoption validations
+    stay the adoption authority the wrapper routes through: ``--adopt`` naming
+    no readable root-matched manifest refuses with the named cannot-adopt
+    error, and ``--adopt`` naming an already finalized run refuses with the
+    named already-finalized error; neither refusal writes a manifest."""
+    root = mktemp_repo("adopt-refusals")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["write-manifest", "--adopt", "run-never-existed"])
+
+    assert rc != 0
+    assert "cannot adopt run-never-existed" in capsys.readouterr().err
+    done_session = root / "docs" / "tmp" / "done-session"
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+    complete_id = "run-adopt-complete"
+    _seed_run_manifest(
+        root,
+        complete_id,
+        marker_name(time.time()),
+        str(root),
+        time.time() - 5,
+        complete=True,
+    )
+    rc2 = lib.main(["write-manifest", "--adopt", complete_id])
+
+    assert rc2 != 0
+    err2 = capsys.readouterr().err
+    assert f"cannot adopt {complete_id}" in err2
+    assert "already finalized" in err2
+    assert [p.name for p in done_session.glob("run-manifest-*.json")] == [
+        f"run-manifest-{complete_id}.json"
+    ]
+
+
 def test_adoption_is_explicit_only(
     tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
 ):

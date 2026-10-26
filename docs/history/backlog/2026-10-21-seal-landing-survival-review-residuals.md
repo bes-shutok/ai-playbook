@@ -3,6 +3,7 @@
 Status: open
 Cluster: docs/history/backlog/2026-10-21-code-family-certification-stale-after-tip-moves.md (same mechanism: the code-family anchor leg; the landed-anchor complement is plan-family only)
 Cluster: docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md (same surface: the diagnostic receipt's target resolution)
+Cluster: EXEC-PROMPTS entry seal-receipt-placeholder-path-contract (covered 2026-10-26: the receipt path-masking contract landed in the ledger header; origin row deleted per the covered-row rule)
 Priority: low
 Class: fix-class (validator exit-class and coverage hardening plus doc-claim repairs; no behavior flip staged here)
 Origin class: review-residual (receiving-review r1 of plan docs/history/plans/2026-10-20-certification-seal-landing-survival.md, staging record .ai-playbook/reviews/2026-10-21-certification-seal-landing-survival-code-review-r1.md; CD1, R1, CD2, CD4, T1, T6 were fixed in the r1 pass, the residuals below were backlogged)

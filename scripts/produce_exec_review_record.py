@@ -8,7 +8,11 @@ validator's current grammar: the fixture builders ``_current_finding`` and
 ``_current_findings_markdown`` in ``scripts/validate_review_staging.py``
 and the witnessed real-record shape under ``.ai-playbook/reviews/``. The
 producer owns no validation rule of its own; a pair is a success only when
-the validator says so.
+the validator says so. Family boundary: this producer emits plan-family
+records only (the ``-plan-review-`` series whose source digest hashes the
+plan bytes), while ``scripts/review_record_selection.py verify-digest``
+checks code-family records (the SHA-256 of the ``git diff <base>...<head>``
+bytes) and never accepts a producer record.
 
 Current-dated records (post-window): a record dated today arms every date
 fence the validator pins on a canonical record, so the producer emits the

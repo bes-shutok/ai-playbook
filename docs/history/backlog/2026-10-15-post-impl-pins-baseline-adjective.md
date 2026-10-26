@@ -12,6 +12,7 @@
 
 Cluster: docs/history/backlog/2026-10-15-codex-stale-worktree-pins-landing-recovery.md (backlog-wide survey: maintenance pins baseline and expected-literal alignment)
 Cluster: docs/history/backlog/2026-10-07-witnessed-fail-arm-enumeration-stale.md (backlog-wide survey: maintenance pins baseline and expected-literal alignment)
+Cluster: docs/history/plans/completed/2026-10-26-maintenance-pin-current-main-baseline-red.md (shared maintenance pins baseline reconciliation)
 ## Problem
 
 The certified plan Task 4 pins-baseline item says the pre-change baseline records "the pre-existing scheduler-state pin failures", while the observed failing set on the clean tree is two maintenance-skill loop-mode span pins. The operative contract (record the pre-change failing set byte-identically; anything beyond it is a regression) is unaffected, but an executor following the parenthetical would mislabel the baseline rows.

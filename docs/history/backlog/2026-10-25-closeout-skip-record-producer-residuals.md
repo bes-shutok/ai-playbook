@@ -2,6 +2,8 @@
 
 Driving force: reliability; the residual is fail-closed today, so the row is a hardening pin, not a live defect.
 
+Cluster: docs/history/backlog/2026-10-26-plan-closeout-missing-phase0-baseline.md (shared surface: plan-slug baseline selection and closeout migration; this row is a missed Phase 0 setup, not either producer residual)
+
 Origins: code review r2 of docs/history/plans/2026-10-18-worktree-closeout-single-start-baseline.md (staging record .ai-playbook/reviews/2026-10-25-worktree-closeout-single-start-baseline-code-review-r2.md, findings R2-L1 and R2-L2), captured 2026-10-25 by the execution run.
 
 Two residuals from the done-run zero/multi-plan skip-record producer:

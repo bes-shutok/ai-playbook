@@ -8,6 +8,7 @@
 - **Class:** lock lifecycle safety
 - **Driving force:** safety
 - **Urgency:** high
+- **Cluster:** `docs/history/backlog/2026-10-26-done-lock-context-recovery-after-compaction.md`
 - **Source:** `.ai-playbook/reviews/2026-10-18-plan-review-done-live-owner-closeout-recovery-pe4f3ada4-r6.md`, F1; observed during authoring of `docs/history/plans/2026-10-18-done-live-owner-closeout-recovery.md`
 
 ## Problem
@@ -18,11 +19,11 @@ The doc-only recovery plan changes the frozen prompt to require the original Ste
 
 ## Acceptance
 
-- Given a replacement lock is acquired after Step 0 and its holder passes caller ancestry, `finalize --from-holder` refuses on generation mismatch and leaves the replacement lock metadata unchanged.
-- Given the Step 0 generation still matches, the existing ancestry and compare-and-swap checks continue to govern release.
-- Given a recovery-owned from-holder call lacks the Step 0 witness, finalization stops before tokenless release.
-- The follow-up plan resolves machinery admission before introducing a new blocking refusal and names the removal or simplification and review date.
+- First add a read-only or warning-only witness that distinguishes a matching Step 0 generation from a replacement generation on the recovery-owned from-holder route; it must never release or alter the replacement lock.
+- Keep the existing ancestry and compare-and-swap checks for every release path.
+- Do not add a new blocking refusal while the evidence remains a review finding rather than a true catch. If a true catch is observed, a later plan may propose promotion only with the incident link, expected catch frequency, false-positive cost, a review date, and a pre-registered registry-removal row naming sunset and promotion criteria.
+- Keep the origin open for the warning-only/read-only investigation; do not delete it as moot because the current runtime route remains unbound to the original generation.
 
 ## Evidence
 
-The r6 panel traced the explicit `from_holder` branch in `cmd_finalize` and the current-image behavior in `release_from_holder`. Its replacement fixture did not prove a generation guard; that fixture gap is part of the follow-up acceptance. The finding is a code path and race condition, not evidence that a proposed guard has already caught a live production case.
+The r6 panel traced the explicit `from_holder` branch in `cmd_finalize` and the current-image behavior in `release_from_holder`. Its replacement fixture did not prove a generation guard. The finding is a code path and race condition, not evidence that a proposed guard has caught a live case; repository policy therefore admits only warning-only or read-only work until a true catch is witnessed.

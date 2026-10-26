@@ -1,5 +1,40 @@
 Tracked rolling log of ready-to-dispatch plan-creation prompts, most urgent first.
 
+PLAN-PROMPTS-PRUNE: release-privacy-gate-report-and-scan-scope-parity -> docs/history/plans/2026-10-26-release-privacy-gate-diagnostics-and-replay.md (frozen entry pruned by additive closeout rider after landing)
+PLAN-PROMPTS-PRUNE: done-lock-acquire-vanished-directory-indeterminate -> 2edee26f8db5e07ba33affd26ccd7c63323b2bb7 (operator-directed cleanup after source and history confirmed the implementation had landed before the authoring freeze)
+
+## exec-entry-prompt-shadows-adhoc-arm-machinery
+
+Frozen: authoring claim 2026-10-26 (2026-10-26)
+
+Added: 2026-10-26, operator correction over the 2026-10-26 interactive exec mandate (the mandate's pick landed cb0e439c with no focused review panel and no ad-hoc worktree; origin row filed in the same pass)
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix spans more than one tracked surface (the investigate skill's Stage 4 emission contract, the EXEC-PROMPTS log's standing rules, and the Exec-mode selection rule's ordering contract), and the mandate-wording resolution carries an open design choice (where the plans-segment-preference clause single-homes), so no body-named single-surface fix exists.
+
+Origins:
+- docs/history/backlog/2026-10-26-exec-entry-prompt-shadows-adhoc-arm-machinery.md
+
+Urgency: high - the arm's blocking review panel, the one gate between ad-hoc work and the default branch, was skipped in a witnessed landing (cb0e439c carries no `Ad-hoc-panel-pass:` line and no review record), and the sibling row shows the same machinery-dropout class three times on 2026-10-22 alone; every parallel-mandate day re-rolls the same dice.
+
+Scope arms:
+- Emission-side constraint: an ad-hoc entry's `Prompt:` payload never restates a gate list that shadows the Ad-hoc backlog arm's machinery (ad-hoc worktree, doing-code-review focused panel before any landing, `Ad-hoc-panel-pass:` receipt, squash-landing route); it inherits the arm by reference with one clause. Home the constraint where it binds the writer: the investigate skill's Stage 4 emission contract and/or the EXEC-PROMPTS log's standing rules - pick one home, cross-reference from the other, and price the two-home shape against the anti-growth rules.
+- Mandate-wording resolution: an operator exec mandate worded "plan(s)" resolves the candidate set to the plans segment first (EXEC-PROMPTS entries and ad-hoc items only in the plans segment's absence), the resolution recorded in `decision_reason`; name the home (the Exec-mode selection rule's ordering contract versus the maintenance skill's Mode binding paragraph) and why the other cannot absorb it.
+- Neither arm adds a gate, validator, lock, ledger, or required ceremony; both are text-authoring contracts over existing surfaces.
+
+Orientation: read the origin row (its Evidence section carries the archaeology: 867f8ed7e introduced the `Ad-hoc-panel-pass:` wording; the witnessed landing cb0e439c followed its entry prompt's three-gate list verbatim), the sibling row docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md (the same dropout class, helper-route shape), the Ad-hoc backlog arm bullet in `agents/skills/maintenance/decisions.md`, the investigate skill's Stage 4, and the EXEC-PROMPTS.md log header's standing-rules region. Retroactive receipt repair for the witnessed landing is out of scope (the origin row's scope item 3 records why).
+
+Prompt: Author a focused plan for the two scope arms. Keep the arm's machinery binding on every ad-hoc run regardless of what its entry prompt says; do not add new machinery, and do not restate the arm's contract in more than one home. Land the emission-side constraint so the next EXEC entry written cannot shadow the arm, and the mandate-wording clause so a plans-worded operator mandate visibly prefers the plans segment with the resolution recorded. Run the pins suite (the known pre-existing `authoring stand-down gate span` red is recorded context, not this work's gate), the em-dash added-lines gate, and the public hygiene scan.
+
+Rejected alternatives:
+- A blocking landing gate refusing an ad-hoc landing without the panel receipt: rejected under the machinery admission protocol - no witnessed incident of the receipt three-way equality failing when the arm is followed; the witnessed defect is prompt shadowing, a text-authoring shape the arm's own text already forbids (origin row, Evidence; `agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm)
+- Bare-pointer entry prompts (no prompt payload at all): rejected - it prices away the entry's real value (scope arms, orientation, urgency evidence); the narrower constraint on gate restatements resolves the witnessed cost (origin row, Alternatives; the pruned `adhoc-run-pick-time-freeze-mark` entry's payload in cb0e439c's parent)
+- Per-run operator confirmation of segment preference: rejected against the loop's never-block-on-questions invariant, which unattended turns decide under (`agents/skills/maintenance/SKILL.md`; origin row, Alternatives)
+- Leave entry prompts as-is and rely on sessions reading the arm: rejected - the witnessed run read the arm-adjacent surfaces and still followed the prompt's shorter gate list, so the dropout is systematic, not a one-session miss (cb0e439c; the 2026-10-22 sibling witnesses)
+
+Standing pre-authorization: the two scope arms above; no machinery is added, so no admission line is owed beyond the first rejected alternative's recorded absence.
+
+PLAN-PROMPTS-PRUNE: maintenance-pin-current-main-baseline-red -> docs/history/plans/completed/2026-10-26-maintenance-pin-current-main-baseline-red.md (frozen entry pruned with the completed plan archive)
+
 PLAN-PROMPTS-PRUNE: done-run-resume-ownership-gap -> docs/history/plans/2026-10-25-done-run-resume-ownership-gap.md (plan file exists at the plans root; frozen entry pruned by monitor duty)
 
 PLAN-PROMPTS-PRUNE: facts-values-safe-loading-and-audit -> docs/history/plans/2026-10-22-facts-values-safe-loading-and-audit.md (plan file exists at the plans root; frozen entry pruned by monitor duty)
@@ -39,6 +74,10 @@ PLAN-PROMPTS-PRUNE: skill-edit-focused-review-timing -> docs/history/plans/2026-
 PLAN-PROMPTS-PRUNE: done-run-lock-span-and-append-ordering -> docs/history/plans/2026-10-24-done-run-lock-span-and-append-ordering.md
 
 PLAN-PROMPTS-PRUNE: dead-run-conversion-zcode-runtime-reachability -> docs/history/plans/2026-10-25-dead-run-conversion-zcode-runtime-reachability.md (landed plan authoring record; own frozen entry pruned with its plan landing; origin row archived to completed/ with covered flip in the same rider)
+
+PLAN-PROMPTS-PRUNE: done-lock-generation-and-context-recovery -> docs/history/plans/2026-10-26-done-lock-context-compaction-recovery.md (plan landing rider)
+
+PLAN-PROMPTS-PRUNE: self-heal-review-invocation-disposition-contract -> docs/history/plans/2026-10-26-review-plan-self-heal-invocation-disposition-gap.md (landed plan authoring record; own frozen entry pruned with its plan landing; origin rows covered-flipped)
 
 Standing rules:
 
@@ -180,93 +219,6 @@ PLAN-PROMPTS-PRUNE: ad-hoc-worktree-lifecycle-owner-gap -> docs/history/plans/20
 PLAN-PROMPTS-PRUNE: ad-hoc-worktree-lifecycle-owner-gap -> landing
 PLAN-PROMPTS-PRUNE: review-plan-recurring-new-blockers -> docs/history/plans/2026-10-25-review-plan-nonconvergence-disposition.md
 
-## authoring-resume-after-operator-reauthorization
-
-Added: 2026-10-25, investigate pass anchored on the failure to resume the revised done-finalize authoring plan after explicit operator authorization.
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this incident leaves an open design choice about whether a shared continuation clarification belongs across Blocker recovery, review reconciliation, and plan review; it is not a body-named single-surface fix.
-
-Origins:
-- docs/history/backlog/2026-10-25-authoring-stopped-after-reauthorization.md
-
-Urgency: medium - the prior plan's r13 digest is stale after a scope simplification, so authoring needs a properly minted, fresh-digest review before it can continue (`agents/skills/review-plan/SKILL.md`).
-
-Scope arms:
-- Compare the existing Blocker recovery duty, reconciliation's caller-owned fresh-review handoff, and review-plan's digest and iteration rules. Decide whether the stop was solely an execution lapse or whether one concise cross-reference is needed to make explicit operator reauthorization resume the existing workflow.
-- If a wording change is warranted, place it at the owning caller skill, remove equivalent text in the same edit, and preserve the digest gate, mint-before-launch rule, one-attempt limit, round cap, and stop condition. If no contract gap exists, document the evidence and disposition the origin without changing operative text.
-
-Orientation: read the origin row, `agents/skills/maintenance/decisions.md` Blocker recovery, `agents/skills/review-reconciliation/SKILL.md` sections 3-4, `agents/skills/review-plan/SKILL.md` Step 5 and Iteration Discipline, and the current plan's latest review record and source digest.
-
-Prompt: Determine why the authoring lane stopped after the operator explicitly directed it to proceed. Re-derive the plan digest and latest review record; confirm that the latest review is stale and that a fresh minted review is the permitted continuation. Trace the stop against the three named instruction surfaces and decide whether the existing contract already resolves it. Prefer no skill-text change if the incident is execution noncompliance; if a genuine ambiguity remains, make one concise owner-level clarification with byte-neutral deletion. Do not reset review budgets, launch before usage mint, reuse a stale digest, add a blocker or validator, or continue automatically after a fresh review reopens the same root. Validate the resulting plan under the existing focused panel and readiness gates.
-
-Rejected alternatives:
-- Treat the stale r13 record as current certification: rejected because its source digest predates the scope amendment and the review-plan rule requires the current digest (`agents/skills/review-plan/SKILL.md`)
-- Stop and ask for direction again after the operator already authorized continuation: rejected because the Blocker recovery rule directs a safe workaround to be applied and authorized work to continue (`agents/skills/maintenance/decisions.md`)
-- Add a new gate or increase automatic review attempts: rejected under the Machinery admission protocol because no witnessed incident beyond this single assistant lapse establishes catch frequency, while false-positive cost would be another refusal (`docs/maintenance/operator-directives.md`)
-- Rewrite the reconciliation and review-plan workflows broadly: rejected because the existing handoff already requires a fresh caller-owned review and retains a user-directed stop if the same root returns (`agents/skills/review-reconciliation/SKILL.md`)
-
-Machinery admission: no new gate, validator, lock, ledger, or ceremony; blocking-gate and automatic-round expansion arms are rejected because there is no witnessed incident beyond this single assistant lapse (`docs/maintenance/operator-directives.md`).
-
-Standing pre-authorization: none - the entry dispatches through the normal plans selection rule.
-
-## done-lock-acquire-vanished-directory-indeterminate
-
-
-Added: 2026-10-25, investigate pass over the newly filed acquire-race row
-
-Work-type verdict: plan-worthy because the fix edits `scripts/done-lock.sh`, an existing lock-bearing acquisition and refusal path; the Ad-hoc backlog arm eligibility test in `agents/skills/maintenance/decisions.md` explicitly excludes guard-bearing paths, even for a single-script change with no open design question.
-
-Origins:
-- docs/history/backlog/2026-10-25-done-lock-acquire-vanished-directory-indeterminate.md
-
-Urgency: medium - one witnessed closeout setup stopped with an indeterminate holder outcome, then an immediate status read was free; the stale result interrupts an otherwise ready closeout, while unresolved or unreadable holder evidence still needs the existing fail-closed outcome.
-
-Scope arms:
-- Retry only on vanished-directory evidence: after an atomic `mkdir` acquisition fails and the lock directory is absent, make one bounded retry through the existing acquisition operation before classifying the refusal. Preserve the current held and indeterminate outcomes when the retry finds a lock or unreadable state; do not treat absence alone as a successful acquisition.
-- Regression fixture: deterministically make the first lock-directory `mkdir` fail without creating a directory, then let the next attempt use the real `mkdir`; cover the direct acquire and the wait-acquire timeout edge, asserting pass plus exports and preserving the existing meta-less ambiguous-timeout cell.
-
-Orientation: read the origin row, `scripts/done-lock.sh` `try_acquire`, `classify_held_outcome`, `cmd_acquire`, and `cmd_wait_acquire`, and `scripts/test_done_lock_holder_visibility.sh`. The ambiguous outcome was added in commit `10a221758` under `docs/history/plans/completed/2026-10-03-outcome-contract-migration-batch-1.md` Task 2 to preserve genuinely unadjudicable holder states; that plan does not establish a recovery arm for an absent directory. `docs/history/plans/2026-10-24-done-run-lock-span-and-append-ordering.md` explicitly excludes ownership and reentrancy changes, while this origin concerns the failed-acquire classification edge.
-
-Prompt: Author a focused plan that closes the false-indeterminate race without weakening the lock's fail-closed behavior. First verify the acquisition race against the compare-and-swap removal path: a missing directory may be transient, so it is not itself proof that acquisition succeeded. Specify one bounded retry through `try_acquire` after a failed attempt when the directory is absent, including the direct `acquire` path and the `wait-acquire` deadline path; if the retry does not acquire, keep the current evidence-based held or indeterminate mapping. Add deterministic tests by interposing a `mkdir` shim that fails once for the lock path without creating it and delegates subsequent calls to the real command. Keep stdout export-only and the final `OUTCOME:` placement unchanged. Preserve the existing aged meta-less indeterminate timeout test. Do not add a lock, gate, validator, ledger, new error class, or wait budget. Validation: `bash scripts/test_done_lock_holder_visibility.sh`, `bash scripts/done-lock.sh selftest`, the relevant `done_run` wrapper test, and the public-hygiene scan.
-
-Rejected alternatives:
-- Remove the indeterminate outcome for all failed acquisitions: rejected because the outcome migration specifically preserves meta-less locks past the incomplete-age limit and unverifiable holder identities as indeterminate, where available evidence cannot establish a safe pass or fail (`docs/history/plans/completed/2026-10-03-outcome-contract-migration-batch-1.md`)
-- Treat a missing lock directory as immediate success without another atomic `mkdir`: rejected because `steal_remove_if_unchanged` moves a candidate directory to a tomb while checking its generation, so absence alone does not prove the caller acquired the lock (`scripts/done-lock.sh`)
-- Leave the code unchanged and tell operators to check status and rerun setup: rejected because the witnessed setup already stopped although the next status read was free, adding an avoidable manual retry to the closeout path (`docs/history/backlog/2026-10-25-done-lock-acquire-vanished-directory-indeterminate.md`)
-- Increase the closeout wait budget or poll frequency: rejected because neither changes the evidence classification after the lock disappears, and a longer wait only delays the same stop (`scripts/done_run.sh`)
-
-Machinery admission: no new gate, validator, lock, ledger, or ceremony; the plan reuses the existing atomic acquisition operation and preserves the current ambiguity refusal for unreadable or unresolved lock records.
-
-Standing pre-authorization: none - the entry dispatches through the normal plans selection rule.
-
-## primary-log-branch-drift-at-commit
-
-Frozen: docs/tmp/authoring-claims/2026-10-25-primary-log-branch-drift-at-commit.md (2026-10-25)
-
-Added: 2026-10-25, investigate pass anchored on the plan-closeout prompt-log commit that landed on a peer branch after the shared checkout changed.
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the safe write target has an unresolved choice between ref-bound commit and serializing checkout changes; this is not a body-named single-surface fix.
-
-Origins:
-- docs/history/backlog/2026-10-25-primary-log-branch-drift-at-commit.md
-
-Urgency: medium - one prompt-log prune commit landed on a peer branch while the required locks were held; it was recovered, but the current lock contract does not bind the commit to the intended branch ref.
-
-Scope arms:
-- Ref-bound write: trace the prompt-log writer's done and merge lock protocol and the existing temporary-index plus expected-ref update pattern. Decide whether primary rolling-log commits can target `main` through that pattern regardless of the checked-out branch, preserving exact-path staging and same-turn commit, or whether every checkout branch switch can be reliably serialized through existing lock consumers.
-- Refusal and preservation: on an expected-ref mismatch, leave refs and foreign worktree/index state unchanged and report the mismatch. Do not add a new lock or blocking gate unless it passes the repository machinery-admission protocol.
-
-Orientation: read the origin row, the `PLAN-PROMPTS.md` Standing rules and Write boundary, `agents/skills/plans/SKILL.md` Final Step, `agents/skills/done/SKILL.md` primary-checkout write duties, and `docs/history/plans/completed/2026-09-20-merge-landing-lock-grouping.md` Task 2's temporary-index and expected-ref landing path. Compare that path with the rolling prompt log's plain commit contract and with the done runner's `authorized_landing` ref update.
-
-Prompt: Resolve how a primary rolling-log write stays bound to its intended ref when another session changes the checked-out branch during the lock-protected write. First reproduce the observed sequence from the origin and confirm the locks do not pin the symbolic branch. Then compare the existing temporary-index plus expected-ref update pattern against serializing all branch switches through the lock contract. Prefer reuse of the existing ref-bound transaction if it preserves the primary worktree and index; otherwise demonstrate that every relevant branch-switch path consumes the existing lock. Keep writes exact-path and same-turn committed. Preserve peer-owned worktree and index bytes. Do not add a global lock, blocking gate, or validator without the required machinery-admission evidence and retirement plan.
-
-Rejected alternatives:
-- Treat an earlier branch check as sufficient: rejected because the witnessed branch changed after the check and before commit despite the write locks (`docs/history/backlog/2026-10-25-primary-log-branch-drift-at-commit.md`).
-- Add a new repository-wide lock for every checkout branch switch: rejected because the witnessed switch bypassed the held lock; there is no evidence every switching path can acquire a new lock (`docs/history/plans/completed/2026-09-20-merge-landing-lock-grouping.md`).
-- Move rolling prompt logs to a separate branch or registry: rejected because it would change the dispatch source without addressing the witnessed wrong-ref commit (`agents/skills/maintenance/SKILL.md`, Step 2).
-
-Machinery admission: no new blocking gate, validator, lock, registry, or ceremony is recommended; the investigation reuses the existing expected-ref update pattern if it fits this write surface.
-
 ## runtime-scripts-home-reconcile-and-retire
 
 Added: 2026-10-25, investigate pass anchored on the updated residue row (witness: the 2026-10-25 authoring run composed a reconcile invocation against the repository copy's CLI and hit the home copy's older contract).
@@ -325,6 +277,95 @@ Machinery admission: no new gate, validator, lock, ledger, or ceremony is recomm
 
 Standing pre-authorization: none - the platform capability and owner boundary remain unresolved and require the normal plans-side design decision.
 
+
+## plan-closeout-missing-phase0-baseline
+
+Added: 2026-10-26, investigate pass over the reviewed plan closeout refusal
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the incident has an explicit refusal and the durable recovery choice spans plans authoring placement and done closeout; it is not a body-named single-surface fix. Keep it separate from the context-compaction origin, whose lock-witness defect is already represented by its own open row and plan branch.
+
+Origins:
+- docs/history/backlog/2026-10-26-plan-closeout-missing-phase0-baseline.md
+
+Stage 1 roster (design context, not origins): `docs/history/backlog/2026-10-25-closeout-skip-record-producer-residuals.md` concerns skip-record healing and plan-slug parity at the same migration surface, but does not explain this session's missed Phase 0 capture.
+
+Urgency: medium - the plan and review remain ready on a preserved worktree branch, but no artifact migration or landing occurred; the refusal prevented an implicit empty baseline from hiding run-owned files.
+
+Scope arm:
+- Recovery wording: decide whether the existing Worktree-first lifecycle supports restarting authoring from its original base in a fresh worktree, capturing the canonical baseline before reapplying plan commits and importing review artifacts, then revalidating the same plan digest before closeout. Preserve the current missing-baseline refusal and the existing transfer-before-removal gates.
+- Origin disposition: keep `docs/history/backlog/2026-10-26-done-lock-context-recovery-after-compaction.md` separate and open until its documentation plan lands. Its lost Step 0 lock witness is distinct from this missing migration baseline; do not remove, merge, or simplify that origin based on this refusal.
+- Do not add a lock, gate, validator, skip-record producer path, or required ceremony. The existing Phase 0 duty already requires a baseline or a genuine capture-failure skip, and the completed single-start baseline plan says a missing record must refuse (`agents/skills/plans/SKILL.md`, Closeout-evidence establishment duty; `docs/history/plans/completed/2026-10-18-worktree-closeout-single-start-baseline.md`).
+
+Orientation: read the new origin, the context-compaction origin, `agents/skills/plans/SKILL.md` Phase 0 closeout-evidence duty, `agents/skills/execute-plan/SKILL.md` Step 0.4, `agents/skills/done/SKILL.md` Step 2, `scripts/done_run.sh` baseline resolution, and `scripts/worktree_closeout_migrate.py` capture and migration. History: `docs/history/plans/completed/2026-10-18-worktree-closeout-single-start-baseline.md` removed late capture and retained the refusal when neither baseline nor valid skip evidence exists. No baseline or skip record for this plan was present in the source worktree or primary checkout.
+
+Prompt: Author a focused documentation plan only if the fresh-worktree replay is a valid recovery under the existing Worktree-first standard. Preserve the no-late-baseline and no-synthetic-skip rules. The recovery must capture the canonical baseline before reapplying the reviewed tracked plan changes or importing gitignored review artifacts, then rerun readiness and the hard review-staging validator against the same plan bytes before the ordinary done migration, landing, and removal gates. Keep the context-compaction origin separate and open until its own plan lands. Do not change runtime guards or add recovery machinery; if the existing lifecycle cannot support the replay with verified artifact ownership, record the refusal and park the plan for operator handling.
+
+Rejected alternatives:
+- Remove the missing-baseline refusal or treat the missing file as an empty baseline: rejected because the completed single-start baseline plan requires refusal when neither a valid baseline nor a valid skip record exists, protecting run-created artifacts from silent omission (`docs/history/plans/completed/2026-10-18-worktree-closeout-single-start-baseline.md`)
+- Synthesize a skip record after the failed closeout: rejected because the existing skip arm is produced only by an actual Phase 0 capture failure, and the plan skill forbids inferring an empty baseline (`agents/skills/plans/SKILL.md`, Closeout-evidence establishment duty)
+- Remove or merge the context-compaction origin: rejected because it tracks loss of lock-generation evidence, while this incident is missing artifact-migration evidence; the source row remains open and the corresponding plan has not landed (`docs/history/backlog/2026-10-26-done-lock-context-recovery-after-compaction.md`; `docs/history/plans/completed/2026-10-18-done-live-owner-closeout-recovery.md`)
+- Add another guard or validator to catch a missed setup step: rejected because the current Phase 0 duty already requires the record before writes, and this single session-level omission does not justify a new blocker under the Machinery admission protocol (`agents/skills/plans/SKILL.md`; repository guidelines, Machinery admission protocol)
+
+## plan-authoring-stand-down-before-charter
+
+Added: 2026-10-26, learn and investigate pass over a post-Phase-0 stand-down
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the remedy touches authoring placement and a guard-bearing closeout path, with a choice about preserving versus extending existing removal protections; it is not a body-named single-surface fix.
+
+Origins:
+- docs/history/backlog/2026-10-26-plan-authoring-stand-down-before-charter.md
+- docs/history/backlog/2026-10-21-gate-removal-empty-owned-set-remedy.md
+
+Stage 1 roster: both origins concern a refusal/remedy path in `scripts/worktree_closeout_migrate.py` `gate-removal`; the existing empty-owned-set case and the absent-charter stand-down case differ in cause but share the removal surface.
+
+Urgency: medium - an authoring run created a worktree and branch for an origin whose implementation already existed, then stopped without a plan file; cleanup required operator direction after the charter-dependent gate returned a tool error.
+
+Scope arms:
+- Preserve `gate-removal`'s fail-closed identity and artifact checks for ordinary plan closeout. Determine whether actionability can be checked before prompt freezing and run provisioning so already-completed origins do not create an authoring worktree that lacks a charter.
+- Resolve the empty-owned-set remedy in the same design pass only if the smallest change shares the same refusal/remedy mechanism; otherwise keep the two remedies separate and explain why.
+- At plan-authoring time, re-derive each origin's implementation and landing state from source and history; do not infer either from an open row or a prompt-log marker.
+
+Orientation: read both origins, `agents/skills/plans/SKILL.md` Phase 0 and Final Step, `agents/skills/maintenance/template-authoring.md` authoring claim procedure, `scripts/worktree_closeout_migrate.py` `cmd_gate_removal`, and `docs/history/plans/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`. The existing lifecycle plan assigns cleanup after a passing gate but does not define the no-charter stand-down; the completed gate-removal plan keeps missing-proof refusals fail-closed, and the empty-owned-set origin records a separate remedy case.
+
+Prompt: Author a focused plan that removes the observed stranded authoring setup with the smallest change. First test whether the selected backlog origin still needs planning before the prompt is frozen and the authoring worktree is provisioned, using current repository source and history rather than the row's open status alone. If the origin is already implemented, route it through the existing covered-origin and prompt-prune contracts without creating plan-owned run state. Then determine whether an unavoidable stand-down after provisioning but before the first plan write can be safely closed using existing exact-path identity and artifact evidence. Preserve `gate-removal`'s ordinary charter, ownership, review-artifact, and branch checks; do not treat a missing charter as a normal closeout pass. Fold the empty-owned-set remedy into this plan only if one bounded remedy model handles both refusal classes without obscuring their distinct causes. Reuse or amend the existing worktree-lifecycle plan only if its reviewed scope can own the no-charter case; otherwise keep a focused plan. Add regression coverage for both pre-provision already-completed detection and post-provision stand-down, including refusal when artifact ownership is unclear. Do not add a global sweep, broad delete path, or new blocking gate without satisfying the repository Machinery admission protocol.
+
+Rejected alternatives:
+- Remove or weaken `gate-removal` for ordinary plans: rejected because the gate's missing-proof and artifact checks preserve run-owned work, as witnessed by its completed design (`docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md`).
+- Keep Phase 0 provisioning first and rely on manual cleanup after authoring discovers an already-landed implementation: rejected because the current session created a worktree and branch before that discovery and needed operator direction to remove them, as witnessed in the origin row (`docs/history/backlog/2026-10-26-plan-authoring-stand-down-before-charter.md`).
+- Add a separate mandatory no-charter removal gate immediately: rejected because a pre-provision actionability check may remove the witnessed cost without introducing another blocker, and the false-positive cost of an incorrect cleanup decision is loss of run-owned artifacts (repository guidelines, Machinery admission protocol).
+- Treat the existing worktree-lifecycle plan as already covering this origin: rejected because its current acceptance covers terminal ownership after a chartered closeout and has no no-charter stand-down case, as witnessed in the plan's criteria (`docs/history/plans/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`).
+
+Machinery admission: no new gate or deletion machinery is recommended at investigation time; if a standalone blocker is ultimately proposed, the plan must register the incident, expected catch frequency, false-positive cost, and sunset or review date, and identify a blocker it removes or demotes.
+
+Standing pre-authorization: none - the proposed alternatives change when authoring state is created and how an absent-charter run can close, so the plan must present that design choice for normal review.
+
+## docs-branch-supported-python-runtime
+
+Added: 2026-10-26, investigate over the open docs-branch sync cluster surfaced by the current learn pass
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin leaves an open design choice between selecting a supported interpreter and refusing early with an actionable version diagnostic, and choosing a portable runtime contract may require a facts/configuration decision.
+
+Origins:
+- docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md
+
+Urgency: medium - the documented canonical sync command can fail before work on a host whose default Python lacks `tomllib`, although the already-configured supported runtime completes the same command (the origin row).
+
+Scope arms:
+- Define a portable supported-runtime contract for the canonical runner, choosing between resolving a configured interpreter and failing early with a clear minimum-version diagnostic; preserve the single canonical sync path and avoid machine-specific absolute paths.
+- Keep implicit `python3` selection and rely on the operator to adjust PATH: rejected because the canonical command failed at `tomllib` import on Python 3.9 and only succeeded when the configured supported interpreter was placed first on PATH (the origin row).
+- Hardcode a host-specific interpreter path into the public runner: rejected by repository portability guidance and the repo's facts-versus-skill split (`AGENTS.md`, Machine paths and workspace roots belong in facts).
+- Add a new blocking maintenance gate around Python installation: rejected under the Machinery admission protocol because the witnessed issue is an early command failure already visible to the caller; a separate lane blocker is unnecessary (the origin row).
+
+Orientation: read the origin row; the completed docs-branch scope-and-tmp-retention plan that established the single canonical runner; the completed done-target-state learn/commit/closeout plan, which records the runtime floor as a separate follow-up; `scripts/docs_branch_sync.sh` startup/import path; and the repo facts plus AGENTS.md facts-versus-skill guidance. Keep the decision scoped to this runner's supported interpreter contract.
+
+Prompt: Author a focused plan that resolves the canonical docs-branch runner's Python runtime contract. Compare configured interpreter resolution with an early minimum-version diagnostic using the origin's failure and successful configured-runtime invocation as evidence. Keep machine-specific paths in facts, preserve the canonical runner, and add only the smallest change and focused regression needed to prove the chosen behavior. Do not add an installation gate or a second sync implementation. Use the plans skill lifecycle and review gates; leave the origin row for the plan completion pass to mark covered.
+
+Rejected alternatives:
+- Leave `python3` implicit: rejected because the canonical command failed at `tomllib` import on the recorded default interpreter (witnessed in `docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md`).
+- Hardcode a local interpreter path: rejected because the repository's public skill/script surfaces must not encode machine-specific paths (witnessed by the repository portability rule in `AGENTS.md`).
+- Add a separate maintenance gate: rejected under the Machinery admission protocol because the command already fails visibly and no separate lane-level harm was witnessed (the origin row).
+
+Machinery admission: no additional gate, validator, lock, ledger, or required ceremony is proposed; a separate installation gate is rejected because no independent lane-blocking incident was witnessed (the origin row).
 
 ## execute-plan-sequential-trace-harness
 
@@ -455,3 +496,7 @@ Rejected alternatives:
 Machinery admission: no new gate, validator, lock, ledger, or ceremony; the remedies extend an existing validator's diagnostics, its selftest, and an existing drift guard's routing. The rejected machinery arm is named above with the missing-incident absence.
 
 Standing pre-authorization: none - the entry dispatches through the normal plans selection rule.
+
+PLAN-PROMPTS-PRUNE: primary-log-branch-drift-at-commit -> docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md
+
+PLAN-PROMPTS-PRUNE: authoring-resume-after-operator-reauthorization -> docs/history/plans/2026-10-26-authoring-resume-after-operator-reauthorization.md (landed plan authoring record; own entry pruned with its plan landing; origin archived to completed/ with covered flip in the same closeout)

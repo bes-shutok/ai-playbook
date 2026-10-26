@@ -85,6 +85,11 @@ class FixtureMixin:
             "DONE_RUN_ID", "DONE_RUN_MANIFEST", "DONE_RUN_MARKER",
             "DONE_SWEEP_DECLARED_STAGE_PATHS",
             "GATE_LIVENESS_LEDGER_PATH",
+            # cmd_setup's writer-claim arrays: inherited values must never
+            # satisfy the runner's own mixed-input probe or inject operands
+            # into the writer call (env scrub parity with the runner's
+            # function-local declarations).
+            "WM_ARGS", "ADOPT_ARGS",
         ):
             env.pop(var, None)
         self.base_env = env
@@ -170,11 +175,19 @@ class FixtureMixin:
         env["DONE_SWEEP_USER_FACTS"] = str(self.tmp / "user-facts.md")
         return env
 
-    def run_setup(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    def run_setup(
+        self, *args: str, cwd: Path | None = None,
+        env: dict | None = None, env_extra: dict | None = None,
+    ) -> subprocess.CompletedProcess:
+        resolved = env if env is not None else self.runner_env()
+        if env_extra:
+            resolved = dict(resolved)
+            resolved.update(env_extra)
         return subprocess.run(
             ["bash", str(RUNNER), "setup", *args],
             cwd=str(cwd or self.fixture),
-            env=self.runner_env(),
+            env=resolved,
+
             capture_output=True,
             text=True,
             timeout=300,
@@ -466,8 +479,9 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         )
         self.assertIn(
             "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py "
-            f"recover-manifest --run-id {run_id} | re-enter with --from-manifest "
-            f"{run_id} (adopt) | python3 scripts/done_sweep_gates_lib.py "
+            f"recover-manifest --run-id {run_id} | re-enter exactly with "
+            f"--from-manifest {run_id} | adopt via setup --adopt {run_id} | "
+            "python3 scripts/done_sweep_gates_lib.py "
             f"finalize-manifest --run-id {run_id}",
             second.stderr,
         )
@@ -492,8 +506,9 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         )
         self.assertIn(
             "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py "
-            f"recover-manifest --run-id {run_id} | adopt via --from-manifest "
-            f"{run_id} | python3 scripts/done_sweep_gates_lib.py "
+            f"recover-manifest --run-id {run_id} | adopt via setup --adopt "
+            f"{run_id} | re-enter exactly with --from-manifest {run_id} | "
+            "python3 scripts/done_sweep_gates_lib.py "
             f"finalize-manifest --run-id {run_id} | python3 "
             "scripts/done_sweep_gates_lib.py disposition-manifest --run-id "
             f"{run_id} (dead root only)",
@@ -554,6 +569,473 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         session = self.done_session()
         self.assertEqual(len(list(session.glob("run-manifest-*.json"))), 1)
         self.assertEqual(len(list(session.glob("run-start-*"))), 1)
+
+
+class DoneRunSetupTerminalReleaseTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan docs/history/plans/2026-10-24-done-run-lock-
+    span-and-append-ordering.md): every terminal classification and
+    fail-closed exit after setup acquires the done lock releases only the
+    generation that invocation acquired before exiting with the original
+    refusal outcome and remedy text, while the explicit --from-manifest
+    re-entry keeps its acquired lock."""
+
+    def lock_status(self) -> str:
+        proc = subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "status"],
+            cwd=str(self.fixture), env=self.runner_env(),
+            capture_output=True, text=True, timeout=120,
+        )
+        return proc.stdout + proc.stderr
+
+    def seed_run(self, label: str) -> dict:
+        self.init_fixture_repo()
+        proc = self.run_setup("--label", label)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return self.eval_exports(proc.stdout)
+
+    def classifier_failure_env(self) -> dict:
+        """A PATH shim whose python3 fails only the boundary-classifier
+        invocation, so the second setup reaches the classifier's
+        tool-failure exit with the acquired lock held."""
+        bin_dir = self.tmp / "shim-bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "python3"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'for arg in "$@"; do\n'
+            '  case "$arg" in\n'
+            "    classify-run-boundary)\n"
+            '      echo "shim: the boundary classifier failed" >&2\n'
+            "      exit 9 ;;\n"
+            "  esac\n"
+            "done\n"
+            f'exec "{sys.executable}" "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env = self.runner_env()
+        env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+        return env
+
+    def test_orphan_classification_stop_releases_and_reentry_holds(self) -> None:
+        exports = self.seed_run("first")
+        run_id = exports["DONE_RUN_ID"]
+        session = self.done_session()
+        before = sorted(p.name for p in session.iterdir())
+        second = self.run_setup("--label", "second")
+        self.assertEqual(second.returncode, 2)
+        # the original refusal outcome and remedy text, unchanged
+        self.assertIn(
+            "done_run setup: remedies: python3 scripts/done_sweep_gates_lib.py "
+            f"recover-manifest --run-id {run_id} | re-enter exactly with "
+            f"--from-manifest {run_id} | adopt via setup --adopt {run_id}",
+            second.stderr,
+        )
+        self.assertIn(
+            "done_run setup: no new boundary written (read-only "
+            "classification; pass --from-manifest to re-enter explicitly)",
+            second.stderr,
+        )
+        # this invocation's acquired generation released: the lock is free
+        # and the read-only stop wrote nothing
+        self.assertIn(": free", self.lock_status())
+        self.assertNotIn("did not release", second.stdout + second.stderr)
+        self.assertEqual(sorted(p.name for p in session.iterdir()), before)
+        # the explicit re-entry still acquires and keeps the lock
+        third = self.run_setup("--from-manifest", run_id)
+        self.assertEqual(third.returncode, 0, third.stderr)
+        reexports = self.eval_exports(third.stdout)
+        self.assertEqual(reexports["DONE_RUN_ID"], run_id)
+        self.assertIn(": held", self.lock_status())
+        meta = Path(reexports["DONE_LOCK_DIR"]) / "meta.env"
+        token_line = next(
+            line for line in meta.read_text().splitlines()
+            if line.startswith("lock_token=")
+        )
+        self.assertEqual(token_line, f"lock_token={reexports['DONE_LOCK_TOKEN']}")
+
+    def test_classifier_tool_failure_releases_the_acquired_lock(self) -> None:
+        self.seed_run("first")
+        session = self.done_session()
+        before = sorted(p.name for p in session.iterdir())
+        second = self.run_setup(
+            "--label", "second", env=self.classifier_failure_env(),
+        )
+        self.assertEqual(second.returncode, 3)
+        self.assertIn("shim: the boundary classifier failed", second.stderr)
+        self.assertIn(
+            "done_run setup: the manifest-state classifier failed; "
+            "no new boundary written (fail-closed)",
+            second.stderr,
+        )
+        self.assertIn(": free", self.lock_status())
+        self.assertNotIn("did not release", second.stdout + second.stderr)
+        self.assertEqual(sorted(p.name for p in session.iterdir()), before)
+
+    def test_unreadable_manifest_fail_closed_releases_the_acquired_lock(self) -> None:
+        exports = self.seed_run("first")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        manifest.write_text("{ not json\n")
+        session = self.done_session()
+        before = sorted(p.name for p in session.iterdir())
+        second = self.run_setup("--label", "second")
+        self.assertEqual(second.returncode, 2)
+        self.assertIn("unparseable", second.stderr)
+        self.assertIn(manifest.name, second.stderr)
+        self.assertIn(": free", self.lock_status())
+        self.assertNotIn("did not release", second.stdout + second.stderr)
+        self.assertEqual(sorted(p.name for p in session.iterdir()), before)
+class DoneRunSetupAdoptionTest(FixtureMixin, unittest.TestCase):
+    """Task 1 regressions (plan 2026-10-25-done-run-resume-ownership-gap):
+    setup --adopt routes the classified orphan boundary through the writer's
+    existing adoption (prior start commit and ownership claims carried into
+    the new linked manifest), exact re-entry stays exact, and every
+    incompatible transition input refuses with no durable marker or manifest
+    change."""
+
+    OWNED_REVIEW = ".ai-playbook/reviews/2026-10-25-adopt-own-review-r1.md"
+    FOREIGN_REVIEW = ".ai-playbook/reviews/2026-10-25-adopt-peer-review-r1.md"
+
+    def seed_interrupted_run(self) -> dict:
+        """A fixture run owning one review and marking one peer review
+        foreign, left interrupted (complete=false): the adoption target."""
+        self.init_fixture_repo()
+        (self.fixture / self.OWNED_REVIEW).parent.mkdir(parents=True)
+        (self.fixture / self.OWNED_REVIEW).write_text("owned staging review\n")
+        (self.fixture / self.FOREIGN_REVIEW).write_text("peer staging review\n")
+        (self.fixture / "seed.txt").write_text("seed\nwork\n")
+        _, exports = self.setup_session(
+            "--owned-path", "seed.txt",
+            "--owned-review", self.OWNED_REVIEW,
+            "--foreign-review", self.FOREIGN_REVIEW,
+        )
+        return exports
+
+    def create_post_setup_review(self) -> str:
+        """A review created after the interrupted setup: the adoption's new
+        claim, the one the pre-change wrapper silently dropped."""
+        rel = ".ai-playbook/reviews/2026-10-25-adopt-late-review-r2.md"
+        (self.fixture / rel).write_text(
+            "review created after the interrupted setup\n"
+        )
+        return rel
+
+    def session_names(self) -> list[str]:
+        return sorted(p.name for p in self.done_session().iterdir())
+
+    def test_adopt_routes_classified_orphan_through_writer(self) -> None:
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        prior = json.loads(prior_bytes)
+        # Move HEAD past the interrupted boundary's start commit so the
+        # preserved-start assertion has a discriminating witness (seed HEAD
+        # must not equal adopt HEAD).
+        (self.fixture / "seed.txt").write_text("seed\nwork\nmore\n")
+        self.git("add", "seed.txt")
+        self.git("commit", "-qm", "post-boundary work")
+        new_head = self.git("rev-parse", "HEAD").stdout.strip()
+        new_rel = self.create_post_setup_review()
+        proc = self.run_setup(
+            "--adopt", exports["DONE_RUN_ID"], "--owned-review", new_rel,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            f"adopting the classified interrupted boundary "
+            f"run_id={exports['DONE_RUN_ID']}",
+            proc.stderr,
+        )
+        reexports = self.eval_exports(proc.stdout)
+        adopted = json.loads(Path(reexports["DONE_RUN_MANIFEST"]).read_text())
+        self.assertNotEqual(adopted["run_id"], prior["run_id"])
+        self.assertEqual(adopted["adopted_from"], prior["run_id"])
+        # the prior boundary is preserved: start commit, owned plan, owned
+        # start-dirt paths, and foreign classifications; the new claim adds on
+        self.assertEqual(adopted["start_commit"], prior["start_commit"])
+        self.assertNotEqual(adopted["start_commit"], new_head)
+        self.assertEqual(adopted["owned_paths"], prior["owned_paths"])
+        self.assertEqual(adopted["owned_plan_paths"], prior["owned_plan_paths"])
+        self.assertEqual(
+            adopted["owned_review_paths"],
+            [new_rel] + prior["owned_review_paths"],
+        )
+        self.assertEqual(
+            adopted["foreign_review_paths"], prior["foreign_review_paths"]
+        )
+        # the prior record is byte-identical and the new manifest binds a
+        # fresh marker (non-positional: name inequality against the prior
+        # marker, not list position)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        session = self.done_session()
+        self.assertEqual(len(list(session.glob("run-manifest-*.json"))), 2)
+        self.assertNotEqual(adopted["marker"], prior["marker"])
+        self.assertTrue((session / adopted["marker"]).is_file())
+        self.assertIn(f"export DONE_RUN_ID={adopted['run_id']}", proc.stdout)
+
+    def test_adopt_routes_stale_marker_orphan_through_writer(self) -> None:
+        exports = self.seed_interrupted_run()
+        prior = json.loads(Path(exports["DONE_RUN_MANIFEST"]).read_text())
+        Path(exports["DONE_RUN_MARKER"]).write_text("garbage marker content\n")
+        new_rel = self.create_post_setup_review()
+        proc = self.run_setup(
+            "--adopt", exports["DONE_RUN_ID"], "--owned-review", new_rel,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        adopted = json.loads(
+            Path(self.eval_exports(proc.stdout)["DONE_RUN_MANIFEST"]).read_text()
+        )
+        self.assertEqual(adopted["adopted_from"], prior["run_id"])
+        self.assertEqual(adopted["start_commit"], prior["start_commit"])
+        self.assertEqual(
+            adopted["owned_review_paths"],
+            [new_rel] + prior["owned_review_paths"],
+        )
+
+    def test_adopt_mismatched_id_refuses_before_any_write(self) -> None:
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        before = self.session_names()
+        proc = self.run_setup("--adopt", "20991231T235959Z-notaboundary")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            "--adopt 20991231T235959Z-notaboundary names no classified "
+            "interrupted boundary",
+            proc.stderr,
+        )
+        self.assertIn(f"(classified run_id: {exports['DONE_RUN_ID']})", proc.stderr)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.session_names(), before)
+
+    def test_adopt_terminal_boundary_refuses_without_durable_change(self) -> None:
+        exports = self.seed_interrupted_run()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        record = json.loads(manifest.read_text())
+        record["complete"] = True
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        before = manifest.read_bytes()
+        before_names = self.session_names()
+        proc = self.run_setup("--adopt", exports["DONE_RUN_ID"])
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            f"--adopt {exports['DONE_RUN_ID']} names the classified boundary "
+            f"run_id={exports['DONE_RUN_ID']}, which is finalized",
+            proc.stderr,
+        )
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_already_adopted_boundary_refuses_without_durable_change(self) -> None:
+        self.seed_interrupted_run()
+        session = self.done_session()
+        prior_path = sorted(session.glob("run-manifest-*.json"))[0]
+        template = json.loads(prior_path.read_text())
+        newest_id = "20991231T235959Z-adoptee00000"
+        template["run_id"] = newest_id
+        newest = session / f"run-manifest-{newest_id}.json"
+        newest.write_text(json.dumps(template, indent=2, sort_keys=True) + "\n")
+        adopter_id = "20260101T000000Z-adopter00000"
+        template["run_id"] = adopter_id
+        template["adopted_from"] = newest_id
+        adopter = session / f"run-manifest-{adopter_id}.json"
+        adopter.write_text(json.dumps(template, indent=2, sort_keys=True) + "\n")
+        prior_path.unlink()  # the crafted adoptee is the newest manifest file
+        before_names = self.session_names()
+        before_newest = newest.read_bytes()
+        before_adopter = adopter.read_bytes()
+        proc = self.run_setup("--adopt", newest_id)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            f"--adopt {newest_id} names the classified boundary "
+            f"run_id={newest_id}, which is adopted",
+            proc.stderr,
+        )
+        self.assertEqual(newest.read_bytes(), before_newest)
+        self.assertEqual(adopter.read_bytes(), before_adopter)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_corrupt_boundary_fails_closed(self) -> None:
+        exports = self.seed_interrupted_run()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        manifest.write_text("{ not json\n")
+        before_names = self.session_names()
+        proc = self.run_setup("--adopt", exports["DONE_RUN_ID"])
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("unparseable", proc.stderr)
+        self.assertIn("fail-closed", proc.stderr)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_writer_rejected_adopt_target_leaves_no_marker_or_manifest(self) -> None:
+        # No partial boundary: the fresh boundary path forwards --adopt to the
+        # writer, whose own validation refuses the unknown target; the wrapper
+        # then removes the marker it just wrote and no manifest lands.
+        self.init_fixture_repo()
+        (self.fixture / "seed.txt").write_text("seed\nwork\n")
+        proc = self.run_setup(
+            "--adopt", "20991231T235959Z-ghost000000", "--owned-path", "seed.txt",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("cannot adopt 20991231T235959Z-ghost000000", proc.stderr)
+        self.assertIn("the writer refused", proc.stderr)
+        session = self.done_session()
+        self.assertEqual(list(session.glob("run-start-*")), [])
+        self.assertEqual(list(session.glob("run-manifest-*.json")), [])
+
+    def test_from_manifest_with_ownership_options_refuses_naming_adopt(self) -> None:
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        before_names = self.session_names()
+        new_rel = self.create_post_setup_review()
+        proc = self.run_setup(
+            "--from-manifest", exports["DONE_RUN_ID"], "--owned-review", new_rel,
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("exact re-entry", proc.stderr)
+        self.assertIn("--owned-review", proc.stderr)
+        self.assertIn(f"setup --adopt {exports['DONE_RUN_ID']}", proc.stderr)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_from_manifest_with_adopt_refuses_as_conflicting_modes(self) -> None:
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        before_names = self.session_names()
+        proc = self.run_setup(
+            "--from-manifest", exports["DONE_RUN_ID"],
+            "--adopt", exports["DONE_RUN_ID"],
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("conflicting modes", proc.stderr)
+        self.assertIn(f"setup --adopt {exports['DONE_RUN_ID']}", proc.stderr)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_from_manifest_exact_reentry_changes_no_claims(self) -> None:
+        exports = self.seed_interrupted_run()
+        self.create_post_setup_review()  # on disk; re-entry must ignore it
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        before = manifest.read_bytes()
+        second = self.run_setup("--from-manifest", exports["DONE_RUN_ID"])
+        self.assertEqual(second.returncode, 0, second.stderr)
+        reexports = self.eval_exports(second.stdout)
+        self.assertEqual(reexports["DONE_RUN_ID"], exports["DONE_RUN_ID"])
+        self.assertEqual(
+            Path(reexports["DONE_RUN_MANIFEST"]).resolve(), manifest.resolve()
+        )
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(
+            len(list(self.done_session().glob("run-manifest-*.json"))), 1
+        )
+
+    def test_terminal_newest_mismatched_adopt_forwards_to_writer(self) -> None:
+        """Given a terminal newest classified boundary and --adopt naming a
+        different id, expects an explicit routing note (the classified verdict
+        plus the writer-validation forwarding, no silent fall-through), the
+        writer's own cannot-adopt refusal surfaced, and zero surviving
+        markers and manifests beyond the prior boundary after the rollback."""
+        exports = self.seed_interrupted_run()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        record = json.loads(manifest.read_text())
+        record["complete"] = True
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        session = self.done_session()
+        before_manifests = sorted(session.glob("run-manifest-*.json"))
+        self.assertEqual(len(before_manifests), 1)
+        proc = self.run_setup(
+            "--adopt", "20991231T235959Z-bogus000000",
+            "--owned-path", "seed.txt",
+        )
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        # the routing note names the classified verdict and the forwarding
+        self.assertIn("is finalized (closed boundary)", combined)
+        self.assertIn(
+            "--adopt 20991231T235959Z-bogus000000 is not the classified "
+            "boundary and is forwarded to the writer's own adoption "
+            "validations",
+            combined,
+        )
+        # the writer's own refusal surfaces through the wrapper's fail-partial
+        self.assertIn("cannot adopt 20991231T235959Z-bogus000000", proc.stderr)
+        self.assertIn("the writer refused", proc.stderr)
+        # rollback: only the prior boundary survives, no new marker or manifest
+        self.assertEqual(
+            sorted(session.glob("run-manifest-*.json")), before_manifests
+        )
+        self.assertEqual(
+            [p.name for p in session.glob("run-start-*")],
+            [Path(exports["DONE_RUN_MARKER"]).name],
+        )
+
+    def test_from_manifest_reentry_ignores_inherited_wm_args(self) -> None:
+        """Given WM_ARGS inherited from the environment, exact re-entry still
+        succeeds: the runner's mixed-input probe reads its own function-local
+        array, never the caller's environment."""
+        exports = self.seed_interrupted_run()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        before = manifest.read_bytes()
+        proc = self.run_setup(
+            "--from-manifest", exports["DONE_RUN_ID"],
+            env_extra={"WM_ARGS": "( --owned-review /tmp/injected.md )"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        reexports = self.eval_exports(proc.stdout)
+        self.assertEqual(reexports["DONE_RUN_ID"], exports["DONE_RUN_ID"])
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(
+            len(list(self.done_session().glob("run-manifest-*.json"))), 1
+        )
+
+    def test_empty_adopt_operand_refuses_at_parse_time(self) -> None:
+        """`setup --adopt ""` refuses at the parse loop (exit 3, the
+        unknown-argument refusal class, the empty operand named) instead of
+        silently degrading to a fresh boundary; nothing durable changes."""
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        before_names = self.session_names()
+        proc = self.run_setup("--adopt", "")
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("--adopt requires a run-id operand", proc.stderr)
+        self.assertIn("empty operand", proc.stderr)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_empty_from_manifest_operand_refuses_at_parse_time(self) -> None:
+        """`setup --from-manifest ""` refuses at the parse loop (exit 3, the
+        same empty-operand class as --adopt) instead of silently degrading to
+        a fresh boundary; nothing durable changes."""
+        exports = self.seed_interrupted_run()
+        prior_path = Path(exports["DONE_RUN_MANIFEST"])
+        prior_bytes = prior_path.read_bytes()
+        before_names = self.session_names()
+        proc = self.run_setup("--from-manifest", "")
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "--from-manifest requires a run-id operand", proc.stderr
+        )
+        self.assertIn("empty operand", proc.stderr)
+        self.assertEqual(prior_path.read_bytes(), prior_bytes)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_ignores_inherited_adopt_args(self) -> None:
+        """Given ADOPT_ARGS inherited from the environment, the classified
+        orphan still adopts cleanly: the runner forwards only its own parsed
+        --adopt target, never the caller's environment (the ADOPT_ARGS twin
+        of the WM_ARGS inheritance witness)."""
+        exports = self.seed_interrupted_run()
+        proc = self.run_setup(
+            "--adopt", exports["DONE_RUN_ID"],
+            env_extra={
+                "ADOPT_ARGS": "( --adopt 20991231T235959Z-ghost000000 )",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        reexports = self.eval_exports(proc.stdout)
+        adopted = json.loads(Path(reexports["DONE_RUN_MANIFEST"]).read_text())
+        self.assertEqual(adopted["adopted_from"], exports["DONE_RUN_ID"])
 
 
 class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
@@ -1197,6 +1679,106 @@ class DoneRunDescriptionLengthCatchTest(FixtureMixin, unittest.TestCase):
         combined = proc.stdout + proc.stderr
         self.assertIn("could not be recorded", combined)
         self.assertIn("scripts/gate_liveness_ledger.json", combined)
+
+
+class DoneRunGuardFiringCommitTest(FixtureMixin, unittest.TestCase):
+    """Task 2 witnesses (plan docs/history/plans/2026-10-24-done-run-lock-
+    span-and-append-ordering.md): the commit subcommand's repeated
+    --guard-firing writes accepted rows BEFORE the declared-path staging and
+    the landing sweep, stages the ledger path so the bytes ride the landing
+    commit exactly once, and keeps every advisory outcome nonblocking,
+    including a pre-write hygiene hit that leaves the canonical bytes
+    unchanged."""
+
+    LEDGER_REL = "scripts/gate_liveness_ledger.json"
+
+    def seed_repo(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        ledger = self.fixture / "scripts" / "gate_liveness_ledger.json"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps(
+            {"schema": 1, "window": {"started": "2026-10-05"}, "guards": {}}
+        ))
+        self.git("add", self.LEDGER_REL)
+        self.git("commit", "-qm", "seed the guard-liveness ledger")
+
+    def committed_ledger_text(self) -> str:
+        return self.git("show", f"HEAD:{self.LEDGER_REL}").stdout
+
+    def matching_rows(self, text: str, evidence: str) -> list[dict]:
+        doc = json.loads(text)
+        return [
+            row
+            for guard in doc["guards"].values()
+            for row in guard["rows"]
+            if row.get("evidence") == evidence
+        ]
+
+    def test_landing_row_written_before_staging_and_lands_once(self) -> None:
+        self.seed_repo()
+        (self.fixture / "work.txt").write_text("session work\n")
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        run_id = exports["DONE_RUN_ID"]
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--stage", "work.txt",
+            "--guard-firing", f"description-length:catch:fixture-evidence:run_id={run_id}",
+            "--subject", "land work and the guard firing",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        shown = self.git("show", "--name-only", "--format=", landing).stdout
+        self.assertIn("work.txt", shown)
+        self.assertIn(self.LEDGER_REL, shown)
+        rows = self.matching_rows(self.committed_ledger_text(), "fixture-evidence")
+        self.assertEqual(len(rows), 1, "exactly one committed matching row")
+        self.assertEqual(rows[0]["kind"], "catch")
+        self.assertIn(f"run_id={run_id}", rows[0]["note"])
+        # the row write preceded the declared-path staging and the sweep
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertIn("guard-firing-appends", stages)
+        self.assertLess(
+            stages.index("guard-firing-appends"), stages.index("staging")
+        )
+        self.assertLess(
+            stages.index("guard-firing-appends"), stages.index("landing-sweep")
+        )
+
+    def test_commit_hygiene_hit_skips_row_and_lands_anyway(self) -> None:
+        self.seed_repo()
+        (self.fixture / "work.txt").write_text("session work\n")
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        env = self.commit_env()
+        env.update(exports)
+        # An active fixture deny pattern matching the row's evidence text: the
+        # writer's pre-write screen skips the advisory row, the ledger bytes
+        # stay unchanged, and the landing continues without them.
+        patterns = Path(env["PUBLIC_HYGIENE_PATTERNS_FILE"])
+        patterns.write_text("# fixture deny patterns\n\\bFORBIDDEN-EVIDENCE-TOKEN\\b\n")
+        count_before = self.commit_count()
+        proc = self.run_commit(
+            "--stage", "work.txt",
+            "--guard-firing",
+            "description-length:incident:flagged FORBIDDEN-EVIDENCE-TOKEN evidence",
+            "--subject", "land work with a screened-out firing",
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("public-hygiene", combined)
+        self.assertIn("advisory row is skipped", combined)
+        self.assertEqual(
+            (self.fixture / self.LEDGER_REL).read_text(),
+            self.committed_ledger_text(),
+            "a hygiene hit leaves the canonical ledger bytes unchanged",
+        )
+        self.assertEqual(self.matching_rows(self.committed_ledger_text(), "flagged FORBIDDEN-EVIDENCE-TOKEN evidence"), [])
+        shown = self.git("show", "--name-only", "--format=", "HEAD").stdout
+        self.assertIn("work.txt", shown)
+        self.assertNotIn(self.LEDGER_REL, shown)
 
 
 class DoneRunDeclaredStageChannelTest(FixtureMixin, unittest.TestCase):
@@ -2576,6 +3158,160 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertFalse(checkpoint.exists())
         self.assertIn("removed: checkpoint-manifest", proc.stdout)
 
+    # ---- deferred-squash honesty (backlog
+    # 2026-10-26-finalize-deferred-squash-silent-success): a ledger landing
+    # commit not on the base branch prints the loud deferral, names a branch
+    # commit, and withholds the complete marking; a landed commit keeps the
+    # current success shape.
+
+    def facts_with_base_branch(self) -> str:
+        base_branch = self.git("symbolic-ref", "--short", "HEAD").stdout.strip()
+        facts = self.fixture / ".ai-playbook" / "facts.md"
+        facts.write_text(facts.read_text() + f'base_branch = "{base_branch}"\n')
+        return base_branch
+
+    def write_ledger(self, run_id: str, landing: str) -> Path:
+        ledger = self.done_session() / f"owned-commits-{run_id}.txt"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(landing + "\n")
+        return ledger
+
+    def test_finalize_deferred_squash_loud_line_withholds_marking(self) -> None:
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "deferred-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        # A run-branch landing commit the squash never carried to the base.
+        self.git("checkout", "-qb", "run/deferred")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        merge = self.lock_invocation("merge-acquire", "--label", "peer-landing-span")
+        self.assertEqual(merge.returncode, 0, merge.stderr)
+        env = self.runner_env()
+        env.update(exports)
+        env.update(self.eval_exports(merge.stdout))
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn("peer-landing-span", proc.stderr)
+        self.assertIn(
+            "re-run finalize or the landing helper's land-worktree mode "
+            "after the lock frees", proc.stderr,
+        )
+        self.assertIn(f"the branch tip is {landing}", proc.stderr)
+        self.assertIn("complete marking withheld", proc.stdout)
+        # The summary names a branch commit, never landing_commit=.
+        self.assertIn(f"branch_commit={landing}", proc.stdout)
+        self.assertIn("squash pending", proc.stdout)
+        self.assertNotIn("landing_commit=", proc.stdout)
+        # The manifest stays incomplete and the checkpoint stays for resume.
+        record = self.manifest_record(exports)
+        self.assertFalse(record.get("complete", False))
+        self.assertTrue(checkpoint.exists())
+        # The release ceremony still ran to its status-free verification.
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+        self.assertIn("done lock status: free", proc.stdout)
+
+    def test_finalize_rerun_after_squash_lands_consumes_withheld_state(self) -> None:
+        self.init_fixture_repo()
+        base_branch = self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "resume-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/resume")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        # First finalize: the squash has not run, so the marking is withheld
+        # and the checkpoint is kept.
+        merge = self.lock_invocation("merge-acquire", "--label", "peer-landing-span")
+        self.assertEqual(merge.returncode, 0, merge.stderr)
+        env = self.runner_env()
+        env.update(exports)
+        env.update(self.eval_exports(merge.stdout))
+        first = self.run_finalize(env=env)
+        self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+        self.assertIn("LANDING DEFERRED", first.stderr)
+        record = self.manifest_record(exports)
+        self.assertFalse(record.get("complete", False))
+        self.assertTrue(checkpoint.exists())
+        # The squash lands (tree-equal base commit) and the run resumes: a
+        # fresh done-lock hold stands in for the resume session's setup, and
+        # the re-run finalize consumes the withheld state.
+        tree = self.git("rev-parse", f"{landing}^{{tree}}").stdout.strip()
+        base_tip = self.git("rev-parse", base_branch).stdout.strip()
+        squash = self.git("commit-tree", tree, "-p", base_tip, "-m", "squash").stdout.strip()
+        self.git("update-ref", f"refs/heads/{base_branch}", squash, base_tip)
+        acq = self.lock_invocation("acquire", "--label", "resume-session")
+        self.assertEqual(acq.returncode, 0, acq.stderr)
+        resume_env = self.runner_env()
+        resume_env.update(self.eval_exports(acq.stdout))
+        second = self.run_finalize(env=resume_env)
+        self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
+        self.assertNotIn("LANDING DEFERRED", second.stderr)
+        self.assertIn(f"landing_commit={landing}", second.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertFalse(checkpoint.exists())
+        self.assertIn(": free", self.lock_status())
+
+    def test_finalize_landed_landing_keeps_current_success_shape(self) -> None:
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "landed-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        # The primary-placement shape: the landing commit sits on the base.
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "direct base work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(f"landing_commit={landing}", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertFalse(checkpoint.exists())
+
+    def test_finalize_squash_proof_tree_match_keeps_success_shape(self) -> None:
+        self.init_fixture_repo()
+        base_branch = self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "squashed-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/squashed")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        # The squash landing the ancestry check cannot see: a base-branch
+        # commit carrying the run branch tip's tree (the squash proof arm).
+        tree = self.git("rev-parse", f"{landing}^{{tree}}").stdout.strip()
+        base_tip = self.git("rev-parse", base_branch).stdout.strip()
+        squash = self.git("commit-tree", tree, "-p", base_tip, "-m", "squash").stdout.strip()
+        self.git("update-ref", f"refs/heads/{base_branch}", squash, base_tip)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(f"landing_commit={landing}", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertFalse(checkpoint.exists())
+
     def test_finalize_from_holder_accepts_a_verifiably_alive_recorded_holder(self) -> None:
         # The recorded holder is this pytest process: the finalize child shell
         # descends from it, so the lock script's from-holder ancestry gate
@@ -2632,78 +3368,293 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # The landing-cost telemetry stays advisory-absent when nothing landed.
         self.assertNotIn("landing-cost telemetry appended", proc.stdout)
 
-    # ---- guard-liveness append placement (plan 2026-10-24-description-
-    #      length-gate-catch-promotion): the append loop runs BEFORE the
-    #      done-lock release; append failure stays a warning and the lock
-    #      releases. ------------------------------------------------------- #
+    # ---- guard-firing placement (plan docs/history/plans/2026-10-24-done-
+    #      run-lock-span-and-append-ordering): landing-carried rows are never
+    #      appended twice; with no prior landing the rows land through the
+    #      checked commit subcommand as a child while the parent holds the
+    #      done lock; both child failure arms restore or preserve as the plan
+    #      fixes, and the release and status checks always run. ------------- #
 
-    def seed_guard_ledger(self) -> Path:
+    def seed_tracked_guard_ledger(self, payload: str | None = None) -> Path:
         ledger = self.fixture / "scripts" / "gate_liveness_ledger.json"
         ledger.parent.mkdir(parents=True, exist_ok=True)
-        ledger.write_text(json.dumps(
-            {"schema": 1, "window": {"started": "2026-10-05"}, "guards": {}}
-        ))
+        if payload is None:
+            payload = json.dumps(
+                {"schema": 1, "window": {"started": "2026-10-05"}, "guards": {}}
+            )
+        ledger.write_text(payload)
+        self.git("add", "scripts/gate_liveness_ledger.json")
+        self.git("commit", "-qm", "seed the guard-liveness ledger")
         return ledger
 
-    def ordering_lock_stub(self, ledger: Path) -> Path:
-        """A stub done-lock whose release-repo refuses unless the fixture
-        guard-liveness ledger already carries a run_id row: a passing
-        finalize proves the append loop ran before the release."""
-        stub = self.tmp / "ordering-lock.sh"
+    def committed_ledger_text(self) -> str:
+        return self.git("show", "HEAD:scripts/gate_liveness_ledger.json").stdout
+
+    def matching_ledger_rows(self, evidence: str, committed: bool = False) -> list[dict]:
+        text = self.committed_ledger_text() if committed else (
+            self.fixture / "scripts" / "gate_liveness_ledger.json"
+        ).read_text()
+        doc = json.loads(text)
+        return [
+            row
+            for guard in doc["guards"].values()
+            for row in guard["rows"]
+            if row.get("evidence") == evidence
+        ]
+
+    def committed_row_release_stub(self) -> Path:
+        """A stub done-lock whose release-repo refuses unless HEAD's committed
+        ledger already carries the fixture row: a passing finalize proves the
+        fallback child commit landed before the release ran, while the parent
+        still held the done lock. After the check the release is forwarded to
+        the real lock script (the same env-token arm), so the fixture's hold
+        is genuinely released. The sync's runner-owned merge span is satisfied
+        with inert exports, since the fallback child's docs-branch sync
+        resolves this same script for its merge acquire and release."""
+        stub = self.tmp / "committed-row-lock.sh"
+        merge_dir = self.tmp / "stub-merge-lock"
         stub.write_text(
             "#!/usr/bin/env bash\n"
-            'LEDGER="%s"\n'
+            'LEDGER_REL="scripts/gate_liveness_ledger.json"\n'
+            f'MERGE_DIR="{merge_dir}"\n'
+            f'REAL_LOCK="{LOCK_SCRIPT}"\n'
             'case "$1" in\n'
             "  release-repo)\n"
-            '    if grep -q "run_id=" "$LEDGER" 2>/dev/null; then\n'
-            '      echo "stub: released after the ledger row existed"\n'
-            '      echo "OUTCOME: pass"\n'
-            "    else\n"
-            '      echo "stub: no guard-liveness row at release time" >&2\n'
+            '    if ! git show "HEAD:$LEDGER_REL" 2>/dev/null | grep -q "run_id="; then\n'
+            '      echo "stub: no committed guard-liveness row at release time" >&2\n'
             '      echo "OUTCOME: fail"\n'
             "      exit 2\n"
-            "    fi ;;\n"
+            "    fi\n"
+            '    bash "$REAL_LOCK" release-repo\n'
+            '    echo "stub: released after the ledger row was committed"\n'
+            '    echo "OUTCOME: pass" ;;\n'
+            "  merge-wait-acquire)\n"
+            '    echo "export MERGE_LOCK_DIR=$MERGE_DIR"\n'
+            '    echo "export MERGE_LOCK_TOKEN=stub-merge-token"\n'
+            '    echo "OUTCOME: pass" ;;\n'
+            "  merge-release)\n"
+            '    echo "OUTCOME: pass" ;;\n'
             '  merge-status) echo "stub merge-lock: free" ;;\n'
             '  status) echo "stub done-lock: free" ;;\n'
             '  *) echo "OUTCOME: pass" ;;\n'
-            "esac\n" % ledger,
+            "esac\n",
             encoding="utf-8",
         )
+        stub.chmod(0o755)
         return stub
 
-    def test_guard_liveness_appends_run_before_done_lock_release(self) -> None:
-        self.init_fixture_repo()
-        ledger = self.seed_guard_ledger()
-        setup_proc, exports = self.setup_session("--label", "append-order-fixture")
+    def test_landing_carried_rows_never_appended_twice(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        (self.fixture / "work.txt").write_text("session work\n")
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
         run_id = exports["DONE_RUN_ID"]
-        env = self.runner_env()
-        env.update(exports)
-        env["DONE_LOCK_SCRIPT"] = str(self.ordering_lock_stub(ledger))
-        env["GATE_LIVENESS_LEDGER_PATH"] = str(ledger)
-        proc = self.run_finalize(
-            "--guard-firing",
-            f"description-length:catch:fixture-evidence:run_id={run_id}",
-            env=env,
+        firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--stage", "work.txt", "--guard-firing", firing,
+            "--subject", "land work and the guard firing",
         )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(self.matching_ledger_rows("fixture-evidence")), 1)
+        env = self.commit_env()
+        env.update(exports)
+        finalize_proc = self.run_finalize("--guard-firing", firing, env=env)
+        self.assertEqual(
+            finalize_proc.returncode, 0, finalize_proc.stderr + finalize_proc.stdout
+        )
+        self.assertIn(
+            "never appended twice after a successful landing", finalize_proc.stdout
+        )
+        self.assertEqual(len(self.matching_ledger_rows("fixture-evidence")), 1)
+        self.assertEqual(
+            self.git(
+                "status", "--porcelain", "--", "scripts/gate_liveness_ledger.json"
+            ).stdout,
+            "",
+        )
+        self.assertIn(": free", self.lock_status())
+
+    def test_carried_arm_verifies_evidence_in_landing_bytes(self) -> None:
+        # r1 residual item 2: the carried claim is verified against the
+        # landing commit's ledger bytes before printing. A metacharacter
+        # evidence pins the fixed-string match; an absent evidence pins the
+        # not-verified variant.
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        (self.fixture / "work.txt").write_text("session work\n")
+        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        run_id = exports["DONE_RUN_ID"]
+        metachar_firing = f"description-length:catch:ev-with[0]brackets:run_id={run_id}"
+        absent_firing = f"description-length:catch:absent-evidence:run_id={run_id}"
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--stage", "work.txt", "--guard-firing", metachar_firing,
+            "--subject", "land work and the metachar guard firing",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(self.matching_ledger_rows("ev-with[0]brackets")), 1)
+        env = self.commit_env()
+        env.update(exports)
+        verified = self.run_finalize("--guard-firing", metachar_firing, env=env)
+        self.assertEqual(verified.returncode, 0, verified.stderr + verified.stdout)
+        self.assertIn(
+            "guard-liveness rows verified in this run's landing commit",
+            verified.stdout,
+        )
+        self.assertNotIn("not verified as carried", verified.stdout + verified.stderr)
+        unverified = self.run_finalize("--guard-firing", absent_firing, env=env)
+        self.assertEqual(unverified.returncode, 0, unverified.stderr + unverified.stdout)
+        self.assertIn("not verified as carried", unverified.stderr)
+        self.assertIn(": free", self.lock_status())
+
+    def test_fallback_child_lands_row_under_parent_lock(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        setup_proc, exports = self.setup_session("--label", "fallback-child-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
+        count_before = self.commit_count()
+        env = self.commit_env()
+        env.update(exports)
+        env["DONE_LOCK_SCRIPT"] = str(self.committed_row_release_stub())
+        proc = self.run_finalize("--guard-firing", firing, env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        # The release only succeeded because the row already existed: the
-        # append loop ran before the done-lock release.
-        self.assertIn("released after the ledger row existed", proc.stdout)
+        # The release only succeeded because the child's landing had already
+        # committed the row: the child ran while the parent held the lock.
+        self.assertIn("released after the ledger row was committed", proc.stdout)
         self.assertIn("done lock status: free", proc.stdout)
-        data = json.loads(ledger.read_text())
-        rows = data["guards"]["description-length"]["rows"]
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        rows = self.matching_ledger_rows("fixture-evidence", committed=True)
+        self.assertEqual(len(rows), 1, "exactly one committed matching row")
         self.assertEqual(rows[0]["kind"], "catch")
         self.assertIn(f"run_id={run_id}", rows[0]["note"])
+        # no post-landing tracked dirt: the worktree ledger matches the commit
+        self.assertEqual(
+            self.git(
+                "status", "--porcelain", "--", "scripts/gate_liveness_ledger.json"
+            ).stdout,
+            "",
+        )
+        self.assertIn(": free", self.lock_status())
 
-    def test_guard_liveness_append_failure_warns_and_lock_releases(self) -> None:
-        self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "append-fail-fixture")
-        corrupt = self.tmp / "corrupt-ledger.json"
-        corrupt.write_text("{not json")
-        env = self.runner_env()
+    def test_precommit_child_failure_restores_prior_bytes_and_index(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        hook = self.fixture / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        setup_proc, exports = self.setup_session("--label", "child-precommit-fail")
+        run_id = exports["DONE_RUN_ID"]
+        firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
+        count_before = self.commit_count()
+        seed_bytes = (self.fixture / "scripts" / "gate_liveness_ledger.json").read_text()
+        env = self.commit_env()
         env.update(exports)
-        env["GATE_LIVENESS_LEDGER_PATH"] = str(corrupt)
+        proc = self.run_finalize("--guard-firing", firing, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("child commit failed", combined)
+        self.assertIn("prior ledger bytes and index were restored", combined)
+        self.assertEqual(
+            self.commit_count(), count_before,
+            "nothing may land past the failing pre-commit hook",
+        )
+        self.assertEqual(self.matching_ledger_rows("fixture-evidence", committed=True), [])
+        self.assertEqual(
+            (self.fixture / "scripts" / "gate_liveness_ledger.json").read_text(),
+            seed_bytes,
+            "the prior ledger bytes were restored",
+        )
+        self.assertEqual(self.git("diff", "--cached", "--name-only").stdout, "")
+        self.assertIn(": free", self.lock_status())
+        self.assertIn("done lock status: free", proc.stdout)
+
+    def test_unborn_head_child_failure_routes_to_restore_arm(self) -> None:
+        # done-run-lock-span r1 residual: an empty child_pre_head (unborn
+        # HEAD) routed a pre-landing child failure into the after-landing
+        # preserve arm under a misleading message; the guard routes empty
+        # pre+post to the restore arm. Setup requires a resolvable HEAD, so
+        # the fixture deletes the branch ref after setup to reach the shape.
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        setup_proc, exports = self.setup_session("--label", "child-unborn-head")
+        self.git("update-ref", "-d", "refs/heads/feature/PROJ-1234-done-run")
+        # No hook injection: on unborn HEAD the child dies at the captured
+        # landing's HEAD resolution before any hook would run; the failure is
+        # the unborn shape itself.
+        firing = f"description-length:catch:fixture-evidence:run_id={exports['DONE_RUN_ID']}"
+        seed_bytes = (
+            self.fixture / "scripts" / "gate_liveness_ledger.json"
+        ).read_text(encoding="utf-8")
+        env = self.commit_env()
+        env.update(exports)
+        proc = self.run_finalize("--guard-firing", firing, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("child commit failed", combined)
+        self.assertIn("prior ledger bytes and index were restored", combined)
+        self.assertNotIn("after landing", combined)
+        self.assertNotEqual(
+            self.git("rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode, 0,
+            "nothing may land on the unborn branch",
+        )
+        self.assertEqual(
+            (self.fixture / "scripts" / "gate_liveness_ledger.json").read_text(encoding="utf-8"),
+            seed_bytes,
+            "the prior ledger bytes were restored",
+        )
+        self.assertNotIn(
+            "scripts/gate_liveness_ledger.json",
+            self.git("diff", "--cached", "--name-only").stdout,
+            "the child's staged ledger entry was reset",
+        )
+        self.assertIn(": free", self.lock_status())
+
+    def test_postcommit_child_failure_preserves_committed_row(self) -> None:
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger()
+        setup_proc, exports = self.setup_session("--label", "child-postcommit-fail")
+        run_id = exports["DONE_RUN_ID"]
+        # The owned-commits ledger path is a directory: the child's fused
+        # owned-commits append fails right after its ref update lands.
+        (self.done_session() / f"owned-commits-{run_id}.txt").mkdir()
+        firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
+        count_before = self.commit_count()
+        env = self.commit_env()
+        env.update(exports)
+        proc = self.run_finalize("--guard-firing", firing, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("after landing", combined)
+        self.assertIn("preserved (no rollback)", combined)
+        self.assertIn("the owned-commits ledger append failed", combined)
+        self.assertEqual(
+            self.commit_count(), count_before + 1,
+            "the child's landing stands",
+        )
+        rows = self.matching_ledger_rows("fixture-evidence", committed=True)
+        self.assertEqual(len(rows), 1, "the committed row is preserved")
+        self.assertIn(f"run_id={run_id}", rows[0]["note"])
+        self.assertEqual(
+            self.git(
+                "status", "--porcelain", "--", "scripts/gate_liveness_ledger.json"
+            ).stdout,
+            "",
+        )
+        self.assertIn(": free", self.lock_status())
+        self.assertIn("done lock status: free", proc.stdout)
+
+    def test_child_append_failure_warns_and_lock_releases(self) -> None:
+        # A corrupt committed ledger: every record call fails (tool error),
+        # the child's arm warns and stages nothing, the landing skips, and
+        # the release and status checks still run.
+        self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
+        self.seed_tracked_guard_ledger(payload="{not json")
+        setup_proc, exports = self.setup_session("--label", "append-fail-fixture")
+        env = self.commit_env()
+        env.update(exports)
         proc = self.run_finalize(
             "--guard-firing",
             "description-length:catch:fixture-evidence:run_id=run-x",
@@ -2711,8 +3662,10 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn(
-            "guard-liveness append failed for description-length", proc.stderr
+            "guard-firing append failed for description-length",
+            proc.stdout + proc.stderr,
         )
+        self.assertIn("no staged changes; landing commit skipped", proc.stdout)
         # The real lock released anyway: the append failure is warning-only.
         self.assertIn(": free", self.lock_status())
         self.assertIn("done lock status: free", proc.stdout)

@@ -1,0 +1,14 @@
+# Boundary plan-write persistence verification
+
+- **Cluster:** docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md (shared defect class: task checkbox state read stale at an execute-plan boundary)
+- **Class:** formal-hardening
+- **Origin:** execution run 2026-10-26 (plan `landing-subject-grammar-end-to-end`): plan-file checkbox edits made inside three successive boundary shell calls printed success but never entered the boundary commits; worktree read clean at HEAD; a Phase 3 review lens found all 22 boxes unchecked. Recovered by re-marking as a standalone verified commit. Cause unresolved (suspect a plan-protection hook or a racing peer process reverting unstaged plan bytes mid-call).
+- **Lesson:** 241 in `docs/maintenance/development_lessons.md` records the per-boundary verification remedy as advice; this row owns landing it as operative skill text.
+
+## Problem
+
+The execute-plan light boundary trusts an in-call plan-file write: the marking step prints success, the boundary commits whatever is staged, and nothing verifies the plan bytes reached the commit. When the write silently fails (witnessed 3x in one run), later phases (resume reads, Phase 3 panels, the archive gate) read stale unchecked boxes and the repair costs a re-mark plus a review round.
+
+## Expected
+
+The light boundary's plan-edit step carries an explicit persistence verification: after the boundary commit, re-derive the plan's box state from disk and from the commit (`git show --stat HEAD` names the plan; the unchecked-box count dropped by the number of boxes just marked), and on a mismatch re-apply and re-commit before the boundary stands as resumable state. Single-surface skill-text change in `agents/skills/execute-plan/SKILL.md` (the Light boundary section / Step 1.4 area), mirrored only where the boundary contract is restated by reference.
