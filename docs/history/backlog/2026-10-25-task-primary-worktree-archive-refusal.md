@@ -1,7 +1,7 @@
 # Backlog: task-primary worktree archive refusal strands an already-landed checkout
 
 - **Filed:** 2026-10-25, self-heal after task-primary archive refusal
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-27-task-primary-worktree-archive-refusal.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** task-owned worktree cleanup blocked by app ownership
@@ -19,7 +19,7 @@ After this task's changes and ignored review artifacts were landed or migrated t
 - The app tool refused to archive the attached task-primary checkout and refused to attach the unmanaged main checkout; both refusals occurred in this session after the landed work and artifact migration.
 - In follow-up, the backlog and closeout commits were made directly in the main checkout while this task remained attached to a managed worktree. This confirms repository work can continue in main without rebinding the app task. The available app operations expose managed-worktree creation, attachment, archive, and restore, but no task-primary rebind or detach operation; attaching main still fails because it is unmanaged.
 - `docs/history/plans/completed/2026-10-13-codex-task-resource-cleanup.md` and `docs/history/plans/completed/2026-10-15-codex-task-resource-cleanup-evidence-recovery.md` investigated task-resource ownership but did not test this exact post-landing primary-checkout refusal or an ownership handoff.
-- `docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md` and `docs/history/plans/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md` cover project-run closeout follow-through; the current gate passed, so the unresolved boundary is the app's primary-checkout restriction.
+- `docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md` covers project-run closeout follow-through; the current gate passed, so the unresolved boundary is the app's primary-checkout restriction.
 
 ## Expected
 

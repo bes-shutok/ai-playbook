@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-21, execute-plan closeout of plan-validation-command-undefined-repo (landed 28127e322)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low (warning-only diagnostic; no block, but most receipts diagnose an unrelated plan)
 - **Cluster:** docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md (same surface: the post-squash certification diagnostic and its receipt ledger)

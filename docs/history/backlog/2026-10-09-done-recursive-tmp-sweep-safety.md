@@ -1,9 +1,10 @@
 # Backlog: safely extend local tmp cleanup without coupling it to docs-branch sync
 
 - **Filed:** 2026-10-09, operator-directed scope split after plan review
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-27-done-recursive-tmp-sweep-safety.md)
 - **Workflow:** backlog
 - **Priority:** moderate
+- **Cluster:** EXEC-PROMPTS entry closeout-proof-record-retention (covered 2026-10-27; the covered row owned the sweep retention arm for the plan-slug closeout proof family and the witnessed consumption of a valid skip record, this row owns the sweep's deletion-safety contract)
 - **Origin class:** operator-directed cleanup request with unresolved deletion-safety design
 - **Class:** fix-class
 - **Driving force:** simplicity + reliability

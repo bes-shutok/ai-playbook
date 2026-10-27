@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-11, maintenance execution of plan 2026-10-10
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

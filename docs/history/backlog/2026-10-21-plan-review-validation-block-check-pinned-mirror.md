@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-21, execute-plan Step 1.2b intermediate review of Task 2 (plan-validation-command-undefined-repo); item shape completed at Phase 3 r1 (finding cc1)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

@@ -1,6 +1,6 @@
 # Instruction file templates
 
-Copy/adapt when applying the hierarchy to a repo. Replace `{service-name}`. Upkeep rules and PR checklist: [company-decisions.md](company-decisions.md) only — do not duplicate here.
+Copy/adapt when applying the hierarchy to a repo. Replace `{service-name}`. Upkeep rules and PR checklist: [company-decisions.md](company-decisions.md) only, do not duplicate here.
 
 ## `docs/maintenance/project-guidelines.md` section
 
@@ -36,7 +36,7 @@ Apply the maintenance model from `company-decisions.md` (Layer 1 vs Layer 2 trig
 
 **Canonical (all agents):** `AGENTS.md` at repo root. **H1 title:** `# Instructions` (not `# AGENTS.md`). Codex, Copilot, Claude Code, Cursor, and other agents discover this filename by convention.
 
-**Patch `AGENTS.md` only** — preserve existing engineering rules. Do not replace the full file with templates below.
+**Patch `AGENTS.md` only**, preserve existing engineering rules. Do not replace the full file with templates below.
 
 ### Optional tool adapters (when the team uses that tool)
 
@@ -66,11 +66,11 @@ When scaffolding empty topic files:
 
 ## Core Concepts
 
-- [1–2 bullets or "Placeholder — to be filled from code review"]
+- [1–2 bullets or "Placeholder, to be filled from code review"]
 
 ## Status
 
-Placeholder — to be filled from code review.
+Placeholder, to be filled from code review.
 
 ## Pointers
 
@@ -90,19 +90,19 @@ Record in `AGENTS.md` repo constraints (if not already present):
 ```markdown
 ## Documentation Hierarchy
 
-- **Start here:** `docs/README.md` (Layer 1 — concise service overview; not a file catalog).
+- **Start here:** `docs/README.md` (Layer 1, concise service overview; not a file catalog).
 - **Facts / guidelines:** `repo_facts_rel` → `.ai-playbook/facts.md` (gitignored repo agent runtime); `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
-- **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
-- **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
+- **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2), update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
+- **Historical context:** `docs/history/` (Layer 3), reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
 - **LLM-only:** `docs/tmp/` at root; gitignored `.ai-playbook/reviews/` and `.ai-playbook/metrics/`, not canonical human Layer 2.
 - **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
-- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines — not from hardcoded skill defaults.
+- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines, not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
 ```
 
 ## Layer 1 `docs/README.md` skeleton
 
-**Purpose:** High-level human onboarding (~few minutes). Per team agreement — service overview, **not** a directory index.
+**Purpose:** High-level human onboarding (~few minutes). Per team agreement, service overview, **not** a directory index.
 
 ```markdown
 # {service-name}
@@ -130,7 +130,7 @@ Short service overview for humans. **Start here (Layer 1).** Deeper material liv
 - [Category: e.g. operator/admin reads]
 - [Category: e.g. async events or webhooks]
 
-Normative wire contracts: `app/api/openapi.yaml` (or equivalent). Detail: `architecture/integrations.md`, `architecture/api-contracts.md`. Runnable caller samples: `maintenance/api-reference.md` (placeholders only — no live credentials).
+Normative wire contracts: `app/api/openapi.yaml` (or equivalent). Detail: `architecture/integrations.md`, `architecture/api-contracts.md`. Runnable caller samples: `maintenance/api-reference.md` (placeholders only, no live credentials).
 
 ## High-level flows
 
@@ -151,7 +151,7 @@ Normative wire contracts: `app/api/openapi.yaml` (or equivalent). Detail: `archi
 | 2 | `maintenance/` | Project guidelines, ADRs, glossary, wire-contract docs, best practices |
 | 3 | `history/` | RFCs, plans, investigations (reference only) |
 
-Do **not** duplicate Layer 2 content here. Do **not** list every file under those folders — discover files in the folder when needed.
+Do **not** duplicate Layer 2 content here. Do **not** list every file under those folders, discover files in the folder when needed.
 ```
 
 **Forbidden in Layer 1:** per-file tables (`| Document | Purpose |` with links to each `architecture/*.md`); “update this index when docs change” wording; ticket debug playbooks.

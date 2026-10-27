@@ -17,6 +17,13 @@ Subcommands:
            source worktree into a target worktree, verifying every copy by
            re-read checksum. Never moves: on any verification failure the
            source file is still present and the exit code is non-zero.
+           When the session manifest beside the baseline (manifest.md)
+           binds its stable run tuple to the source worktree, terminal
+           mirror_status/mirror_receipts tokens on task_boundary rows
+           authorize replacing a different-byte primary target whose
+           current state still matches the latest valid receipt for that
+           exact path; invalid or mismatched receipt history keeps the
+           foreign rename, and replacements are recorded under "replaced".
            The migration holds the repository-keyed merge lock across its
            copies through one bounded-wait merge-wait-acquire under label
            worktree-closeout-migrate (wait default 300s, overridable by
@@ -29,6 +36,24 @@ Subcommands:
            when the run aborts mid-loop (an "interrupted": true marker
            flags the run, and an "incomplete" entry names the error), so
            already-copied files stay in the audit record.
+  boundary-mirror  Mirror one task boundary's records from the run worktree
+           to the primary checkout and append the boundary's task_boundary
+           receipt row in one operation: a try-once merge-acquire of the
+           same worktree-closeout-migrate repository lock migrate holds,
+           kept through every staged mirror install and the atomic
+           manifest-row replacement, released in an always-run finally;
+           SIGINT and SIGTERM route through the ordinary rollback (prior
+           primary targets and prior manifest bytes restored, temporary
+           siblings removed, worktree sources retained) and the token-fenced
+           release; a signal delivered between the manifest os.replace and
+           the commit flag stays pending until the restore-or-discard
+           decision has run, so an already-durable row is never rolled back. A refused acquire copies no primary files, records one
+           status=skipped item per planned path with no verified receipt,
+           reports the refusal, and exits 0 so the boundary continues. A
+           per-path copy error is reported, recorded as a failed item, and
+           never blocks the row. Exits 0 when the row is complete or
+           skipped, 1 when a path failed or the transaction rolled back,
+           2 on usage or identity validation.
   gate-removal  Fail-closed pre-removal gate: verify that every review
            record the executing plan's header cites (Plan review record:/
            Plan review: label lines in the header region only, the block
@@ -145,6 +170,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -244,6 +270,287 @@ def _verify_copy(src: Path, dst: Path) -> bool:
     return _sha256(dst) == _sha256(src)
 
 
+# Receipt-proven same-run mirror replacement (plan
+# 2026-10-24-closeout-migration-same-run-mirror-replace): the session
+# manifest beside the baseline binds the stable run tuple (run_session_id,
+# exact plan_path, registered run_worktree) and its task_boundary rows carry
+# terminal mirror_status/mirror_receipts tokens. Parsing is fail-closed: a
+# row carrying either token that cannot be parsed, an unknown row status, or
+# an item whose path cannot be recovered invalidates run history (no
+# replacement anywhere, never a fallback), while a malformed item with a
+# recoverable path invalidates only that path. Rows without the tokens are
+# legacy and ignored.
+
+class _MirrorHistoryError(Exception):
+    """Run-wide mirror-receipt history invalidation (fail-closed)."""
+
+
+_MIRROR_ROW_STATUSES = ("complete", "partial", "skipped")
+_MIRROR_ITEM_STATUSES = ("verified", "failed", "skipped")
+_MIRROR_STATUS_TOKEN = "mirror_status="
+_MIRROR_RECEIPTS_TOKEN = "mirror_receipts="
+
+
+def _recoverable_mirror_path(path: object) -> bool:
+    """True for a non-empty repository-relative path with no .. escape."""
+    if not isinstance(path, str) or not path:
+        return False
+    if os.path.isabs(path):
+        return False
+    normalized = os.path.normpath(path)
+    return normalized != ".." and not normalized.startswith("../")
+
+
+def _parse_mirror_row(row: str) -> tuple[str, list] | None:
+    """Split one task_boundary row into (status, receipt items); None for a
+    legacy row without the tokens. Raises _MirrorHistoryError when the row
+    carries either token but cannot be parsed to the terminal grammar."""
+    status_idx = row.find(_MIRROR_STATUS_TOKEN)
+    receipts_idx = row.find(_MIRROR_RECEIPTS_TOKEN)
+    if status_idx == -1 and receipts_idx == -1:
+        return None
+    if status_idx == -1 or receipts_idx == -1 or receipts_idx < status_idx:
+        raise _MirrorHistoryError("mirror tokens missing or out of order")
+    cursor = status_idx + len(_MIRROR_STATUS_TOKEN)
+    match = re.match(r"[A-Za-z]+", row[cursor:])
+    if match is None:
+        raise _MirrorHistoryError("mirror_status value missing")
+    status = match.group(0)
+    if status not in _MIRROR_ROW_STATUSES:
+        raise _MirrorHistoryError(f"unknown mirror_status: {status}")
+    rest = row[cursor + match.end():].lstrip()
+    if not rest.startswith(_MIRROR_RECEIPTS_TOKEN):
+        raise _MirrorHistoryError("terminal mirror_receipts token missing")
+    payload = rest[len(_MIRROR_RECEIPTS_TOKEN):].strip()
+    try:
+        items = json.loads(payload)
+    except ValueError as exc:
+        raise _MirrorHistoryError(f"invalid mirror_receipts JSON: {exc}") from exc
+    if not isinstance(items, list):
+        raise _MirrorHistoryError("mirror_receipts is not a JSON array")
+    return status, items
+
+
+def _apply_mirror_items(items: list, proven: dict) -> None:
+    """Fold one row's receipt items into the per-path map (a None value
+    marks an invalidated path): a verified item updates the path, a
+    failed/skipped item invalidates it, an absent path retains its history,
+    and a complete row with no items changes no path. Raises
+    _MirrorHistoryError for an item whose path cannot be recovered (run-wide
+    invalidation)."""
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise _MirrorHistoryError("receipt item is not a JSON object")
+        path = item.get("path")
+        if not _recoverable_mirror_path(path):
+            raise _MirrorHistoryError("receipt item path cannot be recovered")
+        if path in seen:
+            proven[path] = None
+            continue
+        seen.add(path)
+        status = item.get("status")
+        if status not in _MIRROR_ITEM_STATUSES or status in ("failed", "skipped"):
+            proven[path] = None
+            continue
+        kind = item.get("type")
+        if kind == "file":
+            digest = item.get("sha256")
+            proven[path] = (
+                {"type": "file", "sha256": digest}
+                if isinstance(digest, str) and digest
+                else None
+            )
+        elif kind == "symlink":
+            link_target = item.get("target")
+            proven[path] = (
+                {"type": "symlink", "target": link_target}
+                if isinstance(link_target, str)
+                else None
+            )
+        else:
+            proven[path] = None
+
+
+def _session_identity(manifest_text: str) -> dict[str, str]:
+    """The manifest identity block's stable run tuple fields (first
+    occurrence wins); only present, non-empty fields are returned."""
+    identity: dict[str, str] = {}
+    for line in manifest_text.splitlines():
+        for key in ("run_session_id", "plan_path", "run_worktree"):
+            prefix = key + ":"
+            if key not in identity and line.startswith(prefix):
+                value = line[len(prefix):].strip()
+                if value:
+                    identity[key] = value
+    return identity
+
+
+def _load_mirror_receipts(baseline_path: Path, source: Path) -> tuple[dict[str, dict], str | None]:
+    """Receipt-proven per-path map from the session manifest beside the
+    baseline, bound to the stable run tuple. Returns (receipts,
+    run_session_id); an empty map authorizes no replacement, so missing or
+    mismatched identity and run-wide history invalidation degrade to the
+    plain foreign-rename behavior and never fall back to a partial
+    authorization."""
+    manifest_path = baseline_path.parent / "manifest.md"
+    try:
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {}, None
+    identity = _session_identity(manifest_text)
+    if set(identity) != {"run_session_id", "plan_path", "run_worktree"}:
+        return {}, None
+    if not _recoverable_mirror_path(identity["plan_path"]):
+        return {}, None
+    try:
+        registered = Path(identity["run_worktree"]).resolve()
+    except OSError:
+        return {}, None
+    if registered != source:
+        return {}, None
+    proven: dict[str, dict | None] = {}
+    for line in manifest_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("task_boundary:"):
+            continue
+        try:
+            parsed = _parse_mirror_row(stripped)
+            if parsed is None:
+                continue
+            _apply_mirror_items(parsed[1], proven)
+        except _MirrorHistoryError:
+            return {}, None
+    return {path: state for path, state in proven.items() if state is not None}, identity["run_session_id"]
+
+
+def _target_matches_receipt(dst: Path, receipt: dict) -> bool:
+    """True while the current target state still matches the receipt's
+    recorded type and content (SHA-256 for a regular file, link target for
+    a symlink); any read failure is a mismatch."""
+    try:
+        if receipt.get("type") == "file":
+            if dst.is_symlink() or not dst.is_file():
+                return False
+            return _sha256(dst) == receipt.get("sha256")
+        if receipt.get("type") == "symlink":
+            return dst.is_symlink() and os.readlink(dst) == receipt.get("target")
+    except OSError:
+        return False
+    return False
+
+
+def _unique_sibling(dst: Path, marker: str) -> Path:
+    candidate = dst.with_name(dst.name + marker)
+    bump = 2
+    while candidate.exists() or candidate.is_symlink():
+        candidate = dst.with_name(dst.name + f"{marker}-{bump}")
+        bump += 1
+    return candidate
+
+
+def _remove_quietly(path: Path) -> None:
+    try:
+        if path.is_symlink() or path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _install_staged(temp: Path, dst: Path) -> None:
+    """Install seam: one atomic rename puts the staged sibling at the
+    target, so a failed install never half-writes the target."""
+    os.replace(temp, dst)
+
+
+def _state_of(path: Path) -> dict:
+    """The recorded content state of a path, in receipt grammar shapes."""
+    if path.is_symlink():
+        return {"type": "symlink", "target": os.readlink(path)}
+    return {"type": "file", "sha256": _sha256(path)}
+
+
+def _capture_prior_target(dst: Path, prior_tmp: Path) -> None:
+    """Retain the prior target beside itself so a migration-manifest
+    persistence failure can restore it atomically."""
+    if dst.is_symlink():
+        os.symlink(os.readlink(dst), prior_tmp)
+    else:
+        shutil.copy2(dst, prior_tmp)
+
+
+def _replace_receipt_proven(
+    src: Path, dst: Path, rel: str, receipt: dict, suffix: str, run_session_id: str
+) -> tuple[str, dict]:
+    """Stage, verify, recheck, and install one receipt-proven replacement.
+
+    Returns ("replaced", payload) carrying the manifest entry plus the
+    retained prior-target sibling (recoverable until the migration manifest
+    holding the replaced disposition is atomically installed), ("foreign",
+    {}) when the final recheck finds the target changed (the caller falls
+    through to the existing foreign rename), or ("failed", failure_entry)
+    when staging, verification, or installation failed; every failure path
+    preserves the prior target and the source and removes the temporary
+    siblings. Every read sits pre-install inside the guarded span, so no
+    post-install abort can strand the retained prior sibling unrecorded."""
+    temp = _unique_sibling(dst, f".repl-{suffix}.tmp")
+    prior_tmp = _unique_sibling(dst, f".repl-{suffix}.prior-tmp")
+    try:
+        _copy_file(src, temp)
+        if not _verify_copy(src, temp):
+            raise ValueError("staged replacement failed checksum verification")
+        if not _target_matches_receipt(dst, receipt):
+            _remove_quietly(temp)
+            return "foreign", {}
+        prior_state = _state_of(dst)
+        _capture_prior_target(dst, prior_tmp)
+        # The incoming state is read from the staged sibling before the
+        # install, inside the guarded span: the post-install span carries no
+        # fallible read, so an abort after install can no longer strand the
+        # retained prior sibling beside a replaced-but-unrecorded target.
+        # The verified copy is byte-identical to what the install puts at
+        # the target, so the recorded state is unchanged.
+        incoming_state = _state_of(temp)
+        _install_staged(temp, dst)
+    except (OSError, ValueError) as exc:
+        _remove_quietly(temp)
+        _remove_quietly(prior_tmp)
+        return "failed", {
+            "source": rel,
+            "destination": dst.as_posix(),
+            "verified": False,
+            "error": f"receipt replacement failed: {exc}",
+        }
+    except BaseException:
+        _remove_quietly(temp)
+        _remove_quietly(prior_tmp)
+        raise
+    entry = {
+        "source": rel,
+        "destination": dst.as_posix(),
+        "verified": True,
+        "run_session_id": run_session_id,
+        "prior_state": prior_state,
+        "incoming_state": incoming_state,
+    }
+    return "replaced", {"entry": entry, "prior_tmp": prior_tmp}
+
+
+def _restore_prior_targets(priors: list[tuple[Path, Path]]) -> None:
+    """Restore every replaced target from its retained prior sibling; the
+    replaced disposition never became durable, so the prior state stands."""
+    for dst, prior_tmp in priors:
+        try:
+            os.replace(prior_tmp, dst)
+        except OSError as exc:
+            print(f"ERROR: could not restore prior target {dst}: {exc}", file=sys.stderr)
+
+
+def _discard_prior_targets(priors: list[tuple[Path, Path]]) -> None:
+    for _dst, prior_tmp in priors:
+        _remove_quietly(prior_tmp)
+
+
 def _append_manifest(manifest_path: Path, sections: dict[str, list[dict]]) -> None:
     manifest: dict = {}
     if manifest_path.is_file():
@@ -254,9 +561,435 @@ def _append_manifest(manifest_path: Path, sections: dict[str, list[dict]]) -> No
         else:
             manifest[key] = entries
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    # Atomic install: the manifest replaces its prior bytes in one rename,
+    # so a failed persistence leaves the prior manifest intact and the
+    # caller can restore the replaced targets against it.
+    temp = manifest_path.with_name(manifest_path.name + f".tmp-{os.getpid()}")
+    bump = 2
+    while temp.exists() or temp.is_symlink():
+        temp = manifest_path.with_name(manifest_path.name + f".tmp-{os.getpid()}-{bump}")
+        bump += 1
+    try:
+        temp.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(temp, manifest_path)
+    except BaseException:
+        _remove_quietly(temp)
+        raise
+
+
+# Boundary-mirror operation (plan
+# 2026-10-24-closeout-migration-same-run-mirror-replace Task 2): the Step
+# 1.4 record-mirror duty delegates its mirror and receipt work to this
+# operation. One live process holds the worktree-closeout-migrate merge
+# lock from its try-once acquire through every staged mirror install and
+# the atomic task_boundary manifest-row replacement, so the boundary-mirror
+# producer and the closeout-migration consumer serialize on the same
+# repository key and the receipts the consumer reads are written by a
+# lock-cooperating writer.
+
+_BOUNDARY_TEMP_MARKER_PREFIX = ".bndmirror"
+
+
+class _BoundaryMirrorInterrupt(BaseException):
+    """A handled SIGINT/SIGTERM routed through the ordinary rollback and the
+    token-fenced release; SIGKILL and power loss are outside this cleanup
+    guarantee."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"signal {signum}")
+        self.signum = signum
+
+
+_boundary_saved_handlers: dict[int, object] = {}
+
+
+def _boundary_signal_raise(signum: int, _frame: object) -> None:
+    raise _BoundaryMirrorInterrupt(signum)
+
+
+def _install_boundary_signal_handlers() -> bool:
+    """Arm the handled-signal bridge for the lock span; False when handlers
+    cannot be installed (a non-main-thread caller keeps default handling)."""
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            _boundary_saved_handlers[sig] = signal.signal(sig, _boundary_signal_raise)
+    except ValueError:
+        _boundary_saved_handlers.clear()
+        return False
+    return True
+
+
+def _restore_boundary_signal_handlers() -> None:
+    for sig, previous in list(_boundary_saved_handlers.items()):
+        try:
+            signal.signal(sig, previous)
+        except (ValueError, OSError, TypeError):
+            pass
+    _boundary_saved_handlers.clear()
+
+
+_COMMIT_WINDOW_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
+def _block_commit_window_signals() -> bool:
+    """Block the handled signals across the manifest os.replace-to-commit
+    pair (r2 F2): a signal delivered in that window stays pending until the
+    matching unblock, so no handler can raise between the durable receipt
+    row and the commit flag and roll back mirrors the row already records as
+    verified. False when the platform has no pthread_sigmask (the window
+    keeps its previous, unblocked behavior)."""
+    try:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _COMMIT_WINDOW_SIGNALS)
+        return True
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def _unblock_commit_window_signals() -> _BoundaryMirrorInterrupt | None:
+    """Release the commit-window block after the restore-or-discard decision
+    has run; a signal that arrived while blocked is delivered here, captured,
+    and returned instead of unwinding the already-made decision."""
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, _COMMIT_WINDOW_SIGNALS)
+    except _BoundaryMirrorInterrupt as exc:
+        return exc
+    except (AttributeError, OSError, ValueError):
+        pass
+    return None
+
+
+def _mirror_receipts_token(items: list) -> str:
+    """Producer-side receipt token: compact JSON with every table pipe
+    escaped as the six-character \\u007c sequence, the exact grammar the
+    migration consumer parses."""
+    text = json.dumps(items, separators=(",", ":"), ensure_ascii=True)
+    return text.replace("|", "\\u007c")
+
+
+def _boundary_row_line(note: str, status: str, items: list) -> str:
+    """One task_boundary manifest row: the boundary's note, then the
+    terminal mirror_status/mirror_receipts tokens."""
+    stripped = note.strip()
+    head = f"task_boundary: {stripped}; " if stripped else "task_boundary: "
+    return head + f"mirror_status={status} mirror_receipts={_mirror_receipts_token(items)}"
+
+
+def _manifest_with_row(base_text: str, row_line: str) -> str:
+    if base_text and not base_text.endswith("\n"):
+        base_text += "\n"
+    return base_text + row_line + "\n"
+
+
+def _replace_file_staged(path: Path, text: str, marker: str) -> None:
+    """Build the complete file beside itself and atomically replace the
+    prior bytes; a failure leaves the prior bytes intact and removes the
+    staged sibling."""
+    temp = _unique_sibling(path, marker)
+    try:
+        temp.write_text(text, encoding="utf-8")
+        os.replace(temp, path)
+    except BaseException:
+        _remove_quietly(temp)
+        raise
+
+
+def _mirror_source_state(src: Path) -> dict:
+    """The incoming mirror state in receipt grammar shapes; a symlink keeps
+    its link target, anything else digests as a regular file (an unreadable,
+    missing, or non-regular source surfaces as the open error its per-path
+    handling reports)."""
+    if src.is_symlink():
+        return {"type": "symlink", "target": os.readlink(src)}
+    return {"type": "file", "sha256": _sha256(src)}
+
+
+def _restore_mirror_targets(priors: list[tuple[Path, Path | None]]) -> None:
+    """Restore every installed mirror target: a captured prior replaces the
+    target, an absent prior (a fresh install) removes it."""
+    for dst, prior_tmp in priors:
+        try:
+            if prior_tmp is None:
+                if dst.is_symlink() or dst.exists():
+                    dst.unlink()
+            else:
+                os.replace(prior_tmp, dst)
+        except OSError as exc:
+            print(f"ERROR: could not restore prior target {dst}: {exc}", file=sys.stderr)
+
+
+def _discard_mirror_targets(priors: list[tuple[Path, Path | None]]) -> None:
+    for _dst, prior_tmp in priors:
+        if prior_tmp is not None:
+            _remove_quietly(prior_tmp)
+
+
+def _boundary_mirror_install(
+    worktree: Path, target: Path, paths: list[str], priors: list[tuple[Path, Path | None]]
+) -> tuple[list[dict], int]:
+    """Stage, verify, and atomically install each planned mirror beside its
+    destination, capturing the prior target for the rollback span. A
+    per-path copy error is contained the boundary's report-only way: the
+    item records one failed status, the path's own prior target and
+    temporaries are cleaned, and the loop continues. Every planned install
+    appends its rollback-span entry (dst, prior sibling or None) to the
+    caller's `priors` list before staging, so a handled-signal unwind
+    between the append and the install still leaves the whole span - prior
+    targets and fresh installs alike - addressable for the restore; a
+    handled per-path failure removes its own entry. Returns (receipt items,
+    failed count)."""
+    items: list[dict] = []
+    failed = 0
+    marker = f"{_BOUNDARY_TEMP_MARKER_PREFIX}-{os.getpid()}"
+    for rel in paths:
+        src = worktree / rel
+        dst = target / rel
+        temp: Path | None = None
+        prior_tmp: Path | None = None
+        appended = False
+        try:
+            incoming = _mirror_source_state(src)
+            if dst.is_symlink() or dst.exists():
+                try:
+                    current = _state_of(dst)
+                except OSError:
+                    current = None
+                if current == incoming:
+                    items.append({"path": rel, "status": "verified", **incoming})
+                    continue
+                prior_tmp = _unique_sibling(dst, f"{marker}.prior-tmp")
+                _capture_prior_target(dst, prior_tmp)
+            # The rollback-span entry rides `priors` from before the staging
+            # onward (r2 F2), for fresh installs too (prior_tmp None, the
+            # restore removes them): a handled signal raising anywhere
+            # between this append and the install unwinds with the entry
+            # addressable, so neither a replaced target nor a fresh install
+            # can survive the rollback unaddressed.
+            priors.append((dst, prior_tmp))
+            appended = True
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            temp = _unique_sibling(dst, f"{marker}.tmp")
+            _copy_file(src, temp)
+            if not _verify_copy(src, temp):
+                raise ValueError("staged mirror failed verification")
+            _install_staged(temp, dst)
+        except (OSError, ValueError) as exc:
+            if temp is not None:
+                _remove_quietly(temp)
+            if appended:
+                # Handled per-path failure: no install happened for this
+                # path, so its entry comes back off the rollback span and
+                # the prior sibling is removed. A BaseException (the
+                # _BoundaryMirrorInterrupt) keeps piercing this containment
+                # unchanged, leaving the entry in place for the caller's
+                # restore.
+                priors.remove((dst, prior_tmp))
+                if prior_tmp is not None:
+                    _remove_quietly(prior_tmp)
+            items.append({"path": rel, "status": "failed"})
+            failed += 1
+            print(f"boundary-mirror: copy error: {rel}: {exc}", file=sys.stderr)
+            continue
+        except BaseException:
+            # A handled signal (the _BoundaryMirrorInterrupt BaseException)
+            # keeps piercing the per-path containment unchanged; the unwind
+            # only removes this path's staged sibling. The rollback-span
+            # entry and any captured prior sibling stay: the caller's
+            # restore consumes them.
+            if temp is not None:
+                _remove_quietly(temp)
+            raise
+        items.append({"path": rel, "status": "verified", **incoming})
+    return items, failed
+
+
+def cmd_boundary_mirror(args: argparse.Namespace) -> int:
+    """One boundary's mirror-and-receipt transaction: try-once acquire the
+    worktree-closeout-migrate merge lock, install the planned mirrors, then
+    atomically replace the session manifest with the complete receipt row,
+    all in this one live process, releasing in an always-run finally."""
+    worktree = Path(args.worktree).resolve()
+    target = Path(args.target).resolve()
+    manifest_path = Path(args.manifest)
+    paths = list(args.mirror_path)
+    note = args.boundary_note.strip()
+    if "\n" in note or "\r" in note:
+        print("ERROR: --boundary-note must be a single line", file=sys.stderr)
+        return 2
+    # Producer validation (r2 F1): the note text is embedded verbatim before
+    # the terminal tokens, and the consumer's row parser keys on the first
+    # mirror_status=/mirror_receipts= occurrence, so a note carrying either
+    # substring would forge or corrupt the receipt grammar. Refuse it before
+    # any lock or copy work instead of writing an unparsable row.
+    for token in (_MIRROR_STATUS_TOKEN, _MIRROR_RECEIPTS_TOKEN):
+        if token in note:
+            print(
+                f"ERROR: --boundary-note must not contain {token!r}; the "
+                "operation appends the terminal mirror tokens itself",
+                file=sys.stderr,
+            )
+            return 2
+    if len(set(paths)) != len(paths):
+        print("ERROR: --mirror-path entries must be unique", file=sys.stderr)
+        return 2
+    for rel in paths:
+        if not _recoverable_mirror_path(rel):
+            print(f"ERROR: --mirror-path must be a repository-relative path: {rel!r}", file=sys.stderr)
+            return 2
+    expected = {
+        "run_session_id": args.run_session_id.strip(),
+        "plan_path": args.plan_path.strip(),
+        "run_worktree": args.run_worktree.strip(),
+    }
+    for key, value in expected.items():
+        if not value:
+            print(f"ERROR: --{key.replace('_', '-')} must not be empty", file=sys.stderr)
+            return 2
+    if not _recoverable_mirror_path(expected["plan_path"]):
+        print(f"ERROR: --plan-path must be a repository-relative path: {expected['plan_path']!r}", file=sys.stderr)
+        return 2
+    try:
+        base_text = manifest_path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: cannot read the session manifest {manifest_path}: {exc}", file=sys.stderr)
+        return 2
+    identity = _session_identity(base_text)
+    if (
+        identity.get("run_session_id") != expected["run_session_id"]
+        or identity.get("plan_path") != expected["plan_path"]
+    ):
+        print(
+            "ERROR: the session manifest's stable tuple does not match the "
+            f"invocation (manifest run_session_id {identity.get('run_session_id')!r} "
+            f"/ plan_path {identity.get('plan_path')!r}, invocation "
+            f"{expected['run_session_id']!r} / {expected['plan_path']!r})",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        registered = Path(identity.get("run_worktree", "")).resolve()
+        invoked = Path(expected["run_worktree"]).resolve()
+    except OSError as exc:
+        print(f"ERROR: cannot resolve the registered run worktree: {exc}", file=sys.stderr)
+        return 2
+    if registered != invoked:
+        print(
+            "ERROR: the registered run worktree "
+            f"{identity.get('run_worktree')!r} does not resolve to the invoked "
+            f"--run-worktree {expected['run_worktree']!r}",
+            file=sys.stderr,
+        )
+        return 2
+    manifest_marker = f"{_BOUNDARY_TEMP_MARKER_PREFIX}-{os.getpid()}.manifest-tmp"
+    started = time.monotonic()
+    exports: dict[str, str] | None = None
+    # The guarded-state flags are initialized before the merge-lock acquire
+    # so that, once the lock is held, the try whose finally releases it
+    # begins immediately: a signal landing in a statement gap between
+    # acquire and try would otherwise terminate the run with the lock held
+    # until the dead-holder grace.
+    commit = False
+    interrupted: _BoundaryMirrorInterrupt | None = None
+    failure: Exception | None = None
+    items: list[dict] = []
+    priors: list[tuple[Path, Path | None]] = []
+    failed_count = 0
+    handlers_armed = False
+    commit_window_blocked = False
+    if _target_is_git_repository(target):
+        exports, refused = _merge_lock_acquire(target, _MIGRATE_MERGE_LABEL)
+        if exports is None:
+            # Report-only contention: copy no primary files, record one
+            # skipped item per planned path with no verified receipt, and
+            # let the boundary continue.
+            for line in refused:
+                print(f"boundary-mirror: merge-lock: {line}", file=sys.stderr)
+            row = _boundary_row_line(
+                note, "skipped", [{"path": rel, "status": "skipped"} for rel in paths]
+            )
+            try:
+                _replace_file_staged(manifest_path, _manifest_with_row(base_text, row), manifest_marker)
+            except OSError as exc:
+                print(f"ERROR: boundary-mirror could not record the skipped row: {exc}", file=sys.stderr)
+                return 1
+            print(
+                "boundary-mirror: skipped (merge lock held by another writer); "
+                f"no primary files copied; {len(paths)} planned path(s) recorded skipped."
+            )
+            return 0
+    else:
+        print(
+            "boundary-mirror: merge-lock skipped (the target is not a git "
+            "repository; the repository-keyed merge lock has no key here)",
+            file=sys.stderr,
+        )
+    try:
+        handlers_armed = _install_boundary_signal_handlers()
+        try:
+            items, failed_count = _boundary_mirror_install(worktree, target, paths, priors)
+            row = _boundary_row_line(note, "complete" if failed_count == 0 else "partial", items)
+            # r2 F2: the handled signals stay blocked from the manifest
+            # os.replace through the commit flag, so a signal delivered in
+            # that window cannot raise between the durable row and
+            # `commit = True` and roll back mirrors the durable row already
+            # records as verified. The pending signal surfaces at the
+            # unblock inside the finally, after the decision.
+            commit_window_blocked = _block_commit_window_signals()
+            _replace_file_staged(manifest_path, _manifest_with_row(base_text, row), manifest_marker)
+            commit = True
+        except _BoundaryMirrorInterrupt as exc:
+            interrupted = exc
+        except Exception as exc:
+            failure = exc
+        finally:
+            # Prior targets stay recoverable until the complete receipt row
+            # is durably installed; a receipt-write or handled-signal failure
+            # restores them, a durable row discards them. The decision runs
+            # while the commit-window block (when taken) still holds; the
+            # pending signal, if any, is released and captured afterwards.
+            if commit:
+                _discard_mirror_targets(priors)
+            else:
+                _restore_mirror_targets(priors)
+            if commit_window_blocked:
+                commit_window_blocked = False
+                interrupted = _unblock_commit_window_signals() or interrupted
+    finally:
+        if handlers_armed:
+            _restore_boundary_signal_handlers()
+        if exports is not None:
+            _migrate_merge_lock_release(target, exports, started)
+    if interrupted is not None:
+        if commit:
+            print(
+                f"boundary-mirror: interrupted (signal {interrupted.signum}) after the "
+                "receipt row was durable; the mirrors and row stand.",
+                file=sys.stderr,
+            )
+            # A durable row stands, but a failed path is still a failed path:
+            # the interrupted exit honors the failed count like the ordinary
+            # complete exit does.
+            return 1 if failed_count else 0
+        print(
+            f"boundary-mirror: interrupted (signal {interrupted.signum}); prior primary "
+            "targets and prior manifest bytes restored, sources retained, lock released.",
+            file=sys.stderr,
+        )
+        return 1
+    if failure is not None:
+        print(
+            f"ERROR: boundary-mirror rolled back: {type(failure).__name__}: {failure}; "
+            "prior primary targets and prior manifest bytes restored, sources retained.",
+            file=sys.stderr,
+        )
+        return 1
+    verified = sum(1 for item in items if item["status"] == "verified")
+    print(
+        f"boundary-mirror: {'complete' if failed_count == 0 else 'partial'}; "
+        f"verified {verified}, failed {failed_count}; row appended at {manifest_path}."
     )
+    return 1 if failed_count else 0
 
 
 def cmd_capture(args: argparse.Namespace) -> int:
@@ -416,14 +1149,24 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
         }
     migrated: list[dict] = []
     renamed: list[dict] = []
+    replaced: list[dict] = []
     skipped: list[dict] = []
     failed: list[dict] = []
-    # Manifest durability: the four sections accumulate in memory and the
+    # Prior-target siblings retained by replacements until the migration
+    # manifest carrying their replaced disposition is atomically installed.
+    priors: list[tuple[Path, Path]] = []
+    # Receipt-proven same-run mirrors (plan
+    # 2026-10-24-closeout-migration-same-run-mirror-replace): loaded inside
+    # the lock span, consulted only at a different-byte collision, and
+    # rechecked immediately before the atomic install.
+    receipts, run_session_id = _load_mirror_receipts(Path(args.baseline), source)
+    # Manifest durability: the five sections accumulate in memory and the
     # manifest is written in a finally block, so a mid-loop abort still
     # records every entry earned so far, plus an "interrupted": true marker
     # and an incomplete entry naming the error, before the failure
     # propagates unchanged.
     aborted: BaseException | None = None
+    persist_failure: BaseException | None = None
     try:
         for src in _iter_configured_files(source, dirs):
             rel = src.relative_to(source).as_posix()
@@ -451,6 +1194,19 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
                         }
                     )
                     continue
+                receipt = receipts.get(rel)
+                if receipt is not None and _target_matches_receipt(dst, receipt):
+                    status, payload = _replace_receipt_proven(
+                        src, dst, rel, receipt, args.suffix, run_session_id
+                    )
+                    if status == "replaced":
+                        replaced.append(payload["entry"])
+                        priors.append((dst, payload["prior_tmp"]))
+                        print(f"REPLACED: {rel} (receipt-proven same-run mirror)")
+                        continue
+                    if status == "failed":
+                        failed.append(payload)
+                        continue
                 try:
                     collision_dst_digest = _sha256(dst)
                 except OSError:
@@ -496,6 +1252,7 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
         sections: dict[str, list[dict]] = {
             "migrated": migrated,
             "renamed": renamed,
+            "replaced": replaced,
             "skipped": skipped,
             "failed": failed,
             "branch": [branch_record],
@@ -508,7 +1265,22 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
                     "note": "migration aborted mid-loop; entries recorded above are durable",
                 }
             ]
-        _append_manifest(manifest_path, sections)
+        try:
+            _append_manifest(manifest_path, sections)
+        except BaseException as exc:
+            persist_failure = exc
+            # The replaced disposition never became durable: restore every
+            # prior target against the intact prior manifest and fail.
+            _restore_prior_targets(priors)
+        else:
+            _discard_prior_targets(priors)
+    if persist_failure is not None:
+        print(
+            f"ERROR: migration manifest persistence failed ({persist_failure}); "
+            "replaced targets restored, prior manifest intact, sources retained",
+            file=sys.stderr,
+        )
+        return 1
     for entry in failed:
         print(
             f"ERROR: verification failed for {entry['source']} -> {entry['destination']}: {entry['error']}",
@@ -523,7 +1295,7 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
         return 1
     print(
         f"Migrated {len(migrated)} file(s), renamed {len(renamed)} on collision, "
-        f"skipped {len(skipped)} identical; manifest at {manifest_path}."
+        f"replaced {len(replaced)}, skipped {len(skipped)} identical; manifest at {manifest_path}."
     )
     return 0
 
@@ -852,6 +1624,92 @@ def cmd_verify_records(args: argparse.Namespace) -> int:
         for path in missing:
             print(f"missing under {home}: {path}", file=sys.stderr)
         return 1
+    return 0
+
+
+def cmd_copy_cited_records(args: argparse.Namespace) -> int:
+    """Copy the review records a plan cites from the source (primary)
+    reviews home into the target's (run's) reviews home, so the closeout's
+    verify-records leg - whose containment resolves the home from the closeout
+    target - finds records written per the no-mirror remedy (lesson 270: a
+    record written to the primary home is foreign by construction until it is
+    copied run-side; the copy is the bridge, never a containment change).
+    Plain-exit convention: 0 copied or already present, 2 named failure."""
+    plan_path = Path(args.plan)
+    if not plan_path.is_file():
+        print(f"copy-cited-records: plan file not found: {plan_path}", file=sys.stderr)
+        return 2
+    source = Path(args.source).resolve()
+    target = Path(args.target).resolve()
+    source_home = _reviews_home(source)
+    target_home = _reviews_home(target)
+    if source_home is None:
+        print(
+            f"copy-cited-records: cannot resolve reviews_dir from {source / '.ai-playbook' / 'facts.md'}",
+            file=sys.stderr,
+        )
+        return 2
+    if target_home is None:
+        print(
+            f"copy-cited-records: cannot resolve reviews_dir from {target / '.ai-playbook' / 'facts.md'}",
+            file=sys.stderr,
+        )
+        return 2
+
+    plan_bytes = plan_path.read_text(encoding="utf-8")
+    series_tokens, exact_tokens = _extract_citations(plan_bytes)
+    source_home_resolved = source_home.resolve()
+    target_home_resolved = target_home.resolve()
+    transferred: list[str] = []
+    present: list[str] = []
+    failures: list[str] = []
+
+    def copy_member(candidate: Path) -> None:
+        resolved = candidate.resolve()
+        if not _is_under(resolved, source_home_resolved) or not candidate.is_file():
+            return
+        # Destination keyed to the cited path's own home-relative location
+        # when that path already sits under the source home: an in-home
+        # symlink member keeps the cited name the verify leg's scans read,
+        # while containment stays judged on the resolved path (a link
+        # escaping the home is never copied through).
+        try:
+            rel = candidate.relative_to(source_home_resolved)
+        except ValueError:
+            rel = resolved.relative_to(source_home_resolved)
+        dest = target_home_resolved / rel
+        if dest.is_file():
+            present.append(str(dest))
+            return
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, dest)
+        except OSError as exc:
+            failures.append(f"copy-cited-records: cannot copy {candidate}: {exc}")
+            return
+        transferred.append(str(dest))
+
+    for token in series_tokens:
+        for member in _series_members(
+            source_home, token, plan_identity=_plan_identity_for(plan_path)
+        ):
+            copy_member(member)
+    for token in exact_tokens:
+        candidate = Path(token) if token.startswith("/") else (source / token)
+        copy_member(candidate)
+
+    for path in transferred:
+        print(f"copy-cited-records: transferred {path}")
+    for path in present:
+        print(f"copy-cited-records: already present {path}")
+    print(
+        f"copy-cited-records: transferred={len(transferred)} "
+        f"already-present={len(present)}"
+    )
+    if failures:
+        for line in failures:
+            print(line, file=sys.stderr)
+        return 2
     return 0
 
 
@@ -2671,16 +3529,19 @@ def _parse_merge_lock_exports(stdout: str) -> dict[str, str]:
     return exports
 
 
-def _merge_lock_acquire(target: Path) -> tuple[dict[str, str] | None, list[str]]:
+def _merge_lock_acquire(target: Path, label: str = _SWEEP_LABEL) -> tuple[dict[str, str] | None, list[str]]:
     """One try-once merge-acquire of the done-lock script before the first
-    release. Returns (exports, refused lines); exports is None on any
-    refusal with the acquire's captured stderr re-prefixed `merge-lock: `
-    per line and its final OUTCOME line dropped (the sweep's single final
-    line closes the run)."""
+    release, under `label` (the sweep's own label by default; the
+    boundary-mirror operation passes the migrate arm's
+    worktree-closeout-migrate label so the producer and the consumer
+    serialize on the same lock). Returns (exports, refused lines); exports
+    is None on any refusal with the acquire's captured stderr re-prefixed
+    `merge-lock: ` per line and its final OUTCOME line dropped (the sweep's
+    single final line closes the run)."""
     script = _done_lock_script(target)
     try:
         proc = subprocess.run(
-            ["bash", str(script), "merge-acquire", "--label", _SWEEP_LABEL],
+            ["bash", str(script), "merge-acquire", "--label", label],
             capture_output=True,
             text=True,
             cwd=str(target),
@@ -3051,6 +3912,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate.set_defaults(func=cmd_migrate)
 
+    mirror = subparsers.add_parser(
+        "boundary-mirror",
+        help="Mirror one boundary's records to the primary and append the receipt row under the merge lock.",
+    )
+    mirror.add_argument(
+        "--worktree", required=True,
+        help="Run worktree root the mirror sources resolve under.",
+    )
+    mirror.add_argument(
+        "--target", required=True,
+        help="Primary checkout root the mirrors install into.",
+    )
+    mirror.add_argument(
+        "--manifest", required=True,
+        help="Session manifest.md the receipt row is appended to.",
+    )
+    mirror.add_argument(
+        "--run-session-id", required=True,
+        help="Stable run tuple field: run_session_id.",
+    )
+    mirror.add_argument(
+        "--plan-path", required=True,
+        help="Stable run tuple field: exact plan path.",
+    )
+    mirror.add_argument(
+        "--run-worktree", required=True,
+        help="Stable run tuple field: registered run worktree.",
+    )
+    mirror.add_argument(
+        "--boundary-note", default="",
+        help="Task-boundary text preceding the mirror tokens in the appended row.",
+    )
+    mirror.add_argument(
+        "--mirror-path", action="append", default=[],
+        help="Repository-relative path to mirror from the worktree to the primary; repeatable.",
+    )
+    mirror.set_defaults(func=cmd_boundary_mirror)
+
     verify = subparsers.add_parser(
         "verify-records",
         help="Verify cited and claimed review records exist under the target's primary reviews home.",
@@ -3067,6 +3966,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Newline-delimited file of record paths the boundary claims.",
     )
     verify.set_defaults(func=cmd_verify_records)
+
+    copy_cited = subparsers.add_parser(
+        "copy-cited-records",
+        help="Copy the review records a plan cites from the source reviews "
+        "home into the target's reviews home (the lesson-270 run-side bridge "
+        "before the verify-records leg).",
+    )
+    copy_cited.add_argument(
+        "--plan", required=True, help="The plan whose citations are copied."
+    )
+    copy_cited.add_argument(
+        "--source", required=True, help="Source root whose reviews home is read (the primary checkout)."
+    )
+    copy_cited.add_argument(
+        "--target", required=True, help="Target root whose reviews home receives the copies (the run root)."
+    )
+    copy_cited.set_defaults(func=cmd_copy_cited_records)
 
     # Help-only catalog entries (plan
     # 2026-10-24-closeout-helper-command-discovery): the three specialized

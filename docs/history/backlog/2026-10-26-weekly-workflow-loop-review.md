@@ -1,4 +1,5 @@
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low (no weekly recurrence pattern has been measured; this is a user-directed, non-blocking process review)
 - **Severity:** low

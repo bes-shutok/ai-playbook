@@ -32,10 +32,10 @@ structural tree changes. They do not stream terminal output; use `session text` 
 Each shell agterm spawns gets these environment variables. Check `AGTERM_ENABLED` before assuming
 the control channel is available:
 
-- `AGTERM_ENABLED=1` — this shell runs inside agterm.
-- `AGTERM_SESSION_ID` — the current session's UUID (the session this shell belongs to).
-- `AGTERM_WINDOW_ID` / `AGTERM_WORKSPACE_ID` — the owning window / workspace UUIDs.
-- `AGTERM_SOCKET` — the absolute path to the control socket this app bound.
+- `AGTERM_ENABLED=1`, this shell runs inside agterm.
+- `AGTERM_SESSION_ID`, the current session's UUID (the session this shell belongs to).
+- `AGTERM_WINDOW_ID` / `AGTERM_WORKSPACE_ID`, the owning window / workspace UUIDs.
+- `AGTERM_SOCKET`, the absolute path to the control socket this app bound.
 - `AGTERM_PANE` / `AGTERM_PANE_ID`: the surface's spawn role (`left`|`right`|`scratch`) and stable
   per-surface token. The role is not rewritten after promotion or swap; the token resolves the LIVE slot.
   Prefer `--pane-id "$AGTERM_PANE_ID"` where supported, including `session status`, `session restore` and
@@ -45,7 +45,7 @@ The quick terminal is scratch (not in the tree) and belongs to no window, so it 
 `AGTERM_ENABLED` and `AGTERM_SOCKET` (no session/workspace/window ids). An untargeted `agtermctl` run
 from it therefore resolves the active window like any other caller.
 
-These variables are inherited by every process the session's shell spawns — including long-lived
+These variables are inherited by every process the session's shell spawns, including long-lived
 daemons that outlive the shell. A tmux/screen server, a session manager (agent-deck and the like), or
 any background service started from inside a session captures the spawning session's `AGTERM_*` and
 passes it to every child it ever creates, so status hooks running in those children resolve
@@ -89,23 +89,23 @@ or whatever share Settings sets instead; not part of the tree and not owned by a
 
 Inspect the live tree any time with `agtermctl tree --json` (workspaces → sessions, each with
 `id`, `name`, `cwd`, `title`, `active`, `split`, `overlay`, `hud`, `scratch`, `status`, `background`, `surfaces`). `title` is the raw OSC
-terminal title (e.g. a remote host over SSH), omitted when none was reported — read it when a
+terminal title (e.g. a remote host over SSH), omitted when none was reported, read it when a
 session's local `cwd` is stale because it's connected to a remote. `surfaces[].id` is the
 control address for `surface zoom` and `surface cursor` (`left`, `right`, `scratch`, `overlay`,
 `overlay-left`, or `overlay-right`), including hidden-but-alive split/scratch surfaces. The tree object also carries
-read-only top-level fields — `idleMs` (ms since the last user input in the window), `autoFollowMs`
+read-only top-level fields, `idleMs` (ms since the last user input in the window), `autoFollowMs`
 (the Auto-follow timeout in ms, omitted when Disabled), `sidebarVisible` (whether the window's
-sidebar is currently shown — the read side of the write-only `sidebar` command), `sidebarMode`
-(`tree` or `flagged` — the read side of `sidebar mode`), `sidebarWidth` (the sidebar divider position in
-points — the read side of `sidebar width`, on `tree` only), `workspaceFilter`, `quickVisible` (whether the
-quick terminal is shown — the read side of the write-only `quick` command; app-level, so every window
+sidebar is currently shown, the read side of the write-only `sidebar` command), `sidebarMode`
+(`tree` or `flagged`, the read side of `sidebar mode`), `sidebarWidth` (the sidebar divider position in
+points, the read side of `sidebar width`, on `tree` only), `workspaceFilter`, `quickVisible` (whether the
+quick terminal is shown, the read side of the write-only `quick` command; app-level, so every window
 reports the same value), `zoomedSurface`, the four `dashboard*` fields, `pickPending`, and `app` (the
-serving app's `version`, plus `commit` when the build recorded one — the same value `agtermctl version`
+serving app's `version`, plus `commit` when the build recorded one, the same value `agtermctl version`
 returns). reference.md lists every one with its exact shape. List windows with
 `agtermctl window list --json`; each window also reports `autoFollowMs`, `sidebarVisible`, `geometry`
-(the live frame `{x, y, width, height, display}` in the units `window move`/`window resize` take — the
+(the live frame `{x, y, width, height, display}` in the units `window move`/`window resize` take, the
 read side, so record it then restore the exact frame), and `fullscreen`/`zoomed`/`minimized` (the read side
-of `window fullscreen`/`window zoom`/`window minimize`, so a script can act idempotently) — all omitted for
+of `window fullscreen`/`window zoom`/`window minimize`, so a script can act idempotently), all omitted for
 a closed window, but not the live `idleMs`, which is `tree`-only. A MINIMIZED window still reports its
 `geometry` (the frame it comes back to), so a re-align script can include it.
 
@@ -113,7 +113,7 @@ a closed window, but not the live `idleMs`, which is `tree`-only. A MINIMIZED wi
 
 Commands that target a session or workspace take `--target` (default `active`):
 
-- `active` — the selected session / current workspace.
+- `active`, the selected session / current workspace.
 - a full UUID (case-insensitive), or a unique **prefix** of one (git-style). Zero matches → `notFound`
   error; two or more → `ambiguous` error listing candidates.
 
@@ -124,9 +124,9 @@ Scripts rarely type ids: create with `*.new` (capture the returned id), or act o
 
 **Agents: `active` is almost never your own session.** `active` is the session the USER has selected in
 the GUI; your shell runs in `$AGTERM_SESSION_ID`, and the user is usually on a different session while
-you work. For any session-scoped command meant to act on *this* session — `session overlay open`,
+you work. For any session-scoped command meant to act on *this* session, `session overlay open`,
 `session scratch`, `session type`, `session text`, `session background`, `session status`, `session copy`,
-… — pass `--target "$AGTERM_SESSION_ID"`. Omit it and
+…, pass `--target "$AGTERM_SESSION_ID"`. Omit it and
 you open overlays / type into whatever the user has selected, not your own session.
 
 ## Restore modes
@@ -169,12 +169,12 @@ PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, the
 The shell stays open after it exits and `--wait` adds no hold prompt. After a clean quit, a missing daemon
 replays the captured running command inside a new persistent shell. The exclusions above start a fresh shell.
 
-`session type` drives an ALREADY-RUNNING program — it is not a launcher. Its keystrokes land in a line
+`session type` drives an ALREADY-RUNNING program, it is not a launcher. Its keystrokes land in a line
 buffer you do not own: a newline submits (a multi-line brief becomes N premature Enters), and the user
 or a concurrent agent writes to that same buffer. An untargeted `session type` from another agent hits
-whatever is `active`, and `session new` focuses — so a just-created session is briefly `active`, a stray
+whatever is `active`, and `session new` focuses, so a just-created session is briefly `active`, a stray
 prompt concatenates with yours, and the program starts on the merged line. (`--no-select` skips the
-focus, but the newline and shared-buffer hazards of `type`-as-launcher remain — `--command` is still the
+focus, but the newline and shared-buffer hazards of `type`-as-launcher remain, `--command` is still the
 rule.) After `--command`, confirm in `tree --json` that the new node's `foreground` shows your program running, not a bare shell prompt.
 
 ## Command summary
@@ -182,37 +182,37 @@ rule.) After `--command`, confirm in `tree --json` that the new node's `foregrou
 Run `agtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.md**; worked
 examples in **examples.md**; installable community workflows in **cookbook.md**.
 
-**tree** — print the workspace/session tree (`--json` for structured). Each session node carries
+**tree**, print the workspace/session tree (`--json` for structured). Each session node carries
 `foreground`/`splitForeground` (the live argv of each pane's foreground process, omitted when the pane
 is at its shell prompt, or running a setuid/setgid program like `top` or `sudo` whose argv macOS won't
-expose) — i.e. what each pane is currently running — `foregroundShell`/`splitForegroundShell` (the shell
+expose), i.e. what each pane is currently running, `foregroundShell`/`splitForegroundShell` (the shell
 holding each pane's foreground as a basename, present exactly when that pane's `foreground` is omitted
 because a shell holds it, so an EXISTING pane with neither is one whose process could not be read; check
-`hasSplit` before reading the split pair. Not a claim the pane is at a prompt and never permission to type —
+`hasSplit` before reading the split pair. Not a claim the pane is at a prompt and never permission to type,
 a builtin like `read` runs inside the shell), `restoreCommand`/`splitRestoreCommand` (each pane's
-persisted restore-command override set via `session restore` — the read side: omitted = auto-capture, `""`
+persisted restore-command override set via `session restore`, the read side: omitted = auto-capture, `""`
 = pinned to nothing (a plain shell), a command = the shell line that runs on the next launch), `status` (the agent-status set
 via `session status`: `active`|`completed`|`blocked`, omitted when idle), `statusPane` (which pane set
 that status: `left` (main) | `right` (split) | `scratch`, from `session status --pane`, omitted when
 unset or idle), `statusBlink`/`statusColor`/`statusShape` (the status glyph's `--blink` flag, its `--color`
 `#rrggbb` tint and its `--shape` silhouette from `session status`, omitted when idle / not blinking / using
-the configured color or shape — the tint and the silhouette report the per-call override only),
-`statusChangedAt` (when that status was last set, in epoch seconds — the same clock as an event's `ts`;
+the configured color or shape, the tint and the silhouette report the per-call override only),
+`statusChangedAt` (when that status was last set, in epoch seconds, the same clock as an event's `ts`;
 omitted when idle, and refreshed by a re-push of the SAME status, so `now - statusChangedAt` is how long
-ago the status was last written — normally the agent's own push, though a pane promotion re-tags the
+ago the status was last written, normally the agent's own push, though a pane promotion re-tags the
 indicator and counts too; ephemeral, so it does not survive a restart), `background` (the background
-spec — image/text watermark or solid color — set via `session background`, omitted when none — the read side of set/clear),
-`unseen` (the unseen-notification badge count — raised by `notify`/OSC 9/777, cleared by `session
+spec, image/text watermark or solid color, set via `session background`, omitted when none, the read side of set/clear),
+`unseen` (the unseen-notification badge count, raised by `notify`/OSC 9/777, cleared by `session
 seen`; omitted when zero), `commandWait`/`splitCommandWait` (whether either pane's `--command` was
 created with `--wait` to hold open after exit, the read side of `session new --wait`; each omitted for a
 plain or non-holding pane), `overlaySizePercent` (an open overlay's floating-panel percent 1-100,
 omitted for a full-pane overlay or no overlay so gate on `overlay` first; the read side of `session
-overlay resize` for a record-then-restore zoom), `paneOverlays` (the panes covered by their own overlay —
+overlay resize` for a record-then-restore zoom), `paneOverlays` (the panes covered by their own overlay,
 `["left"]`, `["right"]` or `["left","right"]`, omitted when neither is; the read side of `session overlay
 open --pane`, independent of the session-wide `overlay` flag),
-`hud` (the message panel occupying the session-wide slot — `{message, detail?, spinner, backgroundColor?,
+`hud` (the message panel occupying the session-wide slot, `{message, detail?, spinner, backgroundColor?,
 textColor?, sizePercent?, heightPercent?, position, pane?}`, the two percents being the panel's width and height
-shares — omitted when none is up; the read side of `session hud`. `position` and `spinner`
+shares, omitted when none is up; the read side of `session hud`. `position` and `spinner`
 always report the EFFECTIVE value, `center` and a static panel's `none` included, so a caller who omitted
 them never has to know the defaults; `spinner` names the STYLE, so `none` is what a caller echoes back to
 turn one off. While a HUD is up the node's `overlay` reads `false` and `overlaySizePercent` is omitted, so a
@@ -222,29 +222,29 @@ no event announces it),
 `session text` then answers `session not realized` without realizing anything; `session type` brings up a
 restored main pane still waiting its turn in a launch that replays commands, while any other unrealized
 cause can still exhaust its poll and fail the same way. `session new` returns `ok` for a model
-entry, which is weaker — libghostty will not create a surface while the display is asleep, so a session
+entry, which is weaker, libghostty will not create a surface while the display is asleep, so a session
 created by a scheduled job overnight stays unrealized until the displays wake and then recovers itself.
 Poll this after an unattended create),
 `backedByZmx` (true only when every existing primary/split pane is currently zmx-backed; primary/split
 entries in `surfaces` report their own Boolean, while scratch and overlays omit it),
 `remoteHost` (the machine an attached session came from, the read side of `zmx attach`; omitted for a local
 session, and never present after a relaunch because a remote session is not persisted),
-`hasSplit` (whether a second pane exists at all, shown or hidden; omitted when there is none — read this
+`hasSplit` (whether a second pane exists at all, shown or hidden; omitted when there is none, read this
 rather than `split`, which is false for a split hidden with ⌘D even though its pane is still alive),
 `splitAxis` (`vertical` for left/right or `horizontal` for top/bottom; omitted without a split),
 `splitRatio` (the primary-pane divider fraction 0.05-0.95 of the area below the titlebar, of a
-session that has a split — shown or hidden; omitted when there's no split, or while the split has never
-been shown — a shown split always reports a value, 0.5 when nothing set one) —
+session that has a split, shown or hidden; omitted when there's no split, or while the split has never
+been shown, a shown split always reports a value, 0.5 when nothing set one),
 the read side of `session resize`, record it to restore the exact divider), `splitFocused`
 (which pane holds focus in a session that has a split: `true` = split/right/bottom, `false` = primary/left/top; omitted
 when there's no split; the read side of `session focus`, record it to restore focus), and `surfaces`
 (`id`, `kind`, `active`, `visible`, and `backedByZmx` on primary/split entries) for `surface zoom` and
 `surface cursor`. The tree top level carries `zoomedSurface`
-(the control id of the currently zoomed surface, omitted when nothing is zoomed — the read side of
+(the control id of the currently zoomed surface, omitted when nothing is zoomed, the read side of
 `surface zoom`, so a script can check the zoom state and record-then-restore). It also carries the read
 side of the `dashboard` command (all omitted when no dashboard is open): `dashboardMembers` (the pane refs
-the open dashboard shows, in grid order — `<session-id>:left` for a primary pane, `<session-id>:right` for
-a split pane, so a split session appears as both), `dashboardHighlighted` (the highlighted cell's pane ref —
+the open dashboard shows, in grid order, `<session-id>:left` for a primary pane, `<session-id>:right` for
+a split pane, so a split session appears as both), `dashboardHighlighted` (the highlighted cell's pane ref,
 the one Enter jumps into, focusing that exact pane), `dashboardFontSize` (the absolute font size in points
 applied to the cells, omitted when untouched), and `dashboardFontMode` (`auto`|`fixed`|`untouched`).
 The top level also carries `pickPending`, the id of the native picker currently awaiting an answer in
@@ -257,58 +257,58 @@ given. Use `--json` for one bare event object per line; filter with repeatable o
 one process run. Cursor run changes, expiry, and ahead-of-tail errors are fatal and are never silently
 rebaselined. There is no terminal-output event stream.
 
-**workspace** — `workspace new [name] [--collapsed]` (`--collapsed` creates it closed in the sidebar so you can fill
+**workspace**, `workspace new [name] [--collapsed]` (`--collapsed` creates it closed in the sidebar so you can fill
 it with `session new --no-select` without it opening, and keeps it out of the focus set; a plain create
 joins the marked set while the filter is applied, so it is visible) · `workspace rename <name>` ·
 `workspace delete` · `workspace select` ·
 `workspace go --to next|prev` (step the CURRENT workspace one place through the sidebar's visible order, wrapping,
-and select the first session of the one it lands on — relative, so no `--target`, and unaffected by
+and select the first session of the one it lands on, relative, so no `--target`, and unaffected by
 whether a workspace is collapsed; `workspace move` REORDERS instead) ·
 `workspace move --to up|down|top|bottom` ·
-`workspace focus [on|off|toggle|add]` (mark ONE workspace in the sidebar's focus set — `on` marks it alone and
+`workspace focus [on|off|toggle|add]` (mark ONE workspace in the sidebar's focus set, `on` marks it alone and
 applies the filter, `off` unmarks it, `toggle` (default) replace-toggles, and `add` marks it alongside
 the others WITHOUT switching the filter on; read membership back from the tree workspace node's
 `focused` flag) ·
 `workspace filter [on|off|toggle]` (apply or suspend that filter for the whole window WITHOUT losing the marked
-set — no `--target`; read it back from the tree top-level `workspaceFilter`. Build a working set with
+set, no `--target`; read it back from the tree top-level `workspaceFilter`. Build a working set with
 repeated `workspace focus add`, then apply it once with `workspace filter on`; a workspace row renders iff
-`sidebarVisible && sidebarMode == "tree" && (!workspaceFilter || focused)` — no workspace row renders at
+`sidebarVisible && sidebarMode == "tree" && (!workspaceFilter || focused)`, no workspace row renders at
 all with the sidebar hidden or in `flagged` mode, the whole tree renders while the filter is off, and
-only while it is on does visibility narrow to the members — and `workspace filter on` with nothing marked is
+only while it is on does visibility narrow to the members, and `workspace filter on` with nothing marked is
 refused so the pair can never lie) ·
 `workspace collapse [--target W] [--window W]` · `workspace expand [--target W] [--window W]` (collapse/expand ONE workspace
-in the sidebar tree — the per-workspace pair, distinct from the all-workspace `sidebar expand`/`collapse`;
+in the sidebar tree, the per-workspace pair, distinct from the all-workspace `sidebar expand`/`collapse`;
 read the open/closed state back from the tree workspace node's `collapsed` flag, `true` when collapsed and
 omitted when expanded).
 
 **session**
-- `session new [--cwd DIR] [--workspace W] [--workspace-name NAME] [--create-workspace] [--command CMD] [--wait] [--name NAME] [--after SID | --before SID] [--no-select]` —
+- `session new [--cwd DIR] [--workspace W] [--workspace-name NAME] [--create-workspace] [--command CMD] [--wait] [--name NAME] [--after SID | --before SID] [--no-select]`,
   create (and focus) a session. Target the workspace by id/prefix (`--workspace`) OR by name
   (`--workspace-name`, mutually exclusive); add `--create-workspace` to reuse-or-create the named
   workspace when absent. `--command` runs that program as the session process instead of a login shell
-  (argv-only, and with the app's GUI `PATH` — a Homebrew/non-default binary needs an absolute path or a
+  (argv-only, and with the app's GUI `PATH`, a Homebrew/non-default binary needs an absolute path or a
   `zsh -lc '…'` wrapper, else exit 127; same caveat for `session scratch --command` and `session overlay
   open` below);
   `--wait` (with `--command`, else an error) HOLDS the session open after the command exits, showing the
   press-any-key prompt with the final output intact instead of closing (persists across restart, unlike an
   overlay's live-only wait; read back on `tree`'s `commandWait`);
   `--name` seeds the sidebar label (default: the auto basename). `--after`/`--before` place it directly
-  after/before an anchor session (id/prefix/`active`) instead of appending — the anchor carries its own
+  after/before an anchor session (id/prefix/`active`) instead of appending, the anchor carries its own
   workspace, so it's mutually exclusive with `--workspace`/`--workspace-name`. `new --after active` =
-  create right after the current session. `--no-select` creates the session in the BACKGROUND — it is
+  create right after the current session. `--no-select` creates the session in the BACKGROUND, it is
   added to the sidebar but NOT selected or focused, leaving the current selection untouched (the new node
   is not `active` in `tree`); omit it for the default select-and-focus behavior.
-- `session duplicate [--target]` — create a fresh session (a plain login shell) in the target's workspace, right
+- `session duplicate [--target]`, create a fresh session (a plain login shell) in the target's workspace, right
   after it, rooted at the target's focused-pane cwd; selects + focuses it and returns the new id. ONLY the
-  directory carries over — no custom name, command, split, scratch, status, flag, font size, or background.
+  directory carries over, no custom name, command, split, scratch, status, flag, font size, or background.
   Equivalent to `session new --cwd <source cwd> --after <source>` in one round-trip. Read it back from
   `tree`: the new node sits directly after its source carrying the source's focused-pane cwd (equal to the
   source node's `tree.cwd` unless the source is a split focused off its primary pane, where `tree.cwd`
   reports the primary).
-- `session close [--target T ...]` — close one session, or repeat `--target` to close a batch with one
+- `session close [--target T ...]`, close one session, or repeat `--target` to close a batch with one
   grace-period undo.
 - `session select` · `session rename <name>` · `session reveal` (select the focused pane's cwd in Finder).
-- `session go --to next|prev|first|last|next-attention|prev-attention` — move the selection between sessions.
+- `session go --to next|prev|first|last|next-attention|prev-attention`, move the selection between sessions.
 - `session move <workspace>` (relocate) or `session move --to up|down|top|bottom` (reorder within the
   workspace) or `session move --after SID | --before SID` (place after/before an anchor session; the anchor carries its own
   workspace, so this relocates + positions in one shot, even cross-workspace). For workspace and
@@ -317,26 +317,26 @@ omitted when expanded).
 - Shared pane selectors accept `primary`/`left`/`top` for the primary pane and
   `split`/`right`/`bottom` for the split pane. Commands supporting scratch also accept `scratch`.
   Syntax and read-back use canonical `left`/`right`/`scratch`; the invalid-value error keeps those names.
-- `session type <text> [--stdin] [--select] [--pane left|right|scratch]` — inject keystrokes (real typing, Enter
+- `session type <text> [--stdin] [--select] [--pane left|right|scratch]`, inject keystrokes (real typing, Enter
   included) into the main pane, the split pane with `--pane right`, or the scratch terminal (even hidden)
   with `--pane scratch`. Pass `--target "$AGTERM_SESSION_ID"` to type into YOUR session, not the user's
   active one (see Addressing). Like `session text`, every `--pane` addresses the surface UNDER a covering
-  overlay — by design, so a pane stays drivable whatever is drawn over it — meaning text typed while one is
+  overlay, by design, so a pane stays drivable whatever is drawn over it, meaning text typed while one is
   open runs in the hidden shell and is invisible until it closes. There is no write twin of
   `session overlay text`: an overlay runs the caller's own program, so nothing types into one. Typing is the
   input a waiting agent asked for, so it clears that pane's `blocked`/`completed` glyph exactly as a
   keystroke does; another pane's glyph, an `active` one, and an empty payload are left alone.
-- `session copy` — print the session's selected text (does NOT touch the system clipboard).
-- `session paste` — paste the system clipboard into the session (the socket analogue of ⌘V; read it back with
+- `session copy`, print the session's selected text (does NOT touch the system clipboard).
+- `session paste`, paste the system clipboard into the session (the socket analogue of ⌘V; read it back with
   `session text`). `--pane left|right|scratch` picks the pane, with the usual role and position aliases;
   omitted is the main pane.
-- `session select-all` — select the session's entire terminal buffer (the socket analogue of ⌘A; read the
+- `session select-all`, select the session's entire terminal buffer (the socket analogue of ⌘A; read the
   selection back with `session copy`).
 - `session text [--all] [--lines N] [--pane left|right|scratch] [--pane-id TOKEN]`: print the session buffer
   as plain text. Default is the visible screen of the focused pane; `--pane scratch` reads the scratch
   terminal even while hidden; `--pane-id "$AGTERM_PANE_ID"` follows the same terminal after a role change
   and overrides `--pane` when it resolves; `--all` adds scrollback; `--lines N` keeps the last N lines.
-- `session search [needle] [--next|--prev|--close]` — search the terminal scrollback; prints the "N of M" counter.
+- `session search [needle] [--next|--prev|--close]`, search the terminal scrollback; prints the "N of M" counter.
 - `session split [on|off|toggle] [--axis vertical|horizontal]` · `session split close` - second shell, left/right by
   default or top/bottom with `--axis horizontal`. Omitting `--axis` preserves the current axis and the
   legacy left/right behavior. The GUI actions are ⌘D for vertical and ⌘⇧D for horizontal; either
@@ -346,7 +346,7 @@ omitted when expanded).
   them. Focus follows the terminal; axis and divider ratio stay fixed. Works on shown or hidden splits and
   under zoom/dashboard; errors when there is no split or either surface is not ready. Read the new primary
   from `tree`'s `cwd`/`title`/`foreground` and the other side from `splitForeground`.
-- `session scratch [on|off|toggle] [--command CMD]` — full-coverage third shell (hide keeps it alive; `exit`
+- `session scratch [on|off|toggle] [--command CMD]`, full-coverage third shell (hide keeps it alive; `exit`
   recreates). `--command` (when showing) runs a program instead of a shell, run-once like `session new
   --command` (respawns the scratch if one is open). Target your own session with
   `--target "$AGTERM_SESSION_ID"` (see Addressing).
@@ -358,27 +358,27 @@ omitted when expanded).
   the absolute primary-pane fraction of the area below the titlebar (left or top; 0..1, clamped to
   0.05..0.95). The grow options are
   aliases for growing the primary or split pane. Prints the applied fraction.
-- `session status <idle|active|completed|blocked> [--blink] [--auto-reset] [--sound NAME] [--color #rrggbb] [--shape SHAPE] [--pane left|right|scratch] [--pane-id TOKEN]` — set the sidebar agent glyph (`--sound default` or a system sound name plays a one-shot sound; `--color` tints the glyph for this call only, reverting on the next status set without it; `--shape` (`circle`, `square`, `triangle`, `diamond`, `capsule`, `star`) picks its silhouette for this call only and reverts the same way, read back as the tree `statusShape` field; `--pane` records which pane set it — `left`=main, `right`=split, `scratch` — so foreground typing in another pane won't clear it, and while the session is `blocked` a status from another pane that is not itself `blocked` is refused with `blocked status owned by pane <pane>` so one pane's agent cannot erase the other's request for input, `idle` included since the bundled hooks emit it unprompted; any user-initiated GUI selection (auto-follow, attention-nav ⌃⌥↑/↓, plain session nav, the command palettes, a Dock-menu session, a sidebar row click) reveals that pane when the status needs attention (`blocked`/`completed`); `active` preserves the existing pane selection; the pane reads back as the tree `statusPane` field; the socket `session go next-attention` only steps the selection, it does not itself reveal the pane; `--pane-id` is the hook-forwarded stable surface token (`$AGTERM_PANE_ID`) that resolves the pane's live slot and overrides a stale `--pane` after a promote + re-split — scripts set `--pane` directly and leave `--pane-id` to the hook).
-- `session flag [on|off|toggle|clear]` — flag a session for the flagged working-set view (`clear` unflags all).
-- `session context <TEXT|--clear> [--target] [--window W]` — set what the session is ABOUT, shown in the
+- `session status <idle|active|completed|blocked> [--blink] [--auto-reset] [--sound NAME] [--color #rrggbb] [--shape SHAPE] [--pane left|right|scratch] [--pane-id TOKEN]`, set the sidebar agent glyph (`--sound default` or a system sound name plays a one-shot sound; `--color` tints the glyph for this call only, reverting on the next status set without it; `--shape` (`circle`, `square`, `triangle`, `diamond`, `capsule`, `star`) picks its silhouette for this call only and reverts the same way, read back as the tree `statusShape` field; `--pane` records which pane set it, `left`=main, `right`=split, `scratch`, so foreground typing in another pane won't clear it, and while the session is `blocked` a status from another pane that is not itself `blocked` is refused with `blocked status owned by pane <pane>` so one pane's agent cannot erase the other's request for input, `idle` included since the bundled hooks emit it unprompted; any user-initiated GUI selection (auto-follow, attention-nav ⌃⌥↑/↓, plain session nav, the command palettes, a Dock-menu session, a sidebar row click) reveals that pane when the status needs attention (`blocked`/`completed`); `active` preserves the existing pane selection; the pane reads back as the tree `statusPane` field; the socket `session go next-attention` only steps the selection, it does not itself reveal the pane; `--pane-id` is the hook-forwarded stable surface token (`$AGTERM_PANE_ID`) that resolves the pane's live slot and overrides a stale `--pane` after a promote + re-split, scripts set `--pane` directly and leave `--pane-id` to the hook).
+- `session flag [on|off|toggle|clear]`, flag a session for the flagged working-set view (`clear` unflags all).
+- `session context <TEXT|--clear> [--target] [--window W]`, set what the session is ABOUT, shown in the
   title bar: a PR number, an issue, the task in hand. Use it when you
   start work a session's name cannot describe. Exactly one of TEXT or `--clear`; a blank TEXT is an error,
   not a second way to clear. Trimmed; max 256 UTF-8 bytes; no control characters (tabs included) or line
   breaks. Persists
   across a relaunch until cleared. Read it back from the tree node's `context` field.
-- `session seen [--target] [--window W]` — clear the session's unseen-notification badge WITHOUT changing the
-  selection or focus (the focus-free counterpart to `notify`, which raises the badge). Idempotent — a
+- `session seen [--target] [--window W]`, clear the session's unseen-notification badge WITHOUT changing the
+  selection or focus (the focus-free counterpart to `notify`, which raises the badge). Idempotent, a
   no-op when already zero. Read the current count from the tree node's `unseen` field. Use it so an
   orchestrator can acknowledge a driven session's notifications without pulling focus to it.
-- `session restore ("cmd" | --none | --clear) [--pane left|right] [--pane-id TOKEN]` — pin what a pane re-runs on
+- `session restore ("cmd" | --none | --clear) [--pane left|right] [--pane-id TOKEN]`, pin what a pane re-runs on
   the NEXT launch, overriding the captured foreground command. A `"cmd"` shell line pins it, `--none` pins
   nothing (a plain shell), `--clear` drops the override back to auto-capture. Written now, consumed on the
-  next launch (it never touches the running session), and STICKY — fires again on every restart until
+  next launch (it never touches the running session), and STICKY, fires again on every restart until
   cleared. It runs in `rerun` mode. In fresh-shell or live mode, a command or `--none` still saves policy
   for a future rerun launch and returns a note naming the active mode; `--clear` works in every mode. A pin
   never opts one session out of live mode. Deliberate pins bypass `restore-denylist.conf`. Read back as the tree node's
   `restoreCommand`/`splitRestoreCommand`. `--pane right` needs a split; `scratch` is rejected. `--pane-id`
-  (the shell's `$AGTERM_PANE_ID`) resolves the pane's live slot — unlike `session status`, a token that
+  (the shell's `$AGTERM_PANE_ID`) resolves the pane's live slot, unlike `session status`, a token that
   does not resolve errors unless `--pane` is also given. For a non-idempotent command like
   `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
   `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
@@ -386,7 +386,7 @@ omitted when expanded).
   it must not carry secrets. See examples.md.
 - `session background image <path> [--opacity F] [--fit contain|cover|stretch|none] [--position P] [--repeat]` ·
   `session background text <text> [--color #rrggbb] [--opacity F] [--fit ...] [--position ...]` ·
-  `session background color <#rrggbb>` · `session background clear` — composite an image (PNG/JPEG) or rasterized text
+  `session background color <#rrggbb>` · `session background clear`, composite an image (PNG/JPEG) or rasterized text
   behind the terminal as a watermark (auto-fitting the window, re-fits on resize), or set a solid
   terminal background color. Per session; survives restart. `--opacity` 0.0–1.0. (An image/text watermark
   renders the pane opaque, overriding window translucency, so it shows; a `color` takes no opacity and
@@ -396,15 +396,15 @@ omitted when expanded).
   `session overlay close [--pane left|right]` ·
   `session overlay result [--pane left|right]` ·
   `session overlay copy [--pane left|right]` ·
-  `session overlay text [--all] [--lines N] [--pane left|right]` — run a program on top of a session; `--block`
+  `session overlay text [--all] [--lines N] [--pane left|right]`, run a program on top of a session; `--block`
   waits and exits with its status.
   `session overlay copy` returns the selection made INSIDE the overlay and `session overlay text` its terminal buffer:
   `session copy` and `session text` both address the pane the overlay COVERS, so a selection made in the
   overlay reads there as `no selection` and `session text --pane right` returns the shell underneath.
-  Reach for them when the read is NOT chord-driven — polling from outside, or reading some time after the
+  Reach for them when the read is NOT chord-driven, polling from outside, or reading some time after the
   fact. A chord already gets the firing surface's selection synchronously in `$AGT_SELECTION`, the
   overlay's included, so a custom command should use that rather than a later socket read.
-  `session overlay text` returns a TUI's drawn screen wrapped as rendered — for a program's OUTPUT, still prefer
+  `session overlay text` returns a TUI's drawn screen wrapped as rendered, for a program's OUTPUT, still prefer
   its own output file.
   `session overlay resize` changes an ALREADY-OPEN overlay: `--size-percent N` (1-100) makes it a floating panel,
   `--full` switches it back to the full-pane overlay; the program keeps running (no re-spawn).
@@ -418,17 +418,17 @@ omitted when expanded).
   split renders both panes, a HIDDEN one renders only the FOCUSED pane, so the refused one is the pane
   that does not have focus.
   Target with `--target "$AGTERM_SESSION_ID"` for YOUR session (default `active` is the user's selection).
-  **By default `session overlay open` does NOT switch the user** — full and floating (`--size-percent N`, 1-100)
+  **By default `session overlay open` does NOT switch the user**, full and floating (`--size-percent N`, 1-100)
   both open on `--target` and run their program in the background; the panel appears when the user visits
   that session. **Pass `--follow` to select the target after opening** (a no-op if it is already active):
   use `--follow` when you want the user pulled to the overlay, omit it to open quietly on your own or
   another session.
   `--background-color` gives the overlay pane its own solid color, independent of the session's. An
-  overlay is a real terminal (pty), which is also how you **display an image inline** — via the bundled
+  overlay is a real terminal (pty), which is also how you **display an image inline**, via the bundled
   `scripts/show-image.sh` (see below).
 - `session hud [open] <message> [--detail T] [--spinner] [--spinner-style S] [--position P] [--background-color #rrggbb] [--text-color #rrggbb] [--size-percent N] [--pane P] [--pane-id ID]` ·
   `session hud update <message> [--detail T] [--spinner] [--spinner-style S] [--position P] [--text-color #rrggbb] [--size-percent N] [--pane P] [--pane-id ID]` ·
-  `session hud close` — post a small **passive** panel over the session saying what you are doing
+  `session hud close`, post a small **passive** panel over the session saying what you are doing
   ("gathering options…"). Unlike an overlay it takes no input and steals nothing: the session keeps first
   responder, the user keeps typing, and the terminal behind it is neither dimmed nor click-blocked. Use it
   for the seconds an agent needs before it can show something (computing picker items, waiting on a slow
@@ -447,7 +447,7 @@ omitted when expanded).
   promotion and overrides `--pane` when it resolves. An unknown token needs a `--pane` fallback. Open refuses
   a pane that is not visible. Hiding a target keeps the HUD alive until the pane returns; closing it closes
   the HUD. The panel is sized from the message on both axes:
-  width from the longest line, height from the number of them — so a title and a subtitle give a wide, short
+  width from the longest line, height from the number of them, so a title and a subtitle give a wide, short
   panel, not a square one. `--size-percent N` (1-100) overrides the WIDTH only, bounded to 10-80% of the
   pane, since a message must never cover the session it is about, so a requested 100 reads back as 80. The
   height always follows the message. `--text-color` colors the panel's TEXT and `--background-color` its
@@ -464,7 +464,7 @@ omitted when expanded).
   and `surface zoom` will not address it. `session hud update`/`session hud close` with none up answer `no hud`. Read it
   back from the tree node's `hud` object; nothing announces it as an event, so poll `tree`.
 
-**window** — `window new [name] [--minimized]` · `window list` · `window select <id>` · `window close <id>` ·
+**window**, `window new [name] [--minimized]` · `window list` · `window select <id>` · `window close <id>` ·
 `window rename <id> <name>` ·
 `window delete <id>` · `window resize <id> --width W --height H` · `window move <id> --x X --y Y [--display N]` ·
 `window zoom <id>` (maximize-to-screen toggle, the double-click-header gesture; a plain green-button click does full screen) ·
@@ -473,8 +473,8 @@ omitted when expanded).
 `toggle`, the id may be omitted so `window minimize on` targets the active window; errors on a full-screen
 window; read back as `minimized` on `window list`).
 
-**surface** — `surface zoom [show|hide|toggle] [--target surface:<session-id>:left|right|scratch|overlay|overlay-left|overlay-right|quick] [--window W]`
-— zoom a terminal surface to fill the window (sidebar hidden; a slim title-bar strip with an exit
+**surface**, `surface zoom [show|hide|toggle] [--target surface:<session-id>:left|right|scratch|overlay|overlay-left|overlay-right|quick] [--window W]`,
+zoom a terminal surface to fill the window (sidebar hidden; a slim title-bar strip with an exit
 button remains). Omit `--target` to use the active surface;
 copy an explicit surface id from `tree --json` to address a hidden split/scratch or a background
 session. `quick` is the one target that is not a window surface: it grows the quick-terminal panel to
@@ -482,16 +482,16 @@ fill its screen, takes no `--window`, is refused while the panel is hidden, and 
 `--target` resolves to. `hide` exits zoom; `toggle`
 enters/exits only this zoom mode, not macOS window zoom.
 
-**dashboard** — `dashboard <ids…> [--font-size N | --auto-size] [--window W]` opens a view-only grid
+**dashboard**, `dashboard <ids…> [--font-size N | --auto-size] [--window W]` opens a view-only grid
 showing the named sessions' live panes; `dashboard --mru [--font-size N | --auto-size] [--window W]`
 opens the window's most-recently-used sessions instead of naming ids; `dashboard --close [--window W]`
 closes it. The cell unit is a session+pane: a non-split session is one cell, and a SPLIT session shows as
-TWO cells (its left/primary pane and its right/split pane) — unless the id carries a `:left`/`:right` pane
+TWO cells (its left/primary pane and its right/split pane), unless the id carries a `:left`/`:right` pane
 suffix (`dashboard <a>:left <b>:right`), which places THAT PANE ALONE; the suffix is the same form
 `dashboardMembers` reports, composes with `active` and prefixes, and accepts only `left`/`right` (any other
 suffix fails the command, while `:right` on a session with no split parses but names no pane, so it joins
-the `unresolved` note — and errors `no dashboard sessions resolved` if nothing else resolved, leaving any
-open grid untouched). Cells are deduped by session+pane. View-only: no cell takes input — the keyboard
+the `unresolved` note, and errors `no dashboard sessions resolved` if nothing else resolved, leaving any
+open grid untouched). Cells are deduped by session+pane. View-only: no cell takes input, the keyboard
 drives it (arrows move the highlight, Enter jumps into the highlighted session AND focuses that exact pane
 then closes, Esc closes). `--font-size N` sets an absolute cell font in points; `--auto-size` sizes cells
 relative to the Settings default font, shrinking as the grid grows (the two are mutually exclusive; a
@@ -501,7 +501,7 @@ honor `--window` (default frontmost). `--mru` is mutually exclusive with explici
 composes with the font flags. Read the state back from the tree's top-level `dashboardMembers`
 (pane refs `<id>:left`/`<id>:right`, in grid order) / `dashboardHighlighted` (a pane ref) /
 `dashboardFontSize`/`dashboardFontMode`. Zoom and the dashboard are mutually exclusive: opening one CLOSES
-the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw — view-only
+the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw, view-only
 means no input, not no process effect. The most-recently-used grid also has a GUI opener: **⌘⇧G** (the
 `dashboard` built-in action), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry
 TOGGLE the frontmost window's MRU dashboard auto-sized (identical to `dashboard --mru --auto-size`); no new
@@ -519,14 +519,14 @@ result. `--no-block` prints the picker id instead;
 Only one picker may be pending per window. It opens without raising a background target unless
 `--follow` is set. Read the live picker id from the tree's top-level `pickPending` field.
 
-**quick** — `quick [show|hide|toggle]` (visibility; read back from the tree's `quickVisible`; a panel YOU open
+**quick**, `quick [show|hide|toggle]` (visibility; read back from the tree's `quickVisible`; a panel YOU open
 with `quick show` stays up when agterm loses focus, unlike one the user summoned by hotkey, so a following
 `quick type` / `quick text` / `surface zoom --target quick` still finds it) ·
 `quick type TEXT` (or `--stdin`) inject keystrokes into the quick terminal ·
-`quick text [--all] [--lines N]` read its screen back — the twins of `session type`/`session text`. There is one
+`quick text [--all] [--lines N]` read its screen back, the twins of `session type`/`session text`. There is one
 per app, so none of them take `--target`/`--window`/`--pane`; all three still need an open window.
 
-**sidebar** — `sidebar [show|hide|toggle]` (visibility; read back from the tree's `sidebarVisible`) ·
+**sidebar**, `sidebar [show|hide|toggle]` (visibility; read back from the tree's `sidebarVisible`) ·
 `sidebar mode [tree|flagged|toggle]` (flip between the workspace tree and the flat flagged working-set list; read
 back from the tree's top-level `sidebarMode`) · `sidebar expand [--window W]` (expand every workspace) ·
 `sidebar collapse [--window W]` (collapse all workspaces except the active one, which stays expanded) ·
@@ -535,15 +535,15 @@ and reads back from the tree's top-level `sidebarWidth`).
 Visibility/mode act on the frontmost window; `sidebar expand`/`collapse`/`width` default to the frontmost but take a
 `--window` selector to target any open window.
 
-**notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
+**notify**, `notify <body> [--title T]`, post a desktop notification attributed to a session. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
 
-**font** — `font inc|dec|reset [--pane left|right|scratch]` — change a session pane's font size (omitted/`left` = main pane, `right` = the split pane, `scratch` = the scratch terminal). Read the resulting size back from `tree` (`fontSize`/`splitFontSize`/`scratchFontSize` per pane).
+**font**, `font inc|dec|reset [--pane left|right|scratch]`, change a session pane's font size (omitted/`left` = main pane, `right` = the split pane, `scratch` = the scratch terminal). Read the resulting size back from `tree` (`fontSize`/`splitFontSize`/`scratchFontSize` per pane).
 
-**keymap** — `keymap reload` — re-read `keymap.conf` (prints the parse-diagnostic count). `keymap list` — show the resolved keymap AND the live menu key equivalents: every built-in with its current binds (the menu chord first, then any `|`-separated alternatives a key monitor delivers), the custom commands, the parse diagnostics, and what the menu bar is actually dispatching. Use it to check a rebind took effect, to find a free chord, or to spot a chord the keymap resolved but the menu is not carrying.
+**keymap**, `keymap reload`, re-read `keymap.conf` (prints the parse-diagnostic count). `keymap list`, show the resolved keymap AND the live menu key equivalents: every built-in with its current binds (the menu chord first, then any `|`-separated alternatives a key monitor delivers), the custom commands, the parse diagnostics, and what the menu bar is actually dispatching. Use it to check a rebind took effect, to find a free chord, or to spot a chord the keymap resolved but the menu is not carrying.
 
 **config** - `config reload` - re-read the agterm-scoped `ghostty.conf` (prints the diagnostic count).
 
-**theme** — `theme list` (bundled themes, current marked `*`) · `theme set [name]` — set + persist the
+**theme**, `theme list` (bundled themes, current marked `*`) · `theme set [name]`, set + persist the
 terminal theme app-wide, per slot: a NAME sets the light/single theme (a dark theme, if set, is kept);
 `theme set --dark <name>` sets the dark theme, which makes the terminal track the macOS Light/Dark
 appearance automatically; `theme set --dark none` stops tracking. The app default is the bundled
@@ -578,7 +578,7 @@ never restored after a relaunch. Both run ssh non-interactively, so key-based au
 the far side needs `agtermctl` installed by the cask or the Help action: a machine merely running agterm
 has no CLI an ssh command can find. Every zmx command needs a running agterm.
 
-**version** — `agtermctl version` — which agterm is serving this socket, as `result.app` (`version`, plus
+**version**, `agtermctl version`, which agterm is serving this socket, as `result.app` (`version`, plus
 `commit` when the build recorded one). App-global: no target, no `--window`, no window need be open, so it
 works as a preflight from a keymap-launched script, which has no `$TERM_PROGRAM_VERSION`. Address the
 socket explicitly (`--socket "$AGTERM_SOCKET"`, or `"$AGT_SOCKET"` in a keymap child): a bare call
@@ -588,12 +588,12 @@ resolves the DEFAULT socket, which may be another app. The same identity is on t
 ## Displaying an image inline
 
 This skill bundles `scripts/show-image.sh`. It opens an overlay (a real terminal) and renders the
-image there via the kitty graphics protocol, which ghostty draws natively — no kitty binary and no
+image there via the kitty graphics protocol, which ghostty draws natively, no kitty binary and no
 external image tool, just `base64` + `printf`. Run it with the image path (optional size percent,
 default 60):
 
 The script sits next to this file, so resolve `scripts/show-image.sh` against the directory this
-`SKILL.md` was loaded from — not against your working directory. That one form is correct wherever
+`SKILL.md` was loaded from, not against your working directory. That one form is correct wherever
 the skill came from: a plugin install (`~/.claude/plugins/cache/…`, `~/.codex/plugins/cache/…`) or the
 app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/agterm/`, `~/.codex/skills/agterm/`).
 
@@ -606,7 +606,7 @@ in it, so a large screenshot needs no resizing beforehand.
 
 Do NOT print graphics escapes to your own tool stdout (the agent harness escapes the control bytes)
 and do NOT run an image viewer in your tool shell (no controlling terminal). The overlay is what makes
-it render. Outside agterm (`AGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`.
+it render. Outside agterm (`AGTERM_ENABLED` unset) there is no overlay, fall back to `open <image>`.
 
 ## Troubleshooting and reporting
 
@@ -626,19 +626,19 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
 
 ## Reference files
 
-- **reference.md** — full per-command detail: every flag, the JSON return shapes
+- **reference.md**, full per-command detail: every flag, the JSON return shapes
   (`result.id`/`text`/`exitCode`/`count`/`affected`/`tree`/`windows`/`app`/`restore`/`zmx`/`remote`), error strings, the scratch/overlay/split
   lifecycle, and the keymap.conf format (`map` / `command`, chords, leaders, `|` alternatives,
   `{AGT_X}` tokens).
-- **examples.md** — copy-paste agtermctl examples for common tasks (build a layout, run a program in a
+- **examples.md**, copy-paste agtermctl examples for common tasks (build a layout, run a program in a
   blocking overlay and read its status, type into a fresh session, notify, inspect the tree).
-- **cookbook.md** — how to list, acquire and install the repository's cookbook recipes, and how to read
+- **cookbook.md**, how to list, acquire and install the repository's cookbook recipes, and how to read
   one as reference for a tricky workflow. The recipe list lives in the repo, not here; fetch it.
-- **troubleshooting.md** — diagnosing common problems (keymap editor, custom actions, logs) and the
+- **troubleshooting.md**, diagnosing common problems (keymap editor, custom actions, logs) and the
   bug-issue / feature-Discussion reporting workflow (draft-first, scrub, never post without approval).
-- **agent-runtimes.md** — per-runtime integration for the agent CLIs that run inside agterm
+- **agent-runtimes.md**, per-runtime integration for the agent CLIs that run inside agterm
   (Claude Code, Codex, Cursor's agent CLI, Copilot CLI, ZCode, OpenCode, Pi): launch and resume
   lines, the `session restore` reattach pattern, and where each runtime's agent-status hook is wired.
-- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above).
+- **scripts/show-image.sh**, bundled helper that displays an image inline in an overlay (see above).
 
 Read those files when you need exact flags, return shapes, or worked examples.

@@ -1,6 +1,7 @@
 # Dirt gate tree-mode operating assumptions absent from OUTCOME_CONTRACT and docstring
 
 - **Cluster:** docs/history/backlog/completed/2026-10-20-done-dirt-regression-correction-block.md (introduced by the correction-set landing's `--tree` mode)
+- **Cluster:** docs/history/backlog/2026-10-23-dirt-gate-head-pinned-after-classification-window.md (shared surface: both residuals concern the dirt gate's `--tree` contract and runner boundary; this row records the missing mode documentation)
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)

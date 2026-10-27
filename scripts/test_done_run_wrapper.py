@@ -1236,10 +1236,19 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
                 (wt_session / f"worktree-migrate-baseline-{run_id}.json").exists(),
                 "commit captured a late baseline",
             )
-            # the migration manifest records the transfer verified
-            manifests = list(wt_session.glob("worktree-migrate-manifest-*.json"))
-            self.assertEqual(len(manifests), 1)
-            data = json.loads(manifests[0].read_text(encoding="utf-8"))
+            # the migration manifest records the transfer verified, at the
+            # primary checkout's canonical plan-slug destination
+            self.assertEqual(
+                list(wt_session.glob("worktree-migrate-manifest-*.json")), [],
+                "one-owned-plan migration wrote the run-id manifest worktree-side",
+            )
+            primary_manifest = (
+                self.fixture / "docs" / "tmp" / "execute-plan"
+                / "per-task-example" / "closeout-migration.json"
+            )
+            self.assertTrue(primary_manifest.is_file(), combined)
+            data = json.loads(primary_manifest.read_text(encoding="utf-8"))
+            self.assertTrue(data.get("branch"), "migration manifest lost the branch record")
             migrated = {entry["source"] for entry in data["migrated"]}
             self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
             for entry in data["migrated"]:
@@ -3312,6 +3321,163 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertTrue(record.get("complete", False))
         self.assertFalse(checkpoint.exists())
 
+    def test_finalize_rebased_squash_proof_patch_id_match_keeps_success_shape(self) -> None:
+        self.init_fixture_repo()
+        base_branch = self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "rebased-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        # The facts append is a tracked-file edit; commit it so the later
+        # rebase runs against a clean tree.
+        self.git("add", ".ai-playbook/facts.md")
+        self.git("commit", "-qm", "record the base branch fact")
+        self.git("checkout", "-qb", "run/rebased")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        # The witnessed rebased-landing shape: the base advances, the run
+        # branch rebases onto it before the squash, and the ledger keeps the
+        # pre-rebase sha. Ancestry and the tree-identity fast path both miss;
+        # the first-parent delta patch-id of the landing commit matches the
+        # branch delta, so the squash still proves landed.
+        self.git("checkout", base_branch)
+        (self.fixture / "other.txt").write_text("other\n")
+        self.git("add", "other.txt")
+        self.git("commit", "-qm", "base advance")
+        self.git("checkout", "run/rebased")
+        self.git("rebase", base_branch)
+        rebased_tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        base_tip = self.git("rev-parse", base_branch).stdout.strip()
+        squash = self.git("commit-tree", rebased_tree, "-p", base_tip, "-m", "squash").stdout.strip()
+        self.git("update-ref", f"refs/heads/{base_branch}", squash, base_tip)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(f"landing_commit={landing}", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertFalse(checkpoint.exists())
+
+    def test_finalize_unresolvable_base_skips_honesty_check_with_complete_marking(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "failopen-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        # A ledger landing commit with a base that cannot resolve: the
+        # fixture facts carry no base_branch key and no origin/HEAD exists,
+        # so the honesty check fails open to the success shape.
+        self.git("checkout", "-qb", "run/failopen")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("the deferred-squash honesty check is skipped", proc.stderr)
+        self.assertIn(f"landing_commit={landing}", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertFalse(checkpoint.exists())
+
+    def test_finalize_origin_head_fallback_defers_naming_short_branch(self) -> None:
+        self.init_fixture_repo()
+        base_branch = self.git("symbolic-ref", "--short", "HEAD").stdout.strip()
+        setup_proc, exports = self.setup_session("--label", "origin-head-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/origin-head")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        # The facts key is absent but origin/HEAD carries the base: the
+        # deferred shape still resolves and names the short-name branch.
+        base_tip = self.git("rev-parse", base_branch).stdout.strip()
+        self.git("update-ref", f"refs/remotes/origin/{base_branch}", base_tip)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 f"refs/remotes/origin/{base_branch}")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(f"the squash to {base_branch} has not landed", proc.stderr)
+        self.assertIn(f"branch_commit={landing}", proc.stdout)
+        self.assertNotIn("landing_commit=", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertFalse(record.get("complete", False))
+        self.assertTrue(checkpoint.exists())
+
+    def test_finalize_guard_child_defers_after_marking_names_branch_commit(self) -> None:
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "child-corner-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/childcorner")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        # No owned-commits ledger yet, so the marking decision runs complete;
+        # the guard-firing child commit appends the ledger's first line after
+        # it and the summary recompute defers with the branch_commit naming.
+        self.seed_tracked_guard_ledger()
+        firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
+        env = self.commit_env()
+        env.update(exports)
+        proc = self.run_finalize("--guard-firing", firing, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("the complete marking above predates this ledger line", proc.stderr)
+        self.assertIn("branch_commit=", proc.stdout)
+        self.assertIn("squash pending", proc.stdout)
+        self.assertNotIn("landing_commit=", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        self.assertIn(": free", self.lock_status())
+
+    def test_finalize_squash_proof_window_bound_pins_500_commit_scan(self) -> None:
+        self.init_fixture_repo()
+        base_branch = self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "window-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/window")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        checkpoint = self.make_checkpoint(run_id)
+        # The squash lands as a tree-equal base commit, then the base
+        # advances 501 distinct-tree commits so the squash falls outside the
+        # 500-commit window both proof scans bound: the deferral stands and
+        # the window is pinned, not undocumented.
+        tree = self.git("rev-parse", f"{landing}^{{tree}}").stdout.strip()
+        base_tip = self.git("rev-parse", base_branch).stdout.strip()
+        squash = self.git("commit-tree", tree, "-p", base_tip, "-m", "squash").stdout.strip()
+        self.git("update-ref", f"refs/heads/{base_branch}", squash, base_tip)
+        self.git("checkout", base_branch)
+        marker = self.fixture / "advance.txt"
+        for i in range(501):
+            marker.write_text(f"advance {i}\n")
+            self.git("add", "advance.txt")
+            self.git("commit", "-qm", f"advance {i}")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(f"branch_commit={landing}", proc.stdout)
+        record = self.manifest_record(exports)
+        self.assertFalse(record.get("complete", False))
+        self.assertTrue(checkpoint.exists())
+
     def test_finalize_from_holder_accepts_a_verifiably_alive_recorded_holder(self) -> None:
         # The recorded holder is this pytest process: the finalize child shell
         # descends from it, so the lock script's from-holder ancestry gate
@@ -5017,8 +5183,18 @@ class DoneRunCloseoutBaselineArmTest(FixtureMixin, unittest.TestCase):
             "commit captured a late baseline",
         )
         manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
-        self.assertEqual(len(manifests), 1)
-        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifests, [],
+            "one-owned-plan migration wrote the run-id manifest worktree-side",
+        )
+        primary_manifest = (
+            self.fixture / "docs" / "tmp" / "execute-plan"
+            / self.PLAN_SLUG / "closeout-migration.json"
+        )
+        self.assertTrue(primary_manifest.is_file(), combined)
+        data = json.loads(primary_manifest.read_text(encoding="utf-8"))
+        self.assertTrue(data.get("branch"), "migration manifest lost the branch record")
+        self.assertTrue(data["branch"][-1].get("branch"))
         migrated = {entry["source"] for entry in data["migrated"]}
         self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
         for entry in data["migrated"]:
@@ -5056,8 +5232,16 @@ class DoneRunCloseoutBaselineArmTest(FixtureMixin, unittest.TestCase):
         transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
         self.assertTrue(transferred.is_file(), combined)
         manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
-        self.assertEqual(len(manifests), 1)
-        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifests, [],
+            "one-owned-plan migration wrote the run-id manifest worktree-side",
+        )
+        primary_manifest = (
+            self.fixture / "docs" / "tmp" / "execute-plan"
+            / "closeout-charter" / "closeout-migration.json"
+        )
+        self.assertTrue(primary_manifest.is_file(), combined)
+        data = json.loads(primary_manifest.read_text(encoding="utf-8"))
         migrated = {entry["source"] for entry in data["migrated"]}
         self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
         for entry in data["migrated"]:
@@ -5104,12 +5288,66 @@ class DoneRunCloseoutBaselineArmTest(FixtureMixin, unittest.TestCase):
         self.assertNotIn("valid closeout skip record governs", combined)
         transferred = self.fixture / ".ai-playbook" / "reviews" / record.name
         self.assertTrue(transferred.is_file(), combined)
-        manifests = list(self.wt_session(worktree).glob("worktree-migrate-manifest-*.json"))
-        self.assertEqual(len(manifests), 1)
-        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+        primary_manifest = (
+            self.fixture / "docs" / "tmp" / "execute-plan"
+            / self.PLAN_SLUG / "closeout-migration.json"
+        )
+        self.assertTrue(primary_manifest.is_file(), combined)
+        data = json.loads(primary_manifest.read_text(encoding="utf-8"))
         migrated = {entry["source"] for entry in data["migrated"]}
         self.assertIn(f".ai-playbook/reviews/{record.name}", migrated)
         self.assertIn("docs-branch: sync complete", combined)
+
+    def test_absolute_tmp_dir_manifest_lands_at_absolute_tmp(self) -> None:
+        """[class: REPOSITORY_TEST] An absolute facts tmp_dir pins the
+        one-owned-plan migration manifest (and the baseline reuse) to the
+        absolute tmp root as-is: the manifest lands at
+        <abs-tmp>/execute-plan/<slug>/closeout-migration.json and never
+        under the primary checkout prefix."""
+        self.init_fixture_repo()
+        self.seed_tracked_plan(self.PLAN_REL)
+        # the absolute tmp rides the worktree's resolved spelling so the
+        # capture's relative_to sees one path identity (macOS /var symlink)
+        abs_tmp = (self.tmp / "ad-hoc-wt").resolve() / "abs-tmp"
+        (self.fixture / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'backlog_dir = "docs/history/backlog/"\n'
+            f'tmp_dir = "{abs_tmp}"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            'metrics_dir = ".ai-playbook/metrics/"\n'
+            'review_certs_dir = ".ai-playbook/review-certs/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        self.git("add", ".ai-playbook/facts.md")
+        self.git("commit", "-qm", "fixture: absolute tmp_dir facts")
+        worktree, exports, env = self.worktree_session(
+            "--owned-path", "seed.txt", "--owned-plan", self.PLAN_REL,
+        )
+        slug_dir = abs_tmp / "execute-plan" / self.PLAN_SLUG
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        capture = subprocess.run(
+            [sys.executable, str(CLOSEOUT_MIGRATE), "capture", "--out",
+             str(slug_dir / "closeout-baseline.json")],
+            cwd=str(worktree), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        record = self.write_run_review_record(
+            worktree, "2026-10-18-closeout-arm-example-code-review-r1.md"
+        )
+        proc = self.run_worktree_commit(
+            worktree, env, "--stage", "seed.txt", "--subject", "land the run work",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        manifest = abs_tmp / "execute-plan" / self.PLAN_SLUG / "closeout-migration.json"
+        self.assertTrue(manifest.is_file(), combined)
+        self.assertFalse(
+            (self.fixture / "docs" / "tmp" / "execute-plan"
+             / self.PLAN_SLUG / "closeout-migration.json").exists(),
+            "absolute tmp_dir manifest leaked under the primary prefix",
+        )
 
     def test_single_plan_missing_baseline_and_no_skip_refuses(self) -> None:
         """[class: REPOSITORY_TEST] A single-plan run with neither a Phase 0

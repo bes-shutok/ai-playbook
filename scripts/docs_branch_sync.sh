@@ -813,6 +813,21 @@ def append_witness(repo: Path, witness: str) -> None:
         fail(f"docs tip changed; witness preserved at {recovery}; retry the docs sync, then rerun the witness append")
 
 
+def is_linked_worktree(repo: Path) -> bool:
+    """True when the resolving checkout is a linked worktree: its git dir
+    differs from the common dir. The branch-only restore leg's retention
+    purpose is the primary corpus home; a run worktree's gitignored homes
+    hold only their own lines, so restoring docs-tracked archive files
+    there would seed primary-ledger history into a fresh worktree's
+    metrics home (the witnessed landing-costs duplication seeding path)."""
+    git_dir = git(["rev-parse", "--absolute-git-dir"], cwd=repo).stdout.decode("utf-8", "replace").strip()
+    common_raw = git(["rev-parse", "--git-common-dir"], cwd=repo).stdout.decode("utf-8", "replace").strip()
+    common = Path(common_raw)
+    if not common.is_absolute():
+        common = repo / common
+    return Path(git_dir).resolve() != common.resolve()
+
+
 def sync(repo: Path) -> int:
     facts = parse_facts(repo)
     roots = resolve_roots(repo, facts)
@@ -847,6 +862,12 @@ def sync(repo: Path) -> int:
     else:
         print("EMPTY-SYNC-SKIP: no recent review or metrics archives; docs branch was not created")
 
+    if restore and is_linked_worktree(repo):
+        print(
+            "docs-branch: restore leg skipped (linked worktree: run homes hold"
+            " only their own lines; the branch-only archives stay on refs/heads/docs)"
+        )
+        restore = []
     restore_files(repo, roots, restore, archive)
     print(f"docs-branch: sync complete ({len(archive)} archive files retained)")
     return 0

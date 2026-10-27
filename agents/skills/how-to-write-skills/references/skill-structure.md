@@ -9,7 +9,7 @@ Complete guide to organizing your Agent Skills for maximum effectiveness and mai
 ```
 skill-name/
 ├── SKILL.md
-└── LICENSE.txt          # Required — MIT; copy from plans/LICENSE.txt
+└── LICENSE.txt          # Required, MIT; copy from plans/LICENSE.txt
 ```
 
 **Use when**: Your guidance fits in < 300 lines and is focused on a single topic.
@@ -24,7 +24,7 @@ skill-name/
 ```
 skill-name/
 ├── SKILL.md              # Core instructions (200-400 lines)
-├── LICENSE.txt           # Required — MIT + personal copyright email
+├── LICENSE.txt           # Required, MIT + personal copyright email
 └── references/           # Detailed documentation
     ├── topic-a.md        # Deep dive on aspect A
     └── topic-b.md        # Deep dive on aspect B

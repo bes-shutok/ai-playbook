@@ -95,7 +95,7 @@ Biases toward caution over speed; for trivial tasks, use judgment. Full detail: 
 
 ## Skill maintenance (summary)
 
-Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48. Harness-scoped rule families declare a supported set and skip outside it (`agent_workflow_guidelines.md` §14.3).
+Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48. Harness-scoped rule families declare a supported set and skip outside it (`agent_workflow_guidelines.md` §14.3). Before committing changed files under `agents/skills/`, have the focused panel selected by the existing panel-selection policy (`agents/skills/review-agents/review-panel-selection.md`) review the exact working diff of those skill files (staged and unstaged together); the review gates the commit only — other files' review stays governed by that policy, and no review is required before canonical writes.
 
 ## Plans and temporary artifacts (summary)
 

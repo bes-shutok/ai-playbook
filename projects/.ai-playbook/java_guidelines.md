@@ -351,7 +351,11 @@ the class (on its explicit constructor when the class declares one), so the buil
 covers the canonical constructor, and keep the validation of the canonical or compact
 constructor. When the class has one over-threshold constructor beside below-threshold
 convenience constructors, put `@Builder` on that constructor alone; the builder covers
-it, and its validation remains. Without Lombok, write the builder as a hand-written
+it, and its validation remains. When a class declares two or more over-threshold
+constructors, prefer placing `@Builder` at class level rather than on the canonical
+constructor, and read each remaining over-threshold constructor as a consolidation
+signal; require explicit distinct `builderClassName` values only when two
+over-threshold constructors must genuinely coexist. Without Lombok, write the builder as a hand-written
 static nested builder class. Construction call sites in production and test sources
 follow the same rule.
 
@@ -361,8 +365,13 @@ the runtime container invokes it to assemble the component, and application code
 calls it. More than three injected dependencies is a coupling signal for the architecture
 lens, never a builder case. A framework-constructed data type, a type a library
 instantiates reflectively from external data, keeps the constructor that library
-requires; the builder is an addition for hand-written construction sites, not a
-replacement of the required constructor.
+requires.
+
+**Verify:** sample a hand-written construction with three or fewer parameters and
+confirm it stays on the constructor, then a four-parameter hand-written construction
+and confirm it goes through the builder; for a class with two or more over-threshold
+constructors, confirm the class carries one class-level `@Builder`, explicit distinct
+`builderClassName` values, or has been raised as a consolidation signal.
 
 ```java
 // Generic example for rule 27: a four-component record built through a builder,

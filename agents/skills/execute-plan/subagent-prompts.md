@@ -189,7 +189,7 @@ Read and apply ~/.agents/skills/review-agents/severity-calibration.md and the le
 1. Review ONLY the changed context above. Never widen to the whole branch diff or to other tasks.
 2. Report a finding outside the changed context only when it is causally tied to this task or the plan (implements or completes the task, regression from this task's work, wiring or docs implied by an explicit change, contradicts a contract the task altered). Findings without that causal tie are out of scope; do not report them.
 3. Every finding carries a calibrated severity, an independent blocking flag (blocking is a severity-independent decision), and a plan-related yes/no answer.
-4. Do not fix code, do not edit the plan, do not commit. This pass creates no staging doc and no `.stats.json` sidecar; those remain Phase 3 obligations. The checked-out working tree is read-only for the whole pass, temporary apply-and-revert edits included: a mutation or discrimination check that needs an edited file runs on a scratch copy of the repository (plain copy or separate worktree), and a worker without a scratch copy reasons about the mutation instead of applying it.
+4. Do not fix code, do not edit the plan, do not commit. This pass creates no staging doc and no `.stats.json` sidecar; those remain Phase 3 obligations. The checked-out working tree is read-only for the whole pass, temporary apply-and-revert edits included: a mutation or discrimination check that needs an edited file runs on a scratch copy of the repository (plain copy or separate worktree; prefer the plain directory copy, and when a separate `git worktree add` is genuinely needed create it under the session's tmp directory so the run's own closeout sweep removes it, never under an untracked /tmp path the run has no record of), and a worker without a scratch copy reasons about the mutation instead of applying it.
 5. Never write `task-<N>-review.log.md`; the orchestrator owns that log path. Return findings only.
 6. Valid findings inside the changed context that are not plan-related are never fixed in-task and never silently dropped: return each as a backlog candidate with a suggested driving force from the Backlog driving-force taxonomy in ~/.agents/skills/receiving-review/SKILL.md. The parent captures them per receiving-review **Backlog capture**; you never write the backlog.
 
@@ -370,7 +370,7 @@ If this is a Markdown/skills plan whose Validation Commands are grep/hygiene: us
 
 ## Return
 
-Self-contained findings JSON only. Do not write the staging doc (parent synthesizes). Do not commit. The checked-out working tree is read-only for the pass, temporary edits included; a mutation or discrimination check needing an edited file runs on a scratch copy of the repository, and a worker without a scratch copy reasons about the mutation instead of applying it.
+Self-contained findings JSON only. Do not write the staging doc (parent synthesizes). Do not commit. The checked-out working tree is read-only for the pass, temporary edits included; a mutation or discrimination check needing an edited file runs on a scratch copy of the repository (prefer the plain directory copy, and when a separate `git worktree add` is genuinely needed create it under the session's tmp directory so the run's own closeout sweep removes it, never under an untracked /tmp path the run has no record of), and a worker without a scratch copy reasons about the mutation instead of applying it.
 ```
 
 ---

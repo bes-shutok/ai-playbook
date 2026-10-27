@@ -16,7 +16,7 @@ Cluster: docs/history/plans/completed/2026-10-10-plan-scope-gist-surface.md (sam
 
 Observed, 2026-10-09 11:00 D-3 carrier turn: the turn executed its execution lane in-session (merge-lock-release-path, landed b48ddd7a3), then ended at the payload's designed FINAL STEP stop-after-report boundary while the authoring lane held a fully specified dispatchable target (the PLAN-PROMPTS entry primary-class-anchors-grammar-drift) and the primary window had hours of headroom. The payload text carries the boundary as an unconditional FINAL STEP ("end this run after the report"), so the stop fired mechanically with work left. The operator corrected the boundary the same hour (D-6, verbatim).
 
-Expected: the turn-boundary rule itself carries the continuation clause — a turn whose execution or authoring lane still holds dispatchable work, with the 5h limit not low, continues that lane in-session (the authoring lane's in-session authoring primitive; the execution lane's in-session leg) and reaches the stop-after-report boundary only when no dispatchable work remains or the primary window sits at its pause thresholds, recording the resume point in the state file on the quota-low stop.
+Expected: the turn-boundary rule itself carries the continuation clause, a turn whose execution or authoring lane still holds dispatchable work, with the 5h limit not low, continues that lane in-session (the authoring lane's in-session authoring primitive; the execution lane's in-session leg) and reaches the stop-after-report boundary only when no dispatchable work remains or the primary window sits at its pause thresholds, recording the resume point in the state file on the quota-low stop.
 
 ## Suggested direction
 

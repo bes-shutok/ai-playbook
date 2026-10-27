@@ -1914,6 +1914,149 @@ def test_docs_tmp_sweep_live_session_nested_plan_preserved(tmp_path, sweep_env):
 
 
 # --------------------------------------------------------------------------- #
+# Pending-name set: live sessions named by the no-date canonical session slug
+# (execute-plan Step 0.4) are kept while the dated plan is pending.
+# --------------------------------------------------------------------------- #
+def _sweep_sweep(root: Path):
+    return run_gate("docs-tmp-sweep", ctx_for(root))
+
+
+def _sweep_markers(root: Path) -> None:
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+
+
+def test_docs_tmp_sweep_live_session_no_date_slug_kept(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A live session directory named by the no-date
+    canonical session slug of a pending dated plan, with no closeout
+    baseline, is kept and reported active (the witnessed 2026-10-18 mid-run
+    evidence-loss shape)."""
+    root = make_repo(tmp_path, "nodate-keep", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    plan_slug = "2026-10-18-plan-declared-missing-input-fallback"
+    plans = root / "docs" / "history" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / (plan_slug + ".md")).write_text("pending plan\n", encoding="utf-8")
+    manifest = write_manifest(
+        root, "plan-declared-missing-input-fallback", fresh_iso()
+    )
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert manifest.parent.exists(), "no-date live session must be kept"
+    assert "active: plan still pending" in result.message
+
+
+def test_docs_tmp_sweep_live_session_dated_stem_kept(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The dated-stem keep arm is unchanged: a live
+    session named by the full dated stem of a pending plan is kept."""
+    root = make_repo(tmp_path, "dated-keep", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    plan_slug = "2026-10-18-plan-declared-missing-input-fallback"
+    plans = root / "docs" / "history" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / (plan_slug + ".md")).write_text("pending plan\n", encoding="utf-8")
+    manifest = write_manifest(root, plan_slug, fresh_iso())
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert manifest.parent.exists(), "dated live session must be kept"
+    assert "active: plan still pending" in result.message
+
+
+def test_docs_tmp_sweep_archived_plan_session_removed_both_name_forms(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Once the plan archives to the completed dir,
+    session directories named by either the dated stem or the no-date slug
+    (with no closeout proof family) are removed exactly as before."""
+    root = make_repo(tmp_path, "archived-remove", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    completed = root / "docs" / "history" / "plans" / "completed"
+    completed.mkdir(parents=True)
+    plan_slug = "2026-10-18-plan-declared-missing-input-fallback"
+    (completed / (plan_slug + ".md")).write_text("archived\n", encoding="utf-8")
+    dated = write_manifest(root, plan_slug, fresh_iso())
+    nodate = write_manifest(
+        root, "plan-declared-missing-input-fallback", fresh_iso()
+    )
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert not dated.parent.exists(), "archived plan's dated session removed"
+    assert not nodate.parent.exists(), "archived plan's no-date session removed"
+    assert "plan archived" in result.message
+
+
+def test_docs_tmp_sweep_proof_family_dir_retained_unchanged(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A directory holding the closeout proof family
+    is retained and reported exactly as before the pending-name extension
+    (the retention arm is unchanged by the keep-set widening)."""
+    root = make_repo(tmp_path, "proof-retain", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    session = write_manifest(
+        root, "2026-10-18-plan-declared-missing-input-fallback", fresh_iso()
+    )
+    (session.parent / "closeout-baseline.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert session.parent.exists()
+    assert "retained: closeout proof family" in result.message
+
+
+def test_docs_tmp_sweep_slug_collision_keep_is_conservative(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] When a pending plan's slug collides with an
+    archived plan's slug across the date strip, a leftover same-slug session
+    is kept until the last same-slug plan archives: the widening errs in the
+    safe (wrongly-kept, re-reported) direction the plan's Assumptions accept."""
+    root = make_repo(tmp_path, "slug-collision", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    plans = root / "docs" / "history" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / "2026-02-02-shared-slug.md").write_text("pending\n", encoding="utf-8")
+    completed = plans / "completed"
+    completed.mkdir()
+    (completed / "2026-01-01-shared-slug.md").write_text("archived\n", encoding="utf-8")
+    stale = write_manifest(root, "shared-slug", fresh_iso())
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert stale.parent.exists(), "same-slug leftover kept while a same-slug plan is pending"
+    assert "active: plan still pending" in result.message
+
+
+def test_docs_tmp_sweep_no_date_dir_no_pending_plan_removed(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The keep set must not widen into a universal
+    keep: a no-date directory matching no pending plan and holding no proof
+    family is still removed."""
+    root = make_repo(tmp_path, "nodate-nomatch", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    write_manifest(root, "no-such-plan-slug", fresh_iso())
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert not (
+        root / "docs" / "tmp" / "execute-plan" / "no-such-plan-slug"
+    ).exists(), "no-date dir matching no pending plan is removed"
+
+
+# --------------------------------------------------------------------------- #
 # Phase 3 panel fix: a synced one-off must also be OUTSIDE the session window
 # before removal (conservative when the window is unanchorable).
 # --------------------------------------------------------------------------- #
@@ -8996,9 +9139,10 @@ def test_em_dash_ls_files_failure_treats_hits_untracked(
 def test_docs_tmp_sweep_keeps_baseline_holding_archived_session(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] An archived-plan execute-plan session still
     holding its captured closeout-baseline.json (regular file) survives the
-    sweep with the kept witness rendered in the gate message; a baseline-less
-    archived session is still removed; a pending-plan session holding a
-    baseline keeps the active: reason (the two exemptions never collide)."""
+    sweep under the plan-slug proof-family retention with the retained line
+    rendered in the gate message; a proof-family-less archived session is
+    still removed; a pending-plan session holding a baseline keeps the
+    active: reason (the two arms never collide)."""
     root = make_repo(tmp_path, "sweep-baseline", gitignore_docs=True)
     write_facts(root)
     plans_dir = root / "docs/history/plans"
@@ -9027,20 +9171,19 @@ def test_docs_tmp_sweep_keeps_baseline_holding_archived_session(tmp_path, sweep_
     assert result.rc == 0
     assert holder.exists() and (holder / "closeout-baseline.json").is_file()
     assert (holder / "task-1-implement.log.md").exists(), "baseline-holding session survives whole"
-    assert not bare.exists(), "baseline-less archived session still removed"
+    assert not bare.exists(), "proof-family-less archived session still removed"
     assert pending_holder.exists()
-    assert "closeout baseline present" in result.message, result.message
-    assert "transfer-out may be pending" in result.message, result.message
+    assert "(retained: closeout proof family: closeout-baseline.json)" in result.message, result.message
     assert "(active: plan still pending)" in result.message, result.message
 
 
-def test_docs_tmp_sweep_stale_baseline_archived_session_removed(tmp_path, sweep_env):
+def test_docs_tmp_sweep_stale_baseline_archived_session_retained(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
-    closeout-baseline.json is backdated beyond the grace window (os.utime to
-    three days ago, 72h > 48h) no longer lingers: the sweep removes the
-    whole directory, including the session manifest the interrupted-run
-    report would otherwise keep surfacing, and the gate message names the
-    stale closeout baseline as the removal reason."""
+    closeout-baseline.json is backdated far beyond the former grace window
+    (os.utime to three days ago, 72h, once the stale-removal boundary) is
+    retained under the plan-slug proof-family retention: age no longer
+    governs the family, so a slow retry re-reads the same proof state the
+    predecessor had and every sweep pass re-reports the retained row."""
     root = make_repo(tmp_path, "sweep-stale-baseline", gitignore_docs=True)
     write_facts(root)
     plans_dir = root / "docs/history/plans"
@@ -9059,52 +9202,71 @@ def test_docs_tmp_sweep_stale_baseline_archived_session_removed(tmp_path, sweep_
 
     result = run_gate("docs-tmp-sweep", ctx_for(root))
     assert result.rc == 0
-    assert not stale.exists(), "stale closeout baseline no longer keeps the directory"
-    assert "(stale closeout baseline)" in result.message, result.message
+    assert stale.exists(), "proof-family retention is age-independent"
+    assert "(retained: closeout proof family: closeout-baseline.json)" in result.message, result.message
 
 
-@unittest.skipIf(os.getuid() == 0, "root ignores chmod")
-def test_docs_tmp_sweep_stale_baseline_removal_failure_reported(tmp_path, sweep_env):
-    """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
-    closeout-baseline.json is backdated 72h (beyond the 48h grace) but whose
-    session directory is undeletable (chmod 0o500) exercises the stale
-    branch's OSError path: the gate message carries the dedicated
-    ``(stale closeout baseline removal-failed)`` row in the removed section
-    (not a kept row) and the directory survives for a retry."""
-    root = make_repo(tmp_path, "sweep-stale-removal-failed", gitignore_docs=True)
+def test_docs_tmp_sweep_retains_skip_sibling_only_session(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session holding
+    only the closeout-baseline-skip.json capture-failure sibling (no
+    baseline) is retained with the family line naming it: the witnessed
+    2026-10-27 sweep consumption of a valid skip record between closeout
+    attempts can no longer recur (lesson 269; the retry re-reads the skip
+    instead of silently capturing a late baseline)."""
+    root = make_repo(tmp_path, "sweep-skip-only", gitignore_docs=True)
     write_facts(root)
     plans_dir = root / "docs/history/plans"
     completed_dir = root / "docs/history/plans/completed"
     plans_dir.mkdir(parents=True)
     completed_dir.mkdir(parents=True)
-    arch_plan = "2026-09-30-archived-stale-baseline-undeleter-plan.md"
+    arch_plan = "2026-09-30-archived-skip-only-plan.md"
     (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
     tmp_dir = root / "docs/tmp"
-    stale = tmp_dir / "execute-plan" / arch_plan[:-3]
-    stale.mkdir(parents=True)
-    (stale / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
-    stale_epoch = time.time() - 72 * 3600
-    os.utime(stale / "closeout-baseline.json", (stale_epoch, stale_epoch))
-    os.chmod(stale, 0o500)
-    try:
-        result = run_gate("docs-tmp-sweep", ctx_for(root))
-        assert result.rc == 0
-        assert stale.exists(), "removal-failed directory survives the failed rmtree"
-        assert "(stale closeout baseline removal-failed)" in result.message, (
-            result.message
-        )
-        assert "(removal failed)" not in result.message, (
-            "failing stale removal must not degrade to a kept row"
-        )
-    finally:
-        os.chmod(stale, 0o755)
+    skip_only = tmp_dir / "execute-plan" / arch_plan[:-3]
+    skip_only.mkdir(parents=True)
+    (skip_only / "closeout-baseline-skip.json").write_text('{"skip": true}\n', encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert result.rc == 0
+    assert skip_only.exists(), "skip-sibling-only session retained"
+    assert "(retained: closeout proof family: closeout-baseline-skip.json)" in result.message, result.message
+
+
+def test_docs_tmp_sweep_retains_migration_manifest_session(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session holding
+    the closeout-migration.json branch record beside its skip sibling is
+    retained with the family line listing both members in the constant's
+    order: the manifest a later plan closeout's gate-removal reads through
+    its explicit operand survives every sweep pass between the landing and
+    that later closeout."""
+    root = make_repo(tmp_path, "sweep-manifest-handoff", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-manifest-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    manifest_holder = tmp_dir / "execute-plan" / arch_plan[:-3]
+    manifest_holder.mkdir(parents=True)
+    (manifest_holder / "closeout-baseline-skip.json").write_text('{"skip": true}\n', encoding="utf-8")
+    (manifest_holder / "closeout-migration.json").write_text("{}\n", encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert result.rc == 0
+    assert manifest_holder.exists(), "migration-manifest session retained"
+    assert (
+        "(retained: closeout proof family: closeout-baseline-skip.json, "
+        "closeout-migration.json)" in result.message
+    ), result.message
 
 
 def test_docs_tmp_sweep_fresh_baseline_archived_session_kept(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
-    closeout-baseline.json is only one hour old (1h <= 48h grace) keeps the
-    transfer-out-pending exemption: the directory survives whole and the
-    gate message carries the unchanged kept wording."""
+    closeout-baseline.json is only one hour old keeps its directory under
+    the plan-slug proof-family retention: the family line is the same
+    age-independent retained wording every sweep pass renders."""
     root = make_repo(tmp_path, "sweep-fresh-baseline", gitignore_docs=True)
     write_facts(root)
     plans_dir = root / "docs/history/plans"
@@ -9123,7 +9285,39 @@ def test_docs_tmp_sweep_fresh_baseline_archived_session_kept(tmp_path, sweep_env
     result = run_gate("docs-tmp-sweep", ctx_for(root))
     assert result.rc == 0
     assert fresh.exists() and (fresh / "closeout-baseline.json").is_file()
-    assert "(kept: closeout baseline present; transfer-out may be pending)" in result.message, result.message
+    assert "(retained: closeout proof family: closeout-baseline.json)" in result.message, result.message
+
+
+@unittest.skipIf(os.getuid() == 0, "root ignores chmod")
+def test_docs_tmp_sweep_bare_archived_session_removal_failure_reported(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A proof-family-less archived-plan session
+    whose directory is undeletable (chmod 0o500) exercises the surviving
+    rmtree failure arm: the gate message carries ``(removal failed)`` as a
+    kept row (never a removed row claiming a deletion that did not happen)
+    and the directory survives for a retry."""
+    root = make_repo(tmp_path, "sweep-removal-failed", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-undeleter-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    bare = tmp_dir / "execute-plan" / arch_plan[:-3]
+    bare.mkdir(parents=True)
+    (bare / "manifest.md").write_text("stale\n", encoding="utf-8")
+    os.chmod(bare, 0o500)
+    try:
+        result = run_gate("docs-tmp-sweep", ctx_for(root))
+        assert result.rc == 0
+        assert bare.exists(), "undeletable session survives the failed rmtree"
+        assert "(removal failed)" in result.message, result.message
+        assert "(plan archived)" not in result.message, (
+            "a failed deletion must never be reported as a removal"
+        )
+    finally:
+        os.chmod(bare, 0o755)
 
 
 # --------------------------------------------------------------------------- #

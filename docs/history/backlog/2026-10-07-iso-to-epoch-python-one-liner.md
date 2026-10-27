@@ -1,4 +1,5 @@
 # iso_to_epoch hand-rolled civil-date arithmetic vs the python one-liner
+Quarantine: 2026-10-27
 
 Driving force: simplicity
 Secondary driving force: maintainability

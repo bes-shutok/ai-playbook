@@ -4,7 +4,6 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
-- **Cluster:** docs/history/backlog/2026-10-10-code-review-panel-worker-capacity.md (same surface: Phase 3 panel composition)
 - **Origin class:** review finding residual
 - **Class:** fix-class
 - **Skill/step:** `agents/skills/execute-plan/subagent-prompts.md` (Review lens worker template, Panel launch paragraph); `agents/skills/execute-plan/SKILL.md` (Verify-fix vs fresh review table, Fresh review row); `agents/skills/review-agents/review-panel-selection.md` (orchestrator list parenthetical)

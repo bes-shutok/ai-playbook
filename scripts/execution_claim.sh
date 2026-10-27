@@ -91,6 +91,8 @@ BRANCH=""
 WT_PARENT=""
 BASE=""
 START_COMMIT=""
+OPERAND_SOURCE=""
+OPERAND_SCRATCH=""
 
 # Shared resolution results (set by resolve_context)
 ANCHOR=""
@@ -148,7 +150,10 @@ Modes:
            deleted only when its plan is landed (the plan file exists
            under the plans root's completed/ archive, or the plan is
            absent from the whole plans root while a landing commit subject
-           (the repository's `check: land ...` form) on the main-history
+           (the repository's landing-subject grammar: the recognized
+           LANDING_CLAIM_PREFIXES forms `plans: land `, `done: execute `,
+           `execute-plan: land `, `author: land `, plus the legacy
+           `check: land ...` form) on the main-history
            branch names the claim's slug) AND its recorded branch line
            resolves to no worktree; every other claim is skipped untouched
            with a one-line reason (fail closed per claim). Takes no plan
@@ -169,11 +174,22 @@ Options:
                            as the claim's start-commit line; an
                            unresolvable value is a usage refusal writing
                            nothing.
+  --operand-source <commit>:<path>
+                           release only: read the plan operand's bytes
+                           from git object storage (`git show
+                           <commit>:<path>`) instead of the working tree;
+                           the covered-row lifecycle deletes an origin row
+                           in its own landing, so by closeout time the
+                           operand the claim was taken against no longer
+                           exists. The slug derivation and every existing
+                           check are unchanged.
   --help                   This text (metadata exit, no OUTCOME line).
 
 The plan operand (required for take, claim, refresh, and release; never
 accepted by sweep) must be a readable file; its canonical artifact slug
-derives through plan_readiness.py --print-artifact-slug.
+derives through plan_readiness.py --print-artifact-slug. release accepts
+--operand-source <commit>:<path> to satisfy the readability requirement
+from object storage when the operand was deleted by its own landing.
 EOF
 }
 
@@ -258,6 +274,7 @@ run_exit_cleanup() {
   # claim/worktree cleanup.
   gateway_cleanup_trap
   cleanup_fresh_claim
+  [[ -z "$OPERAND_SCRATCH" ]] || rm -rf "$OPERAND_SCRATCH"
 }
 trap run_exit_cleanup EXIT
 trap 'run_exit_cleanup; exit 130' INT
@@ -1609,14 +1626,48 @@ resolve_start_commit() {
 }
 
 resolve_context() {
-  [[ -f "$PLAN_ARG" ]] || die_tool "plan operand not readable: $PLAN_ARG"
+  if [[ ! -f "$PLAN_ARG" ]]; then
+    if [[ "$MODE" == "release" && -n "$OPERAND_SOURCE" ]]; then
+      : # readability is verified against object storage once ANCHOR resolves
+    else
+      if [[ "$MODE" == "release" ]]; then
+        printf 'error: plan operand not readable: %s\n' "$PLAN_ARG" >&2
+        refuse "  bounded remedy when the operand was deleted by its own landing: re-run release with --operand-source <commit>:<path>, which reads the operand bytes from git object storage (the slug derivation and every existing check are unchanged); for a covered-row deletion the commit is the landing that removed the row, so pass <landing>^:<path>"
+        printf 'OUTCOME: tool_error\n'
+        exit 3
+      fi
+      die_tool "plan operand not readable: $PLAN_ARG"
+    fi
+  fi
   ANCHOR="$(resolve_anchor)" || die_tool "repository anchor unresolvable: the working directory is not inside a git repository"
   resolve_start_commit
   PRIMARY="$(resolve_primary "$ANCHOR")" || die_tool "primary checkout unresolvable: no worktree entry in git worktree list --porcelain"
   CLAIMS_DIR="$PRIMARY/$CLAIMS_REL"
   mkdir -p "$CLAIMS_DIR" 2>/dev/null || die_tool "claims directory not creatable: $CLAIMS_DIR"
-  SLUG="$(derive_slug "$PLAN_ARG")" \
-    || die_tool "artifact slug derivation failed for $PLAN_ARG"
+  local slug_operand="$PLAN_ARG"
+  if [[ -n "$OPERAND_SOURCE" ]]; then
+    # --operand-source (release only): the operand bytes live in git object
+    # storage (the covered-row lifecycle deletes the origin row in its own
+    # landing); the bytes are recovered to a basename-preserving scratch so
+    # the slug derivation runs unchanged against the exact original bytes,
+    # and the scratch is removed as soon as the slug has resolved (the exit
+    # trap is the backstop for a signal landing mid-recovery).
+    local os_commit="${OPERAND_SOURCE%%:*}" os_path="${OPERAND_SOURCE#*:}"
+    [[ -n "$os_commit" && "$os_commit" != "$OPERAND_SOURCE" && -n "$os_path" ]] \
+      || die_tool "--operand-source must be <commit>:<path>: $OPERAND_SOURCE"
+    [[ "$(git -C "$ANCHOR" cat-file -t "$os_commit:$os_path" 2>/dev/null)" == "blob" ]] \
+      || die_tool "operand-source object unreadable: $os_commit:$os_path (commit:path must name a blob in this repository's object storage)"
+    OPERAND_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/execution-claim-operand.XXXXXX")"
+    slug_operand="$OPERAND_SCRATCH/$(basename "$os_path")"
+    if ! git -C "$ANCHOR" show "$os_commit:$os_path" > "$slug_operand"; then
+      rm -rf "$OPERAND_SCRATCH"
+      die_tool "operand-source bytes unreadable: $os_commit:$os_path"
+    fi
+  fi
+  SLUG="$(derive_slug "$slug_operand")" \
+    || { rm -rf "$OPERAND_SCRATCH"; die_tool "artifact slug derivation failed for $PLAN_ARG"; }
+  rm -rf "$OPERAND_SCRATCH"
+  OPERAND_SCRATCH=""
   CLAIM_PATH="$CLAIMS_DIR/$SLUG.md"
 }
 
@@ -1891,7 +1942,10 @@ sweep_facts_value() {
 
 sweep_landing_subject_names_slug() {
   # True when the named branch's history carries a landing-shaped commit
-  # subject (the repository's landing-subject convention: `check: land ...`)
+  # subject (the repository's landing-subject grammar: the recognized
+  # prefixes of LANDING_CLAIM_PREFIXES in scripts/reverse_squash_guard.py -
+  # `plans: land `, `done: execute `, `execute-plan: land `, `author: land `
+  # - plus the legacy `check: land ...` form)
   # naming the kebab-case slug as a hyphen-bounded segment (never as the
   # prefix or suffix of a longer token, so a longer slug cannot vouch for
   # its prefix). Subjects are captured whole before the match and matched
@@ -1902,7 +1956,7 @@ sweep_landing_subject_names_slug() {
   subjects="$(git -C "$anchor" log --format=%s "$ref" -- 2>/dev/null)" || return 1
   while IFS= read -r subject; do
     case "$subject" in
-      "check: land "*)
+      "check: land "*|"plans: land "*|"done: execute "*|"execute-plan: land "*|"author: land "*)
         re="(^|[^a-z0-9-])${slug}([^a-z0-9-]|\$)"
         if [[ "$subject" =~ $re ]]; then
           return 0
@@ -2102,6 +2156,11 @@ while (("$#" > 0)); do
       START_COMMIT="$2"
       shift 2
       ;;
+    --operand-source)
+      [[ $# -ge 2 ]] || usage_error "--operand-source requires a value"
+      OPERAND_SOURCE="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -2111,6 +2170,10 @@ while (("$#" > 0)); do
       ;;
   esac
 done
+
+if [[ -n "$OPERAND_SOURCE" && "$MODE" != "release" ]]; then
+  usage_error "--operand-source applies to release only (offending mode: $MODE)"
+fi
 
 case "$MODE" in
   take) cmd_take ;;

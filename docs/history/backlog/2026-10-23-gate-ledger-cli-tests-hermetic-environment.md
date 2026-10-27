@@ -8,6 +8,7 @@
 - **Class:** test reliability
 - **Driving force:** code-quality
 - **Source:** Medium, nonblocking `testing#hermeticity-gap` finding F1 in plan-review rounds r1 and r2; both rounds observed that `run_cli` in `scripts/test_gate_liveness_ledger.py` invokes the child process without an explicit environment.
+Cluster: docs/history/backlog/2026-10-27-plan-readiness-envelope-test-facts-hermeticity.md (same defect class - a suite test not hermetic to its checkout environment - different surface and mechanism: this row's child process inherits host environment variables, that row's subprocess reads the checkout's gitignored facts file)
 
 ## Problem
 

@@ -8,6 +8,7 @@ Priority: high
 - **Origin class:** learn Step 1.8 skill-usage issue (witnessed 2026-10-26, learn run over an exec carrier session)
 - **Skill/step:** `scripts/session_channel.py` `_derive()` (consumed by the learn skill's Step 1 marker recipe, the plans skill's marker recipe, and the skill-gate README's invocation contract)
 - **Driving force:** correctness; secondary: code-quality
+- **Cluster:** the registry consult's state-record read-root defect is covered (landed read-root sentence, EXEC-PROMPTS entry registry-due-read-primary-root); this row owns the shared session-channel helper returning empty on the ZCode runtime
 
 ## Observed versus expected
 

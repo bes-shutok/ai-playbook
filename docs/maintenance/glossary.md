@@ -76,6 +76,10 @@ _Avoid_: release gate
 The confirmed project profile value `pet` or `company`; it selects applicable privacy guidance, not review strictness.
 _Avoid_: project class, ownership status
 
+**Required agent type**:
+An optional canonical runtime ID on a backlog origin, carried into its plan, that limits which agent runtime may start the work; when absent, the work is runtime-neutral.
+_Avoid_: creator agent type
+
 **Artifact visibility**:
 For a pet project, the confirmed value `public` or `private` describing whether project artifacts are publicly visible.
 _Avoid_: ownership-derived visibility, repo-wide visibility

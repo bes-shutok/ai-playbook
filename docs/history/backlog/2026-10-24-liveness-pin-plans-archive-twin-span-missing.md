@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-24, exec carrier automation-eda2e2ee (Task 2 intermediate review of plan ignored-audit-home-tracked-index-fence, off-plan capture)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** self-serving

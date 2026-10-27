@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-21
 - **Status:** open
+Quarantine: 2026-10-27
 - **Priority:** low
 - **Origin class:** self-serving
 - **Class:** fix-class

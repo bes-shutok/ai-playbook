@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-26, maintenance plan-authoring session
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** self-serving
@@ -9,7 +10,7 @@
 - **Driving force:** simplicity; secondary: reliability
 - **Skill/step:** `agents/skills/plans/SKILL.md` Phase 0 and authoring closeout; `scripts/worktree_closeout_migrate.py` `gate-removal`
 - **Cluster:** docs/history/backlog/2026-10-21-gate-removal-empty-owned-set-remedy.md (same gate-removal surface; the refusal causes differ)
-- **Dedup probe:** searched open backlog filenames and Problem bodies for `authoring stand-down`, `no charter`, `missing plan`, `already implemented`, `gate-removal`, and `worktree cleanup`; nearest items are `2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md` (post-landing cleanup ownership) and `2026-10-21-gate-removal-empty-owned-set-remedy.md` (an existing charter with no owned review claims). This is distinct: authoring stopped before a plan file existed, so the plan-dependent removal gate could not run.
+- **Dedup probe:** searched open backlog filenames and Problem bodies for `authoring stand-down`, `no charter`, `missing plan`, `already implemented`, `gate-removal`, and `worktree cleanup`; nearest items are `2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md` (post-landing cleanup ownership; landed and archived) and `2026-10-21-gate-removal-empty-owned-set-remedy.md` (an existing charter with no owned review claims). This is distinct: authoring stopped before a plan file existed, so the plan-dependent removal gate could not run.
 
 ## Problem
 

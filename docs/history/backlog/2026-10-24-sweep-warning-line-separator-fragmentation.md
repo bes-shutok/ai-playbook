@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-24, Phase 3 review round r2 of plan ignored-audit-home-tracked-index-fence
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** self-serving

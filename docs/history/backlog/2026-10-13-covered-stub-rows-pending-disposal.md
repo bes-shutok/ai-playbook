@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-13, corpus-vs-audit alignment investigate pass (commit 661a9e1fa)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** self-serving
@@ -13,7 +14,7 @@
 
 ## Problem
 
-The repository guidelines require that when a change completes a backlog row, the row is deleted in the same change rather than left as a `Status: covered` stub, with the covering commit or completed plan named as witness in the commit message. The 2026-10-13 corpus-vs-audit alignment pass censused 51 open top-level rows whose `Status:` line names a plan that sits in `docs/history/plans/completed/` — executed and landed work still counted as open queue. The stubs inflate every survey's triage set, the open queue depth the lane decisions read, and the audit's open-machinery-internal trend metric.
+The repository guidelines require that when a change completes a backlog row, the row is deleted in the same change rather than left as a `Status: covered` stub, with the covering commit or completed plan named as witness in the commit message. The 2026-10-13 corpus-vs-audit alignment pass censused 51 open top-level rows whose `Status:` line names a plan that sits in `docs/history/plans/completed/`, executed and landed work still counted as open queue. The stubs inflate every survey's triage set, the open queue depth the lane decisions read, and the audit's open-machinery-internal trend metric.
 
 ## Evidence (the pass census; the disposal sweep re-verifies each row individually)
 
@@ -59,7 +60,7 @@ One scoped exec sweep: run `python3 scripts/check_backlog_claimed.py` carrying e
 ## Rejected alternatives
 
 - Leave the stubs open: rejected because they inflate the surveyed queue and the audit's trend metric, and the guidelines say not to leave covered stubs (repository guidelines, Commit & Pull Request Guidelines; `docs/maintenance/machinery-blocker-audit-2026-10-09.md`).
-- Move the stubs to `deferred/` or `rejected/`: rejected because completed work is neither — the sanctioned terminal state for a completed row is deletion with a witness (repository guidelines, Commit & Pull Request Guidelines).
+- Move the stubs to `deferred/` or `rejected/`: rejected because completed work is neither, the sanctioned terminal state for a completed row is deletion with a witness (repository guidelines, Commit & Pull Request Guidelines).
 - Bulk Status flip or bulk delete without the claimed-origin checker: rejected because the bulk disposition sweep gate requires the checker's clean exit before any bulk disposition and never disposes a claimed item (`agents/skills/maintenance/survey-arms.md`).
 
 ## Disposal progress

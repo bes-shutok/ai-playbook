@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-18
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

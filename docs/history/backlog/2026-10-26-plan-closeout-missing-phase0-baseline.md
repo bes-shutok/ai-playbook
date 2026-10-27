@@ -1,7 +1,7 @@
 # Backlog: Recover plan closeout after its Phase 0 baseline was missed
 
 - **Filed:** 2026-10-26, operator-directed recovery investigation
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-27-plan-closeout-missing-phase0-baseline.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** observed execution blocker

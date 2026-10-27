@@ -20,9 +20,9 @@ Write code before the test? Delete it. Start over. No exceptions.
 ## Core TDD Cycle: Red → Green → Refactor
 
 1. **Red**: Write one minimal failing test that defines a small increment of behavior
-2. **Verify Red**: Run the test — confirm it *fails* for the expected reason (missing feature, not a typo or error)
-3. **Green**: Implement the minimum code to make the test pass — no more, no less
-4. **Verify Green**: Run all tests — confirm everything passes
+2. **Verify Red**: Run the test, confirm it *fails* for the expected reason (missing feature, not a typo or error)
+3. **Green**: Implement the minimum code to make the test pass, no more, no less
+4. **Verify Green**: Run all tests, confirm everything passes
 5. **Refactor**: Improve code structure without changing behavior, run tests after each change
 6. **Repeat**: Next failing test for the next increment
 
@@ -36,7 +36,7 @@ Write code before the test? Delete it. Start over. No exceptions.
 
 ## Tidy First (Separate Structure from Behavior)
 
-Classify all changes into two types — **never mix them**:
+Classify all changes into two types, **never mix them**:
 
 | Type | Description | Examples |
 |------|-------------|---------|
@@ -94,7 +94,7 @@ Use small, frequent commits rather than large, infrequent ones.
 |--------|---------|
 | "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
 | "I'll test after" | Tests passing immediately prove nothing. |
-| "Need to explore first" | Fine — throw away exploration, start fresh with TDD. |
+| "Need to explore first" | Fine, throw away exploration, start fresh with TDD. |
 | "Test is hard to write" | Listen to the test. Hard to test = hard to use = design problem. |
 | "TDD will slow me down" | TDD is faster than debugging. |
 | "Keep code as reference" | You'll adapt it. That's testing after. Delete means delete. |
@@ -128,7 +128,7 @@ When fixing a bug or changing behavior, follow this structured process:
    - Feed findings as additional test cases or assertions
 5. **Propose a plan** (test matrix, grouping, location) and **stop for approval**
 6. **Execute Red → Green → Refactor** with mandatory test runs each cycle
-7. **Verify completion** — run the relevant suite, show command + result summary
+7. **Verify completion**, run the relevant suite, show command + result summary
 
 ## Testing Anti-Patterns
 

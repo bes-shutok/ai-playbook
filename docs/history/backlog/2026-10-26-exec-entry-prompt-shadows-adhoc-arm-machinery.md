@@ -11,7 +11,7 @@
 - **Environment:** playbook repo, interactive exec mandate, primary checkout, 2026-10-26
 - **Suspected root area:** the Ad-hoc backlog arm carries the full ad-hoc run contract (ad-hoc worktree, doing-code-review focused panel before any landing with blocking findings folded, `Ad-hoc-panel-pass:` receipt, `land_squash`-class squash landing), but the dispatching session's operative instruction is the EXEC entry's own `Prompt:` field; when an entry's prompt names a shorter gate list (the 2026-10-26 `adhoc-run-pick-time-freeze-mark` entry named only the pins suite, the em-dash gate, and the hygiene scan), the session follows the prompt and the arm's panel/worktree/landing machinery silently drops out. A second, independent gap: an operator mandate worded "exec N plan(s)" was satisfied from the EXEC-PROMPTS segment, and the Exec-mode selection rule's merged urgency ordering gives the operator no way to see that the plans segment was skipped.
 
-Cluster: docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md (same surface: the Ad-hoc arm's landing sentence and the sessions that skip it; that row's fix - naming the helper - and this row's fix - stopping entry prompts from shadowing the arm - compose)
+Cluster: EXEC-PROMPTS entry adhoc-arm-squash-helper-route (covered 2026-10-27; same surface: the Ad-hoc arm's landing sentence and the sessions that skip it; the covered row's fix - naming the helper - and this row's fix - stopping entry prompts from shadowing the arm - compose)
 
 ## Observed vs expected
 
@@ -21,7 +21,7 @@ Observed, 2026-10-26 interactive exec mandate ("exec 1 plan in order of importan
 
 - The panel mandate's introduction: 867f8ed7e (2026-10-18, "skills: clarify planning and execution workflows") landed the `Ad-hoc-panel-pass:` receipt wording into the Ad-hoc backlog arm; the arm's text at HEAD mandates the panel "before any landing with blocking findings folded first".
 - The witnessed landing: cb0e439c carries no review record reference, no `Ad-hoc-panel-pass:` line, and no worktree evidence; its entry prompt (pruned in the same commit) named exactly "the pins suite, the em-dash added-lines gate, and the public hygiene scan".
-- Sibling row docs/history/backlog/2026-10-22-adhoc-landing-sentence-omits-land-squash-helper.md: three exec runs in 2026-10-22 alone hand-composed ad-hoc landings skipping helper gates - the same class of the arm's machinery dropping out between text and run.
+- Covered sibling, EXEC-PROMPTS entry adhoc-arm-squash-helper-route: three exec runs in 2026-10-22 alone hand-composed ad-hoc landings skipping helper gates - the same class of the arm's machinery dropping out between text and run.
 - The Exec-mode selection rule orders plans, then ready EXEC-PROMPTS entries, then ad-hoc items by merged urgency with no operator-wording override, so a "plans"-worded mandate has no textual hook to restrict selection (working-tree grep at the tip agrees).
 
 ## Scope to resolve

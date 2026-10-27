@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-26, learn Step 1.8 over the 2026-10-26 release run (Step 3 report)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

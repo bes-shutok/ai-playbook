@@ -24,6 +24,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parent / "check_prompt_log_origins.py"
 LOG_REL = "docs/history/backlog/PLAN-PROMPTS.md"
 EXEC_LOG_REL = "docs/history/backlog/EXEC-PROMPTS.md"
@@ -1203,6 +1205,147 @@ class TestPromptLogPruneAudit:
         assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
         assert self.final_line(proc) == "OUTCOME: pass"
 
+    def test_receipted_origins_suffixed_removal_audits_clean(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("plan-entry", ["2026-10-01-plan-origin.md"])], "seed the plan log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # A legacy-form heading whose slug carries the origins suffix
+        # (`<slug> (origins: ...)`) is removed under a receipt naming the
+        # leading slug only: the receipt grammars capture a single token,
+        # so the first-token compare witnesses the removal and the audit
+        # stays clean (the matcher-normalization pin).
+        self.write(
+            repo, "docs/history/plans/2026-10-06-unrelated-surface.md", "# unrelated surface\n"
+        )
+        landing = self.commit(repo, "land the ad-hoc surface change")
+        legacy_slug = (
+            "legacy-entry (origins: docs/history/backlog/2026-10-01-legacy-origin.md)"
+        )
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text([entry(legacy_slug, ["2026-10-01-legacy-origin.md"])]),
+        )
+        self.commit(repo, "append the legacy-form entry to the exec log")
+        self.write(repo, EXEC_LOG_REL, log_text([]))
+        self.commit(
+            repo,
+            f"prune the completed legacy-form entry\n\n"
+            f"EXEC-PROMPTS-PRUNE: legacy-entry -> {landing}",
+        )
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: {legacy_slug} -> {landing} (EXEC-PROMPTS-PRUNE receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_receiptless_origins_suffixed_removal_still_flagged(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("plan-entry", ["2026-10-01-plan-origin.md"])], "seed the plan log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The fail-closed complement: a legacy-form removal with no
+        # matching receipt still reports REMOVED-WITHOUT-WITNESS naming
+        # the full heading slug; the tolerance in matching never becomes
+        # an exemption from checking.
+        lost_slug = (
+            "suffixed-lost (origins: docs/history/backlog/2026-10-01-lost-origin.md)"
+        )
+        self.write(
+            repo,
+            EXEC_LOG_REL,
+            log_text([entry(lost_slug, ["2026-10-01-lost-origin.md"])]),
+        )
+        self.commit(repo, "append the suffixed entry to the exec log")
+        self.write(repo, EXEC_LOG_REL, log_text([]))
+        self.commit(repo, "prune the suffixed entry without any receipt")
+        short = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        flagged = self.audit(repo / LOG_REL, base)
+        assert flagged.returncode == 1, flagged.stdout + flagged.stderr
+        assert (
+            f"REMOVED-WITHOUT-WITNESS: {lost_slug}"
+            f" (commit {short} prune the suffixed entry without any receipt)"
+            in flagged.stdout
+        )
+        assert self.final_line(flagged) == "OUTCOME: fail"
+
+    def test_ledger_receipt_witnesses_suffixed_removal(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("legacy-ledger (origins: docs/history/backlog/2026-10-01-ledger-origin.md)",
+                   ["2026-10-01-ledger-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The ledger receipt class for the legacy-form heading: the
+        # in-log line names the leading slug only and the first-token
+        # compare at the ledger site witnesses the suffixed removal.
+        removed_slug = (
+            "legacy-ledger (origins: docs/history/backlog/2026-10-01-ledger-origin.md)"
+        )
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                [
+                    f"PLAN-PROMPTS-PRUNE: legacy-ledger -> {base}"
+                    " (ad-hoc-superseded: fixture rationale prose after the token)"
+                ],
+            ),
+        )
+        self.commit(repo, "prune the suffixed ledger entry with its receipt line")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: {removed_slug} -> {base} (log ledger receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_in_commit_receipt_witnesses_suffixed_removal(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("legacy-incommit (origins: docs/history/backlog/2026-10-01-incommit-origin.md)",
+                   ["2026-10-01-incommit-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The in-commit receipt class for the legacy-form heading: the
+        # same-commit ``landing`` line names the leading slug only and
+        # the first-token compare at the in-commit site witnesses the
+        # suffixed removal.
+        removed_slug = (
+            "legacy-incommit (origins: docs/history/backlog/2026-10-01-incommit-origin.md)"
+        )
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                ["EXEC-PROMPTS-PRUNE: legacy-incommit -> landing in this commit"],
+            ),
+        )
+        self.commit(repo, "prune the suffixed in-commit entry with its landing receipt")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: {removed_slug} -> landing (in-commit receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert "1 removals (1 by log ledger)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
     def test_ad_hoc_removal_without_matching_receipt_is_flagged(self, tmp_path):
         repo = tmp_path
         self.init_repo_with_log(
@@ -2029,6 +2172,262 @@ class TestPromptLogPruneAudit:
         )
         assert decoy_head.returncode != 0
         assert self.git(decoy, "status", "--porcelain").strip() == ""
+
+    def seed_with_receipts(self, repo: Path, log_rel: str = LOG_REL) -> str:
+        """A committed log carrying a two-line receipt ledger, the base
+        for the pending-removal warning tests; returns the base sha."""
+        entry_slug = "kept-entry"
+        self.init_repo_with_log(
+            repo,
+            [entry(entry_slug, ["2026-10-01-kept-origin.md"])],
+            "seed the log",
+        )
+        receipt_prefix = "PLAN" if log_rel == LOG_REL else "EXEC"
+        self.write(
+            repo,
+            log_rel,
+            log_text_with_ledger(
+                [entry(entry_slug, ["2026-10-01-kept-origin.md"])],
+                [
+                    f"{receipt_prefix}-PROMPTS-PRUNE: gone-entry -> abc1234",
+                    f"{receipt_prefix}-PROMPTS-PRUNE: {entry_slug} -> def5678",
+                ],
+            ),
+        )
+        return self.commit(repo, "add the receipt ledger lines")
+
+    def test_pending_index_receipt_removal_warns(self, tmp_path):
+        repo = tmp_path
+        base = self.seed_with_receipts(repo)
+        head = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(
+                "PLAN-PROMPTS-PRUNE: gone-entry -> abc1234\n", ""
+            ),
+        )
+        self.git(repo, "add", LOG_REL)
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {LOG_REL} "
+            f"index (HEAD {head})" in proc.stdout
+        )
+        assert "1 warning(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_pending_worktree_receipt_removal_warns(self, tmp_path):
+        repo = tmp_path
+        base = self.seed_with_receipts(repo)
+        head = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(
+                "PLAN-PROMPTS-PRUNE: gone-entry -> abc1234\n", ""
+            ),
+        )
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {LOG_REL} "
+            f"worktree (HEAD {head})" in proc.stdout
+        )
+        assert "1 warning(s)" in proc.stdout
+        assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 1
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_pending_removal_attributes_only_its_own_log(self, tmp_path):
+        repo = tmp_path
+        exec_rel = "docs/history/backlog/EXEC-PROMPTS.md"
+        base = self.seed_with_receipts(repo, exec_rel)
+        self.write(
+            repo,
+            exec_rel,
+            self.git(repo, "show", f"HEAD:{exec_rel}").replace(
+                "EXEC-PROMPTS-PRUNE: gone-entry -> abc1234\n", ""
+            ),
+        )
+        proc = self.audit(repo / exec_rel, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel}"
+            in proc.stdout
+        )
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {LOG_REL}"
+            not in proc.stdout
+        )
+        assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 1
+
+    def test_pending_clean_addition_and_unrelated_edit_stay_silent(self, tmp_path):
+        repo = tmp_path
+        base = self.seed_with_receipts(repo)
+        head_text = self.git(repo, "show", f"HEAD:{LOG_REL}")
+        # Clean working tree: no pending warning at all.
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0
+        assert "PENDING-RECEIPT-REMOVAL" not in proc.stdout
+        assert "PENDING-SCAN-WARNING" not in proc.stdout
+        assert "0 warning(s)" in proc.stdout
+        # An added receipt line is not a removal.
+        self.write(
+            repo,
+            LOG_REL,
+            head_text + "PLAN-PROMPTS-PRUNE: new-entry -> aaa0000\n",
+        )
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0
+        assert "PENDING-RECEIPT-REMOVAL" not in proc.stdout
+        assert "0 warning(s)" in proc.stdout
+        # An unrelated line edit removes no receipt.
+        self.write(
+            repo,
+            LOG_REL,
+            head_text.replace(
+                "Tracked rolling log fixture.", "Edited header line."
+            ),
+        )
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0
+        assert "PENDING-RECEIPT-REMOVAL" not in proc.stdout
+        assert "0 warning(s)" in proc.stdout
+
+    def test_pending_whole_file_deletions_warn_at_their_layer(self, tmp_path):
+        repo = tmp_path
+        exec_rel = "docs/history/backlog/EXEC-PROMPTS.md"
+        base = self.seed_with_receipts(repo, exec_rel)
+        head = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        # Staged whole-file deletion of the sibling log: the index layer
+        # compares HEAD against an empty image and warns once.
+        self.git(repo, "rm", "--cached", "--quiet", exec_rel)
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel} "
+            f"index (HEAD {head})" in proc.stdout
+        )
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: kept-entry -> def5678 {exec_rel} "
+            f"index (HEAD {head})" in proc.stdout
+        )
+        assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 2
+        assert "2 warning(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+        # Unstaged whole-file deletion (plain rm, index still holding the
+        # receipts): the worktree layer compares the index image against
+        # the empty worktree and carries the delta.
+        self.git(repo, "reset", "--quiet")
+        (repo / exec_rel).unlink()
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel} "
+            f"worktree (HEAD {head})" in proc.stdout
+        )
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: kept-entry -> def5678 {exec_rel} "
+            f"worktree (HEAD {head})" in proc.stdout
+        )
+        assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 2
+        assert "2 warning(s)" in proc.stdout
+
+    def test_pending_duplicate_receipt_delta_counts_copies(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("kept-entry", ["2026-10-01-kept-origin.md"])],
+            "seed the log",
+        )
+        doubled = self.git(repo, "show", f"HEAD:{LOG_REL}").replace(
+            "Tracked rolling log fixture.\n",
+            "Tracked rolling log fixture.\n\n"
+            + "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n"
+            + "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n",
+            1,
+        )
+        self.write(repo, LOG_REL, doubled)
+        self.commit(repo, "double a receipt line")
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        head_text = self.git(repo, "show", f"HEAD:{LOG_REL}")
+        # The delta is line-level (the mirror of the add-side counter's
+        # line accounting): removing one of two identical copies deletes
+        # one receipt line and warns once for it; the surviving copy is
+        # the log's own ledger anomaly, not this scan's concern.
+        self.write(repo, LOG_REL, head_text.replace(
+            "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n", "", 1))
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            "PENDING-RECEIPT-REMOVAL: twin-entry -> aaa1111 "
+            f"{LOG_REL} worktree" in proc.stdout
+        )
+        assert "1 warning(s)" in proc.stdout
+        # Removing the second copy as well deletes the second line: two
+        # warnings, one per deleted line.
+        self.write(repo, LOG_REL, head_text.replace(
+            "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n", ""))
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.count(
+            f"PENDING-RECEIPT-REMOVAL: twin-entry -> aaa1111 {LOG_REL} worktree"
+        ) == 2
+        assert "2 warning(s)" in proc.stdout
+
+    @pytest.mark.skipif(
+        not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="chmod 000 is still readable as root",
+    )
+    def test_committed_and_pending_warnings_combine(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("live-entry", ["2026-10-01-live-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # A committed receipt-without-removal (one committed warning)
+        # plus a pending worktree removal (one pending warning) share
+        # the summary's warning count with OUTCOME still pass.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: ghost-entry -> 0f39e725c"],
+            ),
+        )
+        self.commit(repo, "add a receipt with no removal")
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(
+                "PLAN-PROMPTS-PRUNE: ghost-entry -> 0f39e725c\n", ""
+            ),
+        )
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "RECEIPT-WITHOUT-REMOVAL:" in proc.stdout
+        assert (
+            f"PENDING-RECEIPT-REMOVAL: ghost-entry -> 0f39e725c {LOG_REL} "
+            "worktree" in proc.stdout
+        )
+        assert "2 warning(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_pending_scan_read_failure_warns_without_stopping(self, tmp_path):
+        repo = tmp_path
+        base = self.seed_with_receipts(repo)
+        log = repo / LOG_REL
+        log.chmod(0o000)
+        try:
+            proc = self.audit(log, base)
+        finally:
+            log.chmod(0o644)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "PENDING-SCAN-WARNING:" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
 
 
 class TestCollateralServedDiscovery:

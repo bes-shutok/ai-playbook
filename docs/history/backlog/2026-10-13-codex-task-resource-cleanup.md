@@ -8,7 +8,7 @@
 - **Class:** Codex task resource lifecycle gap
 - **Driving force:** operator time + reliability
 - **Skill/step:** Codex task/worktree lifecycle; local Git branch and worktree cleanup
-- **Related backlog:** `docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md` (project-owned execution worktree transfer and closeout is a separate owner boundary)
+- **Related backlog:** `docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md` (project-owned execution worktree transfer and closeout is a separate owner boundary; origin row covered and deleted)
 
 ## Problem
 
@@ -32,7 +32,7 @@ Trace the current Codex task/worktree lifecycle and the local mechanisms that cr
 
 ## Alternatives
 
-- **Delete every branch or directory with a Codex-looking name:** rejected because the 2026-10-13 inventory included registered worktrees with uncommitted changes or commits not contained in the local base; names do not prove that their content is disposable (`docs/history/backlog/2026-10-11-ad-hoc-worktree-lifecycle-owner-gap.md`).
+- **Delete every branch or directory with a Codex-looking name:** rejected because the 2026-10-13 inventory included registered worktrees with uncommitted changes or commits not contained in the local base; names do not prove that their content is disposable (`docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`).
 - **Keep all Codex task resources indefinitely:** rejected because four already-landed local refs and seven empty or marker-only directories required a separate operator cleanup on 2026-10-13 (`docs/history/plans/completed/2026-10-01-codex-model-guard-runtime-alignment.md`).
 - **Add a global cleanup hook or recurring inventory ledger:** rejected because task ownership and safe landing cannot be inferred from names, while the existing project-specific closeout is narrower and the machinery audit prices extra ceremony (`docs/maintenance/machinery-blocker-audit-2026-10-09.md`).
 - **Extend project `done` closeout to own all Codex-created resources:** rejected pending evidence that those resources belong to the project's execution run; the existing contract gates transfer and removal for a specific run worktree (`agents/skills/done/SKILL.md`).

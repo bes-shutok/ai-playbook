@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -147,6 +148,64 @@ def _migrate(source: Path, target: Path, baseline: Path, manifest: Path, suffix:
             suffix,
         ]
     )
+
+
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _receipts_token(items: list[dict]) -> str:
+    """Producer-side mirror-receipt token (plan
+    2026-10-24-closeout-migration-same-run-mirror-replace): compact JSON
+    with every table pipe escaped as the six-character \\u007c sequence so
+    one manifest row can carry the array unsplit; the consumer decodes it
+    with a plain JSON parse."""
+    text = json.dumps(items, separators=(",", ":"), ensure_ascii=True)
+    return text.replace("|", "\\u007c")
+
+
+def _file_receipt(path: str, digest: str) -> dict:
+    return {"path": path, "status": "verified", "type": "file", "sha256": digest}
+
+
+def _symlink_receipt(path: str, link_target: str) -> dict:
+    return {"path": path, "status": "verified", "type": "symlink", "target": link_target}
+
+
+def _status_receipt(path: str, status: str) -> dict:
+    return {"path": path, "status": status}
+
+
+def _write_session_manifest(
+    path: Path,
+    rows: list[str],
+    *,
+    run_worktree: str,
+    run_session_id: str = "sess-mirror-fixture-1",
+    plan_path: str = "docs/history/plans/2026-10-24-mirror-fixture.md",
+) -> None:
+    """The production session-manifest shape (identity block plus one
+    task_boundary row per entry), pinned beside the baseline the way Step
+    0.4 writes it."""
+    lines = [
+        "# Execute-plan session: mirror-fixture",
+        "",
+        "workflow_state: active",
+        "updated: 2026-10-24T00:00:00Z",
+        f"run_session_id: {run_session_id}",
+        "session_id: sess-current-1",
+        f"plan_path: {plan_path}",
+        "session_start_commit: abc1234def",
+        "canonical_root: /tmp/primary-checkout",
+        f"run_worktree: {run_worktree}",
+        "run_branch: mirror-fixture",
+        "run_base: main c06633961",
+        "",
+        "| Step | Log path | Status |",
+        "|------|----------|--------|",
+        *rows,
+    ]
+    _write(path, ("\n".join(lines) + "\n").encode("utf-8"))
 
 
 class WorktreeCloseoutTest(unittest.TestCase):
@@ -956,6 +1015,1400 @@ class MigrateMergeLockTest(unittest.TestCase):
         data = json.loads(manifest.read_text(encoding="utf-8"))
         self.assertTrue(data.get("failed"))
 
+    def test_migrate_receipt_replacement_runs_inside_merge_lock_span(self):
+        """[class: REPOSITORY_TEST] The replacement decision, staging, final
+        recheck, and install all sit inside the existing runner-owned merge
+        lock: a foreign hold refuses the whole migration (nothing replaced),
+        and the same invocation after release replaces through the span."""
+        source = self.root / "mirror-source"
+        rel = ".ai-playbook/reviews/runtime_state.json"
+        prior_bytes = b'{"state": "boundary-1"}\n'
+        incoming_bytes = b'{"state": "boundary-2"}\n'
+        _write(source / rel, prior_bytes)
+        session_dir = source / "docs/tmp/execute-plan/mirror-lock-fixture"
+        _write_session_manifest(
+            session_dir / "manifest.md",
+            [f"task_boundary: task 1 commit abc1234; mirror_status=complete mirror_receipts={_receipts_token([_file_receipt(rel, _digest(prior_bytes))])}"],
+            run_worktree=str(source),
+        )
+        baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(source, baseline)
+        _write(source / rel, incoming_bytes)
+        _write(self.primary / rel, prior_bytes)
+        migration_manifest = self.root / "closeout-migration.json"
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        exports = self._acquire_foreign_hold("blocker", holder.pid)
+        try:
+            proc = self._run_migrate_subprocess(source, baseline, migration_manifest, DOCS_SYNC_MERGE_MAX_WAIT="2")
+        finally:
+            released = self._release_hold(exports)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(
+            (self.primary / rel).read_bytes(),
+            prior_bytes,
+            "a replacement ran while the merge lock was held",
+        )
+        self.assertFalse(migration_manifest.exists(), "a manifest was written while the merge lock was held")
+        code = MODULE.main(
+            [
+                "migrate",
+                "--baseline", str(baseline),
+                "--source", str(source),
+                "--target", str(self.primary),
+                "--manifest", str(migration_manifest),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual((self.primary / rel).read_bytes(), incoming_bytes)
+        data = json.loads(migration_manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [rel])
+
+
+
+class MigrateMirrorReceiptTest(unittest.TestCase):
+    """Fixtures for receipt-proven same-run mirror replacement at closeout
+    migration (plan 2026-10-24-closeout-migration-same-run-mirror-replace
+    Task 1): the session manifest beside the baseline binds the stable run
+    tuple, terminal mirror_status/mirror_receipts tokens on task_boundary
+    rows authorize replacing a different-byte primary target only while its
+    current state still matches the latest valid receipt for that exact
+    path, and every invalid or mismatched shape keeps the existing foreign
+    rename or verified no-op behavior."""
+
+    CONTROL = ".ai-playbook/reviews/control.md"
+    PROBE = ".ai-playbook/reviews/probe.md"
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wcm-mirror-receipt-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        lock_root = self.root / "lock-root"
+        pins = _hermetic_lock_env(lock_root)
+        self._saved_lock_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        self.addCleanup(self._restore_lock_env)
+
+    def _restore_lock_env(self) -> None:
+        for key, value in self._saved_lock_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _seed(self, rows: list[str]) -> tuple[Path, Path]:
+        """The source worktree with a session manifest carrying `rows` and
+        the baseline captured beside it (both before any post-baseline
+        mutation, so mutated files become migration candidates)."""
+        source = self.root / "source"
+        source.mkdir(parents=True, exist_ok=True)
+        session_dir = source / "docs/tmp/execute-plan/mirror-fixture"
+        _write_session_manifest(session_dir / "manifest.md", rows, run_worktree=str(source))
+        baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(source, baseline)
+        return source, baseline
+
+    def _boundary_row(self, items: list[dict], status: str = "complete") -> str:
+        return (
+            "task_boundary: task 1 commit abc1234 verification: pass; "
+            f"mirror_status={status} mirror_receipts={_receipts_token(items)}"
+        )
+
+    def _boundary_row_raw(self, status: str, token: str) -> str:
+        return (
+            "task_boundary: task 1 commit abc1234; "
+            f"mirror_status={status} mirror_receipts={token}"
+        )
+
+    def _collision_case(
+        self, rows: list[str], rel: str, prior_bytes: bytes, incoming_bytes: bytes
+    ) -> tuple[Path, Path, Path]:
+        """Seed the run with `rows`, then make `rel` a different-byte
+        collision: incoming bytes in the source worktree, prior bytes at the
+        primary. Returns (source, baseline, target)."""
+        source, baseline = self._seed(rows)
+        _write(source / rel, incoming_bytes)
+        target = self.root / "target"
+        _write(target / rel, prior_bytes)
+        return source, baseline, target
+
+    def _renamed_sibling(self, target: Path, rel: str) -> Path:
+        return target / Path(rel).with_name(f"{Path(rel).stem}.wt-1{Path(rel).suffix}")
+
+    def _migrate_expect_foreign(
+        self,
+        source: Path,
+        baseline: Path,
+        target: Path,
+        rel: str,
+        prior_bytes: bytes,
+        incoming_bytes: bytes,
+    ) -> dict:
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0, buf.getvalue())
+        self.assertEqual(
+            (target / rel).read_bytes(),
+            prior_bytes,
+            "the current target was overwritten",
+        )
+        self.assertEqual(self._renamed_sibling(target, rel).read_bytes(), incoming_bytes)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        self.assertIn(rel, [entry["source"] for entry in data.get("renamed", [])])
+        return data
+
+    # Task 1 checklist item 1: the collision-shape fixtures.
+
+    def test_migrate_replaces_receipt_proven_same_run_collision(self):
+        """[class: REPOSITORY_TEST] The exact-path positive case: the
+        primary mirror's current bytes match the latest valid receipt for
+        that exact path, so the incoming file replaces the target instead of
+        being renamed; every replaced-entry payload field and the summary
+        count are asserted."""
+        rel = ".ai-playbook/reviews/runtime_state.json"
+        prior = b'{"state": "boundary-1"}\n'
+        incoming = b'{"state": "boundary-2"}\n'
+        row = self._boundary_row([_file_receipt(rel, _digest(prior))])
+        source, baseline, target = self._collision_case([row], rel, prior, incoming)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / rel).read_bytes(), incoming)
+        self.assertEqual(
+            [path.name for path in (target / ".ai-playbook/reviews").iterdir()],
+            ["runtime_state.json"],
+            "a receipt-proven replacement produced a .wt- rename sibling",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data.get("renamed", [])], [])
+        replaced = data["replaced"]
+        self.assertEqual(len(replaced), 1)
+        entry = replaced[0]
+        self.assertEqual(entry["source"], rel)
+        self.assertEqual(entry["destination"], (target.resolve() / rel).as_posix())
+        self.assertTrue(entry["verified"])
+        self.assertEqual(entry["run_session_id"], "sess-mirror-fixture-1")
+        self.assertEqual(entry["prior_state"], {"type": "file", "sha256": _digest(prior)})
+        self.assertEqual(entry["incoming_state"], {"type": "file", "sha256": _digest(incoming)})
+        self.assertIn("replaced 1", buf.getvalue())
+        self.assertNotIn("COLLISION:", buf.getvalue())
+
+    def test_migrate_identical_target_with_receipt_stays_verified_noop(self):
+        """[class: REPOSITORY_TEST] A receipt-proven path whose target
+        already equals the incoming bytes remains the verified no-op skip:
+        no rewrite, no rename, no replaced record."""
+        shared = b'{"state": "boundary-2"}\n'
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(shared))])
+        source, baseline = self._seed([row])
+        _write(source / self.CONTROL, shared)
+        target = self.root / "target"
+        _write(target / self.CONTROL, shared)
+        os.utime(target / self.CONTROL, (1000, 1000))
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.stat(target / self.CONTROL).st_mtime, 1000, "identical target was rewritten")
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).exists(), False)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        skipped = {entry["source"]: entry for entry in data.get("skipped", [])}
+        self.assertIn(self.CONTROL, skipped)
+        self.assertTrue(skipped[self.CONTROL]["verified"])
+
+    def test_migrate_same_digest_other_path_stays_foreign(self):
+        """[class: REPOSITORY_TEST] Cross-path same-digest rejection: a
+        receipt proves one exact path only, so a collision on another path
+        whose target digest equals the receipt's digest is still a foreign
+        rename."""
+        shared = b"shared mirror bytes\n"
+        incoming = b"incoming b bytes\n"
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(shared))])
+        source, baseline = self._seed([row])
+        _write(source / self.PROBE, incoming)
+        target = self.root / "target"
+        _write(target / self.CONTROL, shared)
+        _write(target / self.PROBE, shared)
+        self._migrate_expect_foreign(source, baseline, target, self.PROBE, shared, incoming)
+        self.assertEqual((target / self.CONTROL).read_bytes(), shared, "the receipt-proven bystander was touched")
+
+    def test_migrate_foreign_run_worktree_authorizes_no_replacement(self):
+        """[class: REPOSITORY_TEST] Identity mismatch (registered run
+        worktree differs from the supplied source) authorizes no
+        replacement: the collision keeps the foreign rename."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        source = self.root / "source"
+        source.mkdir(parents=True)
+        session_dir = source / "docs/tmp/execute-plan/mirror-fixture"
+        _write_session_manifest(
+            session_dir / "manifest.md",
+            [self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])],
+            run_worktree=str(self.root / "elsewhere"),
+        )
+        baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(source, baseline)
+        _write(source / self.CONTROL, incoming)
+        target = self.root / "target"
+        _write(target / self.CONTROL, prior)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+
+    def test_migrate_missing_identity_authorizes_no_replacement(self):
+        """[class: REPOSITORY_TEST] A manifest whose stable tuple is
+        incomplete (empty run_session_id) authorizes no replacement."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        source = self.root / "source"
+        source.mkdir(parents=True)
+        session_dir = source / "docs/tmp/execute-plan/mirror-fixture"
+        _write_session_manifest(
+            session_dir / "manifest.md",
+            [self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])],
+            run_worktree=str(source),
+            run_session_id="",
+        )
+        baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(source, baseline)
+        _write(source / self.CONTROL, incoming)
+        target = self.root / "target"
+        _write(target / self.CONTROL, prior)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+
+    def test_migrate_unrecoverable_plan_path_authorizes_no_replacement(self):
+        """[class: REPOSITORY_TEST] Identity negative control: a plan_path
+        outside the repository root (absolute, or escaping through ..)
+        fails the recoverable-path form check, so the manifest authorizes
+        no replacement and the collision stays a foreign rename."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        for name, plan_path in (
+            ("absolute", "/abs/closeout-plan.md"),
+            ("dotdot-escape", "../outside/closeout-plan.md"),
+        ):
+            with self.subTest(plan_path=plan_path):
+                case_root = self.root / f"identity-{name}"
+                source = case_root / "source"
+                source.mkdir(parents=True)
+                session_dir = source / "docs/tmp/execute-plan/mirror-fixture"
+                _write_session_manifest(
+                    session_dir / "manifest.md",
+                    [self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])],
+                    run_worktree=str(source),
+                    plan_path=plan_path,
+                )
+                baseline = session_dir / "closeout-baseline.json"
+                _capture_baseline(source, baseline)
+                _write(source / self.CONTROL, incoming)
+                target = case_root / "target"
+                _write(target / self.CONTROL, prior)
+                self._migrate_expect_foreign(
+                    source, baseline, target, self.CONTROL, prior, incoming
+                )
+
+    def test_migrate_changed_target_stays_foreign(self):
+        """[class: REPOSITORY_TEST] A target whose current state no longer
+        matches the receipt (changed after the boundary recorded it) is
+        foreign: preserved bytes, renamed incoming, COLLISION evidence."""
+        prior = b"prior mirror bytes\n"
+        changed = b"changed after the boundary bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])
+        source, baseline = self._seed([row])
+        _write(source / self.CONTROL, incoming)
+        target = self.root / "target"
+        _write(target / self.CONTROL, changed)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.CONTROL).read_bytes(), changed)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        self.assertIn("COLLISION:", buf.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+
+    # Symlink receipts.
+
+    def test_migrate_replaces_receipt_proven_symlink_collision(self):
+        """[class: REPOSITORY_TEST] A symlink mirror whose current link
+        target matches its receipt is replaced by the incoming link."""
+        rel = ".ai-playbook/reviews/link.md"
+        row = self._boundary_row([_symlink_receipt(rel, "boundary-1.md")])
+        source, baseline = self._seed([row])
+        (source / rel).parent.mkdir(parents=True, exist_ok=True)
+        # The link target must exist in the source so the link is not the
+        # dangling shape the migration skips.
+        _write(source / ".ai-playbook/reviews/boundary-2.md", b"boundary two content\n")
+        os.symlink("boundary-2.md", source / rel)
+        target = self.root / "target"
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        os.symlink("boundary-1.md", target / rel)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertTrue((target / rel).is_symlink(), "symlink replacement dereferenced the link")
+        self.assertEqual(os.readlink(target / rel), "boundary-2.md")
+        self.assertEqual(self._renamed_sibling(target, rel).exists(), False)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["replaced"]), 1)
+        entry = data["replaced"][0]
+        self.assertEqual(entry["source"], rel)
+        self.assertEqual(entry["prior_state"], {"type": "symlink", "target": "boundary-1.md"})
+        self.assertEqual(entry["incoming_state"], {"type": "symlink", "target": "boundary-2.md"})
+
+    def test_migrate_receipt_type_mismatch_stays_foreign(self):
+        """[class: REPOSITORY_TEST] A receipt typed file never authorizes
+        replacing a symlink at that path: the link's destination holds bytes
+        matching the receipt digest, so only the type guard (symlink
+        rejection) keeps the collision a foreign rename."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])
+        source, baseline = self._seed([row])
+        _write(source / self.CONTROL, incoming)
+        target = self.root / "target"
+        # The destination file lives beside the link so the relative link
+        # resolves: its bytes match the receipt digest, leaving the type
+        # guard as the only mismatch signal.
+        _write(target / ".ai-playbook/reviews/elsewhere.md", prior)
+        (target / self.CONTROL).parent.mkdir(parents=True, exist_ok=True)
+        os.symlink("elsewhere.md", target / self.CONTROL)
+        data = self._migrate_expect_foreign(
+            source, baseline, target, self.CONTROL, prior, incoming
+        )
+        self.assertTrue((target / self.CONTROL).is_symlink(), "the type guard dereferenced the link")
+        self.assertEqual(os.readlink(target / self.CONTROL), "elsewhere.md")
+        self.assertEqual(data.get("replaced", []), [])
+
+    # Task 1 checklist item 2: the parser cases (run-wide versus
+    # path-only invalidation).
+
+    def test_migrate_invalid_json_receipts_invalidate_run(self):
+        """[class: REPOSITORY_TEST] An unparseable mirror_receipts payload
+        invalidates run history: no replacement anywhere, no crash."""
+        incoming = b"incoming mirror bytes\n"
+        prior = b"prior mirror bytes\n"
+        row = self._boundary_row_raw("complete", '[{"path":')
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+
+    def test_migrate_unknown_row_status_invalidates_run(self):
+        """[class: REPOSITORY_TEST] A mirror_status outside the known set
+        invalidates run history even though the receipts array parses."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        row = self._boundary_row_raw("finished", _receipts_token([_file_receipt(self.CONTROL, _digest(prior))]))
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+
+    def test_migrate_unparseable_row_tokens_invalidate_run(self):
+        """[class: REPOSITORY_TEST] A task_boundary row carrying
+        mirror_status without its terminal mirror_receipts token cannot be
+        parsed and invalidates run history."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        rows = [
+            self._boundary_row([_file_receipt(self.PROBE, _digest(prior))]),
+            "task_boundary: task 2 commit abc1235; mirror_status=complete",
+        ]
+        source, baseline, target = self._collision_case(rows, self.CONTROL, prior, incoming)
+        _write(target / self.PROBE, prior)
+        _write(source / self.PROBE, incoming)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+        data = json.loads((self.root / "closeout-migration.json").read_text(encoding="utf-8"))
+        self.assertIn(self.PROBE, [entry["source"] for entry in data.get("renamed", [])],
+                      "the newer unparseable row did not invalidate the older valid receipt")
+
+    def test_migrate_older_valid_newer_malformed_invalidates_run(self):
+        """[class: REPOSITORY_TEST] A valid older row never survives a newer
+        malformed one: run history is invalidated run-wide, never falling
+        back to the older valid receipt."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        rows = [
+            self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))]),
+            self._boundary_row_raw("partial", "[oops"),
+        ]
+        source, baseline, target = self._collision_case(rows, self.CONTROL, prior, incoming)
+        self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+
+    def test_migrate_two_valid_rows_same_path_latest_row_wins(self):
+        """[class: REPOSITORY_TEST] Two verified receipts for one path across
+        rows resolve latest-row-wins: the primary target holds the row-1
+        digest, which does not match the row-2 receipt, so the collision
+        stays a foreign rename with COLLISION evidence, never a replacement."""
+        row_one = b"row one mirror bytes\n"
+        row_two = b"row two mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        rows = [
+            self._boundary_row([_file_receipt(self.CONTROL, _digest(row_one))]),
+            self._boundary_row([_file_receipt(self.CONTROL, _digest(row_two))]),
+        ]
+        source, baseline, target = self._collision_case(rows, self.CONTROL, row_one, incoming)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            (target / self.CONTROL).read_bytes(),
+            row_one,
+            "the primary target was replaced against the latest row's receipt",
+        )
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        self.assertIn("COLLISION:", buf.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        self.assertIn(self.CONTROL, [entry["source"] for entry in data.get("renamed", [])])
+
+    def test_migrate_complete_empty_receipts_row_changes_no_path(self):
+        """[class: REPOSITORY_TEST] A terminal row carrying
+        mirror_status=complete mirror_receipts=[] between valid receipt rows
+        changes no path: the earlier valid receipt still authorizes
+        replacement and the empty row invalidates nothing."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        rows = [
+            self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))]),
+            self._boundary_row([]),
+            self._boundary_row([_file_receipt(self.PROBE, _digest(prior))]),
+        ]
+        source, baseline, target = self._collision_case(rows, self.CONTROL, prior, incoming)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            (target / self.CONTROL).read_bytes(),
+            incoming,
+            "the empty complete row invalidated the earlier valid receipt",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.CONTROL])
+        self.assertEqual(data.get("renamed", []), [])
+
+    def test_migrate_duplicate_path_invalidates_only_that_path(self):
+        """[class: REPOSITORY_TEST] A path repeated inside one row's array
+        is ambiguous and invalidates only that path; another receipt-proven
+        path in the same row stays eligible."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        probe_prior = b"probe prior bytes\n"
+        probe_incoming = b"probe incoming bytes\n"
+        row = self._boundary_row(
+            [
+                _file_receipt(self.CONTROL, _digest(prior)),
+                _file_receipt(self.CONTROL, _digest(prior)),
+                _file_receipt(self.PROBE, _digest(probe_prior)),
+            ]
+        )
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        _write(source / self.PROBE, probe_incoming)
+        _write(target / self.PROBE, probe_prior)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.PROBE).read_bytes(), probe_incoming, "the unambiguous path was not replaced")
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.PROBE])
+        self.assertIn(self.CONTROL, [entry["source"] for entry in data.get("renamed", [])])
+
+    def test_migrate_unknown_item_status_invalidates_only_that_path(self):
+        """[class: REPOSITORY_TEST] Task 1 checklist item 3: in one row with
+        valid path A and malformed (unknown-status) recoverable path B, A
+        stays eligible and is replaced while B is preserved and renamed."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        probe_prior = b"probe prior bytes\n"
+        probe_incoming = b"probe incoming bytes\n"
+        row = self._boundary_row(
+            [
+                _file_receipt(self.PROBE, _digest(probe_prior)),
+                _status_receipt(self.CONTROL, "copied"),
+            ]
+        )
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        _write(source / self.PROBE, probe_incoming)
+        _write(target / self.PROBE, probe_prior)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.PROBE).read_bytes(), probe_incoming, "the valid path lost eligibility")
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.PROBE])
+        self.assertIn(self.CONTROL, [entry["source"] for entry in data.get("renamed", [])])
+
+    def test_migrate_unrecoverable_item_path_invalidates_run(self):
+        """[class: REPOSITORY_TEST] An item whose path cannot be recovered
+        (not a repository-relative string) invalidates run history: even a
+        validly receipted path is foreign-renamed."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        probe_prior = b"probe prior bytes\n"
+        probe_incoming = b"probe incoming bytes\n"
+        bad_item = {"path": 42, "status": "verified", "type": "file", "sha256": _digest(prior)}
+        row = self._boundary_row([bad_item, _file_receipt(self.PROBE, _digest(probe_prior))])
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        _write(source / self.PROBE, probe_incoming)
+        _write(target / self.PROBE, probe_prior)
+        data = self._migrate_expect_foreign(source, baseline, target, self.CONTROL, prior, incoming)
+        self.assertIn(self.PROBE, [entry["source"] for entry in data.get("renamed", [])],
+                      "run-wide invalidation fell back to a per-path authorization")
+
+    def test_migrate_missing_digest_invalidates_only_that_path(self):
+        """[class: REPOSITORY_TEST] A malformed verified file item (no
+        sha256) with a recoverable path invalidates only that path."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        probe_prior = b"probe prior bytes\n"
+        probe_incoming = b"probe incoming bytes\n"
+        malformed = {"path": self.CONTROL, "status": "verified", "type": "file"}
+        row = self._boundary_row([_file_receipt(self.PROBE, _digest(probe_prior)), malformed])
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        _write(source / self.PROBE, probe_incoming)
+        _write(target / self.PROBE, probe_prior)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.PROBE).read_bytes(), probe_incoming)
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.PROBE])
+
+    # Task 1 checklist item 4: partial and skipped rows.
+
+    def test_migrate_partial_row_failed_path_invalidates_only_itself(self):
+        """[class: REPOSITORY_TEST] In a partial row the failed path
+        invalidates only itself; an untouched path keeps its prior receipt
+        and can use it after the digest recheck, and a newly verified path
+        becomes eligible."""
+        prior_a = b"a prior bytes\n"
+        prior_b = b"b prior bytes\n"
+        prior_c = b"c prior bytes\n"
+        incoming_a = b"a incoming bytes\n"
+        incoming_b = b"b incoming bytes\n"
+        incoming_c = b"c incoming bytes\n"
+        rel_a = ".ai-playbook/reviews/a.md"
+        rel_b = ".ai-playbook/reviews/b.md"
+        rel_c = ".ai-playbook/reviews/c.md"
+        rows = [
+            self._boundary_row([
+                _file_receipt(rel_a, _digest(prior_a)),
+                _file_receipt(rel_b, _digest(prior_b)),
+            ]),
+            self._boundary_row([
+                _status_receipt(rel_a, "failed"),
+                _file_receipt(rel_c, _digest(prior_c)),
+            ], status="partial"),
+        ]
+        source, baseline = self._seed(rows)
+        _write(source / rel_a, incoming_a)
+        _write(source / rel_b, incoming_b)
+        _write(source / rel_c, incoming_c)
+        target = self.root / "target"
+        _write(target / rel_a, prior_a)
+        _write(target / rel_b, prior_b)
+        _write(target / rel_c, prior_c)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / rel_a).read_bytes(), prior_a, "the failed path was replaced")
+        self.assertEqual(self._renamed_sibling(target, rel_a).read_bytes(), incoming_a)
+        self.assertEqual((target / rel_b).read_bytes(), incoming_b, "the untouched path lost its prior receipt")
+        self.assertEqual((target / rel_c).read_bytes(), incoming_c)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            sorted(entry["source"] for entry in data["replaced"]),
+            sorted([rel_b, rel_c]),
+        )
+        self.assertIn(rel_a, [entry["source"] for entry in data.get("renamed", [])])
+
+    def test_migrate_skipped_row_items_invalidate_only_their_paths(self):
+        """[class: REPOSITORY_TEST] A skipped row (lock contention shape)
+        invalidates exactly the paths it lists; other receipts stay valid."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        probe_prior = b"probe prior bytes\n"
+        probe_incoming = b"probe incoming bytes\n"
+        rows = [
+            self._boundary_row([
+                _file_receipt(self.CONTROL, _digest(prior)),
+                _file_receipt(self.PROBE, _digest(probe_prior)),
+            ]),
+            self._boundary_row([_status_receipt(self.CONTROL, "skipped")], status="skipped"),
+        ]
+        source, baseline, target = self._collision_case(rows, self.CONTROL, prior, incoming)
+        _write(source / self.PROBE, probe_incoming)
+        _write(target / self.PROBE, probe_prior)
+        manifest = self.root / "closeout-migration.json"
+        code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.PROBE).read_bytes(), probe_incoming)
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.PROBE])
+
+    # Task 1 checklist item 5: the interleaving fixture.
+
+    def test_migrate_destination_change_between_staging_and_recheck_stays_foreign(self):
+        """[class: REPOSITORY_TEST] A destination changed between staging
+        and the final recheck is foreign: its changed bytes are preserved
+        and the incoming file takes the existing rename path."""
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        interloper = b"interloper bytes written after staging\n"
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        original_copy = MODULE._copy_file
+
+        def interleaving_copy(src, dst):
+            result = original_copy(src, dst)
+            if Path(src).name == "control.md":
+                _write(target / self.CONTROL, interloper)
+            return result
+
+        MODULE._copy_file = interleaving_copy
+        try:
+            manifest = self.root / "closeout-migration.json"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = _migrate(source, target, baseline, manifest)
+        finally:
+            MODULE._copy_file = original_copy
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.CONTROL).read_bytes(), interloper, "the interloper write was lost")
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).read_bytes(), incoming)
+        self.assertIn("COLLISION:", buf.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+
+    # Task 1 checklist item 6: the failure injections.
+
+    def _failure_case(self):
+        prior = b"prior mirror bytes\n"
+        incoming = b"incoming mirror bytes\n"
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(prior))])
+        source, baseline, target = self._collision_case([row], self.CONTROL, prior, incoming)
+        return source, baseline, target, prior, incoming
+
+    def _assert_no_temp_siblings(self, target: Path) -> None:
+        leaked = [
+            path.name
+            for path in target.rglob("*")
+            if ".repl-" in path.name or ".tmp-" in path.name
+        ]
+        self.assertEqual(leaked, [], "temporary siblings survived the failure")
+
+    def test_migrate_replacement_copy_failure_preserves_prior_and_fails(self):
+        """[class: REPOSITORY_TEST] A failed staged copy preserves the prior
+        target and the source, removes the temporary sibling, records the
+        failure, and keeps the migration unsuccessful."""
+        source, baseline, target, prior, incoming = self._failure_case()
+        original_copy = MODULE._copy_file
+
+        def failing_copy(src, dst):
+            if ".repl-" in Path(dst).name:
+                raise OSError("simulated staged copy failure")
+            return original_copy(src, dst)
+
+        MODULE._copy_file = failing_copy
+        try:
+            manifest = self.root / "closeout-migration.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+        finally:
+            MODULE._copy_file = original_copy
+        self.assertEqual(code, 1)
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual((source / self.CONTROL).read_bytes(), incoming, "the source was moved")
+        self._assert_no_temp_siblings(target)
+        self.assertEqual(self._renamed_sibling(target, self.CONTROL).exists(), False)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        failed = {entry["source"]: entry for entry in data.get("failed", [])}
+        self.assertIn(self.CONTROL, failed)
+        self.assertIn("receipt replacement failed", failed[self.CONTROL]["error"])
+        self.assertIn("verification failed", stderr.getvalue())
+
+    def test_migrate_replacement_verification_failure_preserves_prior_and_fails(self):
+        """[class: REPOSITORY_TEST] A staged copy that fails verification
+        preserves the prior target and the source and removes the temp."""
+        source, baseline, target, prior, incoming = self._failure_case()
+        original_verify = MODULE._verify_copy
+
+        def refused_verify(src, dst):
+            if ".repl-" in Path(dst).name:
+                return False
+            return original_verify(src, dst)
+
+        MODULE._verify_copy = refused_verify
+        try:
+            manifest = self.root / "closeout-migration.json"
+            code = _migrate(source, target, baseline, manifest)
+        finally:
+            MODULE._verify_copy = original_verify
+        self.assertEqual(code, 1)
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual((source / self.CONTROL).read_bytes(), incoming)
+        self._assert_no_temp_siblings(target)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        failed = {entry["source"]: entry for entry in data.get("failed", [])}
+        self.assertIn(self.CONTROL, failed)
+
+    def test_migrate_replacement_install_failure_preserves_prior_and_fails(self):
+        """[class: REPOSITORY_TEST] A failed atomic install preserves the
+        prior target and the source, removes the staged and prior-temp
+        siblings, records the failure, and keeps the migration
+        unsuccessful."""
+        source, baseline, target, prior, incoming = self._failure_case()
+        original_install = MODULE._install_staged
+
+        def failing_install(temp, dst):
+            raise OSError("simulated install failure")
+
+        MODULE._install_staged = failing_install
+        try:
+            manifest = self.root / "closeout-migration.json"
+            code = _migrate(source, target, baseline, manifest)
+        finally:
+            MODULE._install_staged = original_install
+        self.assertEqual(code, 1)
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior)
+        self.assertEqual((source / self.CONTROL).read_bytes(), incoming)
+        self._assert_no_temp_siblings(target)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced", []), [])
+        failed = {entry["source"]: entry for entry in data.get("failed", [])}
+        self.assertIn(self.CONTROL, failed)
+
+    def test_migrate_manifest_persistence_failure_restores_prior_target(self):
+        """[class: REPOSITORY_TEST] Task 1 checklist item 14: a migration
+        manifest persistence failure after staged installation restores the
+        prior target, leaves the prior manifest bytes intact, retains the
+        source, and fails; a retry then records a durable replaced entry."""
+        source, baseline, target, prior, incoming = self._failure_case()
+        migration_manifest = self.root / "closeout-migration.json"
+        _write(migration_manifest, b'{"prior": true}\n')
+        original_append = MODULE._append_manifest
+
+        def failing_persist(path, sections):
+            raise OSError("simulated manifest persistence failure")
+
+        MODULE._append_manifest = failing_persist
+        try:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, migration_manifest)
+        finally:
+            MODULE._append_manifest = original_append
+        self.assertEqual(code, 1)
+        self.assertIn("persistence failed", stderr.getvalue())
+        self.assertEqual((target / self.CONTROL).read_bytes(), prior, "the prior target was not restored")
+        self.assertEqual((source / self.CONTROL).read_bytes(), incoming)
+        self.assertEqual(migration_manifest.read_bytes(), b'{"prior": true}\n', "the prior manifest was not intact")
+        self._assert_no_temp_siblings(target)
+        # Retry: the restored prior target still matches the receipt, so the
+        # replacement lands again and the replaced record becomes durable.
+        code = _migrate(source, target, baseline, migration_manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / self.CONTROL).read_bytes(), incoming)
+        data = json.loads(migration_manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["replaced"]], [self.CONTROL])
+        self.assertTrue(data["prior"])
+
+    # Task 1 checklist item 14: the escaping round trip.
+
+    def test_migrate_roundtrips_pipe_quote_backslash_path(self):
+        """[class: REPOSITORY_TEST] A receipt path containing a table pipe,
+        a quote, and a backslash survives the token grammar: the serialized
+        token carries the \\u007c escape and no literal pipe, and the
+        replacement lands at the exact decoded path."""
+        weird_rel = 'docs/tmp/pipe|quote"\\back.md'
+        prior = b"prior weird bytes\n"
+        incoming = b"incoming weird bytes\n"
+        row = self._boundary_row([_file_receipt(weird_rel, _digest(prior))])
+        token = row.split("mirror_receipts=", 1)[1]
+        self.assertIn("\\u007c", token)
+        self.assertNotIn("|", token)
+        source, baseline, target = self._collision_case([row], weird_rel, prior, incoming)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / weird_rel).read_bytes(), incoming, "the decoded path was not replaced exactly")
+        target_names = [path.name for path in (target / "docs/tmp").iterdir()]
+        self.assertIn('pipe|quote"\\back.md', target_names)
+        self.assertFalse(
+            any(".wt-" in name for name in target_names),
+            "the replacement produced a rename sibling",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data["replaced"][0]["source"], weird_rel)
+        self.assertEqual(data["replaced"][0]["destination"], (target.resolve() / weird_rel).as_posix())
+        self.assertIn("replaced 1", buf.getvalue())
+
+
+class BoundaryMirrorTest(unittest.TestCase):
+    """Producer fixtures for the boundary-mirror operation (plan
+    2026-10-24-closeout-migration-same-run-mirror-replace Task 2): one live
+    operation holds the worktree-closeout-migrate merge lock from its
+    try-once acquire through every staged mirror install and the atomic
+    task_boundary manifest-row replacement, routes handled signals through
+    the ordinary rollback and the token-fenced release, and on a refused
+    acquire copies no primary files while recording one skipped item per
+    planned path and no verified receipt."""
+
+    GIT_IDENTITY = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    RUN_SESSION_ID = "sess-boundary-fixture-1"
+    PLAN_PATH = "docs/history/plans/2026-10-24-boundary-fixture.md"
+    SESSION_DIR_REL = "docs/tmp/execute-plan/boundary-fixture"
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wcm-boundary-mirror-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.primary = self.root / "proj"
+        self.primary.mkdir(parents=True)
+        env = os.environ.copy()
+        env.update(self.GIT_IDENTITY)
+        subprocess.run(["git", "-C", str(self.primary), "init", "-q"], capture_output=True, env=env, check=True)
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\ntmp_dir = \"docs/tmp/\"\nmetrics_dir = \".ai-playbook/metrics/\"\nreview_certs_dir = \".ai-playbook/review-certs/\"\n```\n",
+        )
+        (self.primary / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DONE_LOCK_SCRIPT_PATH, self.primary / "scripts" / "done-lock.sh")
+        subprocess.run(["git", "-C", str(self.primary), "add", "-A"], capture_output=True, env=env, check=True)
+        subprocess.run(["git", "-C", str(self.primary), "commit", "-q", "-m", "init: fixture repo"], capture_output=True, env=env, check=True)
+        self.merge_lock_root = self.root / "merge-locks"
+        pins = _hermetic_lock_env(self.root)
+        self._saved_lock_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        self.addCleanup(self._restore_lock_env)
+
+    def _restore_lock_env(self) -> None:
+        for key, value in self._saved_lock_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _seed_worktree(self, prior_rows: list[str] | None = None) -> tuple[Path, Path]:
+        worktree = self.root / "run-worktree"
+        manifest = worktree / self.SESSION_DIR_REL / "manifest.md"
+        _write_session_manifest(
+            manifest,
+            list(prior_rows or []),
+            run_worktree=str(worktree),
+            run_session_id=self.RUN_SESSION_ID,
+            plan_path=self.PLAN_PATH,
+        )
+        return worktree, manifest
+
+    def _operation_argv(self, worktree: Path, manifest: Path, paths: list[str], note: str = "task 1 commit abc1234 verification: pass") -> list[str]:
+        argv = [
+            "boundary-mirror",
+            "--worktree", str(worktree),
+            "--target", str(self.primary),
+            "--manifest", str(manifest),
+            "--run-session-id", self.RUN_SESSION_ID,
+            "--plan-path", self.PLAN_PATH,
+            "--run-worktree", str(worktree),
+            "--boundary-note", note,
+        ]
+        for rel in paths:
+            argv += ["--mirror-path", rel]
+        return argv
+
+    def _run_operation_subprocess(self, worktree: Path, manifest: Path, paths: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), *self._operation_argv(worktree, manifest, paths)],
+            capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root),
+        )
+
+    def _poplan_operation(self, worktree: Path, manifest: Path, paths: list[str]) -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, str(SCRIPT_PATH), *self._operation_argv(worktree, manifest, paths)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=str(self.root), env=_hermetic_lock_env(self.root),
+        )
+
+    def _acquire_foreign_hold(self, label: str, holder_pid: int) -> dict[str, str]:
+        acquired = subprocess.run(
+            ["bash", str(self.primary / "scripts" / "done-lock.sh"), "merge-acquire", "--label", label],
+            capture_output=True, text=True, cwd=str(self.primary),
+            env=_hermetic_lock_env(self.root, MERGE_LOCK_HOLDER_PID=str(holder_pid)),
+        )
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        exports: dict[str, str] = {}
+        for line in acquired.stdout.splitlines():
+            for name in ("MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN"):
+                prefix = f"export {name}="
+                if line.startswith(prefix):
+                    exports[name] = line[len(prefix):]
+        self.assertIn("MERGE_LOCK_DIR", exports)
+        self.assertIn("MERGE_LOCK_TOKEN", exports)
+        return exports
+
+    def _release_hold(self, exports: dict[str, str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(self.primary / "scripts" / "done-lock.sh"), "merge-release"],
+            capture_output=True, text=True, cwd=str(self.primary),
+            env=_hermetic_lock_env(self.root, **exports),
+        )
+
+    def _boundary_rows(self, manifest_path: Path) -> list[str]:
+        return [
+            line.strip()
+            for line in manifest_path.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("task_boundary:")
+        ]
+
+    def _temps_under(self, root: Path) -> list[str]:
+        return sorted(path.name for path in root.rglob("*bndmirror*"))
+
+    def test_boundary_mirror_installs_mirrors_and_records_verified_receipts(self):
+        """[class: REPOSITORY_TEST] The happy path: every planned path
+        installs at the primary, the primary manifest copy is the pre-row
+        manifest (the receipt records the verified primary copy of
+        manifest.md before this row), the appended row parses as complete
+        with one verified item per path, and the lock releases."""
+        worktree, manifest = self._seed_worktree()
+        reviews_rel = ".ai-playbook/reviews/notes.md"
+        sidecar_rel = ".ai-playbook/reviews/notes.md.stats.json"
+        state_rel = self.SESSION_DIR_REL + "/runtime_state.json"
+        manifest_rel = self.SESSION_DIR_REL + "/manifest.md"
+        reviews_bytes = b"review notes one\n"
+        sidecar_bytes = b'{"round": 1}\n'
+        state_bytes = b'{"workflow_state": "active", "boundary": 1}\n'
+        _write(worktree / reviews_rel, reviews_bytes)
+        _write(worktree / sidecar_rel, sidecar_bytes)
+        _write(worktree / state_rel, state_bytes)
+        pre_row_manifest_bytes = manifest.read_bytes()
+        _write(self.primary / state_rel, b'{"workflow_state": "active", "boundary": 0}\n')
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = MODULE.main(self._operation_argv(worktree, manifest, [reviews_rel, sidecar_rel, state_rel, manifest_rel]))
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertEqual((self.primary / reviews_rel).read_bytes(), reviews_bytes)
+        self.assertEqual((self.primary / sidecar_rel).read_bytes(), sidecar_bytes)
+        self.assertEqual((self.primary / state_rel).read_bytes(), state_bytes)
+        self.assertEqual(
+            (self.primary / manifest_rel).read_bytes(),
+            pre_row_manifest_bytes,
+            "the primary manifest copy is not the verified pre-row manifest",
+        )
+        rows = self._boundary_rows(manifest)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("task_boundary: task 1 commit abc1234 verification: pass; mirror_status=complete", rows[0])
+        status, items = MODULE._parse_mirror_row(rows[0])
+        self.assertEqual(status, "complete")
+        by_path = {item["path"]: item for item in items}
+        self.assertEqual(
+            by_path[state_rel],
+            {"path": state_rel, "status": "verified", "type": "file", "sha256": _digest(state_bytes)},
+        )
+        self.assertEqual(by_path[manifest_rel]["sha256"], _digest(pre_row_manifest_bytes))
+        self.assertEqual(by_path[reviews_rel]["sha256"], _digest(reviews_bytes))
+        self.assertEqual(by_path[sidecar_rel]["sha256"], _digest(sidecar_bytes))
+        self.assertIn("merge-lock: held", err.getvalue(), "no held-span line at release")
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the merge lock was not released")
+        self.assertEqual(self._temps_under(self.primary), [])
+        self.assertEqual(self._temps_under(manifest.parent), [])
+
+    def test_boundary_mirror_identity_mismatch_fails_before_any_copy(self):
+        """[class: REPOSITORY_TEST] The passed stable run tuple must match
+        the manifest identity block exactly; a mismatch fails loud (exit 2)
+        before the lock, before any copy, and before any row."""
+        worktree, manifest = self._seed_worktree()
+        rel = ".ai-playbook/reviews/notes.md"
+        _write(worktree / rel, b"review notes\n")
+        argv = self._operation_argv(worktree, manifest, [rel])
+        argv[argv.index("--run-session-id") + 1] = "sess-foreign-run"
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = MODULE.main(argv)
+        self.assertEqual(code, 2)
+        self.assertIn("stable tuple", err.getvalue())
+        self.assertFalse((self.primary / rel).exists())
+        self.assertEqual(self._boundary_rows(manifest), [])
+        self.assertFalse(self.merge_lock_root.exists() and list(self.merge_lock_root.iterdir()), "the lock was taken")
+
+    def test_boundary_mirror_lock_contention_records_skipped_row_and_copies_nothing(self):
+        """[class: REPOSITORY_TEST] A try-once acquire refused by a live
+        foreign hold (held well beyond the dead-holder grace by a live
+        holder pid) copies no primary files, reports the existing copy
+        error with the holder evidence, appends the local row with one
+        status=skipped item per planned path and no verified receipts, and
+        exits 0 so the boundary continues."""
+        worktree, manifest = self._seed_worktree()
+        rel_a = ".ai-playbook/reviews/notes.md"
+        rel_b = self.SESSION_DIR_REL + "/runtime_state.json"
+        _write(worktree / rel_a, b"review notes\n")
+        _write(worktree / rel_b, b'{"boundary": 1}\n')
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        exports = self._acquire_foreign_hold("blocker", holder.pid)
+        try:
+            proc = self._run_operation_subprocess(worktree, manifest, [rel_a, rel_b])
+        finally:
+            released = self._release_hold(exports)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("label: blocker", proc.stderr, "the refusal evidence was not reported")
+        self.assertFalse((self.primary / rel_a).exists(), "a copy ran while the merge lock was held")
+        self.assertFalse((self.primary / rel_b).exists(), "a copy ran while the merge lock was held")
+        rows = self._boundary_rows(manifest)
+        self.assertEqual(len(rows), 1)
+        status, items = MODULE._parse_mirror_row(rows[0])
+        self.assertEqual(status, "skipped")
+        self.assertEqual(
+            items,
+            [
+                {"path": rel_a, "status": "skipped"},
+                {"path": rel_b, "status": "skipped"},
+            ],
+        )
+
+    def test_boundary_mirror_partial_copy_failure_records_partial_row(self):
+        """[class: REPOSITORY_TEST] A per-path copy error is contained the
+        report-only way: the failed path records one failed item and keeps
+        its prior target (r2 low-d: an existing prior target's bytes are
+        retained unchanged), a capture-then-verification failure leaves no
+        rollback-span residue (the appended entry is removed and the prior
+        sibling unlinked), the earlier verified mirror stands, the row is
+        partial, temps are removed, sources are retained, and the lock
+        releases."""
+        worktree, manifest = self._seed_worktree()
+        ok_rel = ".ai-playbook/reviews/notes.md"
+        bad_rel = ".ai-playbook/reviews/unreadable.md"
+        bad2_rel = ".ai-playbook/reviews/unverifiable.md"
+        ok_bytes = b"review notes\n"
+        bad_bytes = b"unreadable bytes\n"
+        bad2_prior = b"prior unverifiable target bytes\n"
+        bad2_incoming = b"incoming unverifiable bytes\n"
+        bad_prior = b"prior unreadable target bytes\n"
+        _write(worktree / ok_rel, ok_bytes)
+        _write(worktree / bad_rel, bad_bytes)
+        _write(worktree / bad2_rel, bad2_incoming)
+        _write(self.primary / bad_rel, bad_prior)
+        _write(self.primary / bad2_rel, bad2_prior)
+        os.chmod(worktree / bad_rel, 0o000)
+        self.addCleanup(os.chmod, worktree / bad_rel, 0o644)
+        original_verify = MODULE._verify_copy
+        bad2_src = (worktree / bad2_rel).resolve()
+
+        def unverifiable_verify(src, dst):
+            if src == bad2_src:
+                return False
+            return original_verify(src, dst)
+
+        MODULE._verify_copy = unverifiable_verify
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = MODULE.main(self._operation_argv(worktree, manifest, [ok_rel, bad_rel, bad2_rel]))
+        finally:
+            MODULE._verify_copy = original_verify
+        self.assertEqual(code, 1)
+        self.assertIn("copy error", err.getvalue())
+        self.assertIn("unreadable.md", err.getvalue())
+        self.assertIn("unverifiable.md", err.getvalue())
+        self.assertEqual((self.primary / ok_rel).read_bytes(), ok_bytes, "the verified mirror did not stand")
+        self.assertEqual((self.primary / bad_rel).read_bytes(), bad_prior, "the failing path's prior target was not retained")
+        self.assertEqual((self.primary / bad2_rel).read_bytes(), bad2_prior, "the capture-then-failure path's prior target was not retained")
+        rows = self._boundary_rows(manifest)
+        self.assertEqual(len(rows), 1)
+        status, items = MODULE._parse_mirror_row(rows[0])
+        self.assertEqual(status, "partial")
+        self.assertEqual(
+            items,
+            [
+                {"path": ok_rel, "status": "verified", "type": "file", "sha256": _digest(ok_bytes)},
+                {"path": bad_rel, "status": "failed"},
+                {"path": bad2_rel, "status": "failed"},
+            ],
+        )
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [])
+        self.assertEqual(self._temps_under(self.primary), [], "a prior or staged sibling leaked on a handled failure")
+        self.assertEqual(os.stat(worktree / bad_rel).st_size, len(bad_bytes), "the worktree source was not retained")
+        self.assertEqual((worktree / bad2_rel).read_bytes(), bad2_incoming, "the worktree source was not retained")
+
+    def test_boundary_mirror_manifest_install_failure_restores_prior_targets(self):
+        """[class: REPOSITORY_TEST] An atomic manifest-install failure after
+        mirrors installed rolls the whole transaction back: prior primary
+        targets restored, the fresh manifest mirror removed, the prior
+        manifest bytes intact with no receipt row, temps removed, sources
+        retained, and the lock released."""
+        worktree, manifest = self._seed_worktree()
+        state_rel = ".ai-playbook/reviews/runtime_state.json"
+        manifest_rel = self.SESSION_DIR_REL + "/manifest.md"
+        prior_primary = b'{"boundary": 0}\n'
+        incoming = b'{"boundary": 1}\n'
+        _write(worktree / state_rel, incoming)
+        _write(self.primary / state_rel, prior_primary)
+        manifest.parent.chmod(0o500)
+        self.addCleanup(manifest.parent.chmod, 0o755)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = MODULE.main(self._operation_argv(worktree, manifest, [state_rel, manifest_rel]))
+        self.assertEqual(code, 1)
+        self.assertIn("boundary-mirror rolled back", err.getvalue())
+        self.assertEqual((self.primary / state_rel).read_bytes(), prior_primary, "the prior primary target was not restored")
+        self.assertFalse((self.primary / manifest_rel).exists(), "the fresh manifest mirror survived the rollback")
+        self.assertEqual(self._boundary_rows(manifest), [], "the prior manifest bytes did not stand")
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [])
+        self.assertEqual(self._temps_under(self.primary), [])
+        self.assertEqual(self._temps_under(manifest.parent), [])
+        self.assertEqual((worktree / state_rel).read_bytes(), incoming, "the worktree source was not retained")
+
+    @staticmethod
+    def _kill_process(proc: subprocess.Popen) -> None:
+        """Post-failure cleanup for the FIFO signal fixtures: a pre-signal
+        assertion must not leak a child parked on the FIFO source."""
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def _signal_delivery_case(self, sig: int) -> None:
+        repl_rel = ".ai-playbook/reviews/runtime_state.json"
+        prior_primary = b'{"boundary": 0}\n'
+        # The task-0 prior row carries one non-empty verified receipt item
+        # (this same path's prior boundary mirror), so the rollback
+        # assertion proves receipt history still parses after the restore.
+        worktree, manifest = self._seed_worktree(
+            prior_rows=[
+                "task_boundary: task 0 commit 0000000 verification: pass; mirror_status=complete "
+                "mirror_receipts=" + _receipts_token([_file_receipt(repl_rel, _digest(prior_primary))])
+            ]
+        )
+        fresh_rel = self.SESSION_DIR_REL + "/boundary-1.log.md"
+        fifo_rel = ".ai-playbook/reviews/never-arrives.md"
+        repl_bytes = b'{"boundary": 1}\n'
+        fresh_bytes = b"boundary log one\n"
+        _write(worktree / repl_rel, repl_bytes)
+        _write(worktree / fresh_rel, fresh_bytes)
+        _write(self.primary / repl_rel, prior_primary)
+        os.mkfifo(worktree / fifo_rel)
+
+        def _drop_fifo() -> None:
+            try:
+                (worktree / fifo_rel).unlink()
+            except OSError:
+                pass
+
+        self.addCleanup(_drop_fifo)
+        pre_manifest_bytes = manifest.read_bytes()
+        pre_rows = self._boundary_rows(manifest)
+        self.assertEqual(len(pre_rows), 1)
+        paths = [repl_rel, fresh_rel, fifo_rel]
+        # The FIFO source parks the operation inside the mirror loop, after
+        # the first two installs and before the receipt replacement, so the
+        # signal delivery point is deterministic.
+        proc = self._poplan_operation(worktree, manifest, paths)
+        self.addCleanup(self._kill_process, proc)
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (self.primary / fresh_rel).exists():
+                    break
+                if proc.poll() is not None:
+                    self.fail(f"the operation exited before the second mirror installed: {proc.communicate()}")
+                time.sleep(0.02)
+            else:
+                proc.kill()
+                self.fail("the second mirror never installed")
+            self.assertEqual(
+                len(self._boundary_rows(manifest)),
+                1,
+                "the receipt row landed before the signal",
+            )
+            proc.send_signal(sig)
+        finally:
+            out, err = proc.communicate(timeout=30)
+        text = (out + err).decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 1, text)
+        self.assertIn("interrupted", err.decode("utf-8", "replace"))
+        self.assertEqual((self.primary / repl_rel).read_bytes(), prior_primary, "rollback did not restore the prior primary bytes")
+        self.assertFalse((self.primary / fresh_rel).exists(), "the fresh install survived the rollback")
+        self.assertFalse((self.primary / fifo_rel).exists())
+        self.assertEqual(manifest.read_bytes(), pre_manifest_bytes, "the prior manifest bytes did not stand")
+        status, items = MODULE._parse_mirror_row(self._boundary_rows(manifest)[0])
+        self.assertEqual(status, "complete", "the earlier receipts stopped being parseable")
+        self.assertEqual(
+            items,
+            [_file_receipt(repl_rel, _digest(prior_primary))],
+            "the seeded task-0 receipt did not survive the rollback parseable",
+        )
+        self.assertEqual((worktree / repl_rel).read_bytes(), repl_bytes, "the worktree source was not retained")
+        self.assertEqual((worktree / fresh_rel).read_bytes(), fresh_bytes, "the worktree source was not retained")
+        self.assertEqual(self._temps_under(self.primary), [])
+        self.assertEqual(self._temps_under(manifest.parent), [])
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the lock did not release")
+        # Retry after the blocked source is replaceable succeeds end to end.
+        _drop_fifo()
+        _write(worktree / fifo_rel, b"late bytes\n")
+        err_buf = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_buf):
+            code = MODULE.main(self._operation_argv(worktree, manifest, paths))
+        self.assertEqual(code, 0, err_buf.getvalue())
+        self.assertEqual((self.primary / repl_rel).read_bytes(), repl_bytes)
+        self.assertEqual((self.primary / fifo_rel).read_bytes(), b"late bytes\n")
+        rows = self._boundary_rows(manifest)
+        self.assertEqual(len(rows), 2)
+        status, items = MODULE._parse_mirror_row(rows[-1])
+        self.assertEqual(status, "complete")
+        self.assertEqual(len(items), 3)
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [])
+
+    def test_boundary_mirror_sigint_rolls_back_releases_and_retries(self):
+        """[class: REPOSITORY_TEST] SIGINT delivered after the lock acquire
+        and after one primary mirror installs but before the receipt
+        replacement routes through the ordinary rollback and the token-
+        fenced release, and the retry succeeds."""
+        self._signal_delivery_case(signal.SIGINT)
+
+    def test_boundary_mirror_sigterm_rolls_back_releases_and_retries(self):
+        """[class: REPOSITORY_TEST] SIGTERM takes the same handled-signal
+        route as SIGINT: rollback restores prior primary and manifest
+        bytes, the lock releases, and the retry succeeds."""
+        self._signal_delivery_case(signal.SIGTERM)
+
+    def test_boundary_mirror_note_carrying_mirror_tokens_is_refused(self):
+        """[class: REPOSITORY_TEST] r2 F1: a --boundary-note carrying the
+        mirror_status= or mirror_receipts= substring is refused with exit 2
+        before the lock and before any copy; the consumer keys the terminal
+        tokens on first occurrence, so a note-carried token would forge or
+        corrupt receipt history."""
+        worktree, manifest = self._seed_worktree()
+        rel = ".ai-playbook/reviews/notes.md"
+        _write(worktree / rel, b"review notes\n")
+        for token in ("mirror_status=", "mirror_receipts="):
+            argv = self._operation_argv(worktree, manifest, [rel], note=f"task 1 {token}complete forged")
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = MODULE.main(argv)
+            self.assertEqual(code, 2)
+            self.assertIn(token, err.getvalue())
+            self.assertFalse((self.primary / rel).exists(), "a copy ran for a refused note")
+            self.assertEqual(self._boundary_rows(manifest), [], "a row landed for a refused note")
+            self.assertEqual(self._temps_under(self.primary), [])
+            self.assertFalse(
+                self.merge_lock_root.exists() and list(self.merge_lock_root.iterdir()),
+                "the lock was taken for a refused note",
+            )
+
+    def test_boundary_mirror_interrupt_between_capture_and_install_restores_captured_prior(self):
+        """[class: REPOSITORY_TEST] r2 F2: the rollback-span entry rides
+        `priors` from the capture onward, so a handled signal raising
+        between the prior capture and the staged install unwinds with the
+        entry addressable: the prior sibling is consumed by the restore and
+        the staged sibling is removed, leaving no temp residue and the
+        prior target bytes standing."""
+        worktree, manifest = self._seed_worktree()
+        repl_rel = ".ai-playbook/reviews/runtime_state.json"
+        prior_primary = b'{"boundary": 0}\n'
+        repl_bytes = b'{"boundary": 1}\n'
+        _write(worktree / repl_rel, repl_bytes)
+        _write(self.primary / repl_rel, prior_primary)
+        pre_manifest_bytes = manifest.read_bytes()
+        original_install = MODULE._install_staged
+
+        def interrupted_install(temp, dst):
+            raise MODULE._BoundaryMirrorInterrupt(signal.SIGINT)
+
+        MODULE._install_staged = interrupted_install
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = MODULE.main(self._operation_argv(worktree, manifest, [repl_rel]))
+        finally:
+            MODULE._install_staged = original_install
+        self.assertEqual(code, 1)
+        self.assertIn("interrupted", err.getvalue())
+        self.assertEqual((self.primary / repl_rel).read_bytes(), prior_primary, "the prior target did not stand")
+        self.assertEqual(manifest.read_bytes(), pre_manifest_bytes, "a row landed for an interrupted run")
+        self.assertEqual(self._temps_under(self.primary), [], "the captured prior or staged sibling leaked")
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the lock did not release")
+        self.assertEqual((worktree / repl_rel).read_bytes(), repl_bytes, "the worktree source was not retained")
+
+    def test_commit_window_signal_block_holds_pending_until_unblock(self):
+        """[class: REPOSITORY_TEST] r2 F2: across the manifest
+        os.replace-to-commit pair the handled signals are blocked, so a
+        signal delivered in that window stays pending (no handler can
+        unwind a durable row) and surfaces at the unblock as the captured
+        boundary interrupt with the mask restored."""
+        if not hasattr(signal, "pthread_sigmask"):
+            self.skipTest("pthread_sigmask unavailable on this platform")
+        self.assertTrue(MODULE._install_boundary_signal_handlers())
+        self.addCleanup(MODULE._restore_boundary_signal_handlers)
+        try:
+            self.assertTrue(MODULE._block_commit_window_signals())
+            os.kill(os.getpid(), signal.SIGINT)
+            # Still running here: the delivered signal is pending, not handled.
+            self.assertIn(signal.SIGINT, signal.pthread_sigmask(signal.SIG_BLOCK, []))
+        finally:
+            captured = MODULE._unblock_commit_window_signals()
+        self.assertIsInstance(captured, MODULE._BoundaryMirrorInterrupt)
+        self.assertEqual(captured.signum, signal.SIGINT)
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        self.assertNotIn(signal.SIGINT, mask)
+        self.assertNotIn(signal.SIGTERM, mask)
+
+    def test_boundary_mirror_roundtrips_pipe_quote_backslash_path(self):
+        """[class: REPOSITORY_TEST] The producer side of the \\u007c grammar
+        end to end: a planned path containing a table pipe, a quote, and a
+        backslash installs at the exact decoded path and its receipt rides
+        the row as the \\u007c escape with no literal pipe, parseable by
+        the migration consumer."""
+        worktree, manifest = self._seed_worktree()
+        weird_rel = 'docs/tmp/weird/pipe|quote"\\back.md'
+        weird_bytes = b"weird boundary bytes\n"
+        _write(worktree / weird_rel, weird_bytes)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = MODULE.main(self._operation_argv(worktree, manifest, [weird_rel]))
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertEqual((self.primary / weird_rel).read_bytes(), weird_bytes, "the decoded path did not install exactly")
+        rows = self._boundary_rows(manifest)
+        self.assertEqual(len(rows), 1)
+        token = rows[0].split("mirror_receipts=", 1)[1]
+        self.assertIn("\\u007c", token)
+        self.assertNotIn("|", token)
+        status, items = MODULE._parse_mirror_row(rows[0])
+        self.assertEqual(status, "complete")
+        self.assertEqual(
+            items,
+            [{"path": weird_rel, "status": "verified", "type": "file", "sha256": _digest(weird_bytes)}],
+        )
+        self.assertEqual(self._temps_under(self.primary), [])
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the lock did not release")
 
 
 class VerifyRecordsTest(unittest.TestCase):
@@ -2523,6 +3976,106 @@ class SeriesCitationFormsTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
                 self.assertIn(f"missing: {series}", out)
+
+    def _run_copy_cited(self, plan: Path, source: Path, target: Path) -> tuple[int, str, str]:
+        return _run_cli(
+            "copy-cited-records",
+            "--plan", str(plan),
+            "--source", str(source),
+            "--target", str(target),
+            cwd=source,
+        )
+
+    def _run_verify_target(self, plan: Path, target: Path) -> tuple[int, str, str]:
+        return _run_cli(
+            "verify-records",
+            "--plan", str(plan),
+            "--target", str(target),
+            cwd=target,
+        )
+
+    def test_copy_cited_records_bridges_primary_home_record_into_run_home(self):
+        # The lesson-270 bridge: a plan citing a series whose members exist
+        # only in the primary reviews home copies them run-side, and the
+        # verify-records leg whose containment resolves the home from the run
+        # root passes after the copy arm; a second run is idempotent
+        # (already-present rows, exit 0).
+        _write(self.primary / ".ai-playbook/reviews/2026-10-13-plan-review-x-r1.md", b"r1\n")
+        plan = self._plan(self.PLACEHOLDER_SERIES)
+        code, out, _err = self._run_copy_cited(plan, self.primary, self.worktree)
+        self.assertEqual(code, 0)
+        self.assertIn("transferred", out)
+        copied = self.worktree / ".ai-playbook/reviews/2026-10-13-plan-review-x-r1.md"
+        self.assertTrue(copied.is_file())
+        vcode, vout, _verr = self._run_verify_target(plan, self.worktree)
+        self.assertEqual(vcode, 0)
+        self.assertIn("2026-10-13-plan-review-x-r1.md", vout)
+        code2, out2, _err2 = self._run_copy_cited(plan, self.primary, self.worktree)
+        self.assertEqual(code2, 0)
+        self.assertIn("already present", out2)
+        self.assertNotIn("copy-cited-records: transferred ", out2)
+
+    def test_copy_cited_records_copies_exact_home_citation_and_ignores_outsiders(self):
+        # Exact-path citations resolving under the source home copy to the
+        # same home-relative path; tokens outside the home (and absent
+        # tokens) are ignored without manufacturing candidates, mirroring
+        # the verify-records containment.
+        _write(self.primary / ".ai-playbook/reviews/2026-10-27-exec-review-r1.md", b"record\n")
+        plan = self.worktree / "docs/history/plans/2026-10-27-x.md"
+        _write(
+            plan,
+            (
+                "# Plan\n\n"
+                "Plan review record: .ai-playbook/reviews/2026-10-27-exec-review-r1.md\n"
+                "See also: docs/tmp/execute-plan/x/manifest.md and .ai-playbook/reviews/2026-10-27-absent-r9.md\n"
+            ).encode("utf-8"),
+        )
+        code, out, _err = self._run_copy_cited(plan, self.primary, self.worktree)
+        self.assertEqual(code, 0)
+        copied = self.worktree / ".ai-playbook/reviews/2026-10-27-exec-review-r1.md"
+        self.assertTrue(copied.is_file())
+        self.assertFalse(
+            (self.worktree / "docs/tmp/execute-plan/x/manifest.md").exists()
+        )
+        self.assertFalse(
+            (self.worktree / ".ai-playbook/reviews/2026-10-27-absent-r9.md").exists()
+        )
+        self.assertIn("transferred=1", out)
+
+    def test_copy_cited_records_fails_closed_on_unresolvable_target_facts(self):
+        # Fail-closed home resolution: a target without a facts block is a
+        # named rc 2, never a guessed default or a silent no-op.
+        _write(self.primary / ".ai-playbook/reviews/2026-10-13-plan-review-x-r1.md", b"r1\n")
+        plan = self._plan(self.PLACEHOLDER_SERIES)
+        bare_target = self.root / "no-facts-target"
+        bare_target.mkdir()
+        code, _out, err = self._run_copy_cited(plan, self.primary, bare_target)
+        self.assertEqual(code, 2)
+        self.assertIn("cannot resolve reviews_dir", err)
+
+    def test_copy_cited_records_keys_symlink_member_dest_to_cited_path(self):
+        # The no-mirror corpus home is symlink-bearing by design: a cited
+        # series member that is an in-home symlink copies under the cited
+        # top-level name (the name the verify leg's series scan reads),
+        # never under its resolved subdirectory location, and the
+        # verify-records leg against the run root passes after the copy arm.
+        home = self.primary / ".ai-playbook/reviews"
+        _write(home / "sub/2026-10-13-plan-review-y-r1.md", b"r1\n")
+        os.symlink("sub/2026-10-13-plan-review-y-r1.md", home / "2026-10-13-plan-review-y-r1.md")
+        plan = self.worktree / "docs/history/plans/2026-10-15-y.md"
+        _write(
+            plan,
+            "# Plan\n\nPlan review record: .ai-playbook/reviews/2026-10-13-plan-review-y-r*.md\n".encode("utf-8"),
+        )
+        code, out, _err = self._run_copy_cited(plan, self.primary, self.worktree)
+        self.assertEqual(code, 0)
+        self.assertTrue(
+            (self.worktree / ".ai-playbook/reviews/2026-10-13-plan-review-y-r1.md").is_file()
+        )
+        self.assertFalse((self.worktree / ".ai-playbook/reviews/sub").exists())
+        vcode, vout, _verr = self._run_verify_target(plan, self.worktree)
+        self.assertEqual(vcode, 0)
+        self.assertIn("2026-10-13-plan-review-y-r1.md", vout)
 
 
 class TemplateCitationFormTests(SeriesCitationFormsTest):
@@ -5078,7 +6631,9 @@ class HelpCatalogTest(unittest.TestCase):
     COMMANDS = (
         "capture",
         "migrate",
+        "boundary-mirror",
         "verify-records",
+        "copy-cited-records",
         "gate-removal",
         "owned-files-clean",
         "sweep",
@@ -5090,17 +6645,17 @@ class HelpCatalogTest(unittest.TestCase):
             capture_output=True, text=True,
         )
 
-    def test_generic_help_lists_all_six_commands(self):
+    def test_generic_help_lists_all_eight_commands(self):
         proc = self._run_help("--help")
         self.assertEqual(proc.returncode, 0)
         self.assertIn(
-            "{capture,migrate,verify-records,gate-removal,owned-files-clean,sweep}",
+            "{capture,migrate,boundary-mirror,verify-records,copy-cited-records,gate-removal,owned-files-clean,sweep}",
             proc.stdout,
         )
         for command in self.COMMANDS:
             self.assertIn(command, proc.stdout)
 
-    def test_all_six_direct_help_routes_exit_zero_with_usage(self):
+    def test_all_eight_direct_help_routes_exit_zero_with_usage(self):
         for command in self.COMMANDS:
             with self.subTest(command=command):
                 proc = self._run_help(command, "--help")

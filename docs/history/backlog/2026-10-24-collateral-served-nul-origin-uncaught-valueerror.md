@@ -9,6 +9,7 @@
 - **Driving force:** robustness (one corrupt log line aborts the collateral sweep with a traceback instead of the one-line diagnostic contract)
 - **Skill/step:** `scripts/check_prompt_log_origins.py` `_collateral_log_pass` (~line 1008): `run_git` is called unprotected with origin-derived argv (`HEAD:{origin_rel}`), so an embedded-NUL origin token raises `ValueError: embedded null byte` (exit 1 with traceback), while `check_log`'s deletion arm now classifies the same token as `invalid-argument` and exits 0. Pre-existing behavior, identical pre- and post-fold; outside the covered plan's claimed scope.
 - **Cluster:** docs/history/plans/completed/2026-10-23-prompt-log-stale-check-deleted-origin-served.md (same checker; the deletion arm's widened `(TimeoutExpired, OSError, ValueError)` tuple and `invalid-argument` class are the pattern to mirror)
+- **Cluster:** docs/history/backlog/EXEC-PROMPTS.md EXEC-PROMPTS-PRUNE receipt prune-audit-first-token-slug-match (landed 2026-10-27; same checker script's origin/receipt-matching robustness class; distinct defect: receipt-slug equality vs this row's uncaught ValueError)
 - **Capture hygiene:** repo-relative paths only; no personal or machine-specific data.
 - **Dedup probe:** searched open backlog filenames and text for `collateral`, `NUL`, `ValueError`, `invalid-argument`; nearest is the covered plan above (its arm is fixed; no open row owns the collateral pass).
 

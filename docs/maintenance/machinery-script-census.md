@@ -131,7 +131,6 @@ When the telemetry plan lands, section 4's priority order must be re-ranked on i
 | `scripts/test_review_agent_doors.py` | 291 | 19 | none: exempt (test harness) |
 | `scripts/test_learn_router_dispatch.py` | 290 | 15 | none: exempt (test harness) |
 | `scripts/check_backlog_claimed.py` | 287 | 8 | none: no register row (legacy exits) |
-| `scripts/test_docs_branch_step2_selector.py` | 285 | 21 | none: exempt (test harness) |
 | `scripts/skill_distribution_check.py` | 273 | 9 | none: no register row (legacy exits) |
 | `scripts/test_review_landing_receipt.py` | 272 | 16 | none: exempt (test harness) |
 | `scripts/test_prestage_freshness_gate.py` | 271 | 22 | none: exempt (test harness) |

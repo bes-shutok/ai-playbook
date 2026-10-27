@@ -29,10 +29,10 @@ This table summarizes the same four-layer boundary stated normatively in the **C
 
 Every consumer of this catalog obeys the four-layer boundary:
 
-1. **Shared catalogs** (files in this skill) carry abstract detection patterns and failure shapes only — no language names, framework or product tokens, language-syntax identifiers, build-tool invocations, test-class suffix names, repository-absolute paths, or ticket prefixes, except on lines carrying the `<!-- portability: abstract -->` placement marker.
+1. **Shared catalogs** (files in this skill) carry abstract detection patterns and failure shapes only, no language names, framework or product tokens, language-syntax identifiers, build-tool invocations, test-class suffix names, repository-absolute paths, or ticket prefixes, except on lines carrying the `<!-- portability: abstract -->` placement marker.
 2. **Language overlays** (per-runtime overlay files, e.g. `doing-code-review/<overlay>.md`) carry stack-specific behavior: which framework APIs realize an abstract pattern, and which mandatory-evidence checks apply per stack.
 3. **Guideline Pack** (built by the orchestrator from the facts document) carries project conventions: runner names, harnesses, paths, commands, company + project guidelines.
-4. **Consuming orchestrators** carry execution framing, tool choice, and output format — never restated stack specifics inherited from a catalog example.
+4. **Consuming orchestrators** carry execution framing, tool choice, and output format, never restated stack specifics inherited from a catalog example.
 
 Where a consumer needs stack specifics, it points at the facts-resolved overlay or Guideline Pack instead of restating them. Changes touching `agents/skills/review-agents/` must keep `python3 scripts/check_review_agent_portability.py` exiting 0 (repository mandate); the checker fails loudly with `file:line: category: token` for any new hardcoded stack assumption, and a line-level exception requires the placement marker with a note naming the owning layer.
 

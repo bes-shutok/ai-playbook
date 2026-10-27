@@ -1668,7 +1668,6 @@ sys.exit(1)
     MIGRATE="$(resolve_helper worktree_closeout_migrate.py)"
     if [ -n "$MIGRATE" ]; then
       RUN_ID_MIG="$(resolve_run_id)"
-      MIG_MANIFEST="$session/worktree-migrate-manifest-${RUN_ID_MIG:-adhoc}.json"
       MIG_SKIP_RECORD="$session/worktree-migrate-baseline-${RUN_ID_MIG:-adhoc}-skip.json"
       mkdir -p "$session"
       MG_RC=0
@@ -1685,10 +1684,21 @@ sys.exit(1)
         # manual scoped-copy arm instead.
         OWNED_PLAN_PATH="$(printf '%s\n' "$OWNED_PLAN_LIST")"
         PLAN_SLUG="$(plan_session_slug "$OWNED_PLAN_PATH")"
-        MIG_TMP_ROOT="$(facts_toml_value tmp_dir)"
-        MIG_TMP_ROOT="${MIG_TMP_ROOT:-docs/tmp/}"
-        case "$MIG_TMP_ROOT" in /*) ;; *) MIG_TMP_ROOT="$repo_top/${MIG_TMP_ROOT#/}";; esac
+        MIG_TMP_RAW="$(facts_toml_value tmp_dir)"
+        MIG_TMP_RAW="${MIG_TMP_RAW:-docs/tmp/}"
+        case "$MIG_TMP_RAW" in /*) MIG_TMP_ROOT="$MIG_TMP_RAW";; *) MIG_TMP_ROOT="$repo_top/${MIG_TMP_RAW#/}";; esac
         MIG_BASELINE="${MIG_TMP_ROOT%/}/execute-plan/$PLAN_SLUG/closeout-baseline.json"
+        # The one-owned-plan migration manifest lands at the PRIMARY
+        # checkout's canonical plan-slug path, so the plans closeout's
+        # gate-removal finds the branch record there through its explicit
+        # --migration-manifest operand (plan
+        # 2026-10-27-plan-authoring-branch-manifest-handoff); the worktree
+        # session directory keeps the run-id skip-record form for the
+        # degraded arms below.
+        case "$MIG_TMP_RAW" in
+          /*) MIG_MANIFEST_DEST="${MIG_TMP_RAW%/}/execute-plan/$PLAN_SLUG/closeout-migration.json";;
+          *) MIG_MANIFEST_DEST="${PRIMARY%/}/${MIG_TMP_RAW#/}/execute-plan/$PLAN_SLUG/closeout-migration.json";;
+        esac
         if [ ! -f "$MIG_BASELINE" ] && valid_skip_record "${MIG_BASELINE%.json}-skip.json"; then
           MIG_BYPASS=1
           MIG_BYPASS_RECORD="${MIG_BASELINE%.json}-skip.json"
@@ -1705,12 +1715,23 @@ sys.exit(1)
         commit_die 2 "the worktree migration refused (rc=2); resolve what it named before the sync; nothing committed"
       else
         echo "done_run commit: ad-hoc worktree: migrating review staging docs and session logs to the main checkout before the sync"
-        MG_OUT="$(python3 "$MIGRATE" migrate --baseline "$MIG_BASELINE" --source "$repo_top" --target "$PRIMARY" --manifest "$MIG_MANIFEST" 2>&1)" || MG_RC=$?
+        mkdir -p "$(dirname "$MIG_MANIFEST_DEST")"
+        MG_OUT="$(python3 "$MIGRATE" migrate --baseline "$MIG_BASELINE" --source "$repo_top" --target "$PRIMARY" --manifest "$MIG_MANIFEST_DEST" 2>&1)" || MG_RC=$?
         printf '%s\n' "$MG_OUT"
         if [ "$MG_RC" -ne 0 ]; then
           rm -rf "$tmpd"
           commit_die 2 "the worktree migration refused (rc=$MG_RC); resolve what it named before the sync; nothing committed"
         fi
+      fi
+      if [ "$OWNED_PLAN_COUNT" -eq 1 ] && [ -n "$OWNED_PLAN_PATH" ]; then
+        # Copy the plan's cited review records from the primary reviews home
+        # into this run's reviews home before the closeout's verify-records
+        # leg resolves that home from this worktree: a record written per the
+        # no-mirror remedy is foreign by construction until copied run-side
+        # (lesson 270). Report-and-continue: the verify-records refusal stays
+        # the enforcing gate downstream.
+        CC_OUT="$(python3 "$MIGRATE" copy-cited-records --plan "$OWNED_PLAN_PATH" --source "$PRIMARY" --target "$repo_top" 2>&1)" && CC_RC=0 || CC_RC=$?
+        printf 'done_run commit: ad-hoc worktree: cited-record copy (rc=%s):\n%s\n' "$CC_RC" "$CC_OUT"
       fi
     fi
   fi
@@ -1885,9 +1906,13 @@ landing_pending_state() { # <session-dir> <run-id>; sets LANDING_PENDING, LANDIN
   # that is not on the base branch, so the squash to the default branch never
   # ran and a success-shaped summary would lie. Landed means either the
   # commit is an ancestor of the base branch (direct and merge landings) or
-  # a recent base-history commit carries an equal tree (the squash proof,
-  # the worktree-first standard's squash arm: a squash landing changes the
-  # sha, so ancestry alone never sees it). The base branch resolves from the
+  # a recent base-history commit carries an equal tree (the squash proof's
+  # tree fast path, the worktree-first standard's squash arm: a squash
+  # landing changes the sha, so ancestry alone never sees it) or, when a
+  # rebase after the ledger lines were written changed the branch's trees,
+  # a recent base-history commit carries an equal first-parent delta
+  # patch-id (the squash proof's content form, compared inside the same
+  # 500-commit window). The base branch resolves from the
   # facts base_branch key, then origin/HEAD's short name; an unresolvable
   # base fails open to the current success shape (the caller warns), never
   # blocking the release ceremony. Quiet: callers own every emission.
@@ -1910,6 +1935,26 @@ landing_pending_state() { # <session-dir> <run-id>; sets LANDING_PENDING, LANDIN
   tip_tree="$(git rev-parse "$LANDING_TIP^{tree}" 2>/dev/null)" || { LANDING_TIP=""; BASE_BRANCH=""; return 0; }
   if git log --format='%T' -n 500 "refs/heads/$BASE_BRANCH" 2>/dev/null | grep -qxF "$tip_tree"; then
     return 0
+  fi
+  # Content-form squash proof: a run branch rebased after its ledger lines
+  # were written carries the same delta under new shas and trees, so the
+  # tree-identity scan above misses the squash; compare the branch delta's
+  # patch-id against each scanned base commit's first-parent delta patch-id
+  # inside the same 500-commit window (root commits and unreadable pairs
+  # skip; the first match proves landed).
+  local merge_base branch_pid base_commit base_parent base_pid
+  merge_base="$(git merge-base "$LANDING_TIP" "refs/heads/$BASE_BRANCH" 2>/dev/null)" || merge_base=""
+  if [ -n "$merge_base" ]; then
+    branch_pid="$(git diff "$merge_base..$LANDING_TIP" | git patch-id --stable 2>/dev/null | awk 'NR==1{print $1; exit}')"
+    if [ -n "$branch_pid" ]; then
+      while IFS= read -r base_commit; do
+        base_parent="$(git rev-parse "$base_commit^" 2>/dev/null)" || continue
+        base_pid="$(git diff "$base_parent..$base_commit" | git patch-id --stable 2>/dev/null | awk 'NR==1{print $1; exit}')"
+        if [ -n "$base_pid" ] && [ "$base_pid" = "$branch_pid" ]; then
+          return 0
+        fi
+      done < <(git log --format='%H' -n 500 "refs/heads/$BASE_BRANCH" 2>/dev/null)
+    fi
   fi
   LANDING_PENDING=1
 }

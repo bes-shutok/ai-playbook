@@ -1733,6 +1733,126 @@ class TestExecutionClaim(unittest.TestCase):
         combined = proc.stdout + proc.stderr
         self.assertIn(str(self.claim), combined)
 
+    def test_release_operand_source_reads_deleted_operand_from_landing_parent(self):
+        # The covered-row lifecycle: the operand the claim was taken against
+        # is deleted by its own landing commit, so the working-tree
+        # readability requirement cannot be met; --operand-source
+        # <landing>^:<path> reads the bytes from object storage (the slug
+        # derivation unchanged through the basename-preserving recovery) and
+        # the release passes.
+        committed = self.repo / "docs" / "history" / "backlog"
+        committed.mkdir(parents=True)
+        operand = committed / PLAN_NAME
+        operand.write_text("# origin row\n", encoding="utf-8")
+        self._git("add", "docs/history/backlog")
+        self._git("commit", "-q", "-m", "land the covered row")
+        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
+        self._git("commit", "-q", "-m", "delete the covered row")
+        # The deleting commit is the covering landing; the operand exists at
+        # its parent, the commit that carried the row.
+        landing = self._git_out("rev-parse", "HEAD")
+        self.assertFalse(operand.exists())
+        self._seed_claim(
+            "session-dead", FRESH_AGE, plan_path=str(operand)
+        )
+        tmpdir = self.scratch / "tmpdir"
+        tmpdir.mkdir()
+        proc = self._run(
+            "release", str(operand), "--session", "session-dead",
+            "--operand-source",
+            f"{landing}^:docs/history/backlog/{PLAN_NAME}",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            list(tmpdir.glob("execution-claim-operand.*")),
+            "a passing release left operand scratch residue",
+        )
+
+    def test_release_without_operand_source_keeps_unreadable_refusal(self):
+        # The flag's absence leaves the current refusal intact: the same
+        # deleted-operand shape refuses as a tool error naming the operand,
+        # and the refusal now carries the bounded remedy naming the flag.
+        committed = self.repo / "docs" / "history" / "backlog"
+        committed.mkdir(parents=True)
+        operand = committed / PLAN_NAME
+        operand.write_text("# origin row\n", encoding="utf-8")
+        self._git("add", "docs/history/backlog")
+        self._git("commit", "-q", "-m", "land the covered row")
+        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
+        self._git("commit", "-q", "-m", "delete the covered row")
+        self._seed_claim(
+            "session-dead", FRESH_AGE, plan_path=str(operand)
+        )
+        proc = self._run("release", str(operand), "--session", "session-dead")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
+        self.assertIn("plan operand not readable", proc.stderr)
+        self.assertIn("--operand-source", proc.stderr)
+        self.assertTrue(
+            self.claim.exists(), "the refused release deleted the claim"
+        )
+
+    def test_release_operand_source_guards_refuse_and_leave_no_residue(self):
+        # The flag's guard arms: the mode restriction refuses every
+        # non-release mode writing nothing; malformed values and a
+        # nonexistent commit:path refuse as named tool errors; no refused
+        # invocation leaves operand scratch residue.
+        tmpdir = self.scratch / "tmpdir"
+        tmpdir.mkdir()
+        proc = self._run(
+            "take", str(self.plan), "--session", "session-x",
+            "--branch", self.branch,
+            "--worktree-parent", str(self.wt_parent),
+            "--operand-source", "HEAD:README.md",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("--operand-source applies to release only", proc.stderr)
+        self.assertIn("take", proc.stderr)
+        self.assertFalse((self.wt_parent / self.branch).exists())
+
+        proc = self._run(
+            "sweep", "--session", "session-x",
+            "--operand-source", "HEAD:README.md",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("--operand-source applies to release only", proc.stderr)
+
+        for bad in (
+            "HEAD^docs/history/backlog/x.md",
+            ":docs/history/backlog/x.md",
+            "HEAD^:",
+        ):
+            proc = self._run(
+                "release", str(self.plan), "--session", "session-x",
+                "--operand-source", bad,
+                extra_env={"TMPDIR": str(tmpdir)},
+            )
+            self.assertEqual(proc.returncode, 3, bad)
+            self.assertEqual(
+                self._outcome_line(proc), "OUTCOME: tool_error", bad
+            )
+            self.assertIn("--operand-source must be <commit>:<path>", proc.stderr)
+
+        proc = self._run(
+            "release", str(self.plan), "--session", "session-x",
+            "--operand-source", "HEAD:docs/history/backlog/absent-story.md",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("operand-source object unreadable", proc.stderr)
+        self.assertFalse(
+            list(tmpdir.glob("execution-claim-operand.*")),
+            "a refused release left operand scratch residue",
+        )
+
     # -- sweep ------------------------------------------------------------ #
 
     def _sweep(self, session="session-sweeper"):
@@ -1790,6 +1910,62 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
         self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
         self.assertFalse(self.claim.exists(), "the spent claim survived the sweep")
+
+    def test_sweep_lands_claim_under_each_recognized_landing_prefix(self):
+        # The grammar pins, one per recognized LANDING_CLAIM_PREFIXES form
+        # (scripts/reverse_squash_guard.py, the landing-subject grammar's
+        # single source): a landing commit subject under each prefix naming
+        # the claim's slug lands the spent claim through the sweep's
+        # main-history leg exactly as the legacy `check: land ` form does.
+        base = self._git_out("rev-parse", "HEAD")
+        for prefix in (
+            "plans: land ",
+            "done: execute ",
+            "execute-plan: land ",
+            "author: land ",
+        ):
+            with self.subTest(prefix=prefix):
+                # Per-iteration history isolation: the sweep's main-history
+                # leg scans the whole branch, so an earlier subTest's
+                # witness commit would mask a later prefix missing from the
+                # matcher arm; each iteration rewinds to the shared base so
+                # its history carries only its own subject.
+                self._git("reset", "--hard", "-q", base)
+                self._git(
+                    "commit", "--allow-empty", "-q", "-m",
+                    f"{prefix}{SLUG} (sweep witness landing)",
+                )
+                self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+                proc = self._sweep()
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+                self.assertIn(
+                    f"sweep: deleted {self._physical_claim()}", proc.stdout
+                )
+                self.assertFalse(
+                    self.claim.exists(),
+                    "the spent claim survived the sweep",
+                )
+
+    def test_sweep_skips_claim_under_unrecognized_landing_prefix(self):
+        # The fail-closed skip: an unrecognized prefix is not part of the
+        # landing-subject grammar's closed vocabulary, so a subject naming
+        # the slug under it never witnesses a landing and the claim survives.
+        self._git(
+            "commit", "--allow-empty", "-q", "-m",
+            f"ad-hoc: land {SLUG} (sweep witness landing)",
+        )
+        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._sweep()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(f"sweep: skipped {self._physical_claim()}:", proc.stdout)
+        self.assertEqual(
+            self.claim.read_text(encoding="utf-8"),
+            before,
+            "the unrecognized-prefix claim was modified by the sweep",
+        )
 
     def test_sweep_skips_plan_parked_under_plans_root_despite_landing_subject(self):
         # The parked-plan guard: the plan's file sits under the plans root

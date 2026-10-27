@@ -579,6 +579,16 @@ pin "pricing note read-back"  grep -qF 'note surfaces in the survey read-back' "
 # pinned (the wiring landed before the pin; the pin protects it).
 pin "state-file note names the merge lock" grep -qF 'the done-lock, the merge lock, and claim checks' "$SF"
 pin "G3b final-slot effect named in the state-file note" grep -qF 'the `G3b` final-slot effect' "$SC"
+# Plan 2026-10-24-scheduler-state-decision-shape-drift Task 1: the decision
+# fields' legacy tolerance and repair contract is pinned in the state-file
+# module; removing the prose paragraph or any named arm fails these greps, and
+# the schema example's `notes` array (the preservation surface) is pinned too.
+pin "state-file decision legacy tolerance" grep -qF 'is unscoped legacy text' "$SF"
+pin "state-file decision repair restores both maps" grep -qF 'restores both maps in that same targeted atomic edit' "$SF"
+pin "state-file decision repair writer-class mode" grep -qF 'a mode of the existing Scheduler turns writer class' "$SF"
+pin "state-file legacy scalar notes retention" grep -qF 'retained exactly once as a timestamped `notes` entry' "$SF"
+pin "state-file schema example carries notes array" grep -qF '"notes": [' "$SF"
+pin "state-file notes survival carry-forward clause" grep -qF 'the carry-forward list carries the `notes` array whole' "$SF"
 # --- state durability contract (scheduler/maintenance state durability plan, Task 6) ---
 # The pending_rearm prose surfaces (the loop_mode surfaces retired by the
 # two-mode loop policy plan Task 2: the field paragraph opener pin deleted with

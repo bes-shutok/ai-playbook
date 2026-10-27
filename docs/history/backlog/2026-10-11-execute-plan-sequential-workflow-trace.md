@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-11, Phase 3 review of the sequential-only adapter-removal plan
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** self-serving

@@ -71,8 +71,8 @@ whatever the branch state, and `take` preserves it through the conversion
 arm's evidence-gated refusals: a take whose target is not the manifest's
 registered worktree (branch switched, unregistered target) refuses with the
 claim preserved instead of reaching the historical stale takeover. With no
-registered manifest anywhere — every registered worktree's facts resolved
-and no manifest file present — the branch-occupant rule stands, and an
+registered manifest anywhere, every registered worktree's facts resolved
+and no manifest file present, the branch-occupant rule stands, and an
 unreadable facts document makes the preservation scan inconclusive (the
 claim is preserved, never deleted or taken over). The gateway queries the configured
 session status provider for the literal prior-owner ID under a 10-second

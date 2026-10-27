@@ -1,6 +1,7 @@
 # Dirt classification reads HEAD the runner pins only after the gate
 
 - **Cluster:** docs/history/backlog/completed/2026-10-20-done-dirt-regression-correction-block.md (residual window narrows but survives the captured-tree landing)
+- **Cluster:** docs/history/backlog/2026-10-23-dirt-gate-tree-mode-contract-surface-stale.md (shared surface: both residuals concern the dirt gate's `--tree` contract and runner boundary; this row records classification timing)
 - Status: open
 - Priority: low
 - Age: new (2026-10-23)

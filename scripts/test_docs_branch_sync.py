@@ -256,7 +256,7 @@ class SyncRepo:
         os.utime(path, (timestamp, timestamp))
         return path
 
-    def run(self, *, extra_env: dict[str, str] | None = None, policy: str | None = None) -> subprocess.CompletedProcess[str]:
+    def run(self, *, extra_env: dict[str, str] | None = None, policy: str | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         if policy is not None:
             self.write_facts(policy=policy)
         env = {
@@ -278,7 +278,7 @@ class SyncRepo:
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
-            ["bash", str(SCRIPT)], cwd=self.root, env=env, text=True,
+            ["bash", str(SCRIPT)], cwd=str(cwd or self.root), env=env, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
 
@@ -615,6 +615,55 @@ class DocsBranchSyncTests(unittest.TestCase):
         observed = [events.get(timeout=2) for _ in range(3)]
         self.assertLess(observed.index("first-restore-complete"), observed.index("prune-second-complete"))
         self.assertNotIn(".ai-playbook/reviews/expiring.md", self.repo.docs_paths())
+
+    def test_linked_worktree_sync_skips_branch_only_restore(self) -> None:
+        ledger = ".ai-playbook/metrics/landing-costs.jsonl"
+        self.repo.seed_docs([
+            (ledger, b'{"plan_slug": "primary-history"}\n', NOW, None),
+        ])
+        self.repo.git(
+            "worktree", "add", "-q", "-b", "wt-side", str(Path(self.temp.name) / "wt"), "main",
+        )
+        worktree = Path(self.temp.name) / "wt"
+        (worktree / ".ai-playbook").mkdir(exist_ok=True)
+        (worktree / ".ai-playbook" / "facts.md").write_text(self.repo.facts(), encoding="utf-8")
+        local_review = ".ai-playbook/reviews/wt-run-record.md"
+        (worktree / ".ai-playbook" / "reviews").mkdir(parents=True, exist_ok=True)
+        (worktree / local_review).write_bytes(b"worktree run record\n")
+
+        result = self.repo.run(cwd=worktree)
+
+        self.assert_ok(result)
+        # The seeding-path pin: a run worktree's gitignored homes hold only
+        # their own lines, so the branch-only restore leg must not
+        # materialize the primary's ledger history into the worktree's
+        # metrics home; the archives stay on refs/heads/docs.
+        self.assertFalse((worktree / ledger).exists())
+        self.assertIn(
+            "docs-branch: restore leg skipped (linked worktree: run homes hold"
+            " only their own lines; the branch-only archives stay on refs/heads/docs)",
+            result.stdout,
+        )
+        # The skip arm clears only the restore list: the worktree's own
+        # local archive still lands on the docs ref.
+        self.assertIn(local_review, self.repo.docs_paths())
+        self.assertIn(ledger, self.repo.docs_paths())
+
+    def test_primary_sync_still_restores_branch_only_archive(self) -> None:
+        ledger = ".ai-playbook/metrics/landing-costs.jsonl"
+        self.repo.seed_docs([
+            (ledger, b'{"plan_slug": "primary-history"}\n', NOW, None),
+        ])
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        # The primary corpus home keeps the restore leg's retention
+        # behavior: a recent branch-only archive absent locally is
+        # materialized back from refs/heads/docs.
+        self.assertTrue((self.repo.root / ledger).exists())
+        self.assertEqual((self.repo.root / ledger).read_bytes(), b'{"plan_slug": "primary-history"}\n')
+        self.assertIn(f"docs-branch: restored {ledger} from refs/heads/docs", result.stdout)
 
     def test_fixture_git_calls_ignore_host_repository_selectors(self) -> None:
         selectors = {

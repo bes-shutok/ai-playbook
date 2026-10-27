@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-18, Task 5 inventory from the done-final-only-learn-intermediate plan run; source reference `docs/history/plans/2026-10-18-done-final-only-learn-intermediate.md` Task 5 (capture hygiene: scan-public-hygiene pass on this draft, 2026-10-18)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium
 - **Cluster:** docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md (shared deployed-home maintenance surface: the sync script owns the home's population while this row owns the home's divergent state)

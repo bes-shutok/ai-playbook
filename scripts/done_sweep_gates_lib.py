@@ -233,10 +233,15 @@ PUBLIC_ARTIFACT_CONTENT_PATTERNS = [
 CO_AUTHORED_RE = re.compile(r"co-authored-by", re.IGNORECASE)
 
 MANIFEST_MAX_AGE_H = 24.0
-# Closeout-baseline grace window: a baseline-holding execute-plan session
-# whose baseline mtime is older than this many hours is a crashed run's
-# debris, not an in-flight transfer-out, and the sweep removes it.
-STALE_BASELINE_GRACE_H = 48.0
+# The execute-plan plan-slug proof family: closeout evidence retained
+# cross-session by design (Phase 0 baseline capture, the skip sibling's
+# capture-failure record a retry must re-read, and the migration manifest a
+# later plan closeout's gate-removal reads through its explicit operand).
+PLAN_SLUG_PROOF_FILES = (
+    "closeout-baseline.json",
+    "closeout-baseline-skip.json",
+    "closeout-migration.json",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -2901,6 +2906,25 @@ def _prune_done_session_markers(
             kept.append(str(report_file) + " (inside the session window; immune)")
 
 
+def _pending_plan_session_names(
+    plans_dir: Path, plans_completed_dir: Path
+) -> set[str]:
+    """Pending-name set for the execute-plan session sweep: every pending
+    plan's full file stem plus, for date-prefixed plans, the date-stripped
+    canonical session slug (execute-plan Step 0.4), since live sessions name
+    their directories by the no-date slug while the plan file is
+    date-prefixed."""
+    names: set[str] = set()
+    for plan in plans_dir.rglob("*.md"):
+        if not plan.is_file() or _is_relative_to(plan, plans_completed_dir):
+            continue
+        names.add(plan.stem)
+        m = re.match(r"\d{4}-\d{2}-\d{2}-(.+)", plan.stem)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
 def _sweep_execute_plan_sessions(
     ctx: GateContext,
     execute_dir: Path,
@@ -2912,65 +2936,39 @@ def _sweep_execute_plan_sessions(
     plan still under plans_dir). A live plan may sit anywhere under
     plans_dir (e.g. ``docs/history/plans/deferred/<slug>.md``), so the pending
     check is recursive over plans_dir, mirroring how the readiness
-    candidate derivation accepts nested plan paths. An archived-plan session
-    that still holds its captured ``closeout-baseline.json`` as a regular
-    file is exempt from removal only while the baseline is fresh: the
-    baseline is the mechanical witness that a run owns the directory and its
-    transfer-out (execute-plan lifecycle step 5) may still be pending. The
-    exemption is age-bounded by ``STALE_BASELINE_GRACE_H``: a baseline whose
-    mtime age is within the grace window keeps the transfer-out-pending
-    exemption unchanged; the boundary comparison keeps via ``<=``, so a
-    baseline whose age is exactly 48h is within the window. The pending-plan
-    arm's ``continue`` precedes the baseline branch, so an active session's
-    stale baseline is kept by precedence, not by the exemption. A crashed
-    run's directory lingers by the same
-    witness only up to that window: once the baseline's age exceeds it,
-    nothing has consumed the baseline for two days and the directory IS
-    removed here as a stale closeout baseline (destruction for the stale
-    class moves from the interrupted-run report to this arm), and the
-    removal deletes the session manifest, ending the interrupted-run
-    report's surfacing of that run. A stale removal whose rmtree raises
-    OSError appends ``str(session) + " (stale closeout baseline
-    removal-failed)"`` to removed instead of a kept row: the row lands in
-    removed while the directory survives (removed is report-visible, not
-    existential), so a repeatedly failing stale sweep is visible as a
-    distinct class instead of retrying silently. An unreadable baseline
-    mtime keeps the
-    exemption (fail-open to keep, the safe direction for a witness file)."""
+    candidate derivation accepts nested plan paths. The plan-slug proof
+    family (``PLAN_SLUG_PROOF_FILES``: the Phase 0 ``closeout-baseline.json``,
+    its ``closeout-baseline-skip.json`` capture-failure sibling, and the
+    ``closeout-migration.json`` branch record a later plan closeout's
+    gate-removal reads through its explicit operand) is retained
+    cross-session by design: a session holding any family member is kept
+    with a retained-and-reported line (mirroring the done-session marker
+    handling) and never removed here, so a retry after a failed attempt
+    re-reads the same proof state the predecessor had. Retention supersedes
+    the former age-bounded stale-baseline removal: a baseline-bearing
+    directory is closeout evidence, not a crashed run's scratch, and every
+    sweep pass re-reports the retained rows so the growth stays visible."""
     if not execute_dir.is_dir():
         return
-    pending_stems = {
-        plan.stem
-        for plan in ctx.plans_dir.rglob("*.md")
-        if plan.is_file() and not _is_relative_to(plan, ctx.plans_completed_dir)
-    }
+    pending_stems = _pending_plan_session_names(
+        ctx.plans_dir, ctx.plans_completed_dir
+    )
     for session in sorted(execute_dir.iterdir()):
         if not session.is_dir():
             continue
         if session.name in pending_stems:
             kept.append(str(session) + " (active: plan still pending)")
             continue
-        if (session / "closeout-baseline.json").is_file():
-            baseline_path = session / "closeout-baseline.json"
-            try:
-                age_hours = (time.time() - os.path.getmtime(baseline_path)) / 3600
-            except OSError:
-                # Unreadable baseline mtime keeps the exemption: fail-open to
-                # keep, the safe direction for a witness file.
-                age_hours = 0.0
-            if age_hours <= STALE_BASELINE_GRACE_H:
-                kept.append(str(session) + " (kept: closeout baseline present; transfer-out may be pending)")
-                continue
-            try:
-                shutil.rmtree(session)
-                removed.append(str(session) + " (stale closeout baseline)")
-            except OSError:
-                # The directory survives the failed rmtree; the report still
-                # names the sweep's failed attempt (not a kept row), so a
-                # repeatedly failing stale removal stays visible per retry.
-                removed.append(
-                    str(session) + " (stale closeout baseline removal-failed)"
-                )
+        proof_present = [
+            name for name in PLAN_SLUG_PROOF_FILES if (session / name).is_file()
+        ]
+        if proof_present:
+            kept.append(
+                str(session)
+                + " (retained: closeout proof family: "
+                + ", ".join(proof_present)
+                + ")"
+            )
             continue
         try:
             shutil.rmtree(session)

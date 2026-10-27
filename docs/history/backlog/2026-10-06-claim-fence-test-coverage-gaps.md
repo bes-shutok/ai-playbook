@@ -4,6 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
+Cluster: the sweep landedness leg's subject-grammar defect is covered (matcher widened to the recognized LANDING_CLAIM_PREFIXES forms, EXEC-PROMPTS entry claim-sweep-landing-subject-grammar-mismatch)
 
 Driving force: reliability (the guard's central resolution rules ship correct but unpinned; a future refactor could silently break the witnessed topology the fence exists to protect, and the suite would stay green).
 

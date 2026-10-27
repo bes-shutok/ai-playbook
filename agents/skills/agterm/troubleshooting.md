@@ -3,7 +3,7 @@
 # Troubleshooting agterm and reporting problems
 
 Two jobs: (1) diagnose a problem from inside an agterm session, (2) help the user file it on the repo
-as a bug (issue) or a feature/question (Discussion) — safely, never posting without approval.
+as a bug (issue) or a feature/question (Discussion), safely, never posting without approval.
 
 The full user-facing version of the diagnostics below is the repo's `docs/troubleshooting.md`.
 
@@ -11,11 +11,11 @@ The full user-facing version of the diagnostics below is the repo's `docs/troubl
 
 You are inside agterm (`AGTERM_ENABLED=1`). Use:
 
-- **Live state** — `agtermctl tree --json`, `agtermctl window list --json`.
-- **Keymap problems** — `agtermctl keymap reload` prints the parse-diagnostic count (`0` = clean). A
+- **Live state**, `agtermctl tree --json`, `agtermctl window list --json`.
+- **Keymap problems**, `agtermctl keymap reload` prints the parse-diagnostic count (`0` = clean). A
   non-zero count means `keymap.conf` has problems; `agtermctl keymap list` prints each one with its line
   and message, and the user also sees the list in Settings ▸ Key Mapping.
-- **A keybinding does not fire** — `agtermctl keymap list` shows the chord each action resolved to AND the
+- **A keybinding does not fire**, `agtermctl keymap list` shows the chord each action resolved to AND the
   key equivalents the menu bar is actually dispatching. If the action's `chord` looks right but no `menu`
   entry carries it (or a different item does), the keymap is fine and the menu is the problem: SwiftUI
   rebuilds the menu only on the next app activation, so switch to another app and back, then relaunch if it
@@ -42,7 +42,7 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
   ```
   Categories: `GhosttyApp`, `GhosttySurfaceView`, `WatermarkRenderer`, `NotificationManager`,
   `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
-- **Files** — keymap `~/.config/agterm/keymap.conf`; agterm-scoped ghostty config
+- **Files**, keymap `~/.config/agterm/keymap.conf`; agterm-scoped ghostty config
   `~/.config/agterm/ghostty.conf`; settings `~/Library/Application Support/agterm/settings.json`;
   socket path in `$AGTERM_SOCKET`.
 
@@ -52,34 +52,34 @@ Edit Keymap runs `$VISUAL`/`$EDITOR` (else `vi`) in an overlay via the login she
 cause is a **GUI editor launched without a blocking flag** (`code`, `subl`, `zed`, `mate`, `cursor`):
 it returns immediately, so the overlay flashes shut. Fix: `export EDITOR='code -w'` (the editor's wait
 flag) in the shell rc. `$EDITOR`/`$VISUAL` must be **exported** (`export EDITOR=…`, or fish `set -gx
-EDITOR …`) so it resolves regardless of your login shell — a non-exported value falls back to `vi`. It
+EDITOR …`) so it resolves regardless of your login shell, a non-exported value falls back to `vi`. It
 also no-ops with no session selected or an overlay already open.
 
 ### "Custom action does nothing"
 
 Causes, in order: a parse error (see the diagnostics); the chord conflicts with a built-in or another
 custom command and was dropped to palette-only (it still runs from `⌃⇧P`, tagged `custom`); a reserved
-chord (`ctrl+tab`, `ctrl+1`/`ctrl+2`); a modifier-less key (rejected — a custom chord needs a
+chord (`ctrl+tab`, `ctrl+1`/`ctrl+2`); a modifier-less key (rejected, a custom chord needs a
 modifier); it does not fire while a text field (inline rename, a palette, Settings) has keyboard focus,
 though it DOES fire from a terminal pane or an empty window (every session closed); it runs in a non-interactive
-`/bin/sh -c` (no aliases/functions, a smaller `PATH` — use absolute paths or `$SHELL -lc '…'`); a
+`/bin/sh -c` (no aliases/functions, a smaller `PATH`, use absolute paths or `$SHELL -lc '…'`); a
 non-zero exit posts a failure banner (meaning it DID fire and failed). Reload after edits:
 `agtermctl keymap reload`.
 
 ### "An overlay or --command session opens then instantly closes"
 
-The program exited immediately. Check `agtermctl session overlay result --json` — `exitCode: 127` is
+The program exited immediately. Check `agtermctl session overlay result --json`, `exitCode: 127` is
 "command not found": `session overlay open`, `session scratch --command`, and `session new --command`
-run the program with the app's GUI `PATH` (the launchd default — no `/opt/homebrew/bin`), NOT your login
+run the program with the app's GUI `PATH` (the launchd default, no `/opt/homebrew/bin`), NOT your login
 shell's PATH, so a bare Homebrew or other non-default binary isn't found. Fix: give an absolute path
 (`/opt/homebrew/bin/htop`) or wrap in a login shell (`zsh -lc 'htop'`). Any OTHER exit code just means
-the program ran and exited on its own — the overlay/session closes when its command finishes, by design.
+the program ran and exited on its own, the overlay/session closes when its command finishes, by design.
 
 ⌘C/⌘V/⌘A copy/paste/select-all on any layout by default, via two layers.
 
 The **Edit menu** owns them first: its stock Copy/Paste/Select All items carry ⌘C/⌘V/⌘A as menu key
 equivalents, which AppKit matches against the character the layout produces. An enabled item consumes the
-key before the terminal sees it. The items enable only when the terminal can service them — Copy needs a
+key before the terminal sees it. The items enable only when the terminal can service them, Copy needs a
 selection, Paste needs something pasteable on the clipboard (text, or a file/web URL, which pastes as a
 shell-escaped path), Select All needs a live surface. Cut stays disabled for the terminal (it still works in
 a text field, such as the inline rename or a palette's search box). Undo and Redo are not in the menu at all:
@@ -93,10 +93,10 @@ yields `с`, so the menu's ⌘C never matches and the keycode bind runs instead;
 selection, or a ⌘V with nothing pasteable, leaves the menu item disabled and reaches the bind on ANY
 layout. The three binds deliberately omit ghostty's `performable:` prefix so they always consume the key,
 and one that cannot act simply does nothing. With that prefix the unperformed press fell through to key
-encoding — invisible under legacy encoding, which drops ⌘ chords on macOS, but the kitty keyboard protocol
+encoding, invisible under legacy encoding, which drops ⌘ chords on macOS, but the kitty keyboard protocol
 reports them and the program renders a stray `^[[…u` as text. This is why copy, paste, and select-all all
 keep working on a non-Latin layout. (ghostty's own
-`super+c`/`super+v`/`super+a` match the produced CHARACTER, so alone they would miss there — `super+key_a`
+`super+c`/`super+v`/`super+a` match the produced CHARACTER, so alone they would miss there, `super+key_a`
 in particular exists because without it ⌘A would silently do nothing on a Cyrillic layout.)
 
 To remap a shortcut ghostty still owns: a physical key name (`key_c`, `key_v`, …) matches by position on
@@ -125,7 +125,7 @@ Check these in order:
   to attach, so agterm creates one under the saved name and replays the command that pane was running at the
   last clean quit. A fresh shell instead means no capture applied: the window was closed before the quit, the
   machine lost power or was force-quit, the process exited before quitting, SIGTERM was used, or the command
-  is refused by `restore-denylist.conf`. `agtermctl zmx kill` is not one of these — it closes a shown split
+  is refused by `restore-denylist.conf`. `agtermctl zmx kill` is not one of these, it closes a shown split
   or promotes a primary rather than leaving a daemon to recreate. To check what was captured, read
   `foregroundCommand` in `windows/<id>.json` while agterm is STOPPED: the next launch moves it into memory
   and rewrites the file with nil, so a running app always shows null there.
@@ -166,19 +166,19 @@ Check, in order:
   active mode. Select Re-run commands in General settings and restart agterm.
 - **The pane resolved to the scratch, or you pinned `--pane right` on a session with no split.** Both are
   rejected at set time (`the scratch terminal is never restored` / `session has no split`), so nothing was
-  pinned — re-read the command's output.
+  pinned, re-read the command's output.
 - **The pin landed on the other pane.** Pass `--json` when setting the override and compare `result.pane`
   with the pane you meant.
 - **It already fired once this launch.** The override is consumed once per launch: after it runs, a second
   surface for the same pane in the SAME session (e.g. opening a fresh split with ⌘D) gets a plain shell. It
-  is still pinned — `tree` reports `restoreCommand` — and fires again on the NEXT restart.
+  is still pinned, `tree` reports `restoreCommand`, and fires again on the NEXT restart.
 - **The split is still hidden.** Its identity and pin survive restart, but the surface is created only when
   the split is shown; the saved rerun policy applies then.
 - **You reopened a closed session or a closed window, not relaunched the app.** The override fires only on
-  an app-launch restore — Reopen Closed Item and reopening a closed window deliberately do NOT arm it. Quit
+  an app-launch restore, Reopen Closed Item and reopening a closed window deliberately do NOT arm it. Quit
   and relaunch agterm to see it fire.
-- **It is not the denylist.** `restore-denylist.conf` is deliberately bypassed for overrides — an override
-  names its command on purpose — so a denylisted basename is never the reason it did not run.
+- **It is not the denylist.** `restore-denylist.conf` is deliberately bypassed for overrides, an override
+  names its command on purpose, so a denylisted basename is never the reason it did not run.
 
 Confirm what is pinned from `tree --json`: the node's `restoreCommand` (main pane) / `splitRestoreCommand`
 (split pane) reports the persisted value, which survives after the override fires, so a read at any point
@@ -187,7 +187,7 @@ shows the truth.
 ### "notify says ok but no notification appears"
 
 Check **Settings ▸ Notifications ▸ Show notification banners** first. With it off, `notify` succeeds and
-the unseen badge still rises, but nothing is handed to macOS — the command answers `ok` with
+the unseen badge still rises, but nothing is handed to macOS, the command answers `ok` with
 `result.text` = `badge updated, but "Show notification banners" is off, so no banner was posted`
 (a delivered notification carries no `result.text`). macOS must also have granted permission (System
 Settings ▸ Notifications ▸ agterm), and Do Not Disturb / a Focus mode suppresses banners system-wide.
@@ -239,21 +239,21 @@ so the installer-added `source` line takes effect. For Pi, restart it or run `/r
 For OpenCode, restart it so it loads `~/.config/opencode/plugins/agterm-status.js`;
 the plugin installs only after OpenCode has created `~/.config/opencode`.
 The installed wrapper resolves the bundled `agtermctl` itself; a bare development build instead needs
-`agtermctl` on `PATH`. Moving or replacing agterm.app invalidates the path the installer baked in — the
+`agtermctl` on `PATH`. Moving or replacing agterm.app invalidates the path the installer baked in, the
 wrapper then falls back to `agtermctl` on `PATH`, and with nothing there the glyph silently stops
 updating. Re-run Help ▸ Install Agent Status Hooks… after moving the app, or install the CLI with
 Help ▸ Install Command Line Tool….
 
 ### "The agent-status glyph updates the wrong session"
 
-One session's glyph blinks/changes while the work is happening in a DIFFERENT session — typically when
+One session's glyph blinks/changes while the work is happening in a DIFFERENT session, typically when
 the agents run inside tmux (or a tmux-backed session manager like agent-deck). Cause: the working
 process inherited another session's `AGTERM_SESSION_ID`, and the agent-status hook targets whatever id
 it finds in its environment. The usual carrier is a long-lived daemon started from inside an agterm
-session — a tmux server captures the spawning shell's `AGTERM_*` into its GLOBAL environment
+session, a tmux server captures the spawning shell's `AGTERM_*` into its GLOBAL environment
 (`tmux show-environment -g | grep AGTERM`), and every pane created on that server inherits it, no
-matter which client attaches. Diagnose: find the agent's pid and check its real environment —
-`ps eww <pid> | tr ' ' '\n' | grep AGTERM_SESSION_ID` — if the id is not the session the process
+matter which client attaches. Diagnose: find the agent's pid and check its real environment,
+`ps eww <pid> | tr ' ' '\n' | grep AGTERM_SESSION_ID`, if the id is not the session the process
 lives in, it leaked. Fix a poisoned tmux server without restarting it:
 `for v in AGTERM_ENABLED AGTERM_PANE AGTERM_PANE_ID AGTERM_SESSION_ID AGTERM_SOCKET AGTERM_WINDOW_ID AGTERM_WORKSPACE_ID; do tmux set-environment -g -r "$v"; done`,
 then restart the affected panes/processes (a respawn is enough; existing processes keep their
@@ -278,22 +278,22 @@ by Ghostty's shell integration, which is injected into the shell agterm spawns a
 shell replacing itself. A `.zshrc` that `exec`s a wrapper (Amazon Q CLI, Kiro CLI, Fig) replaces it before
 the first prompt, so `currentCwd` is never written and every cwd consumer falls back to the creation
 directory: restore, the directory under the session name, `session reveal`, and `{AGT_SESSION_PWD}`.
-Confirm with `cd` then `agtermctl tree --json` — the session's `cwd` does not follow the `cd`. Fix in
+Confirm with `cd` then `agtermctl tree --json`, the session's `cwd` does not follow the `cd`. Fix in
 `.zshrc`, below the block that replaced the shell:
 `[[ -n "$GHOSTTY_RESOURCES_DIR" ]] && builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"`
 (a no-op where it already loaded; bash, fish and nushell have their own files in that directory).
 
 Three neighbouring cases share the cause; the block covers all but the last. `exec zsh` at a prompt
-replaces a shell that already reported, so the cwd FREEZES at that moment rather than never being set —
+replaces a shell that already reported, so the cwd FREEZES at that moment rather than never being set,
 the replacement reads `.zshrc`, so the block fixes it. `sudo -E zsh` and other nested shells are children,
 not replacements: the cwd stays frozen while one runs, then the outer shell resumes at its next prompt. A shell inside tmux
-needs the block AND a tmux setting — tmux is a terminal rather than a passthrough, so the pane shell's
+needs the block AND a tmux setting, tmux is a terminal rather than a passthrough, so the pane shell's
 report reaches tmux, which forwards it on only with its `osc7` terminal feature on, and its default
 `terminal-features` does not grant that to `xterm-ghostty`: add
 `set -as terminal-features ',xterm-ghostty:osc7'` to `~/.tmux.conf` and restart the tmux server.
 
 Separate limit, unrelated to the block: the program runs on the wrapper's inner pty, which agterm cannot
-see into, so the capture never reaches it and restore cannot bring that program back — pin it with
+see into, so the capture never reaches it and restore cannot bring that program back, pin it with
 `session restore '<command>'` instead.
 
 ### "⌘-hover does not underline links inside tmux or vim"
@@ -320,7 +320,7 @@ off for every program, trading in-program mouse support for always-on selection 
 
 1. **Never run any `gh` command without the user's explicit approval in this conversation.** Drafting
    is fine; posting needs a clear go-ahead ("post it").
-2. **Check tooling first** — `gh auth status`. If `gh` is missing or not logged in, do NOT install or
+2. **Check tooling first**, `gh auth status`. If `gh` is missing or not logged in, do NOT install or
    authenticate it. Give the user the prefilled content plus the URL to paste it into:
    - issue: <https://github.com/umputun/agterm/issues/new>
    - discussion: <https://github.com/umputun/agterm/discussions/new>

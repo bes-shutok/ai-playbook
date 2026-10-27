@@ -4,7 +4,7 @@ Driving force: reliability
 Date filed: 2026-10-07
 Origin: Task 1 intermediate review (execution-claim-write-enforcement) backlog capture
 
-Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider); agents/skills/maintenance/failure-cap.md (check-side read-resolution sibling, landed 2026-10-25 by the child-outcome-evidence-resolution ad-hoc landing; the EXEC-PROMPTS prune receipt is the witness)
+Cluster: docs/history/plans/completed/2026-10-10-contract-single-sourcing.md (the same drift family: copied contracts disagreeing across surfaces; this row is a claims-surface instance that stays a separate small plan unless that family's plan budget fits a rider); agents/skills/maintenance/failure-cap.md (check-side read-resolution sibling, landed 2026-10-25 by the child-outcome-evidence-resolution ad-hoc landing; the EXEC-PROMPTS prune receipt is the witness); the sweep landedness leg's subject-grammar defect is covered (matcher widened to the recognized LANDING_CLAIM_PREFIXES forms, EXEC-PROMPTS entry claim-sweep-landing-subject-grammar-mismatch)
 
 ## Finding
 

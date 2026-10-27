@@ -545,6 +545,16 @@ def heading_slug(line: str) -> str | None:
     return slug or None
 
 
+def receipt_compare_slug(slug: str) -> str:
+    """The heading slug's first whitespace-delimited token, the compare
+    form for receipt slugs: every receipt grammar captures a single
+    token (``(\\S+)``), while legacy headings carry an origins suffix
+    (``<slug> (origins: ...)``), so a receipt naming the leading slug
+    witnesses the removal and the fail-closed no-receipt arm is
+    unchanged."""
+    return slug.split(None, 1)[0]
+
+
 def fence_state_before(lines: list[str], start_line: int) -> bool:
     """The file's fence state before its 1-based line ``start_line``: an
     odd count of fence lines above the hunk start means the hunk's region
@@ -751,6 +761,104 @@ def newly_added_receipt_pairs(
     return added
 
 
+def missing_ledger_pairs(old_text: str, new_text: str) -> list[tuple[str, str]]:
+    """(slug, token) receipt-ledger pairs present in ``old_text`` but
+    missing from ``new_text``: the per-log ``(slug, token)`` count delta
+    walked in old-image order, so only a genuinely deleted line counts
+    and a pre-existing identical line never does. The mirror of
+    ``newly_added_receipt_pairs`` for the pending-removal warning."""
+    new = Counter(LEDGER_RECEIPT_LINE_RE.findall(new_text))
+    removed: list[tuple[str, str]] = []
+    for pair in LEDGER_RECEIPT_LINE_RE.findall(old_text):
+        if new.get(pair, 0):
+            new[pair] -= 1
+        else:
+            removed.append(pair)
+    return removed
+
+
+def _pending_layer_text(
+    repo_root: Path, log_rel: str, layer: str
+) -> str:
+    """One pending layer's newer image of the log: the index blob for
+    the ``index`` layer (``git show :<path>``) and the working-tree file
+    for the ``worktree`` layer. An image with no log (never created, or
+    the whole file pending-deleted at that layer) reads as the empty
+    string, so a whole-file pending deletion compares against an empty
+    image and its receipt removals still warn at that layer; a read
+    failure other than plain absence raises."""
+    if layer == "index":
+        proc = run_git(repo_root, "show", f":{log_rel}")
+        if proc.returncode != 0:
+            # Both absence shapes read as an empty image: a path git
+            # never knew ("does not exist") and a path staged as deleted
+            # ("exists on disk, but not in the index").
+            if "does not exist" in proc.stderr or "not in the index" in proc.stderr:
+                return ""
+            raise AuditToolError(
+                f"git show :{log_rel} failed: {proc.stderr.strip()}"
+            )
+        return proc.stdout
+    path = repo_root / log_rel
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def pending_receipt_removal_warnings(
+    repo_root: Path, log_rel: str, head_short: str, out: TextIO
+) -> int:
+    """Warning-only pending-receipt-removal scan for one rolling log:
+    compare the log's HEAD image against the index (the ``index`` layer)
+    and the index against the working tree (the ``worktree`` layer), and
+    report each deleted receipt-ledger line with its slug, log path,
+    layer, and the audited HEAD identity. A log absent from an image
+    reads as empty there (a whole-file pending deletion still warns;
+    a log absent at HEAD has no older image and cannot lose receipts).
+    Read failures emit one ``PENDING-SCAN-WARNING`` line and never
+    change the committed audit's exit or outcome — the HEAD image's
+    own NON-ABSENCE failure follows the same fail-open-with-a-warning
+    shape (a log absent at HEAD is the benign no-older-image case and
+    stays silent). The absence probes match the git stderr shapes
+    "does not exist" / "not in the index" / "does not exist in"; an
+    unmatched localized message degrades to the same explicit warning.
+    Returns the warnings emitted."""
+    warnings = 0
+    try:
+        index_text = _pending_layer_text(repo_root, log_rel, "index")
+        worktree_text = _pending_layer_text(repo_root, log_rel, "worktree")
+        head_proc = run_git(repo_root, "show", f"HEAD:{log_rel}")
+    except (AuditToolError, subprocess.TimeoutExpired, OSError, UnicodeDecodeError) as exc:
+        out.write(f"PENDING-SCAN-WARNING: {log_rel}: {exc}\n")
+        return 1
+    head_text = head_proc.stdout
+    if head_proc.returncode != 0:
+        if "does not exist" in head_proc.stderr:
+            # Benign absence: the log was never committed (a brand-new
+            # sibling), so no older image exists and no receipts can be
+            # pending-deleted against it.
+            head_text = ""
+        else:
+            out.write(
+                f"PENDING-SCAN-WARNING: {log_rel}: "
+                f"git show HEAD failed: {head_proc.stderr.strip()}\n"
+            )
+            warnings += 1
+            head_text = ""
+    for layer, old_text, new_text in (
+        ("index", head_text, index_text),
+        ("worktree", index_text, worktree_text),
+    ):
+        for slug, token in missing_ledger_pairs(old_text, new_text):
+            warnings += 1
+            out.write(
+                f"PENDING-RECEIPT-REMOVAL: {slug} -> {token} "
+                f"{log_rel} {layer} (HEAD {head_short})\n"
+            )
+    return warnings
+
+
 def walk_audit_commits(
     repo_root: Path, commits: list[str], log_rels: list[str], out: TextIO
 ) -> tuple[int, int, int, int]:
@@ -843,7 +951,8 @@ def walk_audit_commits(
                     (
                         token
                         for rslug, token in receipts
-                        if rslug == slug and commit_resolves(repo_root, token)
+                        if rslug == receipt_compare_slug(slug)
+                        and commit_resolves(repo_root, token)
                     ),
                     None,
                 )
@@ -867,7 +976,8 @@ def walk_audit_commits(
                     (
                         token
                         for rslug, token in added_receipts
-                        if rslug == slug and token == "landing"
+                        if rslug == receipt_compare_slug(slug)
+                        and token == "landing"
                     ),
                     None,
                 )
@@ -881,7 +991,7 @@ def walk_audit_commits(
                     (
                         token
                         for rslug, token in LEDGER_RECEIPT_LINE_RE.findall(post_text)
-                        if rslug == slug
+                        if rslug == receipt_compare_slug(slug)
                         and ledger_token_resolves(repo_root, sha, token)
                     ),
                     None,
@@ -940,6 +1050,32 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
         return write_tool_error(out, str(exc))
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError, UnicodeDecodeError) as exc:
         return write_tool_error(out, f"git plumbing failure: {exc}")
+    # The pending-removal warning scan (warning-only, the
+    # warn-pending-prompt-log-receipt-removals plan): receipt-ledger
+    # lines deleted in the index or working tree but not yet committed
+    # are invisible to the committed walk above, so each rolling log is
+    # scanned per layer after it. Findings ride the existing warning
+    # count and never change the committed classifications, exit, or
+    # OUTCOME; a pending-scan read failure emits its own warning line
+    # and likewise never becomes a stop or tool error.
+    try:
+        head_ident = run_git(repo_root, "rev-parse", "--short", "HEAD")
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return write_tool_error(out, f"git plumbing failure: {exc}")
+    head_short = head_ident.stdout.strip()
+    if head_ident.returncode != 0:
+        # The same fail-open-with-a-warning shape the scan's own reads
+        # use: the identity degrades to empty and the failure is named.
+        out.write(
+            "PENDING-SCAN-WARNING: HEAD: "
+            f"git rev-parse --short HEAD failed: {head_ident.stderr.strip()}\n"
+        )
+        warnings += 1
+        head_short = ""
+    for rel in log_rels:
+        warnings += pending_receipt_removal_warnings(
+            repo_root, rel, head_short, out
+        )
     out.write(
         f"prune-audit summary: {removals} removals "
         f"({ledger_receipts} by log ledger) across {len(commits)} "

@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-07, code review r1 address round (investigate-origin-independent-eligibility)
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low
 

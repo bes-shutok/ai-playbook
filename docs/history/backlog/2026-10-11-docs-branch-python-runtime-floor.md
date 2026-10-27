@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-11, maintenance execution of plan 2026-10-10
 - **Status:** open
+Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** self-serving
@@ -9,7 +10,7 @@
 - **Driving force:** automation
 - **Severity:** low; the sync can be completed by selecting the configured Python 3.14 environment, but the documented canonical command fails with the host's default Python 3.9.
 - **Cluster:** `docs/history/backlog/2026-10-11-done-sensitive-scan-neutral-token-assignment.md`; `docs/history/backlog/2026-10-11-done-target-state-learn-commit-closeout.md` (closeout-path friction; this row is interpreter selection, the sibling is a scan false positive).
-Cluster: docs/history/backlog/2026-10-22-done-docs-restore-untracked-record-loss.md (same surface: the docs-branch sync runner; that row investigates an unattributed mid-run record deletion near the sync pass)
+Cluster: none (the sibling 2026-10-22 docs-branch record-loss row closed 2026-10-27: producer unresolved after enumeration, the done skill's post-sync untracked verification is the landed preservation arm)
 - **Source:** `scripts/docs_branch_sync.sh`, canonical runner startup; observed during done Step 2.
 
 ## Problem
