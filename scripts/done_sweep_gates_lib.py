@@ -408,7 +408,10 @@ def _resolve_dir(root: Path, key: str) -> Path:
         raise ValueError(
             f"cannot resolve {key} from .ai-playbook/facts.md "
             "(the facts block is the single source for repo paths; "
-            "complete the facts block before running the gates)"
+            "complete the facts block before running the gates; the file is "
+            "machine-local by design and never rides the branch, so copy the "
+            "primary checkout's facts block into this checkout (creating the "
+            ".ai-playbook parent first) and re-run)"
         )
     expanded = Path(raw).expanduser()
     if not expanded.is_absolute():
@@ -1338,11 +1341,28 @@ def _parse_marker_time(text: str) -> Optional[datetime]:
         return None
 
 
+CRASH_EVIDENCE_MAX_CHARS = 200
+
+
+def _traceback_detail(rows: list[str]) -> Optional[str]:
+    """The final non-empty row of a traceback stream: the exception detail
+    when one exists, never a later informative row lost to the header (a
+    degenerate header-only stream returns the header, there being no
+    better evidence available)."""
+    if not rows or not rows[0].startswith("Traceback (most recent call last):"):
+        return None
+    for row in reversed(rows):
+        if row.strip():
+            return row
+    return None
+
+
 def _manifest_exempts(ctx: GateContext, plan_rel: Path) -> bool:
     """execute-plan mechanical exemption: active manifest with a fresh
-    ``updated:`` line (no older than 24h). Stale or absent updated: never
-    exempts."""
-    slug = plan_rel.stem
+    ``updated:`` line (no older than 24h), resolved at the canonical feature
+    slug and owned only when its recorded ``plan_path`` exactly matches the
+    candidate. Stale or absent updated: never exempts."""
+    slug = plan_readiness.feature_slug(plan_rel)
     manifest = ctx.execute_plan_dir / slug / "manifest.md"
     if not manifest.is_file():
         return False
@@ -1352,13 +1372,18 @@ def _manifest_exempts(ctx: GateContext, plan_rel: Path) -> bool:
         return False
     state = None
     updated: Optional[datetime] = None
+    recorded_plan_path: Optional[str] = None
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("workflow_state:"):
             state = stripped.split(":", 1)[1].strip()
         elif stripped.startswith("updated:"):
             updated = _parse_marker_time(stripped.split(":", 1)[1])
+        elif stripped.startswith("plan_path:"):
+            recorded_plan_path = stripped.split(":", 1)[1].strip()
     if state != "active" or updated is None:
+        return False
+    if recorded_plan_path != str(plan_rel):
         return False
     if updated.tzinfo is None:
         updated = updated.replace(tzinfo=timezone.utc)
@@ -1580,8 +1605,12 @@ def gate_plan_readiness(ctx: GateContext) -> GateResult:
         elif stderr_rows:
             # A crashed validator prints its traceback on stdout and its
             # message on stderr: report the message, never the bare
-            # traceback header.
-            first_failure = stderr_rows[0]
+            # traceback header. A traceback wholly on stderr reports its
+            # final exception detail, never the header row.
+            stderr_detail = _traceback_detail(stderr_rows)
+            first_failure = (
+                stderr_detail if stderr_detail is not None else stderr_rows[0]
+            )
         elif stdout_rows:
             first_failure = stdout_rows[-1]
         else:
@@ -1590,10 +1619,14 @@ def gate_plan_readiness(ctx: GateContext) -> GateResult:
         if label is None:
             # The contract's no-line rule wins over the exit code: a child
             # run with no final OUTCOME line (a crash or a legacy shape) is
-            # never a silent pass.
+            # never a silent pass. The diagnostic excerpt is capped, the
+            # useful end retained.
+            evidence = first_failure
+            if len(evidence) > CRASH_EVIDENCE_MAX_CHARS:
+                evidence = evidence[-CRASH_EVIDENCE_MAX_CHARS:]
             tool_errors.append(
                 f"{plan_rel} (no final OUTCOME line, child exit "
-                f"{proc.returncode}; evidence: {first_failure})"
+                f"{proc.returncode}; evidence: {evidence})"
             )
         elif label == "pass" and proc.returncode == 0:
             passed.append(str(plan_rel))

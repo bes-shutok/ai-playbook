@@ -5218,13 +5218,48 @@ class ReadinessSingleFileUnchangedTest(unittest.TestCase):
         with the plan-private step 9 probes, and the former exit-0
         byte-identical pin encoded the pre-extension surface (its own
         docstring records that history; the measured 7-of-16 corpus
-        refusal rate in that plan's Gate delta prices this flip)."""
+        refusal rate in that plan's Gate delta prices this flip). The
+        gate runs against a per-test temp root carrying the facts TOML
+        block and the landed plan's bytes, so the pinned refusal bites
+        the real gate surface in any checkout (a fresh worktree without
+        the gitignored facts file included)."""
+        root = Path(tempfile.mkdtemp(prefix="singlefile-envelope-fixture-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / ".ai-playbook").mkdir()
+        (root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        plans_dir = root / "plans"
+        reviews_dir = root / "reviews"
+        plans_dir.mkdir()
+        reviews_dir.mkdir()
+        fixture_plan = plans_dir / _LANDED_COMPLETED_PLAN.name
+        fixture_plan.write_bytes(_LANDED_COMPLETED_PLAN.read_bytes())
+        # The ownership probe requires every Files: path the plan cites to
+        # exist under the fixture root (the plan carries no *(new)*
+        # annotations), so materialize them before the gate runs.
+        for cited in re.findall(
+            r"^- `([^`]+)`", fixture_plan.read_text(encoding="utf-8"), flags=re.M
+        ):
+            cited_path = root / cited
+            if not cited_path.exists():
+                cited_path.parent.mkdir(parents=True, exist_ok=True)
+                cited_path.touch()
         script = Path(__file__).resolve().parent / "plan_readiness.py"
         proc = subprocess.run(
-            [sys.executable, str(script), "--pre-round", str(_LANDED_COMPLETED_PLAN)],
+            [sys.executable, str(script), "--pre-round", str(fixture_plan)],
             capture_output=True,
             text=True,
             timeout=60,
+            cwd=str(root),
+            # The gate's repo_root walk honors GIT_DIR/GIT_WORK_TREE; strip
+            # the GIT_* ambient keys so the child anchors at the fixture
+            # root in every environment.
+            env={
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("GIT_")
+            },
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn(

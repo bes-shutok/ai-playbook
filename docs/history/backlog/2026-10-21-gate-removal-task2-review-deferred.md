@@ -3,6 +3,7 @@
 Cluster: gate-removal-closeout-accounting
 Cluster: docs/history/backlog/2026-10-27-plan-authoring-branch-manifest-handoff.md (shared gate-removal branch-accounting surface)
 Cluster: docs/maintenance/development_lessons.md lesson 177 (the covered origin row's capture; same plan cluster gate-removal-closeout-accounting)
+Cluster: docs/history/backlog/2026-10-28-zero-plan-branch-only-migration-manifest.md (shared surface: the branch-only adjudicator's manifest contract; that row's fix emits the manifest this row's deferred skip-shape notes describe)
 Status: open
 Origin: plan 2026-10-19-gate-removal-closeout-accounting Task 2 tier-M review (non-blocking findings deferred at the light boundary, 2026-10-21).
 

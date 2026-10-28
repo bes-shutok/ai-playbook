@@ -4292,7 +4292,14 @@ def _sibling_module(name: str):
 
 def _corrections_round(payload: dict) -> int | None:
     """The seal round number from the sidecar's dual-typed ``round`` field
-    (``"r1"`` or an integer); None when it does not resolve."""
+    (``"r1"`` or an integer); None when it does not resolve. The parser is
+    single-homed in corrections_record.sidecar_round (the stdlib-only
+    leaf both surfaces consume); this wrapper keeps the local name for the
+    call sites and falls back to the local copy only when the sibling
+    module is not importable beside this deployment."""
+    module = _sibling_module("corrections_record")
+    if module is not None:
+        return module.sidecar_round(payload)
     value = payload.get("round")
     if isinstance(value, bool):
         return None
@@ -17462,6 +17469,19 @@ def _grading_plan_fixture(cleanup, *, round_number: int = 1,
                   "hop1": hop1, "plan_rel": plan_rel, "slug": slug}
 
 
+def _reviewed_scope_digest(repo, base, head):
+    """The reviewed-scope digest for a selftest fixture: the byte
+    function's bytes outcome hashed, so every fixture-minted digest is
+    minted through the same function the production sites re-derive with
+    (code-family-cert-digest-scope plan, Task 1). Asserts the bytes
+    outcome: a fixture range that filters to zero reviewed bytes is a
+    fixture bug, never a digest over empty bytes."""
+    cr = _sibling("corrections_record")
+    outcome, data = cr.reviewed_scope_bytes(repo, base, head)
+    assert outcome == cr.SCOPE_BYTES, (outcome, base, head)
+    return cr.sha256_hex(data)
+
+
 def _grading_code_fixture(cleanup, *, fix_bytes=_CODE_V3):
     """The certified code range (base commit and two content commits) with
     the round-close commit and the seal entry between the certified head and
@@ -17471,15 +17491,15 @@ def _grading_code_fixture(cleanup, *, fix_bytes=_CODE_V3):
     b0 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V0, "base")
     c1 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V1, "feature one")
     c2 = repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V2, "feature two")
-    certified = cr.diff_bytes(repo.root, b0, c2)
+    certified_digest = _reviewed_scope_digest(repo.root, b0, c2)
     close = repo.commit_allow_empty("round 1 close")
     entry = repo.append_seal_entry(
         _CORRECTIONS_CODE_SLUG, 1, _CORRECTIONS_SRC_REL, c2,
-        cr.sha256_hex(certified), close,
-        reviewed=(b0, c2, cr.sha256_hex(certified)))
+        certified_digest, close,
+        reviewed=(b0, c2, certified_digest))
     c3 = repo.commit_file(_CORRECTIONS_SRC_REL, fix_bytes, "the fix")
     return repo, {"b0": b0, "c1": c1, "c2": c2, "close": close,
-                  "entry": entry, "c3": c3, "certified": certified}
+                  "entry": entry, "c3": c3, "certified": certified_digest}
 
 
 def _grading_v1_payload(source_kind: str, digest: str, *, slug: str,
@@ -18265,9 +18285,9 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "--fix-commits", code_fx["c2"], code_fx["c3"],
         "--base", code_fx["b0"], "--repo", str(code_repo.root),
         "--emit-row"))
-    code_declared = cr.sha256_hex(code_fx["certified"])
-    code_expected = cr.sha256_hex(cr.diff_bytes(
-        code_repo.root, code_fx["b0"], code_fx["c3"]))
+    code_declared = code_fx["certified"]
+    code_expected = _reviewed_scope_digest(code_repo.root, code_fx["b0"],
+                                           code_fx["c3"])
     code_accept_result = _graded_staging_call(
         _grading_stage(
             root, "code-accept",
@@ -18294,23 +18314,23 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     # mint a row over an unclassified delta, and this arm witnesses the
     # validator refusing the same claim after re-deriving the hop diff.
     doc_row = {**code_row,
-               "before_digest": cr.sha256_hex(doc_fx["certified"]),
-               "after_digest": cr.sha256_hex(cr.diff_bytes(
-                   doc_repo.root, doc_fx["c2"], doc_fx["c3"])),
+               "before_digest": doc_fx["certified"],
+               "after_digest": _reviewed_scope_digest(
+                   doc_repo.root, doc_fx["c2"], doc_fx["c3"]),
                "before_base": doc_fx["b0"], "before_head": doc_fx["c2"],
                "after_base": doc_fx["c2"], "after_head": doc_fx["c3"]}
     doc_result = _graded_staging_call(
         _grading_stage(
             root, "code-docstring",
-            _grading_v1_payload("code", cr.sha256_hex(doc_fx["certified"]),
+            _grading_v1_payload("code", doc_fx["certified"],
                                 slug=_CORRECTIONS_CODE_SLUG)
             | {"extensions": {
                 "corrections": [doc_row],
                 "certified_range": {"base": doc_fx["b0"],
                                     "head": doc_fx["c2"]}}}),
         hard=True,
-        expected_digest=cr.sha256_hex(cr.diff_bytes(
-            doc_repo.root, doc_fx["b0"], doc_fx["c3"])),
+        expected_digest=_reviewed_scope_digest(
+            doc_repo.root, doc_fx["b0"], doc_fx["c3"]),
         source_kind="code",
         corrections_context=_code_context(doc_repo),
     )
@@ -18324,14 +18344,14 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     range_result = _graded_staging_call(
         _grading_stage(
             root, "code-range",
-            _grading_v1_payload("code", cr.sha256_hex(range_fx["certified"]),
+            _grading_v1_payload("code", range_fx["certified"],
                                 slug=_CORRECTIONS_CODE_SLUG)
             | {"extensions": {
                 "certified_range": {"base": range_fx["b0"],
                                     "head": range_fx["c1"]}}}),
         hard=True,
-        expected_digest=cr.sha256_hex(cr.diff_bytes(
-            range_repo.root, range_fx["b0"], range_fx["c3"])),
+        expected_digest=_reviewed_scope_digest(
+            range_repo.root, range_fx["b0"], range_fx["c3"]),
         source_kind="code",
         corrections_context=_code_context(range_repo),
     )
@@ -18344,11 +18364,11 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     code_stale_result = _graded_staging_call(
         _grading_stage(
             root, "code-stale",
-            _grading_v1_payload("code", cr.sha256_hex(range_fx["certified"]),
+            _grading_v1_payload("code", range_fx["certified"],
                                 slug=_CORRECTIONS_CODE_SLUG)),
         hard=True,
-        expected_digest=cr.sha256_hex(cr.diff_bytes(
-            range_repo.root, range_fx["b0"], range_fx["c3"])),
+        expected_digest=_reviewed_scope_digest(
+            range_repo.root, range_fx["b0"], range_fx["c3"]),
         source_kind="code",
         corrections_context=_code_context(range_repo),
     )
@@ -18406,7 +18426,7 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "--base", cli_fx["b0"], "--repo", str(cli_repo.root),
         "--emit-row"))
     cli_payload = _grading_v1_payload(
-        "code", cr.sha256_hex(cli_fx["certified"]),
+        "code", cli_fx["certified"],
         slug=_CORRECTIONS_CODE_SLUG)
     cli_payload["extensions"] = {
         "corrections": [cli_row],
@@ -18428,7 +18448,7 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     )
 
     range_cli_payload = _grading_v1_payload(
-        "code", cr.sha256_hex(cli_fx["certified"]),
+        "code", cli_fx["certified"],
         slug=_CORRECTIONS_CODE_SLUG)
     range_cli_payload["extensions"] = {
         "corrections": [cli_row],
@@ -18449,7 +18469,7 @@ def _selftest_corrections_grading(root: Path, check) -> None:
 
     unresolvable_cli_row = dict(cli_row, after_head="f" * 40)
     unresolvable_payload = _grading_v1_payload(
-        "code", cr.sha256_hex(cli_fx["certified"]),
+        "code", cli_fx["certified"],
         slug=_CORRECTIONS_CODE_SLUG)
     unresolvable_payload["extensions"] = {
         "corrections": [unresolvable_cli_row],
@@ -18486,6 +18506,182 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     )
 
     # ------------------------------------------------------------------
+    # The digest-scope arms (code-family-cert-digest-scope plan, Task 1):
+    # a bookkeeping-path append riding the hop chain's last commit leaves
+    # the validator's digest unchanged (exit 0); a reviewed source-path
+    # commit after certification moves it (exit 1 stale); and a
+    # corrections_record copy without the byte function degrades the
+    # code-source arm to the named-gap tool error, never a crash.
+    # ------------------------------------------------------------------
+    scope_repo = cr.build_scratch_repo(cleanup)
+    scope_b0 = scope_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V0, "base")
+    scope_c1 = scope_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V1,
+                                      "feature one")
+    scope_close = scope_repo.commit_allow_empty("round 1 close")
+    scope_digest = _reviewed_scope_digest(scope_repo.root, scope_b0,
+                                          scope_c1)
+    scope_repo.append_seal_entry(
+        _CORRECTIONS_CODE_SLUG, 1, _CORRECTIONS_SRC_REL, scope_c1,
+        scope_digest, scope_close,
+        reviewed=(scope_b0, scope_c1, scope_digest))
+    # The hop's commit rides the residual-row append (a tracked write
+    # under the bookkeeping prefixes) beside the comment-only source fix:
+    # the minted hop chain ends at the append commit at HEAD.
+    scope_repo.write_file(_CORRECTIONS_SRC_REL,
+                          b"def f():\n    return 2\n# reviewed note\n")
+    scope_repo.write_file("docs/history/backlog/scope-residual-r1.md",
+                          "# residual row\n\nbookkeeping append\n")
+    scope_append = scope_repo.commit_all("comment-only fix plus residual "
+                                         "append")
+    scope_row = _minted_row(_run_cli(
+        "code_delta_classifier.py",
+        "--fix-commits", scope_c1, scope_append,
+        "--base", scope_b0, "--repo", str(scope_repo.root),
+        "--emit-row"))
+    scope_payload = _grading_v1_payload("code", scope_digest,
+                                        slug=_CORRECTIONS_CODE_SLUG)
+    scope_payload["extensions"] = {
+        "corrections": [scope_row],
+        "certified_range": {"base": scope_b0, "head": scope_c1},
+    }
+    scope_md = _grading_stage(root, "cli-scope-append", scope_payload,
+                              kind="code")
+    scope_rc, scope_out, scope_err = cli_call(
+        ["--hard", str(scope_md),
+         "--source-code-repo", str(scope_repo.root),
+         "--source-code-plan", str(scope_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: a bookkeeping-path append riding the hop chain's last commit leaves the instrument digest unchanged (exit 0)",
+        scope_rc == 0 and scope_out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    edit_repo, edit_fx = _grading_code_fixture(cleanup)
+    edit_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V2, "reviewed edit")
+    edit_payload = _grading_v1_payload("code", edit_fx["certified"],
+                                       slug=_CORRECTIONS_CODE_SLUG)
+    edit_payload["extensions"] = {
+        "certified_range": {"base": edit_fx["b0"], "head": edit_fx["c2"]},
+    }
+    edit_md = _grading_stage(root, "cli-scope-source-edit", edit_payload,
+                             kind="code")
+    edit_rc, _edit_out, edit_err = cli_call(
+        ["--hard", str(edit_md),
+         "--source-code-repo", str(edit_repo.root),
+         "--source-code-plan", str(edit_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: a reviewed source-path commit after certification stales the record (exit 1)",
+        edit_rc == 1 and "source_digest is stale" in edit_err,
+    )
+
+    # Phase 3 fold arms (code-family-cert-digest-scope review, F1): the
+    # site's bookkeeping-only exit-2 branch and the no-chain re-pin had
+    # zero arms, so a whole-diff revert of the site's current-diff recipe
+    # left --selftest green. Each arm fails under that revert: the
+    # no-chain arm's re-pinned digest would stale (exit 1), and the
+    # refusal arm's exit-2 branch would never fire.
+    bk_repo = cr.build_scratch_repo(cleanup)
+    bk_b0 = bk_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V0, "base")
+    bk_c1 = bk_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V1,
+                                "feature one")
+    bk_close = bk_repo.commit_allow_empty("round 1 close")
+    bk_digest = _reviewed_scope_digest(bk_repo.root, bk_b0, bk_c1)
+    # The bookkeeping-only tail lands before the seal entry is written:
+    # the seal-write commit is itself reviewed-scope, so the moved tip
+    # the arm grades is pinned with --verification-head (the production
+    # re-pin operand, the certified range's covering tip), never the
+    # post-seal worktree tip. The sidecar digest is re-pinned over that
+    # moved tip through the byte function (the tail contributes no
+    # reviewed bytes), and no corrections chain is declared.
+    bk_repo.commit_file(
+        "docs/history/backlog/tail-row-r1.md",
+        "# tail row\n\nbookkeeping tail\n", "bookkeeping tail")
+    bk_tail = bk_repo.head()
+    bk_repo.append_seal_entry(
+        _CORRECTIONS_CODE_SLUG, 1, _CORRECTIONS_SRC_REL, bk_c1,
+        bk_digest, bk_close,
+        reviewed=(bk_b0, bk_c1, bk_digest))
+    bk_repinned = _reviewed_scope_digest(bk_repo.root, bk_b0, bk_tail)
+    bk_payload = _grading_v1_payload("code", bk_repinned,
+                                     slug=_CORRECTIONS_CODE_SLUG)
+    bk_payload["extensions"] = {
+        "certified_range": {"base": bk_b0, "head": bk_c1},
+    }
+    bk_md = _grading_stage(root, "cli-scope-bk-tail-nochain", bk_payload,
+                           kind="code")
+    bk_rc, bk_out, _bk_err = cli_call(
+        ["--hard", str(bk_md),
+         "--source-code-repo", str(bk_repo.root),
+         "--source-code-plan", str(bk_md.with_suffix(".stats.json")),
+         "--verification-head", bk_tail])
+    check(
+        "CLI code context: a bookkeeping-only tail commit past the certified range re-pins the sidecar digest with no corrections chain (exit 0)",
+        bk_rc == 0 and bk_out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    refusal_repo = cr.build_scratch_repo(cleanup)
+    rb0 = refusal_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V0, "base")
+    rc1 = refusal_repo.commit_file(_CORRECTIONS_SRC_REL, _CODE_V1,
+                                   "feature one")
+    rclose = refusal_repo.commit_allow_empty("round 1 close")
+    rdigest = _reviewed_scope_digest(refusal_repo.root, rb0, rc1)
+    rentry = refusal_repo.append_seal_entry(
+        _CORRECTIONS_CODE_SLUG, 1, _CORRECTIONS_SRC_REL, rc1,
+        rdigest, rclose,
+        reviewed=(rb0, rc1, rdigest))
+    refusal_repo.commit_file(
+        "docs/history/backlog/tail-row-r2.md",
+        "# tail row\n\nbookkeeping tail\n", "bookkeeping tail")
+    # Observed site code: SCOPE_BOOKKEEPING_ONLY over the sidecar's
+    # recorded range emits exit 2 (OUTCOME: indeterminate) naming the
+    # filters-to-zero refusal before any seal or digest comparison runs.
+    # The branch's precondition is the whole recorded range filtering to
+    # zero reviewed-scope bytes, so the re-pinned range here is the
+    # tail-side range (seal commit..bookkeeping tail): a reviewed source
+    # path inside the recorded range would keep the bytes non-zero and
+    # this branch unreachable (that shape stales instead, armed above as
+    # cli-scope-source-edit). The declared digest is never compared here;
+    # it carries the certified digest for fixture honesty only.
+    refusal_payload = _grading_v1_payload("code", rdigest,
+                                          slug=_CORRECTIONS_CODE_SLUG)
+    refusal_payload["extensions"] = {
+        "certified_range": {"base": rentry,
+                            "head": refusal_repo.head()},
+    }
+    refusal_md = _grading_stage(root, "cli-scope-bk-only-refusal",
+                                refusal_payload, kind="code")
+    refusal_rc, refusal_out, refusal_err = cli_call(
+        ["--hard", str(refusal_md),
+         "--source-code-repo", str(refusal_repo.root),
+         "--source-code-plan",
+         str(refusal_md.with_suffix(".stats.json"))])
+    check(
+        "CLI code context: a recorded range filtering to zero reviewed-scope bytes (bookkeeping-only) refuses at the site's bookkeeping-only branch (exit 2)",
+        refusal_rc == 2
+        and refusal_out.rstrip().endswith("OUTCOME: indeterminate")
+        and "filters to zero" in refusal_err
+        and "bookkeeping-only" in refusal_err,
+    )
+
+    vintage_repo, _vintage_fx = _grading_code_fixture(cleanup)
+    vintage_cr = _sibling_module("corrections_record")
+    vintage_saved = vintage_cr.reviewed_scope_bytes
+    del vintage_cr.reviewed_scope_bytes
+    try:
+        vintage_rc, vintage_out, vintage_err = cli_call(
+            ["--hard", str(scope_md),
+             "--source-code-repo", str(vintage_repo.root),
+             "--source-code-plan",
+             str(scope_md.with_suffix(".stats.json"))])
+    finally:
+        vintage_cr.reviewed_scope_bytes = vintage_saved
+    check(
+        "CLI code context: a corrections_record copy without the reviewed-scope byte function degrades to the named-gap tool error (exit 3), never a crash",
+        vintage_rc == 3 and "OUTCOME: tool_error" in vintage_out
+        and "reviewed_scope_bytes" in vintage_err
+        and "reviewed-scope byte function" in vintage_err,
+    )
+
+    # ------------------------------------------------------------------
     # Family-aware seal lookup and the explicit verification head
     # (certification-seal-landing-survival plan, Task 1): the graded arm
     # passes its parsed family to the seal loader and the verifier, and a
@@ -18500,11 +18696,11 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "## round 2",
         "artifact: %s" % _CORRECTIONS_SRC_REL,
         "round_start_commit: %s" % collision_fx["c2"],
-        "round_start_digest: %s" % cr.sha256_hex(collision_fx["certified"]),
+        "round_start_digest: %s" % collision_fx["certified"],
         "round_close_commit: %s" % collision_fx["close"],
         "reviewed_base: %s" % collision_fx["b0"],
         "reviewed_head: %s" % collision_fx["c2"],
-        "range_digest: %s" % cr.sha256_hex(collision_fx["certified"]),
+        "range_digest: %s" % collision_fx["certified"],
         "family: code",
         "staging_round: r2",
         "",
@@ -18516,13 +18712,13 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     ]) + "\n")
     collision_repo.commit_all("colliding seal rounds")
     collision_payload = _grading_v1_payload(
-        "code", cr.sha256_hex(collision_fx["certified"]),
+        "code", collision_fx["certified"],
         slug=_CORRECTIONS_CODE_SLUG, round_value="r2")
     collision_result = _graded_staging_call(
         _grading_stage(root, "code-collision", collision_payload,
                        kind="code"),
         hard=True,
-        expected_digest=cr.sha256_hex(collision_fx["certified"]),
+        expected_digest=collision_fx["certified"],
         source_kind="code",
         corrections_context=_code_context(collision_repo),
     )
@@ -18759,9 +18955,9 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "writer: scheduler-turn-writer",
         "operator_direction: accept the comment-only re-bind",
         "artifact: %s" % _CORRECTIONS_SRC_REL,
-        "before_digest: %s" % cr.sha256_hex(code_ack_fx["certified"]),
-        "after_digest: %s" % cr.sha256_hex(cr.diff_bytes(
-            code_ack_repo.root, code_ack_fx["c2"], code_ack_fx["c3"])),
+        "before_digest: %s" % code_ack_fx["certified"],
+        "after_digest: %s" % _reviewed_scope_digest(
+            code_ack_repo.root, code_ack_fx["c2"], code_ack_fx["c3"]),
     ]) + "\n")
     code_ack_receipt_path = root / "ack-receipt-r2-code.json"
     code_ack_receipt_path.write_text(json.dumps({
@@ -18781,7 +18977,7 @@ def _selftest_corrections_grading(root: Path, check) -> None:
         "# classifier gap\n\nproposal: a typography bucket covering hunk "
         "digest %s\n" % code_ack_row["hunks"][0]["digest"])
     code_ack_payload = _grading_v1_payload(
-        "code", cr.sha256_hex(code_ack_fx["certified"]),
+        "code", code_ack_fx["certified"],
         slug=_CORRECTIONS_CODE_SLUG)
     code_ack_payload["extensions"] = {
         "corrections": [code_ack_row],
@@ -20471,10 +20667,12 @@ def _main(argv: list[str] | None = None) -> int:
             "code artifact. "
             "Reads the local certification seal from the named source checkout "
             "(.ai-playbook/review-certs/<artifact-slug>.md), requires the "
-            "sidecar's recorded range to equal the seal's, regenerates the "
-            "reviewed diff and the current diff "
-            "(git diff <reviewed_base>...<head>), and grades the declared "
-            "corrections chain through the code verifier legs. Requires "
+            "sidecar's recorded range to equal the seal's, re-derives the "
+            "expected digest from the reviewed-scope bytes of "
+            "git diff <reviewed_base>...<head> through the byte function "
+            "(reviewed_scope_bytes; bookkeeping prefixes never hash), and "
+            "grades the declared corrections chain through the code "
+            "verifier legs. Requires "
             "--source-code-plan; mutually exclusive with the source-file "
             "flags."
         ),
@@ -20788,8 +20986,9 @@ def _main(argv: list[str] | None = None) -> int:
         # The code-source context (review-cert-graded-binding plan, Task 5):
         # read the certification seal's binding facts from the
         # named sidecar, re-derive the expected digest from the repository
-        # (git diff <reviewed_base>...<head>), and grade the declared
-        # corrections chain through the code verifier legs.
+        # (the reviewed-scope bytes of git diff <reviewed_base>...<head>),
+        # and grade the declared corrections chain through the code
+        # verifier legs.
         cr_module = _sibling_module("corrections_record")
         if cr_module is None:
             payload = {
@@ -20803,6 +21002,30 @@ def _main(argv: list[str] | None = None) -> int:
             else:
                 print("ERROR: corrections_record.py is not importable next "
                       "to this validator copy", file=sys.stderr)
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        # Rollout guard (code-family-cert-digest-scope plan, Task 1): a
+        # corrections_record copy predating the reviewed-scope byte
+        # function degrades to the named-gap tool error, never a crash on
+        # a mixed-vintage pair.
+        reviewed_scope_bytes = getattr(cr_module, "reviewed_scope_bytes",
+                                       None)
+        if reviewed_scope_bytes is None:
+            reason = (
+                "corrections_record.py predates the reviewed-scope byte "
+                "function (reviewed_scope_bytes): a mixed-vintage "
+                "validator/corrections_record pair cannot derive the "
+                "code-family digests; upgrade corrections_record.py next "
+                "to this validator copy"
+            )
+            if args.json:
+                print(json.dumps({
+                    "ok": False,
+                    "errors": [reason],
+                    "outcome": OUTCOME_LABELS[3],
+                }))
+            else:
+                print("ERROR: %s" % reason, file=sys.stderr)
                 print("OUTCOME: %s" % OUTCOME_LABELS[3])
             return 3
         code_sidecar_path = Path(args.source_code_plan).expanduser().resolve()
@@ -20859,19 +21082,52 @@ def _main(argv: list[str] | None = None) -> int:
                 "the certification seal path"
             )
         source_kind = "code"
+        # The explicit verification head is validated BEFORE the current
+        # diff is derived: the validated OID threads into the digest
+        # computation and the corrections context (the origin row's
+        # literal-HEAD gap), so a landing-pinned record never re-derives
+        # its expected digest at the unreviewed worktree HEAD.
+        code_head = "HEAD"
+        if args.verification_head is not None:
+            head_error = _validate_verification_head(
+                args.verification_head, code_repo)
+            if head_error is not None:
+                return verification_head_tool_error(head_error)
+            code_head = args.verification_head.strip()
         code_range = _extensions_member(
             code_sidecar, CERTIFIED_RANGE_EXTENSION_KEY)
         if isinstance(code_range, dict) and \
                 isinstance(code_range.get("base"), str):
-            # The current diff recipe: git diff <reviewed_base>...<head>;
+            # The current-diff recipe: the reviewed-scope bytes of
+            # git diff <reviewed_base>...<head> through the byte function;
             # a plumbing failure over the resolved refs classifies
-            # indeterminate naming the diff.
-            current_diff = cr_module.diff_bytes(
-                code_repo, code_range["base"], "HEAD")
-            if current_diff is None:
+            # indeterminate naming the diff, and a range filtering to zero
+            # reviewed-scope bytes is the distinct bookkeeping-only
+            # outcome (never conflated with plumbing).
+            scope_outcome, current_diff = reviewed_scope_bytes(
+                code_repo, code_range["base"], code_head)
+            if scope_outcome == cr_module.SCOPE_UNRESOLVED:
                 reason = (
-                    "git diff %s...HEAD failed over the certified range's "
-                    "base in %s" % (code_range["base"], code_repo)
+                    "git diff %s...%s failed over the certified range's "
+                    "base in %s" % (code_range["base"], code_head,
+                                    code_repo)
+                )
+                if args.json:
+                    print(json.dumps({
+                        "ok": False,
+                        "errors": [reason],
+                        "outcome": OUTCOME_LABELS[2],
+                    }))
+                else:
+                    print("INDETERMINATE: %s" % reason, file=sys.stderr)
+                    print("OUTCOME: %s" % OUTCOME_LABELS[2])
+                return 2
+            if scope_outcome == cr_module.SCOPE_BOOKKEEPING_ONLY:
+                reason = (
+                    "the certified range %s...%s filters to zero "
+                    "reviewed-scope bytes (bookkeeping-only) in %s; no "
+                    "reviewed-scope digest binds the freshness comparison"
+                    % (code_range["base"], code_head, code_repo)
                 )
                 if args.json:
                     print(json.dumps({
@@ -20888,16 +21144,10 @@ def _main(argv: list[str] | None = None) -> int:
             "family": "code",
             "repo": code_repo,
             "artifact_path": None,
-            "head": "HEAD",
+            "head": code_head,
             "slug": code_slug,
             "witness_path": args.ack_witness or None,
         }
-        if args.verification_head is not None:
-            head_error = _validate_verification_head(
-                args.verification_head, code_repo)
-            if head_error is not None:
-                return verification_head_tool_error(head_error)
-            corrections_context["head"] = args.verification_head.strip()
 
     # Outcome contract: the CLI's own input must be openable. A missing or
     # unreadable staging path is tool error (exit 3) naming the path, never

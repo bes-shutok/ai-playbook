@@ -1,7 +1,7 @@
 # Backlog: hard-mode clause pointer coverage extensions
 
 Filed: 2026-10-23
-Status: open
+Status: covered (docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md)
 Driving force: usability
 
 Origin: Task 1 intermediate review of plan 2026-10-22-review-staging-hard-validator-fail-fast-iteration (Phase 3 r1 finding F4 class). The SKILL_CLAUSE_POINTERS table landed with 20 exact mappings plus a bare `(review-staging SKILL.md)` fallback; the reviewer identified high-value families still riding the fallback although their owning sections exist:

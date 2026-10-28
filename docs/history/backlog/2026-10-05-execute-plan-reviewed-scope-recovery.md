@@ -1,5 +1,6 @@
 # Execute-plan cannot resume after a reviewed task scope widens
 
+Status: covered (docs/history/plans/2026-10-05-execute-plan-reviewed-scope-recovery.md)
 Cluster: docs/history/backlog/2026-10-10-execute-plan-plan-digest-handoff-drift.md (shared surface: execute-plan scope and recovery transitions)
 
 ## Problem

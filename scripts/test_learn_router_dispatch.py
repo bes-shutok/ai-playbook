@@ -43,6 +43,8 @@ EXPECTED_DISPATCH_ORDER = [
 
 #: The frozen heading contract per module: the pre-split SKILL.md section
 #: headings each module must carry byte-identically, in order, and no others.
+#: Post-split arrivals are pinned too and noted inline (Step 1.9 arrived with
+#: the project-issue-backlog-capture section, commit c71465ef1; extended 2026-10-28).
 EXPECTED_MODULE_HEADINGS = {
     "step-1-extract.md": [
         "## Step 1: Extract Lessons",
@@ -54,6 +56,7 @@ EXPECTED_MODULE_HEADINGS = {
         "## Step 1.6: Internet Research Capture",
         "## Step 1.7: Proper-Noun Justification Review (required before any lesson is written)",
         "## Step 1.8: Skill-usage issue capture",
+        "## Step 1.9: Project issue backlog capture",
     ],
     "step-2-placement.md": [
         "## Step 2: Placement Rules",

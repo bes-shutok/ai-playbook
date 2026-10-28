@@ -182,14 +182,21 @@ def fresh_iso(hours_ago: float = 0.0) -> str:
     return dt.isoformat(timespec="seconds").replace("+00:00", "+0000")
 
 
-def write_manifest(root: Path, slug: str, updated: str, state: str = "active") -> Path:
+def write_manifest(
+    root: Path,
+    slug: str,
+    updated: str,
+    state: str = "active",
+    plan_path: str | None = None,
+) -> Path:
     session_dir = root / "docs" / "tmp" / "execute-plan" / slug
     session_dir.mkdir(parents=True, exist_ok=True)
     manifest = session_dir / "manifest.md"
     manifest.write_text(
         f"# Execute-plan session: {slug}\n\n"
         f"workflow_state: {state}\n"
-        f"updated: {updated}\n",
+        f"updated: {updated}\n"
+        + (f"plan_path: {plan_path}\n" if plan_path is not None else ""),
         encoding="utf-8",
     )
     return manifest
@@ -474,7 +481,12 @@ def test_plan_readiness_candidates(tmp_path, sweep_env):
     (root / gamma).write_text("gamma\n", encoding="utf-8")
     (root / delta_completed).write_text("delta\n", encoding="utf-8")
     write_deliverables(root, [alpha, gamma, delta_completed])
-    write_manifest(root, "2026-09-20-gamma", fresh_iso())
+    write_manifest(
+        root,
+        "gamma",
+        fresh_iso(),
+        plan_path="docs/history/plans/2026-09-20-gamma.md",
+    )
 
     derivation = derive_plan_readiness_candidates(ctx_for(root))
     names = [str(p) for p in derivation.candidates]
@@ -532,7 +544,127 @@ def test_plan_readiness_stale_manifest_no_exemption(tmp_path, sweep_env):
     (root / "docs/history/plans").mkdir(parents=True)
     (root / plan).write_text("stale\n", encoding="utf-8")
     write_deliverables(root, [plan])
-    write_manifest(root, "2026-09-20-stale-exempt-attempt", fresh_iso(hours_ago=30))
+    write_manifest(
+        root,
+        "stale-exempt-attempt",
+        fresh_iso(hours_ago=30),
+        plan_path="docs/history/plans/2026-09-20-stale-exempt-attempt.md",
+    )
+
+    derivation = derive_plan_readiness_candidates(ctx_for(root))
+    assert [str(p) for p in derivation.candidates] == [plan]
+    assert derivation.exempted == []
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: canonical-slug manifest parity and ownership boundaries
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def test_plan_readiness_dated_path_canonical_manifest_parity(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A dated plan path with a fresh active manifest
+    stored at the canonical feature slug and recording the exact plan_path is
+    exempted in direct candidate derivation and in the composed sweep (the
+    stub validator never gates the exempted plan)."""
+    root = make_repo(tmp_path, "parity", gitignore_docs=True)
+    write_facts(root)
+    write_stub_readiness_validator(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    plan = "docs/history/plans/2026-10-17-archive-ceremony-plan.md"
+    (root / "docs/history/plans").mkdir(parents=True)
+    (root / plan).write_text("live\n", encoding="utf-8")
+    write_deliverables(root, [plan])
+    write_manifest(
+        root,
+        "archive-ceremony-plan",
+        fresh_iso(),
+        plan_path=plan,
+    )
+
+    derivation = derive_plan_readiness_candidates(ctx_for(root))
+    assert [str(p) for p in derivation.candidates] == []
+    assert [str(p) for p in derivation.exempted] == [plan]
+
+    result = run_gate("plan-readiness", ctx_for(root))
+    assert result.rc == 0, result.message
+    # The exemption pruned the deliverable line: no candidate was ever
+    # gated (the stub validator would have reported failed=1 otherwise).
+    assert "no gated plan-deliverable candidates" in result.message
+    assert read_deliverables(root) == []
+
+
+def test_plan_readiness_same_slug_wrong_path_no_exemption(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A fresh active manifest at the canonical slug
+    recording a DIFFERENT plan's path does not exempt the candidate: the
+    same-slug wrong-path manifest stays a gated candidate."""
+    root = make_repo(tmp_path, "wrong-path", gitignore_docs=True)
+    write_facts(root)
+    write_stub_readiness_validator(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    plan = "docs/history/plans/2026-10-17-archive-ceremony-plan.md"
+    other = "docs/history/plans/2026-10-18-other-dated-plan.md"
+    (root / "docs/history/plans").mkdir(parents=True)
+    (root / plan).write_text("live\n", encoding="utf-8")
+    write_deliverables(root, [plan])
+    write_manifest(
+        root,
+        "archive-ceremony-plan",
+        fresh_iso(),
+        plan_path=other,
+    )
+
+    derivation = derive_plan_readiness_candidates(ctx_for(root))
+    assert [str(p) for p in derivation.candidates] == [plan]
+    assert derivation.exempted == []
+
+
+def test_plan_readiness_manifest_without_plan_path_no_exemption(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A fresh active manifest at the canonical slug
+    recording no plan_path line exempts nothing: ownership requires the
+    exact plan_path match."""
+    root = make_repo(tmp_path, "no-owner", gitignore_docs=True)
+    write_facts(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    plan = "docs/history/plans/2026-10-17-ownerless-manifest-plan.md"
+    (root / "docs/history/plans").mkdir(parents=True)
+    (root / plan).write_text("live\n", encoding="utf-8")
+    write_deliverables(root, [plan])
+    write_manifest(root, "ownerless-manifest-plan", fresh_iso())
+
+    derivation = derive_plan_readiness_candidates(ctx_for(root))
+    assert [str(p) for p in derivation.candidates] == [plan]
+    assert derivation.exempted == []
+
+
+def test_plan_readiness_inactive_manifest_no_exemption(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A manifest whose workflow_state is not
+    `active` (done) grants no exemption even when fresh and owned: the plan
+    stays a gated candidate."""
+    root = make_repo(tmp_path, "inactive", gitignore_docs=True)
+    write_facts(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    plan = "docs/history/plans/2026-10-17-inactive-manifest-plan.md"
+    (root / "docs/history/plans").mkdir(parents=True)
+    (root / plan).write_text("live\n", encoding="utf-8")
+    write_deliverables(root, [plan])
+    write_manifest(
+        root,
+        "inactive-manifest-plan",
+        fresh_iso(),
+        state="done",
+        plan_path=plan,
+    )
 
     derivation = derive_plan_readiness_candidates(ctx_for(root))
     assert [str(p) for p in derivation.candidates] == [plan]
@@ -567,7 +699,12 @@ def test_deliverables_removal_rule(tmp_path, sweep_env):
     (completed_dir / "2026-09-20-gone-one.md").write_text("gone\n", encoding="utf-8")
     (plans_dir / "2026-09-20-bad-one.md").write_text("b\n", encoding="utf-8")
     write_deliverables(root, [good, exempt, gone, bad])
-    write_manifest(root, "2026-09-20-exempt-one", fresh_iso())
+    write_manifest(
+        root,
+        "exempt-one",
+        fresh_iso(),
+        plan_path="docs/history/plans/2026-09-20-exempt-one.md",
+    )
 
     result = run_gate("plan-readiness", ctx_for(root))
     # The failing plan is gated; its modeled ready=no is advisory: the gate
@@ -884,6 +1021,119 @@ def test_plan_readiness_child_without_outcome_line_is_tool_error(
     assert result.rc == 3, result.message
     assert "2026-09-20-no-line-plan.md" in result.message
     assert "no final OUTCOME line" in result.message
+
+
+# --------------------------------------------------------------------------- #
+# Missing-OUTCOME crash-evidence selection (done-plan-readiness-child-
+# tool-error plan, Task 2): the tool-error classification is unchanged; the
+# diagnostic excerpt selects the useful end of a traceback stream and caps
+# at 200 characters.
+# --------------------------------------------------------------------------- #
+def _crash_validator_script(root: Path, body: str) -> None:
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / "plan_readiness.py").write_text(
+        "#!/usr/bin/env python3\n" + body, encoding="utf-8"
+    )
+
+
+def test_plan_readiness_stderr_traceback_reports_final_detail(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A traceback wholly on stderr with no final
+    OUTCOME line still classifies tool error, and the evidence is the final
+    exception detail, never the bare traceback header."""
+    root = make_repo(tmp_path, "stderr-tb", gitignore_docs=True)
+    write_facts(root)
+    _crash_validator_script(
+        root,
+        "import sys\n"
+        "sys.stderr.write(\n"
+        "    'Traceback (most recent call last):\\n'\n"
+        "    '  File \"plan_readiness.py\", line 2, in <module>\\n'\n"
+        "    'RuntimeError: the real crash detail\\n'\n"
+        ")\n"
+        "sys.exit(1)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-stderr-tb-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    assert "Traceback (most recent call last)" not in result.message
+    assert "RuntimeError: the real crash detail" in result.message
+
+
+def test_plan_readiness_plain_stderr_evidence_retained(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Plain (non-traceback) stderr without a final
+    OUTCOME line keeps the current useful-first-row selection."""
+    root = make_repo(tmp_path, "plain-stderr", gitignore_docs=True)
+    write_facts(root)
+    _crash_validator_script(
+        root,
+        "import sys\n"
+        "sys.stderr.write('readiness error: missing facts block\\n')\n"
+        "sys.exit(1)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-plain-stderr-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    assert "readiness error: missing facts block" in result.message
+
+
+def test_plan_readiness_empty_crash_output_reports_no_output(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A child crashing with no output at all and no
+    final OUTCOME line reports the `no output` placeholder, still tool
+    error."""
+    root = make_repo(tmp_path, "empty-crash", gitignore_docs=True)
+    write_facts(root)
+    _crash_validator_script(root, "import sys\nsys.exit(1)\n")
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-empty-crash-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    assert "no output" in result.message
+
+
+def test_plan_readiness_crash_evidence_capped_at_200_chars(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A crash detail longer than 200 characters is
+    capped to its final 200 characters (the useful end retained) and the
+    tool-error classification is unchanged."""
+    root = make_repo(tmp_path, "oversized", gitignore_docs=True)
+    write_facts(root)
+    tail = "the-actual-crash-tail-" + "x" * 120
+    long_detail = "ValueError: " + "y" * 300 + " " + tail
+    _crash_validator_script(
+        root,
+        "import sys\n"
+        "sys.stderr.write('Traceback (most recent call last):' + chr(10))\n"
+        "sys.stderr.write('  File \"plan_readiness.py\", line 1' + chr(10))\n"
+        "sys.stderr.write('ValueError: ' + 'y'*300 + ' "
+        + tail
+        + "' + chr(10))\n"
+        "sys.exit(1)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-oversized-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    evidence_start = result.message.index("evidence: ") + len("evidence: ")
+    evidence = result.message[evidence_start:].rstrip(")")
+    assert len(evidence) <= 200
+    assert evidence.endswith(tail)
+    assert long_detail[:100] not in evidence
 
 
 # --------------------------------------------------------------------------- #
@@ -15298,6 +15548,9 @@ def test_discover_fail_closed_on_missing_and_empty_facts_keys(tmp_path):
     )
     with pytest.raises(ValueError, match="cannot resolve reviews_dir"):
         GateContext.discover(root)
+    with pytest.raises(ValueError, match="copy the primary checkout") as remedy_exc:
+        GateContext.discover(root)
+    assert "machine-local by design and never rides the branch" in str(remedy_exc.value)
 # --------------------------------------------------------------------------- #
 # Plan: docs/history/plans/2026-10-05-live-claim-plan-deletion-fence.md
 # Task 2: the plans-root claim fence gate (refusal, foreign report, skip).

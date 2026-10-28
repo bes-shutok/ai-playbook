@@ -40,9 +40,36 @@ SEED = {
 }
 
 
-def run_cli(*argv: str) -> subprocess.CompletedProcess:
+def child_env(**extra: str | None) -> dict[str, str]:
+    """The controlled child-process environment: a minimal dict, not the
+    inherited host environment, so every exit-code and OUTCOME assertion
+    stays independent of unrelated host variables. The suite's own hygiene
+    pins flow through by default (the record classes' setUp pinning is
+    in-process only); deliberate extra pins ride as keyword arguments
+    (None drops the key)."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", str(Path.home())),
+    }
+    for key in HYGIENE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    for key, value in extra.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    return env
+
+
+def run_cli(*argv: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *argv], capture_output=True, text=True, check=False
+        [sys.executable, str(SCRIPT), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env() if env is None else env,
     )
 
 
@@ -489,6 +516,10 @@ class CandidateHygieneScreenTest(unittest.TestCase):
         return run_cli(
             "--ledger", self.ledger, "record", "--guard", "example-guard",
             "--kind", "incident", "--date", "2026-10-25", "--evidence", evidence,
+            env=child_env(
+                PUBLIC_HYGIENE_PATTERNS_FILE=os.environ.get("PUBLIC_HYGIENE_PATTERNS_FILE"),
+                PUBLIC_HYGIENE_REPO_ROOT=os.environ.get("PUBLIC_HYGIENE_REPO_ROOT"),
+            ),
         )
 
     def test_hygiene_hit_leaves_canonical_bytes_unchanged_and_warns(self) -> None:

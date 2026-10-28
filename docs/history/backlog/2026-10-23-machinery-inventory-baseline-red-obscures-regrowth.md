@@ -1,6 +1,7 @@
 # Machinery inventory check is red at baseline (30 failures), obscuring new regrowth
 
 - **Cluster:** docs/history/backlog/completed/2026-10-20-done-dirt-regression-correction-block.md (witnessed during that plan's execution)
+- **Cluster:** docs/history/backlog/EXEC-PROMPTS.md EXEC-PROMPTS-PRUNE receipt learn-router-dispatch-pin-step19-heading (covered 2026-10-28, pin extension landed); docs/history/backlog/2026-10-25-machinery-inventory-check-preexisting-red.md (same defect class: a guard suite or check red at baseline independent of any change under test, masking new failures; mechanisms differ per member)
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)

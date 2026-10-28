@@ -115,22 +115,22 @@ Files:
 - `scripts/test_code_delta_classifier.py`
 - the migration set: `.ai-playbook/review-certs/` seals, their `.ai-playbook/reviews/` record/sidecar pairs, and their plans-egress backfill records *(re-pins only)*
 
-- [ ] Add one reviewed-scope byte function next to `diff_bytes` in `scripts/corrections_record.py`: compute the delta at the git layer with pathspec exclusion (`git diff base...head -- . ':(exclude)docs/history/backlog/'`), never by parsing diff text. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pin the byte function's outcome routing table: bytes (reviewed content present, including a raw-empty delta hashed over empty bytes, preserving today's empty-range behavior), a distinct named BOOKKEEPING-ONLY outcome (raw diff non-empty, filtered bytes empty), and the existing indeterminate/refusal shape (plumbing failure); the last two are never conflated. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Re-derive from disk the full digest-site list before editing (anchor leg, per-hop re-derivation, current-diff, minting, build-time check, verify-digest); record it in the task log. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Switch every site in that re-derived list to the byte function; where a caller passes a verified OID, thread it through (the origin row's Source bullet names the literal-HEAD gap at the current-diff call site); no consumer copies the exclusion list. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Behavior witness: given a post-certification commit touching only `docs/history/backlog/`, expects every instrument's digest unchanged; given a reviewed source path commit, expects each digest to change. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness (spoof): given a bookkeeping-path commit embedding crafted `diff --git` header lines, expects the digest to still bind the source hunks; fixture it. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness (empty filter): a non-empty raw diff filtering to zero bytes yields the distinct BOOKKEEPING-ONLY outcome, never a digest over empty bytes; fixture the all-bookkeeping range. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness (plumbing): a plumbing failure over the range base propagates the existing indeterminate/refusal shape. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Amend the verify-digest duty (`review_record_selection.py verify_digest`): a HEAD advance whose delta the byte function classifies BOOKKEEPING-ONLY (positive evidence: raw diff non-empty and filtered bytes empty as the distinct outcome, never inferred from a plumbing refusal) is accepted with the verified head advanced. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The same amendment keeps refusing a reviewed-path delta and a plumbing failure; fixture the raw-empty advance, bookkeeping-advance accept, reviewed-delta refuse, and plumbing-refuse routings in `scripts/test_review_record_selection.py`. [class: REPOSITORY_TEST]
-- [ ] Migration: re-pin every member of the migration set through the new function (recompute each pinned digest across the four identities), re-validating each landed range with `validate_review_staging.py --hard --source-code-repo <repo-root> --source-code-plan <stats-sidecar>` plus `--verification-head <landing OID>` (the origin row's detached-checkout trap), recording the re-pin list in the task log; a refusing member parks with the named reason. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Rollout guard: feature-detect the byte function at every consumer entry point (the staging validator, the classifier, the record selector) and degrade to the named-gap tool-error shape, never a crash, on a mixed-vintage pair; fixture it. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Fixtures: corrections-record suite gains the bookkeeping-append, source-edit, spoof, empty-filter, and plumbing cases; the staging `--selftest` gains the bookkeeping-append and source-edit arms over `--source-code-repo` with a minted hop chain ending at the append commit. [class: REPOSITORY_TEST]
-- [ ] Run: RED for the bookkeeping-append, spoof, and empty-filter fixtures; first-run GREEN for the source-edit fixtures (regression guards, recorded as expected); implement; all GREEN. [class: REPOSITORY_TEST]
-- [ ] Run the Validation Commands; expect all suites green and the grep showing no whole-diff hash outside the byte function. [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: scope the code-family certification digest to reviewed source paths` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add one reviewed-scope byte function next to `diff_bytes` in `scripts/corrections_record.py`: compute the delta at the git layer with pathspec exclusion (`git diff base...head -- . ':(exclude)docs/history/backlog/'`), never by parsing diff text. [class: IMPLEMENTATION_REQUIRED]
+- [x] Pin the byte function's outcome routing table: bytes (reviewed content present, including a raw-empty delta hashed over empty bytes, preserving today's empty-range behavior), a distinct named BOOKKEEPING-ONLY outcome (raw diff non-empty, filtered bytes empty), and the existing indeterminate/refusal shape (plumbing failure); the last two are never conflated. [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-derive from disk the full digest-site list before editing (anchor leg, per-hop re-derivation, current-diff, minting, build-time check, verify-digest); record it in the task log. [class: IMPLEMENTATION_REQUIRED]
+- [x] Switch every site in that re-derived list to the byte function; where a caller passes a verified OID, thread it through (the origin row's Source bullet names the literal-HEAD gap at the current-diff call site); no consumer copies the exclusion list. [class: IMPLEMENTATION_REQUIRED]
+- [x] Behavior witness: given a post-certification commit touching only `docs/history/backlog/`, expects every instrument's digest unchanged; given a reviewed source path commit, expects each digest to change. [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness (spoof): given a bookkeeping-path commit embedding crafted `diff --git` header lines, expects the digest to still bind the source hunks; fixture it. [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness (empty filter): a non-empty raw diff filtering to zero bytes yields the distinct BOOKKEEPING-ONLY outcome, never a digest over empty bytes; fixture the all-bookkeeping range. [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness (plumbing): a plumbing failure over the range base propagates the existing indeterminate/refusal shape. [class: IMPLEMENTATION_REQUIRED]
+- [x] Amend the verify-digest duty (`review_record_selection.py verify_digest`): a HEAD advance whose delta the byte function classifies BOOKKEEPING-ONLY (positive evidence: raw diff non-empty and filtered bytes empty as the distinct outcome, never inferred from a plumbing refusal) is accepted with the verified head advanced. [class: IMPLEMENTATION_REQUIRED]
+- [x] The same amendment keeps refusing a reviewed-path delta and a plumbing failure; fixture the raw-empty advance, bookkeeping-advance accept, reviewed-delta refuse, and plumbing-refuse routings in `scripts/test_review_record_selection.py`. [class: REPOSITORY_TEST]
+- [x] Migration: re-pin every member of the migration set through the new function (recompute each pinned digest across the four identities), re-validating each landed range with `validate_review_staging.py --hard --source-code-repo <repo-root> --source-code-plan <stats-sidecar>` plus `--verification-head <landing OID>` (the origin row's detached-checkout trap), recording the re-pin list in the task log; a refusing member parks with the named reason. [class: IMPLEMENTATION_REQUIRED]
+- [x] Rollout guard: feature-detect the byte function at every consumer entry point (the staging validator, the classifier, the record selector) and degrade to the named-gap tool-error shape, never a crash, on a mixed-vintage pair; fixture it. [class: IMPLEMENTATION_REQUIRED]
+- [x] Fixtures: corrections-record suite gains the bookkeeping-append, source-edit, spoof, empty-filter, and plumbing cases; the staging `--selftest` gains the bookkeeping-append and source-edit arms over `--source-code-repo` with a minted hop chain ending at the append commit. [class: REPOSITORY_TEST]
+- [x] Run: RED for the bookkeeping-append, spoof, and empty-filter fixtures; first-run GREEN for the source-edit fixtures (regression guards, recorded as expected); implement; all GREEN. [class: REPOSITORY_TEST]
+- [x] Run the Validation Commands; expect all suites green and the grep showing no whole-diff hash outside the byte function. [class: REPOSITORY_TEST]
+- [x] Commit: `feat: scope the code-family certification digest to reviewed source paths` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Name the post-rebase re-pin in the skill texts
 
@@ -140,11 +140,11 @@ Files:
 - `agents/skills/execute-plan/SKILL.md`
 - `agents/skills/review-plan/SKILL.md`
 
-- [ ] Add one sentence to the execute-plan Phase 4 text keyed after the archive commit step: after the archive move or a pre-landing rebase (whichever moved the tip last), re-pin the four identities and re-validate through `validate_review_staging.py --hard --source-code-repo <repo-root> --source-code-plan <stats-sidecar>` with `--verification-head <landing OID>` before the landing critical section. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The re-pinned four identities are named in that sentence: seal block anchors and reviewed range, sidecar source_digest and certified_range, the record's Round and Source digest lines, the plans-egress backfill record; pay the text growth with a deletion in the same paragraph. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add one sentence to review-plan's plan-family round-close seal paragraph referencing that Phase 4 re-pin step for code-family certifications, by reference, no restatement; pay the growth with a deletion in the same paragraph. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the Validation Commands; expect hygiene and portability checks passing. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: name the post-rebase certification re-pin in the Phase 4 preamble` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add one sentence to the execute-plan Phase 4 text keyed after the archive commit step: after the archive move or a pre-landing rebase (whichever moved the tip last), re-pin the four identities and re-validate through `validate_review_staging.py --hard --source-code-repo <repo-root> --source-code-plan <stats-sidecar>` with `--verification-head <landing OID>` before the landing critical section. [class: IMPLEMENTATION_REQUIRED]
+- [x] The re-pinned four identities are named in that sentence: seal block anchors and reviewed range, sidecar source_digest and certified_range, the record's Round and Source digest lines, the plans-egress backfill record; pay the text growth with a deletion in the same paragraph. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add one sentence to review-plan's plan-family round-close seal paragraph referencing that Phase 4 re-pin step for code-family certifications, by reference, no restatement; pay the growth with a deletion in the same paragraph. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the Validation Commands; expect hygiene and portability checks passing. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: name the post-rebase certification re-pin in the Phase 4 preamble` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Rebased-tip re-pin fixture
 
@@ -153,8 +153,12 @@ Context surface: the plan's Terms, this task, and `## Standing constraints` when
 Files:
 - `scripts/test_corrections_record.py`
 
-- [ ] Fixture: a range rebased onto a new merge-base whose reviewed-scope delta bytes are unchanged re-pins green through the byte function; the rebased commits carry committer dates pinned at or before the re-pinned round-close commit (through the fixture repo's date mechanism or `--committer-date-is-author-date`), so the dating leg never masquerades as a digest refusal. [class: REPOSITORY_TEST]
-- [ ] Fixture negative arm: a rebase whose new merge-base touched a reviewed source path still refuses, and the fixture asserts the refusal reason is the digest re-hash, not a dating message. [class: REPOSITORY_TEST]
-- [ ] Run: expect first-run GREEN on both arms (regression guards; the three-manual-re-pins friction they retire is the origin row's witness, noted in the task log). [class: REPOSITORY_TEST]
-- [ ] Run the Validation Commands; expect all suites green. [class: REPOSITORY_TEST]
-- [ ] Commit: `test: pin the rebased-tip re-pin and its dating discipline` [class: IMPLEMENTATION_REQUIRED]
+- [x] Fixture: a range rebased onto a new merge-base whose reviewed-scope delta bytes are unchanged re-pins green through the byte function; the rebased commits carry committer dates pinned at or before the re-pinned round-close commit (through the fixture repo's date mechanism or `--committer-date-is-author-date`), so the dating leg never masquerades as a digest refusal. [class: REPOSITORY_TEST]
+- [x] Fixture negative arm: a rebase whose new merge-base touched a reviewed source path still refuses, and the fixture asserts the refusal reason is the digest re-hash, not a dating message. [class: REPOSITORY_TEST]
+- [x] Run: expect first-run GREEN on both arms (regression guards; the three-manual-re-pins friction they retire is the origin row's witness, noted in the task log). [class: REPOSITORY_TEST]
+- [x] Run the Validation Commands; expect all suites green. [class: REPOSITORY_TEST]
+- [x] Commit: `test: pin the rebased-tip re-pin and its dating discipline` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+The promoted origin row `2026-10-21-code-family-certification-stale-after-tip-moves.md` (three hand re-pins per run witnessed) was archived covered into `docs/history/backlog/completed/` at commit 1309e4e07 during the authoring lane's landing ba477eb80 (review r5 ready=yes, zero blocking, seal written); this execution is that covering plan's completion. Its durable home is the completed twin; no living backlog path remains.

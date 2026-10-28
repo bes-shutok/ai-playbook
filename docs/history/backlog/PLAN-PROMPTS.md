@@ -1,5 +1,15 @@
 Tracked rolling log of ready-to-dispatch plan-creation prompts, most urgent first.
+
+PLAN-PROMPTS-PRUNE: landing-diagnostic-own-plan-target -> docs/history/plans/2026-10-28-landing-diagnostic-own-plan-target.md
+PLAN-PROMPTS-PRUNE: docs-branch-supported-python-runtime -> docs/history/plans/2026-10-28-docs-branch-supported-python-runtime.md
+
+PLAN-PROMPTS-PRUNE: landing-gate-prune-audit-leg -> docs/history/plans/2026-10-28-landing-gate-prune-audit-leg.md (frozen entry pruned by immediate post-landing closeout rider)
+
+PLAN-PROMPTS-PRUNE: verify-digest-recompute-endpoint-vs-additive-commits -> docs/history/plans/2026-10-28-verify-digest-recompute-endpoint-vs-additive-commits.md (own frozen entry pruned after certified plan landing)
+PLAN-PROMPTS-PRUNE: hard-mode-clause-pointer-residuals -> docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md (own frozen entry pruned after certified plan landing; folds the done-advisory row as a task)
+PLAN-PROMPTS-PRUNE: done-advisory-threshold-pin-and-re-aim-comment-trim -> docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md (own frozen entry pruned; its origin row rides the covering plan as a task)
 PLAN-PROMPTS-PRUNE: code-review-panel-capacity-recovery -> agents/skills/execute-plan/SKILL.md
+PLAN-PROMPTS-PRUNE: learn-missed-skill-issue-capture -> docs/history/plans/2026-10-27-learn-missed-skill-issue-capture.md (own frozen entry pruned with the certified plan landing; origin row covered-flipped in the same change)
 PLAN-PROMPTS-PRUNE: done-recursive-tmp-sweep-safety -> docs/history/plans/2026-10-27-done-recursive-tmp-sweep-safety.md (own frozen entry pruned after certified plan landing)
 
 PLAN-PROMPTS-PRUNE: release-privacy-gate-report-and-scan-scope-parity -> docs/history/plans/2026-10-26-release-privacy-gate-diagnostics-and-replay.md (frozen entry pruned by additive closeout rider after landing)
@@ -57,6 +67,7 @@ PLAN-PROMPTS-PRUNE: dead-run-conversion-zcode-runtime-reachability -> docs/histo
 PLAN-PROMPTS-PRUNE: done-lock-generation-and-context-recovery -> docs/history/plans/2026-10-26-done-lock-context-compaction-recovery.md (plan landing rider)
 
 PLAN-PROMPTS-PRUNE: self-heal-review-invocation-disposition-contract -> docs/history/plans/2026-10-26-review-plan-self-heal-invocation-disposition-gap.md (landed plan authoring record; own frozen entry pruned with its plan landing; origin rows covered-flipped)
+PLAN-PROMPTS-PRUNE: plan-authoring-stand-down-before-charter -> docs/history/plans/2026-10-28-plan-authoring-stand-down-before-charter.md (r7 certified; origin row covered by landing rider)
 
 Standing rules:
 
@@ -198,118 +209,11 @@ PLAN-PROMPTS-PRUNE: ad-hoc-worktree-lifecycle-owner-gap -> docs/history/plans/20
 PLAN-PROMPTS-PRUNE: ad-hoc-worktree-lifecycle-owner-gap -> landing
 PLAN-PROMPTS-PRUNE: review-plan-recurring-new-blockers -> docs/history/plans/2026-10-25-review-plan-nonconvergence-disposition.md
 
-## learn-missed-skill-issue-capture
-Frozen: docs/tmp/authoring-claims/learn-missed-skill-issue-capture.md (in-session log-entry authoring started 2026-10-27T20:26Z, auth run automation-fc20a852)
-
-Added: 2026-10-27, investigate pass anchored on the current-session learn issue row (operator correction after the first learn pass omitted it).
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the row leaves an open authoring choice between adding a concise discriminator to Step 1.8 and treating the miss as execution noncompliance; it is not yet a body-named single-surface fix with no open design choice.
-
-Origins:
-- docs/history/backlog/2026-10-27-learn-missed-skill-issue.md
-
-Urgency: medium - the omission made the user repeat the request to capture the learn failure, while the skill already contains both a specific-failure-mode check and a skill-usage capture duty; this is a witnessed reliability lapse whose recurrence and remedy still need adjudication.
-
-Scope arms:
-- Root-cause distinction: determine whether the candidate review conflated two failures from one incident (the underlying workflow defect and learn's own missed capture) or whether the candidate was identified and then wrongly dismissed as covered.
-- Minimal skill remedy: decide whether one sentence under Step 1.8 should require a separate candidate for an agent's missed skill invocation or step when it co-occurs with the underlying workflow defect; if so, keep it within the existing section and explain why its current skill-usage predicate does not already make the distinction operational.
-- No machinery: preserve the current no-validator/no-gate posture; evaluate the existing text and the witnessed omission without adding a blocking mechanism.
-
-Orientation: the origin's two failures must remain distinct: the self-heal plan addresses the workflow's missed recovery invocation, while this row addresses learn's failure to capture that separate skill-use issue. The current learn module already requires mistake/friction extraction, checking the specific failure mode before dismissing a candidate as covered, and identifying skill-usage issues; its introduction commit `867f8ed7e` added the anti-dismissal rule and Step 1.8 together. Treat that existing coverage as evidence in the authoring decision, not proof that learn's candidate pass actually followed it.
-
-Prompt: Author a narrowly scoped plan for `agents/skills/learn/step-1-extract.md` Step 1/Step 1.8 using the origin row and this investigation. Reconstruct the first learn pass from the session evidence, distinguish the workflow's self-heal failure from learn's missed capture, and decide whether the operative text needs one concise candidate-separation instruction or whether the current rules are sufficient and the incident was execution noncompliance. If text changes, extend the existing Step 1.8 section; state why its present predicate does not absorb the distinction, keep the change byte-balanced under the skill anti-growth rules, and add no new section, validator, gate, or required ceremony. If no text change is warranted, record that disposition with the exact existing instructions that already cover it. Include validation of the edited wording against both failure modes and the public hygiene and em-dash checks. Preserve the boundary that this plan does not rework the self-heal workflow plan.
-
-Rejected alternatives:
-- Treat the self-heal plan as covering both failures: rejected because that plan's origin and scope concern the workflow's missed recovery invocation, while this origin records learn's separate candidate-capture omission (docs/history/backlog/2026-10-27-self-heal-before-workflow-stop.md)
-- Add a validator or blocking capture gate: rejected because the witnessed issue is a semantic candidate-classification miss and no witnessed incident shows a mechanical check can distinguish it; the added false-positive and blocking cost is not justified (docs/history/backlog/2026-10-27-learn-missed-skill-issue.md)
-- Close the issue as a general execution lapse with no learn-skill review: rejected because the user explicitly reported that learn omitted its own skill-use issue and requested a learn improvement investigation, and the existing rule did not prevent this witnessed repetition (docs/history/backlog/2026-10-27-learn-missed-skill-issue.md)
-
-## runtime-scripts-home-reconcile-and-retire
-
-Added: 2026-10-25, investigate pass anchored on the updated residue row (witness: the 2026-10-25 authoring run composed a reconcile invocation against the repository copy's CLI and hit the home copy's older contract).
-
-Work-type verdict: plan-worthy; the ad-hoc eligibility test's tracked-surface clause excludes the item because its scope spans the deployed runtime scripts home outside any repository, and the disposition carries per-file recovery-before-reconcile adjudications with open keep-or-retire choices, not a body-named single-surface fix.
-
-Origins:
-- docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md
-
-Urgency: medium - the divergence is live at the CLI surface (the repository `scripts/reconcile_post_landing.py` grew a read-only `--check-primary` mode the home copy lacks entirely, re-derived 2026-10-25: the token appears 6 times in the repository copy at HEAD and 0 times in the home copy), so an invocation composed against one copy's contract fails on the other, and the home still holds 25 real files beside the repository symlinks and 60 dangling symlinks.
-
-Scope arms:
-- Per-file adjudication: for each of the four diverged live files, recover the named home-only delta into its own backlog row or record the drop decision, then reconcile the home copy against its repository twin with the repository side authoritative.
-- Retire the shadows: after reconciliation, delete the real-file copies, the dated backups, the byte-identical duplicates, and every dangling link, keeping the no-twin helper only if it gains a repository twin; repository symlinks and the facts-resolved skills-repository path become the only resolution paths.
-- No new gate: the plan adds no sync-side drift validation; the cleanup itself is the removal of the witnessed cost.
-
-Orientation: the origin row's inventory and five-point disposition are the scope of record (recovery-before-reconcile, retire, tracked retirement surface, tracked sync surface, acceptance); `scripts/sync_runtime_scripts.sh` and `scripts/deploy_runtime_helpers.sh` end as the machinery owning the home's population; sibling row docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md owns the sync script's manifest prefix-mapping bug and stays separate.
-
-Prompt: Author a plan executing the origin row's disposition. Task 1 recovers or drops each home-only delta with a recorded per-file decision. Task 2 reconciles the four diverged copies (repository authoritative) and retires the real-file shadows, dated backups, byte-identical duplicates, and dangling links. Validation: the home holds no real files beside repository symlinks and no dangling links (the row's acceptance clause); a `--check-primary` invocation resolves through one canonical copy.
-
-Rejected alternatives:
-- Leave the home as-is and document which copy to invoke (keep): rejected because the divergence is contract-visible at the flag level and every new repository-side helper widens it; the row's acceptance clause already prices the block (docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md)
-- Reconcile without recovering the home-only deltas first (keep and narrow): rejected because the row's disposition 1 pins recovery-before-reconcile; the home-only deltas may carry evidence strings a deletion would destroy (docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md)
-- Add a sync-side gate refusing to run while the home holds real files or dangling links: rejected as machinery without its own witnessed incident beyond the divergence itself; the cleanup removes that cost, and a gate would block every sync until an operator cleans the home, a false-positive cost with no protective value the cleanup does not already deliver (scripts/sync_runtime_scripts.sh)
-
 PLAN-PROMPTS-PRUNE: done-finalize-checkpoint-manifest-env-honoring -> docs/history/plans/2026-10-25-done-finalize-checkpoint-manifest-env-honoring.md (own frozen entry pruned after landing commit 87f28c48fccbd9081c5dfb3f01df35b124bb4341)
 
+PLAN-PROMPTS-PRUNE: runtime-scripts-home-reconcile-and-retire -> docs/history/plans/2026-10-28-runtime-scripts-home-reconcile-and-retire.md
 
-## plan-authoring-stand-down-before-charter
-Added: 2026-10-26, learn and investigate pass over a post-Phase-0 stand-down
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the remedy touches authoring placement and a guard-bearing closeout path, with a choice about preserving versus extending existing removal protections; it is not a body-named single-surface fix.
-
-Origins:
-- docs/history/backlog/2026-10-26-plan-authoring-stand-down-before-charter.md
-
-Stage 1 roster: the retained stand-down origin concerns the absent-charter refusal in `scripts/worktree_closeout_migrate.py` `gate-removal`.
-
-Urgency: medium - an authoring run created a worktree and branch for an origin whose implementation already existed, then stopped without a plan file; cleanup required operator direction after the charter-dependent gate returned a tool error.
-
-Scope arms:
-- Preserve `gate-removal`'s fail-closed identity and artifact checks for ordinary plan closeout. Determine whether actionability can be checked before prompt freezing and run provisioning so already-completed origins do not create an authoring worktree that lacks a charter.
-- At plan-authoring time, re-derive the origin's implementation and landing state from source and history; do not infer either from an open row or a prompt-log marker.
-
-Orientation: read the origin, `agents/skills/plans/SKILL.md` Phase 0 and Final Step, `agents/skills/maintenance/template-authoring.md` authoring claim procedure, `scripts/worktree_closeout_migrate.py` `cmd_gate_removal`, and `docs/history/plans/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`. The existing lifecycle plan assigns cleanup after a passing gate but does not define the no-charter stand-down; the completed gate-removal plan keeps missing-proof refusals fail-closed.
-
-Prompt: Author a focused plan that removes the observed stranded authoring setup with the smallest change. First test whether the selected backlog origin still needs planning before the prompt is frozen and the authoring worktree is provisioned, using current repository source and history rather than the row's open status alone. If the origin is already implemented, route it through the existing covered-origin and prompt-prune contracts without creating plan-owned run state. Then determine whether an unavoidable stand-down after provisioning but before the first plan write can be safely closed using existing exact-path identity and artifact evidence. Preserve `gate-removal`'s ordinary charter, ownership, review-artifact, and branch checks; do not treat a missing charter as a normal closeout pass. Reuse or amend the existing worktree-lifecycle plan only if its reviewed scope can own the no-charter case; otherwise keep a focused plan. Add regression coverage for both pre-provision already-completed detection and post-provision stand-down, including refusal when artifact ownership is unclear. Do not add a global sweep, broad delete path, or new blocking gate without satisfying the repository Machinery admission protocol.
-
-Rejected alternatives:
-- Remove or weaken `gate-removal` for ordinary plans: rejected because the gate's missing-proof and artifact checks preserve run-owned work, as witnessed by its completed design (`docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md`).
-- Keep Phase 0 provisioning first and rely on manual cleanup after authoring discovers an already-landed implementation: rejected because the current session created a worktree and branch before that discovery and needed operator direction to remove them, as witnessed in the origin row (`docs/history/backlog/2026-10-26-plan-authoring-stand-down-before-charter.md`).
-- Add a separate mandatory no-charter removal gate immediately: rejected because a pre-provision actionability check may remove the witnessed cost without introducing another blocker, and the false-positive cost of an incorrect cleanup decision is loss of run-owned artifacts (repository guidelines, Machinery admission protocol).
-- Treat the existing worktree-lifecycle plan as already covering this origin: rejected because its current acceptance covers terminal ownership after a chartered closeout and has no no-charter stand-down case, as witnessed in the plan's criteria (`docs/history/plans/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`).
-
-Machinery admission: no new gate or deletion machinery is recommended at investigation time; if a standalone blocker is ultimately proposed, the plan must register the incident, expected catch frequency, false-positive cost, and sunset or review date, and identify a blocker it removes or demotes.
-
-Standing pre-authorization: none - the proposed alternatives change when authoring state is created and how an absent-charter run can close, so the plan must present that design choice for normal review.
-
-## docs-branch-supported-python-runtime
-
-Added: 2026-10-26, investigate over the open docs-branch sync cluster surfaced by the current learn pass
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin leaves an open design choice between selecting a supported interpreter and refusing early with an actionable version diagnostic, and choosing a portable runtime contract may require a facts/configuration decision.
-
-Origins:
-- docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md
-
-Urgency: medium - the documented canonical sync command can fail before work on a host whose default Python lacks `tomllib`, although the already-configured supported runtime completes the same command (the origin row).
-
-Scope arms:
-- Define a portable supported-runtime contract for the canonical runner, choosing between resolving a configured interpreter and failing early with a clear minimum-version diagnostic; preserve the single canonical sync path and avoid machine-specific absolute paths.
-- Keep implicit `python3` selection and rely on the operator to adjust PATH: rejected because the canonical command failed at `tomllib` import on Python 3.9 and only succeeded when the configured supported interpreter was placed first on PATH (the origin row).
-- Hardcode a host-specific interpreter path into the public runner: rejected by repository portability guidance and the repo's facts-versus-skill split (`AGENTS.md`, Machine paths and workspace roots belong in facts).
-- Add a new blocking maintenance gate around Python installation: rejected under the Machinery admission protocol because the witnessed issue is an early command failure already visible to the caller; a separate lane blocker is unnecessary (the origin row).
-
-Orientation: read the origin row; the completed docs-branch scope-and-tmp-retention plan that established the single canonical runner; the completed done-target-state learn/commit/closeout plan, which records the runtime floor as a separate follow-up; `scripts/docs_branch_sync.sh` startup/import path; and the repo facts plus AGENTS.md facts-versus-skill guidance. Keep the decision scoped to this runner's supported interpreter contract.
-
-Prompt: Author a focused plan that resolves the canonical docs-branch runner's Python runtime contract. Compare configured interpreter resolution with an early minimum-version diagnostic using the origin's failure and successful configured-runtime invocation as evidence. Keep machine-specific paths in facts, preserve the canonical runner, and add only the smallest change and focused regression needed to prove the chosen behavior. Do not add an installation gate or a second sync implementation. Use the plans skill lifecycle and review gates; leave the origin row for the plan completion pass to mark covered.
-
-Rejected alternatives:
-- Leave `python3` implicit: rejected because the canonical command failed at `tomllib` import on the recorded default interpreter (witnessed in `docs/history/backlog/2026-10-11-docs-branch-python-runtime-floor.md`).
-- Hardcode a local interpreter path: rejected because the repository's public skill/script surfaces must not encode machine-specific paths (witnessed by the repository portability rule in `AGENTS.md`).
-- Add a separate maintenance gate: rejected under the Machinery admission protocol because the command already fails visibly and no separate lane-level harm was witnessed (the origin row).
-
-Machinery admission: no additional gate, validator, lock, ledger, or required ceremony is proposed; a separate installation gate is rejected because no independent lane-blocking incident was witnessed (the origin row).
-
+PLAN-PROMPTS-PRUNE: review-sop-target-lifecycle -> docs/history/plans/2026-10-28-review-sop-target-lifecycle.md
 ## execute-plan-sequential-trace-harness
 
 Added: 2026-10-12, investigate pass over the remaining sequential-behavior witness
@@ -344,133 +248,44 @@ PLAN-PROMPTS-PRUNE: gate-removal-squash-accounting-requires-archive-twin -> docs
 PLAN-PROMPTS-PRUNE: done-cached-diff-authorized-reversal -> docs/history/plans/2026-10-19-done-cached-diff-authorized-reversal.md (r8-certified ready=yes zero blocking, digest 16aa7cfbd2f0900dba9445e344111ee4384df2c966d7840e5cf7d51d96b3c691, seal .ai-playbook/review-certs/done-cached-diff-authorized-reversal.md; the frozen entry pruned by this closeout rider; the plan landed at the plans root 44201ff2b before certification closed; origin row already covered 44201ff2b)
 
 
-## done-advisory-threshold-pin-and-re-aim-comment-trim
-
-Added: 2026-10-20, investigate pass anchored on the Phase 3 r1 Low findings of the done-immediate-commit-single-homing execution
-
-Work-type verdict: plan-worthy only because the pins suite `scripts/check_maintenance_pins.sh` is a denylisted whole path in the Ad-hoc backlog arm's eligibility test (`agents/skills/maintenance/decisions.md`); the work itself is one warning-only presence row plus two comment trims, so the smallest landing shape is a rider task on the next plan that edits the pins suite rather than a plan of its own.
-
-Origins:
-- docs/history/backlog/2026-10-20-done-advisory-threshold-sentence-unpinned.md
-
-Urgency: low - the thresholds' owner file keeps its own pins, the gap covers only the done skill's restatement, and no drift has been witnessed; the comment length is cosmetic.
-
-Scope arms:
-- One `placement_pin "$PD" "<distinctive threshold fragment>"` row (warning-only, the family's existing helper), or a recorded decision that the owner file's pins suffice.
-- Trim the two `# Re-aimed 2026-10-20` comments to the one-line plan citation plus a single relocation clause, matching the adjacent 2026-10-19 convention.
-
-Orientation: the placement rows were introduced with the placement-closing doctrine (f3894756d, 2026-10-18) as warning-only presence greps that never move the suite's exit; the 2026-10-20 re-aim (cfb909995) replaced the row quoting `exceeds the direct-commit class bounds` with the measurement-clause span, which the plan required, and left the threshold sentence unquoted; the Phase 3 testing lens demonstrated on a scratch copy that a mangled threshold passes all four done-file pins.
-
-Prompt: When a plan next edits `scripts/check_maintenance_pins.sh` (or as a dedicated low plan if none appears within a month), fold `docs/history/backlog/2026-10-20-done-advisory-threshold-sentence-unpinned.md` as one task: add one warning-only `placement_pin "$PD"` row for a distinctive fragment of the advisory's threshold sentence in `agents/skills/done/SKILL.md` line 114 (verify exactly one occurrence), or record the decision that the owner file's pins suffice; trim the two `# Re-aimed 2026-10-20` comments to citation plus one clause. Validation: `bash scripts/check_maintenance_pins.sh` (placement pins all hold, exit contract unchanged), hygiene scan, em-dash check. Delete the row in the same landing.
-
-Rejected alternatives:
-- Upgrade the retargeted rows to a count gate so semantic drift refuses: rejected because the plan's standing constraint bars a new pin family or acceptance mechanism and the family is warning-only by design (`docs/history/plans/completed/2026-10-19-done-immediate-commit-single-homing.md` Standing constraints; `scripts/check_maintenance_pins.sh` placement_pin comment)
-- Land the pin row ad-hoc now: rejected because the pins suite is a denylisted whole path for the ad-hoc arm (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm denylist)
-- Leave the gap undocumented since the owner file is pinned: rejected as a disposition only if recorded; the entry keeps that as the sanctioned alternative outcome of the task (`agents/skills/execute-plan/worktree-first.md` pins on the same spans)
-
-Standing pre-authorization: both arms.
-
-Machinery admission: the pin row is one more warning-only presence grep in an existing family and moves no exit code; no gate, validator, lock, ledger, or ceremony is added.
-
 PLAN-PROMPTS-PRUNE: semantic-naming-and-analogous-class-review -> docs/history/plans/2026-10-21-semantic-naming-and-analogous-class-review.md (r4-certified ready=yes zero blocking, seal .ai-playbook/review-certs/semantic-naming-and-analogous-class-review.md; the frozen entry pruned by its own landing rider; origin row covered by this plan)
 PLAN-PROMPTS-PRUNE: execute-plan-step-3-4-primary-cadence -> docs/history/plans/completed/2026-10-18-done-final-only-learn-intermediate.md (completed plan exists and its origin row is deleted; pruned by the maintenance monitor)
 
 PLAN-PROMPTS-PRUNE: code-family-certification-digest-scope-and-tip-moves -> docs/history/plans/2026-10-24-code-family-cert-digest-scope.md (landed plan authoring record ba477eb80054f8d0a50e560c66b562d6bc335cda, review r5 ready=yes zero blocking, seal .ai-playbook/review-certs/code-family-cert-digest-scope.md; own entry pruned with its plan landing; origin row archived to completed/ with the covered flip in the same change)
 
-## landing-diagnostic-own-plan-target
+## plan-delta-classifier-new-plan-baseline
 
-Added: 2026-10-21, investigate pass anchored on the landing-diagnostic row filed by the session analysis of the plan-validation-command-undefined-repo execution run (landed 28127e322); the row's archaeology was corrected in the same pass (the procedure text already scopes the record to this plan)
+Added: 2026-10-28, investigate after the authored plan was absent from the classifier baseline commit
 
-Work-type verdict: plan-worthy because the fix edits the receipt contract of a just-landed plan (Task 2 of `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md` is the declared single source for receipt branch behavior, so its outcome matrix and both ledger headers reconcile together), spanning the plans skill's landing-closeout bullet and the tracked ledger `docs/history/certification-seal-landing-diagnostics.md`, with one open design choice (where the identity sentence lives); the Ad-hoc backlog arm's single-surface test fails (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm).
-
-Origins:
-- docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md
-
-Stage 1 roster (design context, not an origin): `docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md` (same diagnostic surface; its readiness-not-pass residual over an archived identity is the matrix's own row and stays with that row).
-
-Urgency: low - the diagnostic is warning-only and the witnessed receipt is honest about observing nothing, but a receipt whose `plan_path` names a foreign plan certifies nothing about the landing that produced it, and the second receipt on the ledger already took that shape (1846d9e6b), so the ledger's signal decays with every landing until the identity tie is stated.
-
-Scope arms:
-- Identity sentence (the smallest arm): one contract sentence beside the receipt content contract (the ledger header in `docs/history/certification-seal-landing-diagnostics.md` or the Post-squash certification diagnostic arm in `agents/skills/plans/SKILL.md`), requiring the receipt's `plan_path` to equal the landing's own archived-plan identity and its `source_worktree_head` the landing's own source worktree, a mismatch routing the receipt through the existing `docs/history/certification-seal-landing-diagnostic-write-failures.md` fallback rather than the main ledger.
-- Matrix reconciliation: the sentence's branch is reconciled with Task 2's receipt outcome matrix (the declared single source) so the matrix carries the mismatch row and both ledger headers keep pointing at it; no second branch source.
-- Anti-growth: the receipt content contract is the home the sentence extends; the plan deletes equivalent bytes from the procedure arm where it restates the matrix.
-
-Orientation: the diagnostic landed at 097826d60 (2026-10-21) as a manual plans-skill procedure whose text already reads "the highest ready review record for this plan"; the witnessed receipt (appended at landing 28127e322, committed by a peer as 1846d9e6b) resolved `plan_path` to a peer's open plan and `source_worktree_head` to a third session's worktree, every validator `not run` with the warning `not_observed`, so the failure is a producer resolving "this plan" against the corpus instead of the landing, with no post-append check tying the receipt to the landed identity.
-
-Prompt: Author a plan from `docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md` that ties every certification-seal landing receipt to the landing that produced it. Read the row, the Post-squash certification diagnostic arm of the landing-closeout bullet in `agents/skills/plans/SKILL.md`, both ledger headers, Task 2's receipt outcome matrix in `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md`, the two receipts on the primary ledger, and the Machinery admission protocol. Task 1: add the identity sentence (receipt `plan_path` equals the landing's archived-plan identity, `source_worktree_head` the landing's own source worktree; a mismatch routes to the write-failures fallback) at the home the plan chooses, and add the mismatch row to the outcome matrix keeping one branch source. Task 2: pay growth with deletion in the procedure arm. Do not add a producer script, a new ledger, a lock, or a closeout condition; the diagnostic stays warning-only. Validation: the hygiene scan, `check-no-em-dash.sh touched`, the document-registry validator, and the pins suite exit 0.
-
-Rejected alternatives:
-- Add a mechanical producer script keyed on the landing commit that resolves the plan and worktree itself: rejected as the first arm because it adds a landing-side component for a warning-only diagnostic with no witnessed incident beyond one foreign-target receipt, while the identity sentence removes the witnessed cost at sentence cost (`docs/history/certification-seal-landing-diagnostics.md`)
-- Narrow the record selection rule in the procedure text: rejected because the text already scopes the record to this plan and the witnessed receipt is a resolution drift, not a selection-rule defect (the corrected archaeology in `docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md`)
-- Remove the diagnostic until a producer exists: rejected because the diagnostic is the landed warning-only detector for the squash-orphaned seal class and its first receipt already rode a real landing (ada922c7e; `docs/history/plans/completed/2026-10-20-certification-seal-landing-survival.md`)
-- Promote the identity check to a blocking closeout condition: rejected because the certifying plan fixed the diagnostic as warning-only adding no closeout condition, and no witnessed incident shows a foreign receipt misleading a landing decision (`agents/skills/plans/SKILL.md`)
-
-Standing pre-authorization: the identity sentence and the matrix row; the sentence's home is the authoring-side decision.
-
-Machinery admission: no new gate, validator, lock, ledger, or ceremony; the producer-script arm is rejected above with the missing-incident absence named, and the identity sentence routes a mismatch through an existing fallback ledger.
-
-## hard-mode-clause-pointer-residuals
-
-Added: 2026-10-23, learn run's investigate pass over the two residual rows filed by the review-staging hard-validator execution run's Phase 3 panels (landed 2a99f9554)
-
-Work-type verdict: plan-worthy on the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): both origins' remedies require regenerating the pins drift-guard section list inside `scripts/check_maintenance_pins.sh`, a banned whole path on the arm's mechanical denylist, so neither row is ad-hoc-eligible and the clustered pair routes as one plans-scope entry.
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this changes a shared classifier and its tests, crosses the single-surface test, and still has a design choice between recovering a first-draft baseline and routing absence through the existing fresh-review default.
 
 Origins:
-- docs/history/backlog/2026-10-23-hard-mode-pointer-coverage-extensions.md
-- docs/history/backlog/2026-10-23-hard-mode-pointer-pinning-and-fixture-residuals.md
+- docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md
 
-Urgency: low - print-layer diagnostics and test-pinning quality only; validator verdicts, exits, and readiness routing are unchanged and no lane is blocked; both rows name their remedies and price riding the next change on the pointer surface.
+Stage 1 roster (design context, not origins): `docs/history/backlog/2026-10-18-plan-delta-classifier-scope-fold.md` (same classifier surface, quarantined row about inline-code/link hunk classification); `docs/history/backlog/2026-10-18-plan-fold-unclassified-authorization-record.md` (same review-loop surface, distinct authorization and evidence-retention concern). Keep those causes separate and do not widen this plan to them.
 
-Scope arms:
-- Coverage extensions: add the eight named marker families from the first origin row to `SKILL_CLAUSE_POINTERS` in `scripts/validate_review_staging.py` with their owning sections, add the more specific marker ahead of the generic conservation marker for the pattern-disagrees precision nit, extend the selftest's pointer mapping/fallback checks to the new mappings, regenerate the pins drift-guard section list in the same change, and price any skill-side growth per the anti-growth rules.
-- Pinning and fixture builders: hardcode the expected `(review-staging SKILL.md, <section>)` suffix per origin-family line in the hard-mode diagnostics arm so mappings are pinned against a wrong section (T1), anchor marker matching per marker shape instead of substring-anywhere (C3), compose the arm from the shared fixture builders instead of the per-arm copies (D2), route the drift-guard's raw `exit 1` arms through the pins suite's fail-plus-emit_outcome funnel (R2-1), and complete the drift-guard provenance comment with the r1 review-record admission link and review date (R2-4).
-- Origin rows: resolve per the covered-row rule with the landing as witness.
-
-Orientation: the clause-pointer mechanism is one execution old (landed 2a99f9554 with a clean r2 round and a mutation-proven selftest); the residuals are deferred valid panel findings, not incidents - the misroute class (C3) is reproduced only on contrived author-controlled input, and the un-pinned mappings (T1) are proven by mutation, never by a wrong landing. One landing pays the pins-regeneration cost once for both rows on the shared surface.
-
-Prompt: Author and land the pointer-surface residuals per the two origin rows and scope arms. Read both rows, the pointer table and `_skill_clause_pointer` in `scripts/validate_review_staging.py`, the hard-mode diagnostics selftest arm, the drift-guard block in `scripts/check_maintenance_pins.sh`, and the completed plan's Phase 3 records for the finding provenance. Add the mappings with selftest coverage, pin the existing mappings' suffixes, anchor the matching, refactor the fixture copies onto the shared builders, route the drift-guard exits through the outcome funnel, and complete the provenance comment. No new gate, refusal class, or schema field; keep the first-error routing and all existing outcomes byte-stable; run the validator selftest, the plan-readiness regression, and the pins suite green before the round.
-
-Rejected alternatives:
-- Ad-hoc route for the coverage row alone (split the group): rejected - its remedy regenerates the drift-guard list in the pins suite, a banned whole path in the Ad-hoc backlog arm's denylist (`agents/skills/maintenance/decisions.md`, Ad-hoc backlog arm)
-- Remove the pointer table and fall back to the bare skill name everywhere (remove): rejected - the mechanism landed this run against the origin incident's eight fix-validate rounds, and removal regresses the repair efficiency it was priced on (completed plan docs/history/plans/completed/2026-10-22-review-staging-hard-validator-fail-fast-iteration.md)
-- Pin-only pass deferring coverage (keep and narrow): rejected as the sole arm - both rows share one surface and one change class, and a second landing would pay the pins-regeneration and digest re-bind cost twice (docs/history/backlog/2026-10-23-hard-mode-pointer-pinning-and-fixture-residuals.md)
-- New blocking gate over pointer drift beyond the existing drift-guard exits: rejected with the missing-incident absence named - no witnessed incident of a renamed section leaving a pointer aiming at nothing (checker-passing evidence basis: the drift guard added this run has fired zero times)
-
-Machinery admission: no new gate, validator, lock, ledger, or ceremony; the remedies extend an existing validator's diagnostics, its selftest, and an existing drift guard's routing. The rejected machinery arm is named above with the missing-incident absence.
-
-Standing pre-authorization: none - the entry dispatches through the normal plans selection rule.
-
-## verify-digest-recompute-endpoint-vs-additive-commits
-
-Added: 2026-10-27, learn Step 1.9 + investigate over the self-heal-before-workflow-stop execute-plan session (r1 record re-bind witness; cluster annotation swept).
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin row leaves an open design choice between two remedy shapes (endpoint-honoring recompute versus an additive-delta auto re-bind arm) touching an existing validator's refusal semantics; it is not a body-named single-surface fix with no open design choice, though the chosen shape itself stays script-bounded.
-
-Origins:
-- docs/history/backlog/2026-10-27-verify-digest-recompute-head-vs-expect-head.md
-
-Stage 1 roster: single origin; the cluster sweep annotated one sibling, the digest-family mismatch row docs/history/backlog/2026-10-22-producer-review-findings-followups.md (producer-vs-verifier digest-source disagreement), which shares the refusal-forces-manual-work defect class but not the endpoint mechanism, so it stays its own group.
-
-Urgency: low - the refusal is workable (its own text routes to the corrections re-bind) and fires only when a base-branch commit lands between a landing and its record verification; the cost is a manual re-bind per occurrence, witnessed once.
+Urgency: low - the current authoring run recovered through fresh full-panel reviews and passed plan readiness; missing-baseline handling affects future authoring convenience, while the existing review safeguard remains available (`docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`).
 
 Scope arms:
-- Endpoint arm: keep the live-HEAD recompute (the docstring's "refuses rather than verify against an unknown HEAD" intent, introduced f3894756d) and add an explicit corrections re-bind arm that, when the `expect_head..HEAD` delta touches zero record-scope paths, re-binds the record's digest and sidecar automatically and records the delta-path witness.
-- Endpoint-honoring arm (alternative shape, decided at authoring): make `--expect-head` the recompute endpoint when passed; rejected in this entry because it inverts the freshness gate's deliberate live-HEAD intent and lets a stale head rubber-stamp a record.
-- Semantics-only arm: document the current-HEAD endpoint in `--help` and the skill text so callers pre-verify before record-capture commits; cheapest, but it leaves the witnessed manual cost in place.
+- Resolve the missing baseline through an existing initial-draft artifact if one is already available, preserving exact bytes and avoiding a new commit checkpoint.
+- When no baseline artifact exists, return an explicit absent-baseline result that follows the existing unclassified-change fresh-review path; do not require operator acknowledgement or stop unrelated work.
+- Commit every first draft solely to manufacture a classifier baseline: rejected because it adds a checkpoint to every plan-authoring run and turns classifier convenience into a new prerequisite (`agents/skills/plans/SKILL.md`).
+- Add a separate blocking baseline-presence gate: rejected because the current fresh-review route safely handles the semantic change and no additional lane harm was witnessed (`docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`).
+- Treat the entire new plan as format-exempt: rejected because file absence supplies no evidence that the whole-file addition is mechanical, while the plans skill requires fresh review for unclassified semantic changes (`agents/skills/plans/SKILL.md`).
 
-Orientation: read the origin row, `verify_digest` in `scripts/review_record_selection.py` (the `_resolve_commit(repo, "HEAD")` recompute leg and the `--expect-head` comparison leg), the corrections arm in the staging validator, and the sibling row's digest-family witness before choosing the shape. Disk re-derivation at write time confirmed the recompute leg reads HEAD and the refusal text routes to the corrections arm.
+Orientation: read the origin row and both Stage 1 roster rows; review rule 2 and the post-round digest rule in `agents/skills/plans/SKILL.md`; inspect the missing-blob refusal in `scripts/plan_delta_classifier.py`; and read the classifier correction and refusal-preservation evidence in `docs/history/plans/completed/2026-10-12-execute-plan-task-contract-recovery.md`. Preserve the existing semantic review safeguard and classify this as a tool-input boundary issue, not a hunk-content issue.
 
-Prompt: Author a narrowly scoped plan resolving the origin row's open design choice per the scope arms. Land the chosen shape in `scripts/review_record_selection.py` with selftest coverage for both refusal classes (genuine scope drift stays fail-closed; the additive no-plan-scope-delta case either auto re-binds with a recorded witness or is documented as caller-owned), update the verify-digest help text, and keep the existing outcome vocabulary and exit contract byte-stable. Run the record-selection suite, the plan-readiness regression, and the public hygiene and em-dash checks; resolve the origin row per the covered-row rule with the landing as witness.
+Prompt: Author a focused plan for `docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`. Determine whether an existing initial-draft artifact can provide an exact classifier baseline. If none can, make absent-baseline handling explicit and route the plan through the existing unclassified-change fresh-review path. Preserve tracked-plan classification behavior and the semantic review gate; do not add an operator-ack dependency, a mandatory first-draft commit, or a new blocker. Keep unrelated authoring and maintenance work moving, report the fallback clearly, and test the new-plan and existing-baseline paths with the smallest focused fixture set. Keep the two Stage 1 design-context origins outside this plan because they describe different defects. Use the plans skill lifecycle and review gates; leave this origin row for the plan completion pass to dispose.
 
 Rejected alternatives:
-- Honor `--expect-head` as the recompute endpoint: rejected because the verifier's introduction intent is freshness against live HEAD ("refuses rather than verify against an unknown HEAD", `scripts/review_record_selection.py` verify_digest docstring) and the operand is a comparison value, not an endpoint; honoring it lets a stale recorded head pass a drifted record (witnessed: the recompute leg reads live HEAD by design, scripts/review_record_selection.py)
-- Remove the freshness gate (remove): rejected - the stale-record refusal carries protective value from the witnessed stale-record class, and the sibling row shows the gate is the operative freshness instrument for code-family records (docs/history/backlog/2026-10-22-producer-review-findings-followups.md)
-- Pins-suite or test-only change codifying today's behavior (keep): rejected as the sole arm - it adds no behavior change and leaves the witnessed manual re-bind cost on every additive commit between landing and verification
-- Auto re-bind without a delta-path witness: rejected - an unrecorded re-bind could bless a record past a genuine scope change; the witness line is what keeps the arm auditable (witnessed: the manual re-bind this session recorded named its delta paths before the verifier accepted the record, docs/history/backlog/2026-10-27-verify-digest-recompute-head-vs-expect-head.md)
+- Add a mandatory first-draft commit as the baseline: rejected because it adds repeated checkpoint ceremony when an explicit existing-reviews fallback can preserve safety (`agents/skills/plans/SKILL.md`)
+- Require operator acknowledgement for an absent baseline: rejected because the existing fresh-review default covers unclassified semantic edits without this human handoff (`docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`)
+- Classify the absent-baseline whole-file addition as format-exempt: rejected because absence alone cannot prove mechanical edits and the plans skill routes unclassified changes to fresh review (`agents/skills/plans/SKILL.md`)
+- Add a new blocking baseline-presence gate: rejected because the same witnessed case succeeded through existing fresh review and no independent lane-level incident was observed (`docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`)
 
-Machinery admission: the recommended arm extends an existing validator with one bounded auto re-bind behavior; incident: docs/history/backlog/2026-10-27-verify-digest-recompute-head-vs-expect-head.md; expected catch frequency: every additive base-branch commit between a landing and its record verification (witnessed once, 2026-10-27); false-positive cost: an incorrect auto re-bind could bless a stale record - bounded by the zero-record-scope-path check over the recompute delta; sunset/review: review at the next digest-family touch beside the sibling row's resolution.
+Machinery admission: no new gate, validator, lock, ledger, or ceremony is recommended; a baseline-presence blocker is rejected because no additional witnessed incident exists and the existing fresh-review route already preserves semantic review (`docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md`).
 
-Standing pre-authorization: none.
+Standing pre-authorization: none - choosing between exact first-draft recovery and an explicit absent-baseline classification affects the shared classifier contract and needs normal plan review.
 
 PLAN-PROMPTS-PRUNE: primary-log-branch-drift-at-commit -> docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md
 
@@ -479,3 +294,4 @@ PLAN-PROMPTS-PRUNE: authoring-resume-after-operator-reauthorization -> docs/hist
 PLAN-PROMPTS-PRUNE: done-run-untrack-ignored-path -> docs/history/plans/2026-10-27-done-run-untrack-ignored-path.md (frozen entry pruned with the plan landing; origin row covered by the landing)
 PLAN-PROMPTS-PRUNE: exec-entry-prompt-shadows-adhoc-arm-machinery -> docs/history/plans/2026-10-26-adhoc-entry-prompt-contract-and-plans-wording-preference.md
 PLAN-PROMPTS-PRUNE: self-heal-before-workflow-stop -> docs/history/plans/2026-10-27-self-heal-before-workflow-stop.md
+PLAN-PROMPTS-PRUNE: pending-receipt-removal-audit-promotion -> docs/history/plans/2026-10-28-pending-receipt-removal-audit-promotion.md

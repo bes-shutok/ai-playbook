@@ -16,7 +16,12 @@ author_session_id schema (operator-acked plan-family rows only), and
 the primary-state authorization route (the fixed scheduler-state
 selector, the matched correction_authorizations entry, and the
 kind-aware classification bypass for a fully verified operator-acked
-plan hop).
+plan hop), and the reviewed-scope byte function with its three-outcome
+routing (bytes, bookkeeping-only, unresolved) and the anchor and
+binding legs that consume it, and the rebased-tip re-pin (a rebase
+whose new merge-base stays outside the reviewed scope re-pins green
+through the byte function; a reviewed merge-base edit still refuses
+through the digest re-hash, never a dating message).
 """
 
 import fcntl
@@ -2119,6 +2124,411 @@ class RegionScannerTest(unittest.TestCase):
         self.assertEqual(cr.excluded_char_spans(t), [])
         self.assertEqual(cr.excluded_line_numbers(t), set())
         self.assertFalse(cr.line_fully_excluded(t, 1))
+
+
+class ReviewedScopeDigestTest(unittest.TestCase):
+    """The reviewed-scope byte function and the digest sites that consume
+    it (code-family-cert-digest-scope plan, Task 1): the certified range's
+    delta is computed at the git layer with pathspec exclusion, a
+    bookkeeping-path write never moves a pinned digest, a spoofed
+    ``diff --git`` payload inside a bookkeeping path never binds, an
+    all-bookkeeping range is the distinct bookkeeping-only outcome (never
+    a digest over empty bytes), a raw-empty delta still hashes over empty
+    bytes, and a plumbing failure keeps the existing refusal shape."""
+
+    BACKLOG_ROW = "docs/history/backlog/residual-row.md"
+
+    def scope_fixture(self, backlog_body="# residual row\n"):
+        """Certified range b0..c2 whose diff spans one source commit, one
+        bookkeeping-only commit, and a second source commit; the seal
+        entry mints through the reviewed-scope byte function. Dates pinned
+        and increasing."""
+        repo = cr.build_scratch_repo(self)
+        b0 = repo.commit_file("src/app.py", "def f():\n    return 1\n",
+                              "base")
+        c1 = repo.commit_file("src/app.py", "def f():\n    return 2\n",
+                              "one")
+        bk = repo.commit_file(self.BACKLOG_ROW, backlog_body,
+                              "bookkeeping append")
+        c2 = repo.commit_file("src/app.py", "def f():\n    return 3\n",
+                              "two")
+        close = repo.commit_allow_empty("round close")
+        outcome, data = cr.reviewed_scope_bytes(repo.root, b0, c2)
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        digest = cr.sha256_hex(data)
+        repo.append_seal_entry("acme-src", 1, "src/app.py", c2, digest,
+                               close, reviewed=(b0, c2, digest))
+        return repo, {"b0": b0, "c1": c1, "bk": bk, "c2": c2, "close": close,
+                      "scope": data, "digest": digest}
+
+    def pure_source_fixture(self):
+        """The pre-scope fixture shape: a certified range over source
+        commits only, minted from the raw diff bytes (whole-diff hashing
+        and reviewed-scope hashing coincide on it), so the fixture runs
+        green on both sides of the change as a regression guard."""
+        repo = cr.build_scratch_repo(self)
+        b0 = repo.commit_file("src/app.py", "def f():\n    return 1\n",
+                              "base")
+        c1 = repo.commit_file("src/app.py", "def f():\n    return 2\n",
+                              "one")
+        close = repo.commit_allow_empty("round close")
+        digest = hx(repo.git("diff",
+                             "%s...%s" % (b0, c1)).stdout.encode())
+        repo.append_seal_entry("acme-src", 1, "src/app.py", c1, digest,
+                               close, reviewed=(b0, c1, digest))
+        return repo, {"b0": b0, "c1": c1, "close": close, "digest": digest}
+
+    def test_bookkeeping_write_never_moves_the_certified_digest(self):
+        # The range's whole-diff hash carries the bookkeeping bytes, the
+        # reviewed-scope hash does not, and the anchor leg re-derives the
+        # certified digest through the byte function.
+        repo, fx = self.scope_fixture()
+        whole = cr.diff_bytes(repo.root, fx["b0"], fx["c2"])
+        self.assertIn(b"residual row", whole)
+        self.assertNotEqual(cr.sha256_hex(whole), fx["digest"])
+        outcome, data = cr.reviewed_scope_bytes(repo.root, fx["b0"],
+                                                fx["c2"])
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        self.assertNotIn(b"residual row", data)
+        self.assertEqual(cr.sha256_hex(data), fx["digest"])
+        # Zero-hop verification over the range that carries the
+        # bookkeeping commit verifies: the anchor leg reads the
+        # reviewed-scope bytes.
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["b0"], "head": fx["c2"]},
+            head=fx["close"])
+        self.assertTrue(ok, msg)
+        # A post-certification bookkeeping append moves the tip without
+        # moving any instrument's digest: the certified range's
+        # reviewed-scope bytes are byte-identical across the append.
+        repo.commit_file("docs/history/backlog/second-row.md",
+                         "# second residual\n", "post-cert append")
+        outcome_after, data_after = cr.reviewed_scope_bytes(
+            repo.root, fx["b0"], fx["c2"])
+        self.assertEqual(outcome_after, cr.SCOPE_BYTES, outcome_after)
+        self.assertEqual(data_after, fx["scope"])
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["b0"], "head": fx["c2"]},
+            head=fx["close"])
+        self.assertTrue(ok, msg)
+
+    def test_spoofed_diff_headers_in_a_bookkeeping_path_never_bind(self):
+        # A bookkeeping-path commit embedding crafted ``diff --git``
+        # header lines cannot escape into the reviewed-scope bytes: the
+        # digest still binds the real source hunks.
+        spoof = (
+            "# residual row\n\n"
+            "attacker payload:\n"
+            "diff --git a/src/app.py b/src/app.py\n"
+            "--- a/src/app.py\n"
+            "+++ b/src/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-def f():\n"
+            "+def pwned():\n"
+            "+    return 0\n"
+        )
+        repo, fx = self.scope_fixture(backlog_body=spoof)
+        whole = cr.diff_bytes(repo.root, fx["b0"], fx["c2"])
+        self.assertIn(b"pwned", whole)
+        self.assertIn(b"diff --git a/src/app.py", whole)
+        outcome, data = cr.reviewed_scope_bytes(repo.root, fx["b0"],
+                                                fx["c2"])
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        self.assertNotIn(b"pwned", data)
+        self.assertEqual(cr.sha256_hex(data), fx["digest"])
+        # Byte identity with a spoof-free twin carrying the same source
+        # commits: the crafted headers contribute nothing to the
+        # reviewed-scope bytes.
+        clean = cr.build_scratch_repo(self)
+        cb0 = clean.commit_file("src/app.py", "def f():\n    return 1\n",
+                                "base")
+        clean.commit_file("src/app.py", "def f():\n    return 2\n", "one")
+        cc2 = clean.commit_file("src/app.py", "def f():\n    return 3\n",
+                                "two")
+        _clean_outcome, clean_data = cr.reviewed_scope_bytes(
+            clean.root, cb0, cc2)
+        self.assertEqual(data, clean_data)
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["b0"], "head": fx["c2"]},
+            head=fx["close"])
+        self.assertTrue(ok, msg)
+
+    def test_all_bookkeeping_range_is_the_bookkeeping_only_outcome(self):
+        # A non-empty raw diff filtering to zero reviewed bytes is the
+        # distinct bookkeeping-only outcome, never a digest over empty
+        # bytes; the anchor leg refuses naming it.
+        repo = cr.build_scratch_repo(self)
+        b0 = repo.commit_file("src/app.py", "def f():\n    return 1\n",
+                              "base")
+        bk = repo.commit_file(self.BACKLOG_ROW, "# only bookkeeping\n",
+                              "bookkeeping only")
+        raw = cr.diff_bytes(repo.root, b0, bk)
+        self.assertTrue(raw.strip(), raw)
+        outcome, data = cr.reviewed_scope_bytes(repo.root, b0, bk)
+        self.assertEqual(outcome, cr.SCOPE_BOOKKEEPING_ONLY, outcome)
+        # The consuming anchor leg refuses the empty-bytes digest shape
+        # through the named outcome, never by hashing empty bytes.
+        empty_digest = hx(b"")
+        repo.append_seal_entry("acme-src", 1, "src/app.py", bk,
+                               empty_digest, bk,
+                               reviewed=(b0, bk, empty_digest))
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, empty_digest, [],
+            slug="acme-src", head=bk)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", "bookkeeping-only",
+                       "reviewed-scope")
+        self.assertNotIn("do not re-hash", msg)
+        # A correction hop whose own delta is bookkeeping-only refuses at
+        # the binding leg through the same named outcome. The hop's after
+        # base is the seal-entry commit, so the c2..hop range carries only
+        # the backlog change.
+        repo2, fx = self.scope_fixture()
+        entry_tip = repo2.head()
+        bk2 = repo2.commit_file("docs/history/backlog/hop-row.md",
+                                "# hop bookkeeping\n", "bookkeeping hop")
+        hop = code_row(fx["b0"], fx["c2"], entry_tip, bk2, fx["digest"],
+                       hx(b"never-minted"))
+        ok, msg = cr.verify_corrections(
+            repo2.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"],
+            [hop], slug="acme-src",
+            certified_range={"base": fx["b0"], "head": fx["c2"]},
+            head=bk2)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "binding", "bookkeeping-only",
+                       "reviewed-scope")
+
+    def test_raw_empty_delta_still_hashes_over_empty_bytes(self):
+        # The empty-range behavior is preserved: a delta that is empty raw
+        # and empty filtered is the bytes outcome over b"" (today's
+        # sha256-of-empty shape), never bookkeeping-only.
+        repo = cr.build_scratch_repo(self)
+        b0 = repo.commit_file("src/app.py", "def f():\n    return 1\n",
+                              "base")
+        empty = repo.commit_allow_empty("empty closeout commit")
+        outcome, data = cr.reviewed_scope_bytes(repo.root, b0, empty)
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        self.assertEqual(data, b"")
+        self.assertEqual(cr.sha256_hex(data), hx(b""))
+
+    def test_reviewed_source_edit_moves_the_digest(self):
+        # Regression guard: a commit on a reviewed source path moves the
+        # digest, verified through the production byte function and a
+        # one-hop chain over a pure-source range (whole-diff and
+        # reviewed-scope hashing coincide there, so the chain binds
+        # exactly as before the byte function existed). The closing leg
+        # pins the routing itself: a bookkeeping-only tip movement leaves
+        # the instrument digest unchanged, so a whole-diff revert of the
+        # byte function flips this test.
+        repo, fx = self.pure_source_fixture()
+        e1 = repo.commit_file("src/app.py", "def f():\n    return 9\n",
+                              "reviewed edit")
+        outcome, data = cr.reviewed_scope_bytes(repo.root, fx["b0"], e1)
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        moved = cr.sha256_hex(data)
+        self.assertNotEqual(moved, fx["digest"])
+        hop_outcome, hop_bytes = cr.reviewed_scope_bytes(
+            repo.root, fx["c1"], e1)
+        self.assertEqual(hop_outcome, cr.SCOPE_BYTES, hop_outcome)
+        hop = code_row(fx["b0"], fx["c1"], fx["c1"], e1, fx["digest"],
+                       cr.sha256_hex(hop_bytes))
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"],
+            [hop],
+            slug="acme-src",
+            certified_range={"base": fx["b0"], "head": fx["c1"]},
+            head=e1)
+        self.assertTrue(ok, msg)
+        bk = repo.commit_file(self.BACKLOG_ROW,
+                              "# reviewed-scope append\n",
+                              "bookkeeping append")
+        bk_outcome, bk_bytes = cr.reviewed_scope_bytes(
+            repo.root, fx["b0"], bk)
+        self.assertEqual(bk_outcome, cr.SCOPE_BYTES, bk_outcome)
+        self.assertEqual(cr.sha256_hex(bk_bytes), moved)
+
+    def test_plumbing_failure_over_the_range_propagates_the_refusal(self):
+        # A git plumbing failure over the range keeps the existing
+        # indeterminate/refusal shape and is never read as the
+        # bookkeeping-only outcome.
+        repo, fx = self.pure_source_fixture()
+        real_run_git = cr.run_git
+
+        def failing_diff(repo_arg, *args):
+            if args[:1] == ("diff",):
+                return subprocess.CompletedProcess(
+                    ["git"], 128, b"", b"plumbing down")
+            return real_run_git(repo_arg, *args)
+
+        with mock.patch.object(cr, "run_git", side_effect=failing_diff):
+            ok, msg = cr.verify_corrections(
+                repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"],
+                [], slug="acme-src", head=fx["close"])
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", "round-start diff",
+                       "unresolvable")
+        self.assertNotIn("bookkeeping", msg)
+
+
+class RebasedTipRepinTest(unittest.TestCase):
+    """The rebased-tip re-pin (code-family-cert-digest-scope plan, Task
+    3): a range rebased onto a new merge-base whose reviewed-scope delta
+    bytes are unchanged re-pins green through the byte function, and a
+    rebase whose new merge-base touched a reviewed source path still
+    refuses with the digest re-hash as the named reason, never a dating
+    message. The rebased commits carry committer dates pinned at or
+    before the re-pinned round-close commit, so the dating leg never
+    masquerades as the refusal cause."""
+
+    RESIDUAL_ROW = "docs/history/backlog/residual-row.md"
+    APP_V1 = "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\n"
+    APP_C1 = ("alpha\nbravo\ncharlie\ndelta-one\necho\nfoxtrot\ngolf\n"
+              "hotel\n")
+    APP_C2 = ("alpha\nbravo\ncharlie\ndelta-one\necho-two\nfoxtrot\ngolf\n"
+              "hotel\n")
+    # The upstream reviewed edit lands on a line inside the branch
+    # hunks' context window, so the replayed patch text (and its
+    # re-derived digest) necessarily differs while the replay stays
+    # clean.
+    APP_UPSTREAM_REVIEWED = (
+        "alpha\nbravo-upstream\ncharlie\ndelta\necho\nfoxtrot\ngolf\n"
+        "hotel\n")
+
+    def committer_date(self, repo, commit):
+        return int(repo.git("show", "-s", "--format=%ct",
+                            commit).stdout.split()[0])
+
+    def rebase_fixture(self, upstream_reviewed):
+        """A certified range m..c2 sealed on a review branch that forks
+        at its own base, then the branch rebased onto a new merge-base
+        carrying one upstream commit: a bookkeeping append, or a
+        reviewed source edit when upstream_reviewed. The rebase runs
+        with --committer-date-is-author-date, so the replayed commits
+        keep their pinned committer dates at or before the replayed
+        round-close commit."""
+        repo = cr.build_scratch_repo(self)
+        m = repo.commit_file("src/app.py", self.APP_V1, "seed app")
+        c1 = repo.commit_file("src/app.py", self.APP_C1, "one")
+        c2 = repo.commit_file("src/app.py", self.APP_C2, "two")
+        close = repo.commit_allow_empty("round close")
+        outcome, data = cr.reviewed_scope_bytes(repo.root, m, c2)
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        digest = cr.sha256_hex(data)
+        entry = repo.append_seal_entry("acme-src", 1, "src/app.py", c2,
+                                       digest, close,
+                                       reviewed=(m, c2, digest))
+        repo.git("branch", "review")
+        repo.git("checkout", "-q", "-b", "upstream", m)
+        if upstream_reviewed:
+            merge_base = repo.commit_file("src/app.py",
+                                          self.APP_UPSTREAM_REVIEWED,
+                                          "upstream reviewed edit")
+        else:
+            merge_base = repo.commit_file(
+                self.RESIDUAL_ROW, "# upstream residual row\n",
+                "upstream bookkeeping move")
+        repo.git("checkout", "-q", "review")
+        repo.git("rebase", "--committer-date-is-author-date", "upstream")
+        tip = repo.head()
+        close_p = repo.git("rev-parse", "%s~1" % tip).stdout.strip()
+        c2p = repo.git("rev-parse", "%s~2" % tip).stdout.strip()
+        c1p = repo.git("rev-parse", "%s~3" % tip).stdout.strip()
+        self.assertEqual(
+            repo.git("merge-base", "upstream", "review").stdout.strip(),
+            merge_base)
+        for replayed in (c1p, c2p):
+            self.assertLessEqual(self.committer_date(repo, replayed),
+                                 self.committer_date(repo, close_p))
+        return repo, {"m": m, "c2": c2, "close": close, "entry": entry,
+                      "digest": digest, "merge_base": merge_base,
+                      "c1p": c1p, "c2p": c2p, "close_p": close_p,
+                      "tip": tip}
+
+    def test_rebased_tip_repins_green_through_the_byte_function(self):
+        repo, fx = self.rebase_fixture(upstream_reviewed=False)
+        # Baseline: the sealed range verified zero-hop at the pre-rebase
+        # tip.
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["m"], "head": fx["c2"]},
+            head=fx["entry"])
+        self.assertTrue(ok, msg)
+        # The rebase orphans the pinned anchors: before the re-pin the
+        # same certification refuses through the anchor leg, the friction
+        # the re-pin step retires.
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["m"], "head": fx["c2"]},
+            head=fx["tip"])
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", "not an ancestor of HEAD")
+        # The new merge-base's bytes sit outside the reviewed scope: the
+        # delta re-derived through the byte function over the moved base
+        # pin is byte-identical, so the re-pinned digest is the pinned
+        # digest.
+        outcome, data = cr.reviewed_scope_bytes(repo.root,
+                                                fx["merge_base"],
+                                                fx["c2p"])
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        self.assertEqual(cr.sha256_hex(data), fx["digest"])
+        # Re-pin: the anchors move to the replayed OIDs and the base pin
+        # moves to the new merge-base; the digest re-derives unchanged.
+        repo.write_seal_entry("acme-src", 1, "src/app.py", fx["c2p"],
+                              fx["digest"], fx["close_p"],
+                              reviewed=(fx["merge_base"], fx["c2p"],
+                                        fx["digest"]),
+                              message="re-pin: rebased anchors")
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["merge_base"],
+                             "head": fx["c2p"]},
+            head=repo.head())
+        self.assertTrue(ok, msg)
+        self.assertIn("chain verified", msg)
+
+    def test_reviewed_merge_base_rebase_refuses_on_the_digest_re_hash(self):
+        repo, fx = self.rebase_fixture(upstream_reviewed=True)
+        # Premise: the new merge-base's reviewed edit moves the
+        # reviewed-scope bytes re-derived over the moved base pin.
+        outcome, data = cr.reviewed_scope_bytes(repo.root,
+                                                fx["merge_base"],
+                                                fx["c2p"])
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        self.assertNotEqual(cr.sha256_hex(data), fx["digest"])
+        # The anchors re-pin onto the replayed OIDs and the base pin
+        # moves to the new merge-base, with the pre-rebase digest
+        # carried over: the stale-certification shape a re-pin cannot
+        # absorb.
+        repo.write_seal_entry("acme-src", 1, "src/app.py", fx["c2p"],
+                              fx["digest"], fx["close_p"],
+                              reviewed=(fx["merge_base"], fx["c2p"],
+                                        fx["digest"]),
+                              message="re-pin: rebased anchors")
+        ok, msg = cr.verify_corrections(
+            repo.root, "src/app.py", cr.FAMILY_CODE, 1, fx["digest"], [],
+            slug="acme-src",
+            certified_range={"base": fx["merge_base"],
+                             "head": fx["c2p"]},
+            head=repo.head())
+        self.assertFalse(ok)
+        # The refusal reason is the digest re-hash over the re-derived
+        # scope bytes: the dating discipline holds by construction and
+        # the replayed anchors are ancestors, so no dating or anchor
+        # message masquerades as the cause.
+        assert_refusal(self, msg, "anchor", "do not re-hash")
+        self.assertNotIn("postdates", msg)
+        self.assertNotIn("dated before", msg)
+        self.assertNotIn("not an ancestor", msg)
+        self.assertNotIn(cr.LEG_REASONS["seal"], msg)
 
 
 class FixtureBuilderTest(unittest.TestCase):

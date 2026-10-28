@@ -54,6 +54,10 @@
 #   LAND_SQUASH_TEST_FAULT=diverge-origin fires at the post-CAS point and
 #       redirects the post-landing invocation's --origin-ref to the forged
 #       fixture ref refs/remotes/land-squash-fault/diverged.
+#   LAND_SQUASH_TEST_FAULT=prune-audit-unclassified (land-worktree only)
+#       reclassifies the wired prompt-log prune audit's exit to an
+#       unclassified value (42) after the audit ran, exercising the
+#       tool-error arm for a result the real checker cannot produce.
 #
 # The script carries no in-file selftest mode: the python unittest suite
 # scripts/test_land_squash.py is the fixture layer.
@@ -63,6 +67,7 @@ PROG="land-squash"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENTAGE_GATE="$SCRIPT_DIR/landing_parentage_gate.py"
 REVERSE_GUARD="$SCRIPT_DIR/reverse_squash_guard.py"
+PROMPT_LOG_AUDIT="$SCRIPT_DIR/check_prompt_log_origins.py"
 
 usage() {
   cat <<'EOF'
@@ -99,14 +104,27 @@ Modes:
   land-worktree
           The worktree-complete landing: the same lock authenticity and
           base-branch resolution as land (the invocation runs from the
-          primary checkout), with the source worktree addressed through the
-          worktree list by --branch. Verifies the source worktree's branch
-          ref and checked-out HEAD against --expected-tip (there
+          primary checkout), with the source worktree addressed through
+          the worktree list by --branch. Verifies the source worktree's
+          branch ref and checked-out HEAD against --expected-tip (there
           --expected-tip carries the expected source tip, never the base
-          tip), runs the wired check-landing base-freshness gate, composes
-          the squash in a GIT_INDEX_FILE-scoped temp index seeded from the
-          verified base tip over the branch's changed paths, reading the
-          source worktree's working-tree bytes, asserts tree equality
+          tip), runs the wired check-landing base-freshness gate, runs
+          the wired prompt-log prune audit when any commit in the landing
+          range (the merge base through the verified source tip) touched
+          either rolling prompt log (PLAN-PROMPTS.md or EXEC-PROMPTS.md;
+          commit-history touch detection with rename detection disabled,
+          so deletion, rename, or a later revert cannot hide a touch): a
+          receipt-less removal refuses the landing before any ref update
+          with one direct repair (put the removed entry's receipt in its
+          removal commit, squash or recommit the pair per lesson 234,
+          then retry); a checker tool error (exit 3 or unrecognized) is
+          a named tool error with refs unchanged, recovered by the
+          invoking workflow's single self-heal diagnosis/correction/retry
+          pass (park with the exact evidence when it persists; the audit
+          is never bypassed). Code-only ranges invoke no audit. Composes
+          the squash in a GIT_INDEX_FILE-scoped temp index seeded from
+          the verified base tip over the branch's changed paths, reading
+          the source worktree's working-tree bytes, asserts tree equality
           against the source branch tip, runs the wired plans-egress
           check-archive gate over the built landing commit anchored at the
           source worktree, runs the parentage gate's pre-swap invocation
@@ -127,11 +145,13 @@ on stdout matching the exit code: 0 pass; 1 fail (a modeled refusal: in land
 the prechecks, the tip-moved class, the tree-equality assertion, or a
 propagated gate fail; in land-worktree the source-worktree tip refusals, the
 tree-inequality assertion, the wired check-landing and check-archive
-refusals, the compare-and-swap refusal, or a propagated parentage-gate fail);
+refusals, the prompt-log prune-audit receipt-less-removal refusal, the
+compare-and-swap refusal, or a propagated parentage-gate fail);
 2 indeterminate (in land a land-time merge failure, the interleaved-tip
 refusal, or a mid-restore pipeline failure naming the unrestored paths; in
 land-worktree the interleaved-tip refusal); 3 tool error (lock authenticity,
-detached HEAD, an unresolvable ref, or a wired guard's tool failure).
+detached HEAD, an unresolvable ref, a wired guard's tool failure, or the
+prompt-log prune audit's tool error).
 --help is a metadata exit and emits no OUTCOME line.
 
 Test-only fault seam (fixtures only; production never sets these; every
@@ -741,9 +761,12 @@ if [[ "$MODE" == "land-worktree" ]]; then
   WTCL_ERR="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtcle.XXXXXX")"
   WTCA_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtca.XXXXXX")"
   WTCA_ERR="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtcae.XXXXXX")"
+  WTPA_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtpa.XXXXXX")"
+  WTPA_ERR="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtpae.XXXXXX")"
+  WT_TOUCH_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wttouch.XXXXXX")"
   WT_INDEX="$(mktemp "${TMPDIR:-/tmp}/land-squash-wt-index.XXXXXX")"
   WT_CHANGED="$(mktemp "${TMPDIR:-/tmp}/land-squash-wt-ch.XXXXXX")"
-  trap 'rm -f "$WTCL_OUT" "$WTCL_ERR" "$WTCA_OUT" "$WTCA_ERR" "$WT_INDEX" "$WT_CHANGED"' EXIT
+  trap 'rm -f "$WTCL_OUT" "$WTCL_ERR" "$WTCA_OUT" "$WTCA_ERR" "$WTPA_OUT" "$WTPA_ERR" "$WT_TOUCH_OUT" "$WT_INDEX" "$WT_CHANGED"' EXIT
 
   # The wired check-landing base-freshness gate, resolved adjacent to the
   # helper (the $SCRIPT_DIR precedent the parentage gate sets): guard exit 1
@@ -774,6 +797,64 @@ if [[ "$MODE" == "land-worktree" ]]; then
   # the source tip.
   BASE_TIP="$(git -C "$REPO_ROOT" rev-parse --verify "refs/heads/${BASE_BRANCH}")" || \
     tool_error "base branch ref unresolvable: refs/heads/${BASE_BRANCH}"
+
+  # The wired prompt-log prune audit, before commit composition and before
+  # the base ref moves. The landing range is every commit after the source
+  # branch's merge base with the resolved base tip through the verified
+  # source tip. When any commit in that range touched either rolling prompt
+  # log (commit-history detection with rename detection disabled, so a
+  # deletion, a rename, or a touch later reverted cannot hide), the existing
+  # checker audits the range's prompt-log removals exactly once, over both
+  # logs, with the verified source tip passed as the pinned upper endpoint
+  # (--head) so a concurrent worktree HEAD move cannot change the audited
+  # history. The checker anchor is an existing rolling log in the source
+  # worktree: the surviving sibling when the touched log was deleted (the
+  # checker audits both logs from either anchor). The audit's stdout and
+  # stderr are preserved in the landing receipt; PRUNE-OK lines are retained
+  # and a passing summary with no removals carries no PRUNE-OK line. Exit 1
+  # refuses before any landing ref update with the single direct repair;
+  # exit 3 or any unrecognized result is a named tool error with refs
+  # unchanged (the invoking workflow's single self-heal recovery owns the
+  # retry; the audit is never bypassed). A code-only range invokes no audit
+  # and keeps the existing landing path unchanged.
+  MERGE_BASE="$(git -C "$REPO_ROOT" merge-base "$BASE_TIP" "$SOURCE_TIP")" || \
+    tool_error "merge base unresolvable between the base tip and ${SOURCE_TIP}"
+  PROMPT_LOG_PLAN="docs/history/backlog/PLAN-PROMPTS.md"
+  PROMPT_LOG_EXEC="docs/history/backlog/EXEC-PROMPTS.md"
+  git -C "$REPO_ROOT" log --format=%H --no-renames \
+    "${MERGE_BASE}..${SOURCE_TIP}" -- "$PROMPT_LOG_PLAN" "$PROMPT_LOG_EXEC" \
+    > "$WT_TOUCH_OUT" || \
+    tool_error "git log over the landing range's prompt-log touch failed"
+  if [[ -s "$WT_TOUCH_OUT" ]]; then
+    if [[ -f "$SOURCE_WT/$PROMPT_LOG_PLAN" ]]; then
+      AUDIT_ANCHOR="$SOURCE_WT/$PROMPT_LOG_PLAN"
+    elif [[ -f "$SOURCE_WT/$PROMPT_LOG_EXEC" ]]; then
+      AUDIT_ANCHOR="$SOURCE_WT/$PROMPT_LOG_EXEC"
+    else
+      AUDIT_ANCHOR="$SOURCE_WT/$PROMPT_LOG_PLAN"
+    fi
+    WTPA_RC=0
+    python3 "$PROMPT_LOG_AUDIT" --prune-audit --base "$MERGE_BASE" \
+      --head "$SOURCE_TIP" "$AUDIT_ANCHOR" \
+      > "$WTPA_OUT" 2> "$WTPA_ERR" || WTPA_RC=$?
+    echo "prune-audit:"
+    echo "  anchor: $AUDIT_ANCHOR"
+    sed 's/^/  /' "$WTPA_OUT" || true
+    sed 's/^/  /' "$WTPA_ERR" || true
+    # Test-only seam at its single declared point: reclassifies a passing
+    # audit exit to an unclassified value so the tool-error arm is
+    # reachable without a fixture the real checker cannot produce.
+    if [[ "${LAND_SQUASH_TEST_FAULT:-}" == "prune-audit-unclassified" ]]; then
+      echo "test-only fault seam honored: prune-audit-unclassified (LAND_SQUASH_TEST_FAULT=prune-audit-unclassified): the prune-audit exit is reclassified to 42"
+      WTPA_RC=42
+    fi
+    if [[ "$WTPA_RC" -eq 1 ]]; then
+      echo "remedy: put the removed entry's receipt in its removal commit (the PLAN-PROMPTS-PRUNE/EXEC-PROMPTS-PRUNE ledger line or the same-commit receipt), squash or recommit that pair per lesson 234, then retry the landing"
+      emit_outcome fail
+      exit 1
+    fi
+    [[ "$WTPA_RC" -eq 0 ]] || tool_error "prompt-log prune audit failed (exit ${WTPA_RC})"
+  fi
 
   # Test-only seam at its single declared point between the check-landing
   # pass and the compare-and-swap.

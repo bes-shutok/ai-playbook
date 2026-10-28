@@ -97,12 +97,12 @@ Files:
 Primary class anchors:
 - `PlanReadinessDerivation` in `scripts/done_sweep_gates_lib.py`
 
-- [ ] Resolve the manifest directory with `plan_readiness.feature_slug(plan_rel)` and exempt only when its recorded repository-relative `plan_path` exactly matches `plan_rel`; keep active-state and freshness checks. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add parity coverage: a fresh active manifest at the canonical slug and exact plan path exempts the same dated candidate in direct derivation and the composed sweep. [class: REPOSITORY_TEST]
-- [ ] Add boundary coverage: absent, stale, inactive, unrelated, and same-slug wrong-path manifests do not exempt the candidate; stale review digests remain refused for candidates. [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: the fresh-active-manifest dated-path regression fails against the current date-prefixed lookup. [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: focused parity and boundary cases pass with existing manifest cases. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: align done active manifest lookup` [class: IMPLEMENTATION_REQUIRED]
+- [x] Resolve the manifest directory with `plan_readiness.feature_slug(plan_rel)` and exempt only when its recorded repository-relative `plan_path` exactly matches `plan_rel`; keep active-state and freshness checks. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add parity coverage: a fresh active manifest at the canonical slug and exact plan path exempts the same dated candidate in direct derivation and the composed sweep. [class: REPOSITORY_TEST]
+- [x] Add boundary coverage: absent, stale, inactive, unrelated, and same-slug wrong-path manifests do not exempt the candidate; stale review digests remain refused for candidates. [class: REPOSITORY_TEST]
+- [x] Run → expect RED: the fresh-active-manifest dated-path regression fails against the current date-prefixed lookup. [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: focused parity and boundary cases pass with existing manifest cases. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: align done active manifest lookup` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Preserve useful evidence for readiness child crashes
 
@@ -115,8 +115,8 @@ Files:
 Primary class anchors:
 - `GateResult` in `scripts/done_sweep_gates_lib.py`
 
-- [ ] When child output has no final `OUTCOME`, select the final non-empty detail from a traceback stream, retain current useful plain stderr selection, cap evidence at 200 characters, and preserve tool-error classification. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add subprocess fixtures for traceback wholly on stderr, stdout traceback plus useful stderr, plain stderr, empty output, and oversized detail; assert useful evidence, the 200-character cap, and unchanged tool-error classification. [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: a traceback wholly on stderr reports its header instead of its final exception detail under current selection. [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: all diagnostic fixtures pass and the existing gate suite remains green. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: retain readiness child crash detail` [class: IMPLEMENTATION_REQUIRED]
+- [x] When child output has no final `OUTCOME`, select the final non-empty detail from a traceback stream, retain current useful plain stderr selection, cap evidence at 200 characters, and preserve tool-error classification. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add subprocess fixtures for traceback wholly on stderr, stdout traceback plus useful stderr, plain stderr, empty output, and oversized detail; assert useful evidence, the 200-character cap, and unchanged tool-error classification. [class: REPOSITORY_TEST]
+- [x] Run → expect RED: a traceback wholly on stderr reports its header instead of its final exception detail under current selection. [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: all diagnostic fixtures pass and the existing gate suite remains green. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: retain readiness child crash detail` [class: IMPLEMENTATION_REQUIRED]

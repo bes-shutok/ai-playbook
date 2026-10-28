@@ -97,3 +97,9 @@ Files:
 - [x] Remove equivalent operative bytes from each edited skill file and add no machinery. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run plan readiness and the public hygiene scan for the changed files. [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: route recoverable closeout stops through self-heal` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-27-self-heal-before-workflow-stop.md`: covered by this plan (Status: covered recorded 2026-10-27; origin deleted in this completion pass; implementation witness: `execute-plan: land self-heal-before-workflow-stop`, 2026-10-27).
+- `docs/history/backlog/2026-10-27-self-heal-done-staging-classification-asks-label.md`: covered by Task 1 review correction (Status: covered recorded 2026-10-27; origin deleted on 2026-10-28; implementation witness: the done handoff names the side-repo staging asks and Step 0 lock return, 2026-10-27).
+- `docs/history/backlog/2026-10-27-self-heal-disposition-taxonomy-provider-enumeration.md`: covered by Task 1 review correction (Status: covered recorded 2026-10-27; origin deleted on 2026-10-28; implementation witness: consumer handoffs refer to one recorded recovery disposition, 2026-10-27).

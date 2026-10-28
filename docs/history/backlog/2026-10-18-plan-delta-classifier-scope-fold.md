@@ -8,6 +8,7 @@ Quarantine: 2026-10-27
 - **Origin class:** self-serving
 - **Class:** authoring-tooling
 - **Driving force:** efficiency
+- **Cluster:** docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md
 - **Source:** unclassified plan delta while resolving r5-r7 findings in `docs/history/plans/2026-10-18-done-live-owner-closeout-recovery.md`
 
 ## Problem

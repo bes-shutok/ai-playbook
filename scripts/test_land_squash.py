@@ -25,7 +25,16 @@ check-archive plans-egress refusal and its sanctioned-archive and
 operator-ack pass shapes, the wrong-source-tip refusals, the parentage
 pre-swap refusal, the base-mover compare-and-swap refusal, the diverge-origin
 informational note, the backward-peer indeterminate arm, and the
-omission-scope and usage-text audit."""
+omission-scope and usage-text audit. The wired prompt-log prune audit
+carries its own cases: a code-only range invokes no audit, a receipted
+removal passes with the PRUNE-OK line retained and exactly one audit call,
+the receipt names the pinned <merge-base>..<source-tip> range, a
+receipt-less removal refuses before any ref move with the single direct
+repair, a changed-then-reverted log and a log rename each run one audit
+call, both logs touched run one invocation, a deleted touched log anchors
+on the surviving sibling, and the checker's tool error and an unclassified
+exit (the test-only prune-audit-unclassified seam) preserve diagnostics and
+refs."""
 
 import atexit
 import hashlib
@@ -42,6 +51,38 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 HELPER = SCRIPTS / "land_squash.sh"
 DONE_LOCK = SCRIPTS / "done-lock.sh"
+
+PROMPT_LOG_PLAN_REL = "docs/history/backlog/PLAN-PROMPTS.md"
+PROMPT_LOG_EXEC_REL = "docs/history/backlog/EXEC-PROMPTS.md"
+
+# The fixture logs' shape mirrors the checker suite's: an entry-template
+# fence in the header (so the placeholder heading never parses as an
+# entry), then one ## <slug> section per entry.
+PROMPT_LOG_FENCE = (
+    "Entry template (one section per entry):\n\n"
+    "```\n"
+    "## <short-slug>\n"
+    "```\n"
+)
+
+
+def prompt_log_text(entries):
+    return "Tracked rolling log fixture.\n\n" + PROMPT_LOG_FENCE + "\n".join(entries)
+
+
+def prompt_log_ledger_text(entries, receipts):
+    header = "".join("%s\n" % receipt for receipt in receipts)
+    return (
+        "Tracked rolling log fixture.\n\n"
+        + header
+        + "\n"
+        + PROMPT_LOG_FENCE
+        + "\n".join(entries)
+    )
+
+
+def prompt_log_entry(slug):
+    return "## %s\n\nAdded: fixture provenance\n\nPrompt: fixture payload\n" % slug
 
 
 def load_guard_module():
@@ -1078,6 +1119,35 @@ class LandSquashHelperTest(unittest.TestCase):
         lock = acquire_merge_lock(repo, self.locks)
         return repo, wt, lock
 
+    def worktree_repo_with_logs(self, name, plan_entries, exec_entries,
+                                plan_text=None, exec_text=None):
+        """worktree_repo with both rolling prompt logs tracked on main, so a
+        branch range's log edit is the checker's removal class; each log
+        carries the fenced fixture shape with the given entry slugs unless
+        an explicit full text is passed."""
+        extra = {
+            PROMPT_LOG_PLAN_REL: (
+                plan_text if plan_text is not None
+                else prompt_log_text([prompt_log_entry(s) for s in plan_entries])
+            ),
+            PROMPT_LOG_EXEC_REL: (
+                exec_text if exec_text is not None
+                else prompt_log_text([prompt_log_entry(s) for s in exec_entries])
+            ),
+        }
+        repo = make_repo(self.tmp / name, extra_files=extra)
+        commit_file(repo, "main-base.txt", "main base\n", "main base work")
+        wt = self.tmp / (name + "-source-wt")
+        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+        lock = acquire_merge_lock(repo, self.locks)
+        return repo, wt, lock
+
+    def commit_log_change(self, wt, message):
+        """Commit the source worktree's pending prompt-log edit; the
+        directory pathspec matches a whole-file log deletion too."""
+        git(wt, "add", "-A", "--", "docs/history/backlog")
+        git(wt, "commit", "-q", "-m", message)
+
     def archive_fixture(self, name, plan_rel, plan_body):
         """A primary repo plus a source worktree whose branch renames a
         plans-root file into docs/history/plans/completed/ (the archive
@@ -1248,6 +1318,237 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertEqual(rev(repo, "HEAD"), landing)
         # the record exists only in the run worktree's reviews home
         self.assertFalse((repo / ".ai-playbook" / "reviews").exists())
+
+    # ---- wired prompt-log prune audit (land-worktree) -----------------
+
+    def test_land_worktree_code_only_range_skips_prune_audit(self):
+        # a branch that touches no prompt log: the landing follows the
+        # existing path and the receipt carries no audit section at all
+        repo, wt, lock = self.worktree_repo("wt-no-log")
+        base_tip = rev(repo, "refs/heads/main")
+        commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertNotIn("prune-audit:", proc.stdout)
+        self.assertNotIn("prune-audit summary:", proc.stdout)
+        self.assertNotEqual(rev(repo, "refs/heads/main"), base_tip)
+
+    def test_land_worktree_receipted_removal_passes_with_prune_ok(self):
+        # a receipted log removal: exactly one audit call, its passing
+        # summary in the receipt, the PRUNE-OK line retained, the landing
+        # completes
+        repo, wt, lock = self.worktree_repo_with_logs("wt-receipt", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "prune wt-entry with its receipt")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertIn("prune-audit:", proc.stdout)
+        self.assertIn("PRUNE-OK: wt-entry", proc.stdout)
+        self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
+        self.assertNotEqual(rev(repo, "refs/heads/main"), base_tip)
+
+    def test_land_worktree_audit_pins_verified_source_tip(self):
+        # the receipt names the audited range as <merge-base>..<source-tip>,
+        # the pinned upper endpoint the helper passes, never a HEAD form
+        repo, wt, lock = self.worktree_repo_with_logs("wt-pinned", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "prune wt-entry with its receipt")
+        source_tip = rev(wt, "HEAD")
+        merge_base = git(repo, "merge-base", "refs/heads/main",
+                         "feature").stdout.strip()
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("in %s..%s" % (merge_base, source_tip), proc.stdout)
+
+    def test_land_worktree_receiptless_removal_refused_before_ref_move(self):
+        # a receipt-less removal: the audit's finding is preserved, the
+        # refusal names the single direct repair, and no ref moves
+        repo, wt, lock = self.worktree_repo_with_logs("wt-refused", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(prompt_log_text([]))
+        self.commit_log_change(wt, "prune wt-entry without any receipt")
+        source_tip = rev(wt, "HEAD")
+        short = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
+        before = primary_state(repo)
+
+        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+        self.assertIn("prune-audit:", proc.stdout)
+        self.assertIn(
+            "REMOVED-WITHOUT-WITNESS: wt-entry (commit %s" % short,
+            proc.stdout)
+        self.assertIn("lesson 234", proc.stdout)
+        self.assertIn("remedy: put the removed entry's receipt in its removal commit",
+                      proc.stdout)
+        self.assertNotIn("PRUNE-OK", proc.stdout)
+        self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
+        self.assertEqual(rev(repo, "feature"), source_tip)
+        self.assertEqual(primary_state(repo), before)
+
+    def test_land_worktree_changed_then_reverted_log_runs_audit_once(self):
+        # a log edit later reverted: commit history still shows the touch,
+        # the audit runs exactly once, and the receipted removal keeps the
+        # landing green
+        repo, wt, lock = self.worktree_repo_with_logs("wt-revert", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        original = (wt / PROMPT_LOG_PLAN_REL).read_text()
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "prune wt-entry with its receipt")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(original)
+        self.commit_log_change(wt, "revert the log edit")
+        # a code file keeps the branch tip's tree distinct from the base
+        # tip's (a pure revert would be the empty-diff landing refusal)
+        commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
+        self.assertIn("PRUNE-OK: wt-entry", proc.stdout)
+        self.assertNotEqual(rev(repo, "refs/heads/main"), base_tip)
+
+    def test_land_worktree_log_rename_runs_audit_once(self):
+        # a rename is a touch with rename detection disabled: the audit
+        # runs over the renamed log's whole-file removal, witnessed by the
+        # ad-hoc receipt class in the rename commit's message
+        repo, wt, lock = self.worktree_repo_with_logs("wt-rename", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        renamed_rel = "docs/history/backlog/PLAN-PROMPTS-renamed.md"
+        git(wt, "mv", PROMPT_LOG_PLAN_REL, renamed_rel)
+        git(wt, "commit", "-q",
+            "-m", "rename the plan prompt log",
+            "-m", "EXEC-PROMPTS-PRUNE: wt-entry -> %s" % base_tip)
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
+        self.assertIn("PRUNE-OK: wt-entry", proc.stdout)
+
+    def test_land_worktree_both_logs_touched_one_audit_call(self):
+        # both logs touched by one range: a single invocation audits both,
+        # both PRUNE-OK lines land in the receipt
+        repo, wt, lock = self.worktree_repo_with_logs(
+            "wt-both", ["plan-entry"], ["exec-entry"])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: plan-entry -> landing"]))
+        (wt / PROMPT_LOG_EXEC_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["EXEC-PROMPTS-PRUNE: exec-entry -> landing"]))
+        self.commit_log_change(wt, "prune one entry from each log")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
+        self.assertIn("PRUNE-OK: plan-entry", proc.stdout)
+        self.assertIn("PRUNE-OK: exec-entry", proc.stdout)
+
+    def test_land_worktree_deleted_log_anchors_surviving_sibling(self):
+        # the touched log was deleted in the range: the audit anchors on
+        # the surviving sibling (anchoring on the deleted path would be the
+        # checker's missing-log tool error and the landing would fail)
+        repo, wt, lock = self.worktree_repo_with_logs("wt-sibling", [], ["exec-entry"])
+        base_tip = rev(repo, "refs/heads/main")
+        git(wt, "rm", "-q", "--", PROMPT_LOG_PLAN_REL)
+        (wt / PROMPT_LOG_EXEC_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["EXEC-PROMPTS-PRUNE: exec-entry -> landing"]))
+        self.commit_log_change(wt, "delete the plan log, prune the exec entry")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
+        self.assertIn(
+            "anchor: %s" % os.path.realpath(str(wt / PROMPT_LOG_EXEC_REL)),
+            proc.stdout)
+        self.assertIn("PRUNE-OK: exec-entry", proc.stdout)
+
+    def test_land_worktree_audit_tool_error_preserves_output_and_refs(self):
+        # a non-UTF-8 log blob inside the range is the checker's modeled
+        # tool error: the diagnostics are preserved in the receipt, the
+        # outcome is the named tool error, and no ref moves
+        repo, wt, lock = self.worktree_repo_with_logs("wt-tool-error", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_bytes(
+            prompt_log_text([prompt_log_entry("wt-entry")]).encode("utf-8")
+            + b"\n<!-- caf\xe9 -->\n")
+        self.commit_log_change(wt, "touch the log with a non-UTF-8 byte")
+        source_tip = rev(wt, "HEAD")
+        before = primary_state(repo)
+
+        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
+        self.assertIn("prompt-log prune audit failed (exit 3)", proc.stdout)
+        self.assertIn("  OUTCOME: tool_error", proc.stdout)
+        self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
+        self.assertEqual(rev(repo, "feature"), source_tip)
+        self.assertEqual(primary_state(repo), before)
+
+    def test_land_worktree_audit_unclassified_exit_is_tool_error(self):
+        # an unclassified audit exit routes through the same named
+        # tool-error arm with refs unchanged (the test-only seam
+        # reclassifies a passing audit exit to 42)
+        repo, wt, lock = self.worktree_repo_with_logs("wt-unclassified", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "prune wt-entry with its receipt")
+        source_tip = rev(wt, "HEAD")
+        before = primary_state(repo)
+
+        proc = land_worktree(repo, "feature", source_tip, "land it",
+                             lock=lock, fault="prune-audit-unclassified")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
+        self.assertIn("prune-audit-unclassified", proc.stdout)
+        self.assertIn("prompt-log prune audit failed (exit 42)", proc.stdout)
+        self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
+        self.assertEqual(rev(repo, "feature"), source_tip)
+        self.assertEqual(primary_state(repo), before)
+
+    def test_land_worktree_help_names_prompt_log_audit(self):
+        # the usage text names the audit, its scoped trigger, and the
+        # direct recoveries
+        proc = subprocess.run(["bash", str(HELPER), "--help"],
+                              capture_output=True, text=True,
+                              env=base_env(), check=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        for token in ("prompt-log prune audit", "prune-audit", "lesson 234",
+                      "self-heal", "PLAN-PROMPTS.md", "EXEC-PROMPTS.md"):
+            self.assertIn(token, proc.stdout)
 
     def test_land_worktree_ack_egress_passthrough(self):
         # the flag without the matching Archive-egress-ack trailer in the

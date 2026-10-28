@@ -7,7 +7,11 @@ and empty-array edges); the seal-recorded anchor leg over the on-disk
 ``.ai-playbook/review-certs/<artifact-slug>.md`` file (the seal is read
 from the working tree, never from git); the per-hop digest
 binding to bytes re-derived from git (the seal's round-start bytes as hop
-0); the linkage and terminal legs; seal integrity (the sidecar range
+0) through the reviewed-scope byte function (``reviewed_scope_bytes``,
+the git-layer delta with the bookkeeping prefixes excluded; its
+SCOPE_BYTES / SCOPE_BOOKKEEPING_ONLY / SCOPE_UNRESOLVED routing is
+pinned once here and every consumer threads it); the linkage and
+terminal legs; seal integrity (the sidecar range
 against the seal's certified range and hop-commit dating; the
 append-only-entries duty is producer-side); the subject-bound
 operator ack receipt whose witness record path is injected by the caller
@@ -51,6 +55,7 @@ corrections family on the marker alone. Consumers: the plan and code
 delta classifiers, the staging validator, and the readiness gate.
 """
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -385,6 +390,50 @@ def blob_bytes(repo, commit, path):
 
 def diff_bytes(repo, base, head):
     return git_bytes(repo, "diff", "%s...%s" % (base, head))
+
+
+# The reviewed-scope byte function (code-family-cert-digest-scope plan,
+# Task 1): the bookkeeping prefixes a code-family certification digest
+# never hashes, component-wise matched with trailing slash. The set is
+# pinned here and consumed only through reviewed_scope_bytes; no consumer
+# copies the list.
+BOOKKEEPING_PREFIXES = ("docs/history/backlog/",)
+
+# Outcome routing for reviewed_scope_bytes; the last two outcomes are
+# never conflated:
+# - SCOPE_BYTES: data carries the reviewed-scope delta bytes. A delta
+#   that is empty both raw and filtered is this outcome over b"",
+#   preserving the empty-range behavior (hashed over empty bytes).
+# - SCOPE_BOOKKEEPING_ONLY: the raw delta is non-empty but filters to
+#   zero reviewed-scope bytes; there are no bytes to hash and a digest
+#   over empty bytes is never minted from it.
+# - SCOPE_UNRESOLVED: a git plumbing failure over the range; consumers
+#   keep their existing indeterminate/refusal shape.
+SCOPE_BYTES = "bytes"
+SCOPE_BOOKKEEPING_ONLY = "bookkeeping-only"
+SCOPE_UNRESOLVED = "unresolved"
+
+
+def reviewed_scope_bytes(repo, base, head):
+    """(outcome, data) for the bytes a code-family certification digest
+    hashes: the branch delta computed at the git layer with pathspec
+    exclusion (``git diff base...head -- . ':(exclude)<bookkeeping
+    prefixes>'``), never by parsing diff text. See the SCOPE_* outcome
+    routing above for the three outcomes and their contract."""
+    pathspecs = ["--", "."] + [":(exclude)%s" % prefix
+                               for prefix in BOOKKEEPING_PREFIXES]
+    filtered = git_bytes(repo, "diff", "%s...%s" % (base, head),
+                         *pathspecs)
+    if filtered is None:
+        return SCOPE_UNRESOLVED, None
+    if filtered.strip():
+        return SCOPE_BYTES, filtered
+    raw = diff_bytes(repo, base, head)
+    if raw is None:
+        return SCOPE_UNRESOLVED, None
+    if raw.strip():
+        return SCOPE_BOOKKEEPING_ONLY, b""
+    return SCOPE_BYTES, b""
 
 
 def touches_path(repo, commit, path):
@@ -1166,6 +1215,84 @@ def record_correction_authorization(repo, row, operator_direction,
 
 _APPEND_LOCK_DEADLINE = 5.0
 
+_LOCK_POLL_SECONDS = 0.05
+
+
+class AdvisoryLockBusy(Exception):
+    """The corrections advisory lock stayed busy past the caller's
+    deadline; the message is the shared busy tail each writer composes
+    into its own refusal shape."""
+
+
+class AdvisoryLockOpenError(Exception):
+    """The corrections advisory lock file could not be opened; the
+    message names the lock path and the operating-system error."""
+
+
+@contextlib.contextmanager
+def corrections_advisory_lock(repo_root, slug, timeout=None):
+    """Open and acquire the corrections advisory lock keyed on the
+    artifact slug, with the shared poll-until-deadline discipline. Yields
+    the open lock handle; the lock is released and the handle closed on
+    exit, including on an exception. Raises AdvisoryLockOpenError when
+    the lock file cannot be opened and AdvisoryLockBusy when the lock
+    stays busy past the deadline; the writers compose their own refusal
+    texts around those."""
+    lock_path = corrections_lock_path(repo_root, slug)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = open(lock_path, "a+")
+    except OSError as exc:
+        raise AdvisoryLockOpenError(
+            "the corrections advisory lock %s cannot be opened: %s"
+            % (lock_path, exc)) from exc
+    try:
+        deadline = time.monotonic() + (timeout if timeout is not None
+                                       else _APPEND_LOCK_DEADLINE)
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise AdvisoryLockBusy(
+                        "a concurrent certification round may hold the "
+                        "lock beside an unwitnessed mutation; re-derive "
+                        "from disk and retry")
+                time.sleep(_LOCK_POLL_SECONDS)
+        yield handle
+    finally:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        handle.close()
+
+
+def atomic_write_bytes(path, data):
+    """Replace a file's bytes atomically: write a temp file beside the
+    target and os.replace it over the target, so a crash mid-write is
+    never observable as a torn file at the target path."""
+    temp_path = path.parent / (path.name + ".atomic-tmp")
+    with open(temp_path, "wb") as handle:
+        handle.write(data)
+    os.replace(temp_path, path)
+
+
+def sidecar_round(payload):
+    """The seal round number from the sidecar's dual-typed ``round``
+    field (``"r1"`` or an integer); None when it does not resolve."""
+    value = payload.get("round")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        match = re.fullmatch(r"[rR]?(\d+)", value.strip())
+        if match:
+            return int(match.group(1))
+    return None
+
 
 def corrections_lock_path(repo_root, slug):
     git_dir = git_text(repo_root, "rev-parse", "--absolute-git-dir")
@@ -1179,75 +1306,59 @@ def append_corrections(record_path, new_rows, repo_root, slug,
     keyed on the artifact slug. Returns (True, sha256 of the written
     bytes) or (False, prefixed append refusal naming the concurrent-round
     possibility beside an unwitnessed mutation)."""
-    deadline = time.monotonic() + (timeout if timeout is not None
-                                   else _APPEND_LOCK_DEADLINE)
     for row in new_rows:
         try:
             validate_row(row, family)
         except CorrectionsSchemaError as exc:
             return False, str(exc)
-    lock_path = corrections_lock_path(repo_root, slug)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(lock_path, "a+")
     try:
-        while True:
+        with corrections_advisory_lock(repo_root, slug, timeout=timeout):
+            path = Path(record_path)
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    return False, leg_reason(
-                        "append", "advisory lock busy: a concurrent "
-                        "certification round may hold the lock beside an "
-                        "unwitnessed mutation; re-derive from disk and "
-                        "retry")
-                time.sleep(0.05)
-        path = Path(record_path)
-        try:
-            raw = path.read_bytes() if path.exists() else b""
-        except OSError as exc:
-            return False, leg_reason(
-                "append", "record unreadable under the advisory lock: %s"
-                % exc)
-        if expect_sha256 is not None and sha256_hex(raw) != expect_sha256:
-            return False, leg_reason(
-                "append", "the record changed under the advisory lock: a "
-                "concurrent certification round or an unwitnessed "
-                "mutation; re-derive from disk and retry")
-        if raw:
+                raw = path.read_bytes() if path.exists() else b""
+            except OSError as exc:
+                return False, leg_reason(
+                    "append", "record unreadable under the advisory lock: %s"
+                    % exc)
+            if expect_sha256 is not None and sha256_hex(raw) != expect_sha256:
+                return False, leg_reason(
+                    "append", "the record changed under the advisory lock: a "
+                    "concurrent certification round or an unwitnessed "
+                    "mutation; re-derive from disk and retry")
+            if raw:
+                try:
+                    doc = json.loads(raw.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    return False, _schema(
+                        "record operand is not decodable JSON")
+                if not isinstance(doc, dict):
+                    return False, _schema(
+                        "record operand is not a JSON object")
+                existing = doc.get("corrections")
+            else:
+                doc = {}
+                existing = None
+            reason = corrections_array_reason(existing)
+            if reason is not None and existing is not None:
+                return False, reason
+            rows = list(existing or [])
+            rows.extend(new_rows)
+            doc["corrections"] = rows
+            written = (json.dumps(doc, indent=2, sort_keys=True)
+                       + "\n").encode()
             try:
-                doc = json.loads(raw.decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
-                return False, _schema(
-                    "record operand is not decodable JSON")
-            if not isinstance(doc, dict):
-                return False, _schema(
-                    "record operand is not a JSON object")
-            existing = doc.get("corrections")
-        else:
-            doc = {}
-            existing = None
-        reason = corrections_array_reason(existing)
-        if reason is not None and existing is not None:
-            return False, reason
-        rows = list(existing or [])
-        rows.extend(new_rows)
-        doc["corrections"] = rows
-        written = (json.dumps(doc, indent=2, sort_keys=True)
-                   + "\n").encode()
-        try:
-            path.write_bytes(written)
-        except OSError as exc:
-            return False, leg_reason(
-                "append", "record not writable under the advisory lock: %s"
-                % exc)
-        return True, sha256_hex(written)
-    finally:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        handle.close()
+                atomic_write_bytes(path, written)
+            except OSError as exc:
+                return False, leg_reason(
+                    "append", "record not writable under the advisory lock: %s"
+                    % exc)
+            return True, sha256_hex(written)
+    except AdvisoryLockBusy as exc:
+        return False, leg_reason(
+            "append", "advisory lock busy: %s" % exc)
+    except AdvisoryLockOpenError as exc:
+        return False, leg_reason(
+            "append", "the advisory lock cannot be opened: %s" % exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1504,9 +1615,11 @@ def verify_corrections(repo, artifact_path, family, round_number,
     symbolic HEAD again.
     Plan family: per-hop bytes are plan blobs at evidence commits, hop 0
     the seal's round-start blob, the terminal leg the current bytes. Code
-    family: per-hop bytes are regenerated three-dot diffs over the row's
-    refs, the first hop's before refs equal the seal's certified range,
-    and the terminal leg is the branch head. primary_checkout is the
+    family: per-hop bytes are the reviewed-scope bytes of the regenerated
+    three-dot diffs over the row's refs (a bookkeeping-only hop is a
+    named refusal, never a digest over empty bytes), the first hop's
+    before refs equal the seal's certified range, and the terminal leg is
+    the branch head. primary_checkout is the
     already-resolved primary checkout root: a plan-family operator-acked
     row resolves its receipt against the primary state file's
     correction_authorizations array through the receipt's fixed selector,
@@ -1597,10 +1710,16 @@ def verify_corrections(repo, artifact_path, family, round_number,
         if not base or not tip:
             return False, leg_reason(
                 "anchor", "the seal entry carries no certified range")
-        start_bytes = diff_bytes(srepo, base, tip)
-        if start_bytes is None:
+        start_outcome, start_bytes = reviewed_scope_bytes(srepo, base, tip)
+        if start_outcome == SCOPE_UNRESOLVED:
             return False, leg_reason(
                 "anchor", "the round-start diff %s...%s is unresolvable"
+                % (base, tip))
+        if start_outcome == SCOPE_BOOKKEEPING_ONLY:
+            return False, leg_reason(
+                "anchor", "the certified range %s...%s filters to zero "
+                "reviewed-scope bytes (bookkeeping-only); a certification "
+                "binds reviewed content and this seal entry carries none"
                 % (base, tip))
     if sha256_hex(start_bytes) != entry.fields["round_start_digest"]:
         return False, leg_reason(
@@ -1738,12 +1857,18 @@ def verify_corrections(repo, artifact_path, family, round_number,
                     "binding", "the plan blob at evidence commit %s is "
                                "unresolvable" % row["evidence_commit"])
         else:
-            after_bytes = diff_bytes(repo, row["after_base"],
-                                     row["after_head"])
-            if after_bytes is None:
+            hop_outcome, after_bytes = reviewed_scope_bytes(
+                repo, row["after_base"], row["after_head"])
+            if hop_outcome == SCOPE_UNRESOLVED:
                 return False, leg_reason(
                     "binding", "the diff %s...%s is unresolvable"
                                % (row["after_base"], row["after_head"]))
+            if hop_outcome == SCOPE_BOOKKEEPING_ONLY:
+                return False, leg_reason(
+                    "binding", "the hop delta %s...%s filters to zero "
+                    "reviewed-scope bytes (bookkeeping-only); no reviewed "
+                    "content binds at this hop"
+                    % (row["after_base"], row["after_head"]))
         if sha256_hex(after_bytes) != row["after_digest"]:
             return False, leg_reason(
                 "binding", "declared after digest does not match the "

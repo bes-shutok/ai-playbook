@@ -1,7 +1,7 @@
 # Backlog: plan authoring can stand down after provisioning without a charter closeout
 
 - **Filed:** 2026-10-26, maintenance plan-authoring session
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-28-plan-authoring-stand-down-before-charter.md)
 Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium

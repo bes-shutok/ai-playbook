@@ -99,10 +99,15 @@ consults later ones, and each log's removals consult only that log's
 post-image. The audit classifies mechanically; the
 consultative leg adjudicates: ranges are expected to start after the
 pNNN-to-dispatch-log transition, and the landing leg never spans the
-pre-plan-era wave commits. Exit 1 when any removal lacks its witness,
+pre-plan-era wave commits. An optional ``--head <commit>`` pins the
+audited range's upper endpoint (default ``HEAD``): the audit enumerates
+``base..head`` at the pinned commit and reports that tip identity, so a
+caller can audit an exact verified tip even after the working tree's
+``HEAD`` has moved; the summary line reports the actual audited range.
+Exit 1 when any removal lacks its witness,
 0 otherwise, 3 for a tool error (a missing log at the audit path, an
-unresolvable base ref, or a git plumbing failure), each with the final
-``OUTCOME:`` line per scripts/OUTCOME_CONTRACT.md.
+unresolvable base or head ref, or a git plumbing failure), each with the
+final ``OUTCOME:`` line per scripts/OUTCOME_CONTRACT.md.
 
 The default log path resolves against this script's own repo root,
 never the caller's cwd (the pins sweep promises run-from-anywhere and
@@ -807,19 +812,23 @@ def _pending_layer_text(
 
 
 def pending_receipt_removal_warnings(
-    repo_root: Path, log_rel: str, head_short: str, out: TextIO
+    repo_root: Path,
+    log_rel: str,
+    head_short: str,
+    out: TextIO,
+    head_commit: str = "HEAD",
 ) -> int:
     """Warning-only pending-receipt-removal scan for one rolling log:
-    compare the log's HEAD image against the index (the ``index`` layer)
-    and the index against the working tree (the ``worktree`` layer), and
-    report each deleted receipt-ledger line with its slug, log path,
-    layer, and the audited HEAD identity. A log absent from an image
-    reads as empty there (a whole-file pending deletion still warns;
-    a log absent at HEAD has no older image and cannot lose receipts).
-    Read failures emit one ``PENDING-SCAN-WARNING`` line and never
-    change the committed audit's exit or outcome — the HEAD image's
+    compare the log's audited-tip image against the index (the ``index``
+    layer) and the index against the working tree (the ``worktree``
+    layer), and report each deleted receipt-ledger line with its slug,
+    log path, layer, and the audited tip identity. A log absent from an
+    image reads as empty there (a whole-file pending deletion still warns;
+    a log absent at the audited tip has no older image and cannot lose
+    receipts). Read failures emit one ``PENDING-SCAN-WARNING`` line and
+    never change the committed audit's exit or outcome — the tip image's
     own NON-ABSENCE failure follows the same fail-open-with-a-warning
-    shape (a log absent at HEAD is the benign no-older-image case and
+    shape (a log absent at the tip is the benign no-older-image case and
     stays silent). The absence probes match the git stderr shapes
     "does not exist" / "not in the index" / "does not exist in"; an
     unmatched localized message degrades to the same explicit warning.
@@ -828,7 +837,7 @@ def pending_receipt_removal_warnings(
     try:
         index_text = _pending_layer_text(repo_root, log_rel, "index")
         worktree_text = _pending_layer_text(repo_root, log_rel, "worktree")
-        head_proc = run_git(repo_root, "show", f"HEAD:{log_rel}")
+        head_proc = run_git(repo_root, "show", f"{head_commit}:{log_rel}")
     except (AuditToolError, subprocess.TimeoutExpired, OSError, UnicodeDecodeError) as exc:
         out.write(f"PENDING-SCAN-WARNING: {log_rel}: {exc}\n")
         return 1
@@ -842,7 +851,7 @@ def pending_receipt_removal_warnings(
         else:
             out.write(
                 f"PENDING-SCAN-WARNING: {log_rel}: "
-                f"git show HEAD failed: {head_proc.stderr.strip()}\n"
+                f"git show {head_commit} failed: {head_proc.stderr.strip()}\n"
             )
             warnings += 1
             head_text = ""
@@ -1009,10 +1018,18 @@ def walk_audit_commits(
     return removals, ledger_receipts, flagged, warnings
 
 
-def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> int:
-    """Audit base..HEAD removals of the prompt log against plan-file
+def prune_audit(
+    log_path: Path,
+    repo_root: Path,
+    base_ref: str,
+    out: TextIO,
+    head_ref: str = "HEAD",
+) -> int:
+    """Audit base..head removals of the prompt log against plan-file
     witnesses at each removal commit; returns the exit code and writes
-    the evidence plus the final OUTCOME line."""
+    the evidence plus the final OUTCOME line. ``head_ref`` defaults to
+    ``HEAD``; an explicit pinned commit audits that exact upper endpoint
+    regardless of where the working tree's HEAD sits."""
     try:
         log_rel = log_path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
@@ -1025,6 +1042,14 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
     if verified.returncode != 0:
         return write_tool_error(out, f"base ref does not resolve to a commit: {base_ref}")
     base_commit = verified.stdout.strip()
+    head_verified = run_git(
+        repo_root, "rev-parse", "--verify", "--quiet", f"{head_ref}^{{commit}}"
+    )
+    if head_verified.returncode != 0:
+        return write_tool_error(
+            out, f"head ref does not resolve to a commit: {head_ref}"
+        )
+    head_commit = head_verified.stdout.strip()
     # The audit enumerates both rolling logs: the audited log plus its
     # sibling when the audited path names one (one window covers both).
     log_rels = [log_rel]
@@ -1035,7 +1060,7 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
         repo_root,
         "rev-list",
         "--reverse",
-        f"{base_commit}..HEAD",
+        f"{base_commit}..{head_commit}",
         "--",
         *log_rels,
     )
@@ -1059,7 +1084,7 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
     # OUTCOME; a pending-scan read failure emits its own warning line
     # and likewise never becomes a stop or tool error.
     try:
-        head_ident = run_git(repo_root, "rev-parse", "--short", "HEAD")
+        head_ident = run_git(repo_root, "rev-parse", "--short", head_commit)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         return write_tool_error(out, f"git plumbing failure: {exc}")
     head_short = head_ident.stdout.strip()
@@ -1067,19 +1092,20 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
         # The same fail-open-with-a-warning shape the scan's own reads
         # use: the identity degrades to empty and the failure is named.
         out.write(
-            "PENDING-SCAN-WARNING: HEAD: "
-            f"git rev-parse --short HEAD failed: {head_ident.stderr.strip()}\n"
+            "PENDING-SCAN-WARNING: "
+            f"{head_commit}: git rev-parse --short failed: "
+            f"{head_ident.stderr.strip()}\n"
         )
         warnings += 1
         head_short = ""
     for rel in log_rels:
         warnings += pending_receipt_removal_warnings(
-            repo_root, rel, head_short, out
+            repo_root, rel, head_short, out, head_commit
         )
     out.write(
         f"prune-audit summary: {removals} removals "
         f"({ledger_receipts} by log ledger) across {len(commits)} "
-        f"log-touching commit(s) in {base_ref}..HEAD, "
+        f"log-touching commit(s) in {base_commit}..{head_commit}, "
         f"{warnings} warning(s)\n"
     )
     if flagged:
@@ -1089,13 +1115,21 @@ def prune_audit(log_path: Path, repo_root: Path, base_ref: str, out: TextIO) -> 
     return 0
 
 
-def prune_audit_cli(log_arg: str | None, base_ref: str | None, out: TextIO) -> int:
+def prune_audit_cli(
+    log_arg: str | None,
+    base_ref: str | None,
+    out: TextIO,
+    head_arg: str | None = None,
+) -> int:
     """Resolve the audited log and its repository, then run the audit.
     The default log is this script's own repo root's tracked log; an
     explicit log path is audited in the repository that contains it (the
-    caller's cwd is never consulted)."""
+    caller's cwd is never consulted). ``head_arg`` optionally pins the
+    audited range's upper endpoint; omitted keeps the ``HEAD`` default
+    for existing callers."""
     if not base_ref:
         return write_tool_error(out, "--base <ref> is required with --prune-audit")
+    head_ref = head_arg or "HEAD"
     if log_arg:
         log_path = Path(log_arg).expanduser()
         if not log_path.is_file():
@@ -1112,7 +1146,7 @@ def prune_audit_cli(log_arg: str | None, base_ref: str | None, out: TextIO) -> i
         if not log_path.is_file():
             return write_tool_error(out, f"prompt log not found: {log_path}")
         repo_root = REPO_ROOT
-    return prune_audit(log_path, repo_root, base_ref, out)
+    return prune_audit(log_path, repo_root, base_ref, out, head_ref)
 
 
 def _collateral_log_pass(
@@ -1591,8 +1625,9 @@ def main(argv: list[str] | None = None) -> int:
             "token, and the in-commit receipt: a ledger line with the "
             "literal landing token newly added by the same commit "
             "(PRUNE-OK, SUPERSEDED-IN-COMMIT, "
-            "REMOVED-WITHOUT-WITNESS); exit 1 when a removal lacks its "
-            "witness, 3 for a tool error"
+            "REMOVED-WITHOUT-WITNESS); an optional --head <commit> pins "
+            "the audited range's upper endpoint (default HEAD); exit 1 "
+            "when a removal lacks its witness, 3 for a tool error"
         ),
     )
     parser.add_argument(
@@ -1614,11 +1649,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="base ref for --prune-audit and --collateral-served",
     )
+    parser.add_argument(
+        "--head",
+        default=None,
+        help=(
+            "optional upper endpoint commit for --prune-audit "
+            "(default: HEAD); the audit enumerates base..head at the "
+            "pinned commit and the summary reports the audited range"
+        ),
+    )
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
     if args.prune_audit:
-        return prune_audit_cli(args.log, args.base, sys.stdout)
+        return prune_audit_cli(args.log, args.base, sys.stdout, args.head)
     if args.collateral_served:
         return collateral_served_cli(args.log, args.base, sys.stdout)
     if args.log:

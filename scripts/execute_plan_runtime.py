@@ -365,7 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--operation", choices=("precondition", *_PLANS_WATCHER_OPERATIONS, *_CLOCKED_ORDER_OPERATIONS), required=True)
     parser.add_argument("--predecessors-file", type=Path)
-    parser.add_argument("--input")
+    parser.add_argument(
+        "--input",
+        help="inline JSON object passed as one argument (never a file path or per-key flags); "
+        "for --operation clocked-order-schedule the object keys are requested_at_iso, payload_slug, "
+        "and payload_path (or payload_text); a pickup re-record under a derived id also passes order_id",
+    )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:

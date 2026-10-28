@@ -77,6 +77,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -99,6 +100,13 @@ NOISE_PATTERNS = (
 # exhaustion); the digest counts occurrences per code, never conflated. The
 # host column is TEXT affinity, so numeric strings are accepted too.
 PROVIDER_429_CODES = (1302, 1308)
+
+# Recognized Agent rate-limit message form: a leading bracketed provider code
+# (1302 per-request rate limit, 1308 quota exhaustion), a bracketed
+# description, and an optional trailing bracketed request identifier. The
+# request id varies per request, so it is dropped from the class label; the
+# code stays visible so the two codes never conflate in the class table.
+AGENT_RATE_LIMIT_RE = re.compile(r"^\[(1302|1308)\]\[(.*?)\](?:\[[^\]]*\])?$")
 
 # Correction-heuristic keywords (case-insensitive substring match on
 # session_input payload): prompts that read as corrections of a previous turn.
@@ -151,13 +159,12 @@ def _is_noise(event: str) -> bool:
     return any(event.startswith(pattern) for pattern in NOISE_PATTERNS)
 
 
-def _message_class(message: str) -> str:
-    """Normalize an error message into a stable class: digits collapse to <n>,
-    whitespace collapses, case folds, so variable ids do not fragment classes."""
-    collapsed = " ".join(str(message).split()).lower()
+def _collapse_digit_runs(text: str) -> str:
+    """Collapse every digit run to <n> so variable numbers do not fragment
+    classes."""
     out = []
     digits = ""
-    for ch in collapsed:
+    for ch in text:
         if ch.isdigit():
             digits += ch
         else:
@@ -168,6 +175,20 @@ def _message_class(message: str) -> str:
     if digits:
         out.append("<n>")
     return "".join(out)
+
+
+def _message_class(message: str) -> str:
+    """Normalize an error message into a stable class: recognized Agent
+    rate-limit forms keep their provider code (1302/1308) and lowercase
+    description but drop the trailing bracketed request id; everything else
+    has its digit runs collapsed to <n>; whitespace collapses and case folds,
+    so variable ids do not fragment classes."""
+    collapsed = " ".join(str(message).split()).lower()
+    match = AGENT_RATE_LIMIT_RE.match(collapsed)
+    if match:
+        code, description = match.group(1), match.group(2)
+        return f"[{code}][{_collapse_digit_runs(description)}]"
+    return _collapse_digit_runs(collapsed)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

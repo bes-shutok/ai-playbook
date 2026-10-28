@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import review_plan_identity
 from datetime import date
@@ -53,6 +54,11 @@ try:
 except ImportError as exc:  # pragma: no cover - repo layout regression
     cr = None  # type: ignore[assignment]
     _CR_IMPORT_ERROR = exc
+
+try:
+    import code_delta_classifier as cdc
+except ImportError as exc:  # pragma: no cover - repo layout regression
+    cdc = None  # type: ignore[assignment]
 
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
@@ -1587,8 +1593,11 @@ class SelectionHelperTest(unittest.TestCase):
     ) -> tuple[object, Path, str, str, str]:
         """A one-round code-review record over a two-commit scratch repo:
         the seed commit is the recorded base, the change commit is the
-        reviewed head, and the sidecar's source_digest carries the
-        canonical recomputation of the base...head diff bytes. Returns
+        reviewed head, and the sidecar's source_digest carries a
+        WHOLE-DIFF digest minted from the raw base...head diff bytes
+        (never the reviewed-scope derivation); that mint is valid only
+        because this fixture range is pure-source, where whole-diff
+        hashing and the reviewed-scope derivation coincide. Returns
         ``(repo, md, base, head, recomputed)``."""
         if cr is None:  # pragma: no cover - repo layout regression
             self.fail(f"corrections_record import failed: {_CR_IMPORT_ERROR}")
@@ -1600,9 +1609,13 @@ class SelectionHelperTest(unittest.TestCase):
         repo.write_file(".gitignore", "docs/reviews/\n")
         base = repo.commit_file("src/app.py", "one\n", "seed the reviewed scope")
         head = repo.commit_file("src/app.py", "two\n", "the reviewed change")
+        # Hermetic oracle (r1 F4): the digest must byte-match the code's
+        # derivation on any host, so the raw git call parks the ambient
+        # GIT_* config exactly like corrections_record.run_git.
         diff = subprocess.run(
             ["git", "-C", str(repo.root), "diff", base + "..." + head],
             capture_output=True,
+            env=cr.hermetic_git_env(),
         ).stdout
         recomputed = hashlib.sha256(diff).hexdigest()
         reviews = repo.root / "docs" / "reviews"
@@ -1723,6 +1736,116 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
         self.assertEqual(md.read_bytes(), md_bytes)
 
+    def test_verify_digest_bookkeeping_advance_routing(self) -> None:
+        # The four HEAD-advance routings (code-family-cert-digest-scope
+        # plan, Task 1): a bookkeeping-only advance is accepted with the
+        # verified head advanced on positive evidence; a raw-empty
+        # advance, a reviewed-path delta, and a plumbing failure keep
+        # refusing.
+        repo, md, base, head, recomputed = self.verify_fixture()
+        reviews = md.parent
+
+        # Bookkeeping-advance accept: a tracked append under the
+        # bookkeeping prefixes moves HEAD; the advance's own delta is
+        # raw non-empty and filters to zero reviewed bytes, and the
+        # record is accepted fresh with the verified head advanced.
+        moved = repo.commit_file(
+            "docs/history/backlog/residual.md", "# residual row\n",
+            "residual row append")
+        code, payload, err = self.verify_record(repo.root, md, reviews, base, head)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "fresh", payload)
+        self.assertEqual(payload["verified_head"], moved)
+        self.assertEqual(payload["expected_head"], head)
+        self.assertEqual(payload["bookkeeping_advance"],
+                         {"from": head, "to": moved})
+        self.assertEqual(payload["recomputed_digest"], recomputed)
+
+        # Raw-empty advance refuse: an empty commit moves HEAD with a
+        # delta that is empty raw and empty filtered (the bytes outcome
+        # over b"", never bookkeeping-only); the movement refuses.
+        repo2, md2, base2, head2, _recomputed2 = self.verify_fixture()
+        reviews2 = md2.parent
+        empty_move = repo2.commit_allow_empty("empty closeout commit")
+        code, payload, err = self.verify_record(repo2.root, md2, reviews2,
+                                                base2, head2)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertIn("moved HEAD", err)
+        self.assertIn("past the recorded verified head", err)
+        self.assertIn(empty_move, err)
+
+        # Reviewed-delta refuse: a reviewed source path commit in the
+        # advance moves the reviewed-scope digest; the stale refusal
+        # fires ahead of any advance probe.
+        repo3, md3, base3, head3, _recomputed3 = self.verify_fixture()
+        reviews3 = md3.parent
+        edited = repo3.commit_file("src/app.py", "three\n", "reviewed edit")
+        code, payload, err = self.verify_record(repo3.root, md3, reviews3,
+                                                base3, head3)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertIn("stale review record", err)
+        self.assertIn(edited, err)
+
+        # Plumbing-refuse: the advance probe failing over the range is
+        # never advance evidence; the movement refuses and names the
+        # failed probe.
+        repo4, md4, base4, head4, _recomputed4 = self.verify_fixture()
+        reviews4 = md4.parent
+        moved4 = repo4.commit_file(
+            "docs/history/backlog/other.md", "# other row\n",
+            "second bookkeeping append")
+        real_scope = helper._reviewed_scope_bytes
+        probed: list[str] = []
+
+        def flaky_probe(repo_arg, base_ref, head_ref):
+            outcome, data = real_scope(repo_arg, base_ref, head_ref)
+            probed.append(head_ref)
+            if base_ref == head4 and head_ref == moved4:
+                return cr.SCOPE_UNRESOLVED, None
+            return outcome, data
+
+        with mock.patch.object(helper, "_reviewed_scope_bytes",
+                               side_effect=flaky_probe):
+            code, payload, err = self.verify_record(repo4.root, md4,
+                                                    reviews4, base4, head4)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertIn("moved HEAD", err)
+        self.assertIn("probe", err)
+        self.assertIn(moved4, err)
+        self.assertIn(moved4, probed)
+
+        # A base..HEAD delta that filters to zero reviewed bytes refuses
+        # through the named outcome at the top-level comparison, never a
+        # digest over empty bytes and never a plumbing inference.
+        repo5, md5, base5, head5, _recomputed5 = self.verify_fixture()
+        reviews5 = md5.parent
+        moved5 = repo5.commit_file(
+            "docs/history/backlog/third.md", "# third row\n",
+            "bookkeeping append past the reviewed head")
+        code, payload, err = self.verify_record(repo5.root, md5, reviews5,
+                                                head5, head5)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertIn("bookkeeping-only", err)
+        self.assertIn(moved5, err)
+
+    def test_verify_digest_degrades_on_a_mixed_vintage_sibling(self) -> None:
+        # Rollout guard: a corrections_record copy that predates the
+        # reviewed-scope byte function degrades verify-digest to the
+        # named-gap usage error (exit 2), never a crash.
+        repo, md, base, head, _recomputed = self.verify_fixture()
+        reviews = md.parent
+        with mock.patch.object(helper, "_reviewed_scope_bytes", None):
+            code, payload, err = self.verify_record(repo.root, md, reviews,
+                                                    base, head)
+        self.assertEqual(code, 2)
+        self.assertEqual(payload, {})
+        self.assertIn("reviewed-scope byte function", err)
+        self.assertIn("reviewed_scope_bytes", err)
+
     def test_verify_digest_refusals(self) -> None:
         # The record-state refusal arms decide before any git operand is
         # consulted, so the placeholder commit arguments are never
@@ -1802,6 +1925,917 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("\n", err.strip(), err)
         self.assertIn("outside the reviews directory", err)
+
+    # -- re-bind routing and additive coverage (verify-digest corrections
+    #    re-bind plan, Task 2) ---------------------------------------------
+
+    def re_bind_fixture(self) -> tuple[object, Path, Path, str, str, str]:
+        """A one-round code-review record whose round a corrections seal
+        certifies: base seeds ``src/app.py``, head is the reviewed change,
+        the sidecar carries source_digest, round 1, and the artifact_slug,
+        and the committed seal entry at ``.ai-playbook/review-certs`` pins
+        the certified range (family code, staging_round r1). The
+        seal-entry commit itself lands after the recorded verified head,
+        exactly like the witnessed record-capture commits, so the
+        pre-re-bind delta is already additive. Returns ``(repo, md,
+        sidecar, base, head, digest)``."""
+        if cr is None:  # pragma: no cover - repo layout regression
+            self.fail(f"corrections_record import failed: {_CR_IMPORT_ERROR}")
+        repo = cr.build_scratch_repo(self)
+        # The reviews corpus is gitignored (the same seam verify_fixture
+        # uses), so the record pair never rides into a later commit.
+        repo.write_file(".gitignore", "docs/reviews/\n")
+        # A non-reviewed Python path seeded BEFORE the recorded base: it
+        # stays outside the record scope (the reviewed window
+        # base..certified head never touches it), so a comment-only edit
+        # there is the additive class the grading owner's classification
+        # leg accepts.
+        repo.commit_file(
+            "src/notes.py", "# scratch notes\n", "seed a non-reviewed notes path"
+        )
+        base = repo.commit_file("src/app.py", "one\n", "seed the reviewed scope")
+        head = repo.commit_file("src/app.py", "two\n", "the reviewed change")
+        # Hermetic oracle (r1 F4): the digest must byte-match the code's
+        # derivation on any host, so the raw git call parks the ambient
+        # GIT_* config exactly like corrections_record.run_git.
+        diff = subprocess.run(
+            ["git", "-C", str(repo.root), "diff", base + "..." + head],
+            capture_output=True,
+            env=cr.hermetic_git_env(),
+        ).stdout
+        digest = hashlib.sha256(diff).hexdigest()
+        reviews = repo.root / "docs" / "reviews"
+        reviews.mkdir(parents=True)
+        md, sidecar = self.write_pair(
+            reviews, f"{self.today}-demo-code-review-r1", digest
+        )
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        payload["artifact_slug"] = "demo-src"
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        repo.append_seal_entry(
+            "demo-src", 1, "src/app.py", head, digest, head,
+            reviewed=(base, head, digest),
+        )
+        return repo, md, sidecar, base, head, digest
+
+    def re_bind_record(
+        self, repo_root: Path, record: Path, reviews: Path,
+        base: str, expect_head: str,
+    ) -> tuple[int, dict, str]:
+        # re-bind reads the invoking process's repository, so the CLI runs
+        # with cwd pinned to the scratch repo (the same chdir seam
+        # verify_record uses).
+        original_cwd = os.getcwd()
+        os.chdir(repo_root)
+        try:
+            code, out, err = self.run_cli(
+                "re-bind",
+                "--record",
+                str(record),
+                "--dir",
+                str(reviews),
+                "--base",
+                base,
+                "--expect-head",
+                expect_head,
+            )
+        finally:
+            os.chdir(original_cwd)
+        payload = json.loads(out) if out.strip() else {}
+        return code, payload, err
+
+    def witness_hunks(self, repo_root: Path, anchor: str, head: str) -> dict:
+        """The expected delta-path witness: one ``(commit, path)`` ->
+        digest entry per (delta commit, changed path), derived the way
+        the re-bind writer witnesses the delta. Every raw git call runs
+        hermetic (r1 F4) so the oracle byte-matches the code's derivation
+        on any host."""
+        env = cr.hermetic_git_env()
+        commits = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-list", f"{anchor}..{head}"],
+            capture_output=True, text=True, env=env,
+        ).stdout.split()
+        expected: dict = {}
+        for commit in commits:
+            parents = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-list", "--parents",
+                 "-n", "1", commit],
+                capture_output=True, text=True, env=env,
+            ).stdout.split()[1:]
+            candidates: list = []
+            if not parents:
+                # Root commit: witnessed against the empty tree.
+                paths = subprocess.run(
+                    ["git", "-C", str(repo_root), "diff-tree", "-r",
+                     "--name-only", "--no-commit-id", "--root", commit],
+                    capture_output=True, text=True, env=env,
+                ).stdout.splitlines()
+                candidates = [
+                    (None, line) for line in paths if line.strip()
+                ]
+            else:
+                # Parent-aware derivation (the merge-commit witness fix):
+                # each commit is witnessed against its parents, first
+                # parent first, a path already witnessed against an
+                # earlier parent skipped.
+                seen: set = set()
+                for parent in parents:
+                    paths = subprocess.run(
+                        ["git", "-C", str(repo_root), "diff",
+                         "--no-renames", "--name-only", parent, commit],
+                        capture_output=True, text=True, env=env,
+                    ).stdout.splitlines()
+                    for path in (line for line in paths if line.strip()):
+                        if path not in seen:
+                            seen.add(path)
+                            candidates.append((parent, path))
+            for parent, path in candidates:
+                if parent is None:
+                    patch = subprocess.run(
+                        ["git", "-C", str(repo_root), "diff-tree", "-p",
+                         "--no-commit-id", "--root", commit, "--", path],
+                        capture_output=True, env=env,
+                    ).stdout
+                else:
+                    patch = subprocess.run(
+                        ["git", "-C", str(repo_root), "diff",
+                         "--no-renames", parent, commit, "--", path],
+                        capture_output=True, env=env,
+                    ).stdout
+                expected[(commit, path)] = hashlib.sha256(patch).hexdigest()
+        return expected
+
+    def test_re_bind_additive_rebinds_and_next_verify_passes_accepted_stale(
+        self,
+    ) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        md_bytes = md.read_bytes()
+        # The witnessed additive class: a comment-only commit lands after
+        # the recorded verified head on the non-reviewed path (the only
+        # byte shape the grading owner's classification leg accepts),
+        # disjoint from the reviewed scope (the seal-entry commit is
+        # already in the delta), so verify-digest re-prices the record
+        # and refuses stale before any re-bind.
+        additive = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, _payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("stale review record", err)
+        # The re-bind succeeds: the rebound receipt names the anchor (the
+        # record's own recorded verified head), the verified head, and
+        # the additive delta paths.
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(receipt["status"], "rebound", receipt)
+        self.assertEqual(receipt["anchor"], head, receipt)
+        self.assertEqual(receipt["verified_head"], additive, receipt)
+        self.assertEqual(
+            receipt["delta_paths"],
+            sorted(
+                [
+                    ".ai-playbook/review-certs/demo-src.md",
+                    "src/notes.py",
+                ]
+            ),
+            receipt,
+        )
+        # The written row: exactly one script-verified code-family row in
+        # extensions.corrections, delta-anchored the way the grading
+        # owner's certified-range ref rules require (row 0's before refs
+        # equal the certified range, after_base is the before head, the
+        # after digest binds the anchor..additive delta bytes); the hunks
+        # record the delta-path witness (one hunk per additive
+        # commit/path, each digest over the per-commit patch bytes); the
+        # Markdown record is never touched; the certified range rides the
+        # sidecar (written when absent) in the shape the grading expects.
+        sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        rows = sidecar_doc["extensions"]["corrections"]
+        self.assertEqual(
+            sidecar_doc["extensions"]["certified_range"],
+            {"base": base, "head": head},
+            sidecar_doc,
+        )
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual(row["kind"], "script-verified", row)
+        self.assertEqual(row["before_base"], base, row)
+        self.assertEqual(row["before_head"], head, row)
+        self.assertEqual(row["after_base"], head, row)
+        self.assertEqual(row["after_head"], additive, row)
+        self.assertEqual(row["before_digest"], digest, row)
+        delta_diff = subprocess.run(
+            ["git", "-C", str(repo.root), "diff", head + "..." + additive],
+            capture_output=True,
+            env=cr.hermetic_git_env(),
+        ).stdout
+        self.assertEqual(
+            row["after_digest"], hashlib.sha256(delta_diff).hexdigest(), row
+        )
+        expected_witness = self.witness_hunks(repo.root, head, additive)
+        self.assertEqual(len(row["hunks"]), len(expected_witness), row["hunks"])
+        seen = set()
+        for hunk in row["hunks"]:
+            match = re.fullmatch(
+                r"re-bind additive delta ([0-9a-f]{40}) (.+)", hunk["header"]
+            )
+            self.assertIsNotNone(match, hunk["header"])
+            key = (match.group(1), match.group(2))
+            self.assertIn(key, expected_witness, hunk)
+            self.assertEqual(hunk["digest"], expected_witness[key], hunk)
+            seen.add(key)
+        self.assertEqual(seen, set(expected_witness))
+        self.assertEqual(md.read_bytes(), md_bytes)
+        # The written row grades verified through the grading owner the
+        # staging validator's corrections arm actually delegates to
+        # (code_delta_classifier.verify_code_corrections, certified-range
+        # ref rules plus classification leg included) over the rows read
+        # back from the written sidecar; the raw corrections_record
+        # verifier accepts strictly more than this, so its green would
+        # over-claim acceptance.
+        if cdc is None:  # pragma: no cover - repo layout regression
+            self.fail("code_delta_classifier import failed")
+        verified, message = cdc.verify_code_corrections(
+            repo.root,
+            "src/app.py",
+            1,
+            digest,
+            rows,
+            {"base": base, "head": head},
+            slug="demo-src",
+        )
+        self.assertTrue(verified, message)
+        # The following verify-digest passes as accepted-stale naming
+        # both heads, with the byte-stable outcome key vocabulary.
+        code, payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "accepted-stale", payload)
+        self.assertEqual(
+            set(payload),
+            {
+                "outcome",
+                "record",
+                "reviewed_base",
+                "recorded_digest",
+                "recomputed_digest",
+                "verified_head",
+                "expected_head",
+                "corrections_after_head",
+            },
+            payload,
+        )
+        self.assertEqual(payload["expected_head"], head, payload)
+        self.assertEqual(payload["verified_head"], additive, payload)
+        self.assertEqual(payload["corrections_after_head"], additive, payload)
+
+    def test_re_bind_chained_second_rebind_chains_and_keeps_scope(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        md_bytes = md.read_bytes()
+        # First additive re-bind (the witnessed happy path).
+        additive1 = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(receipt["verified_head"], additive1, receipt)
+        # The chained case: a SECOND additive re-bind on the record that
+        # already carries a corrections chain. The chained minting arm
+        # chains the new row from the previous row's after side, and the
+        # no-scope-growth invariant keeps the record-scope window the
+        # original certified range (another additive commit outside it
+        # still re-binds).
+        additive2 = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n# second note\n",
+            "append a second comment-only note outside the reviewed scope",
+        )
+        code, receipt2, err = self.re_bind_record(
+            repo.root, md, reviews, base, additive1
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(receipt2["status"], "rebound", receipt2)
+        self.assertEqual(receipt2["anchor"], additive1, receipt2)
+        self.assertEqual(receipt2["verified_head"], additive2, receipt2)
+        sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        rows = sidecar_doc["extensions"]["corrections"]
+        self.assertEqual(len(rows), 2, rows)
+        # The chained linkage: row 1's before refs both equal row 0's
+        # after head, its before digest row 0's after digest.
+        row0, row1 = rows
+        self.assertEqual(row0["after_head"], additive1, row0)
+        self.assertEqual(row1["before_base"], additive1, row1)
+        self.assertEqual(row1["before_head"], additive1, row1)
+        self.assertEqual(row1["after_base"], additive1, row1)
+        self.assertEqual(row1["after_head"], additive2, row1)
+        self.assertEqual(row1["before_digest"], row0["after_digest"], row1)
+        # No scope growth: the certified range stays the original
+        # certified window through the chained re-bind.
+        self.assertEqual(
+            sidecar_doc["extensions"]["certified_range"],
+            {"base": base, "head": head},
+            sidecar_doc,
+        )
+        self.assertEqual(md.read_bytes(), md_bytes)
+        # The chained chain grades verified through the grading owner.
+        if cdc is None:  # pragma: no cover - repo layout regression
+            self.fail("code_delta_classifier import failed")
+        verified, message = cdc.verify_code_corrections(
+            repo.root,
+            "src/app.py",
+            1,
+            digest,
+            rows,
+            {"base": base, "head": head},
+            slug="demo-src",
+        )
+        self.assertTrue(verified, message)
+        # And the following verify-digest passes as accepted-stale with
+        # the chain terminal at the second additive head.
+        code, payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "accepted-stale", payload)
+        self.assertEqual(payload["corrections_after_head"], additive2, payload)
+
+    def test_re_bind_merge_commit_delta_records_witness_hunks(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        # The under-report class: the additive delta lands exclusively
+        # through a merge commit. A merge's own diff-tree output without
+        # -m shows only the combined/empty path set, so the witness
+        # derivation witnesses each commit against its parents instead;
+        # the fixture proves the merge's brought-in path is recorded.
+        repo.git("checkout", "-q", "-b", "side")
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# merged note\n",
+            "comment-only note on a side branch",
+        )
+        repo.git("checkout", "-q", "main")
+        repo.git("merge", "--no-ff", "--no-edit", "-q", "side")
+        merge = repo.head()
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(receipt["verified_head"], repo.head(), receipt)
+        sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        rows = sidecar_doc["extensions"]["corrections"]
+        self.assertEqual(len(rows), 1, rows)
+        expected_witness = self.witness_hunks(repo.root, head, repo.head())
+        self.assertTrue(expected_witness, "oracle found no witness hunks")
+        seen = set()
+        for hunk in rows[0]["hunks"]:
+            match = re.fullmatch(
+                r"re-bind additive delta ([0-9a-f]{40}) (.+)", hunk["header"]
+            )
+            self.assertIsNotNone(match, hunk["header"])
+            key = (match.group(1), match.group(2))
+            self.assertIn(key, expected_witness, hunk)
+            self.assertEqual(hunk["digest"], expected_witness[key], hunk)
+            seen.add(key)
+        self.assertEqual(seen, set(expected_witness))
+        # The merge commit itself is among the witnessed commits.
+        self.assertIn(merge, {key[0] for key in seen}, seen)
+        # And the graded chain still verifies through the grading owner.
+        if cdc is None:  # pragma: no cover - repo layout regression
+            self.fail("code_delta_classifier import failed")
+        verified, message = cdc.verify_code_corrections(
+            repo.root,
+            "src/app.py",
+            1,
+            digest,
+            rows,
+            {"base": base, "head": head},
+            slug="demo-src",
+        )
+        self.assertTrue(verified, message)
+
+    def test_re_bind_anchor_not_ancestor_refuses(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        # Rewind HEAD below the recorded verified head (soft, so the
+        # tracked seal entry survives on disk): the anchor is no longer
+        # an ancestor of HEAD, so the additive delta is unresolvable and
+        # the refusal fires before any derivation rides the rewound
+        # state.
+        repo.git("reset", "-q", "--soft", base)
+        code, _payload, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("is not an ancestor of HEAD", err)
+        self.assertIn("cannot re-bind", err)
+
+    def test_re_bind_lock_busy_refuses_after_deadline(self) -> None:
+        import fcntl as fcntl_mod
+
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        additive = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        # A concurrent holder keeps the corrections advisory lock for the
+        # artifact slug; the re-bind polls past its deadline and refuses
+        # with the named busy shape, nothing written.
+        lock_path = cr.corrections_lock_path(repo.root, "demo-src")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        holder = open(lock_path, "a+")
+        self.addCleanup(holder.close)
+        fcntl_mod.flock(holder, fcntl_mod.LOCK_EX)
+        with mock.patch.object(
+            helper, "_RE_BIND_LOCK_DEADLINE", 0.2
+        ):
+            code, _payload, err = self.re_bind_record(
+                repo.root, md, reviews, base, head
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("the corrections advisory lock is busy", err)
+        self.assertIn("cannot re-bind", err)
+        sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "corrections", sidecar_doc.get("extensions", {}), sidecar_doc
+        )
+
+    def test_re_bind_lock_open_failure_refuses_named(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        # An unwritable lock path (the lock file's path taken by a
+        # directory): the lock-open failure surfaces the named-refusal
+        # contract instead of a raw traceback.
+        lock_path = cr.corrections_lock_path(repo.root, "demo-src")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.mkdir()
+        code, _payload, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("cannot re-bind", err)
+        self.assertIn("cannot be opened", err)
+        self.assertIn(str(lock_path), err)
+
+    def test_re_bind_sidecar_drift_under_lock_refuses(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        # The expect-sha256 drift guard: the sidecar bytes change between
+        # the pre-lock derivation and the under-lock re-read. Simulated
+        # at the seam the guard reads: the digest helper's second
+        # observation of these exact bytes reports a different value.
+        real_sha = helper._sha256_hex
+        pre_bytes = sidecar.read_bytes()
+        state = {"seen": 0}
+
+        def drifting_sha(data: bytes) -> str:
+            if data == pre_bytes:
+                state["seen"] += 1
+                if state["seen"] > 1:
+                    return "b" * 64
+            return real_sha(data)
+
+        with mock.patch.object(
+            helper, "_sha256_hex", drifting_sha
+        ):
+            code, _payload, err = self.re_bind_record(
+                repo.root, md, reviews, base, head
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("the sidecar changed under the advisory lock", err)
+        self.assertIn("cannot re-bind", err)
+        sidecar_doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "corrections", sidecar_doc.get("extensions", {}), sidecar_doc
+        )
+
+    def test_re_bind_shared_record_state_refusal_names_verb(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        # A record whose sidecar half is gone: the shared record-state
+        # refusal renders with the re-bind verb, the same shape every
+        # surrounding leg uses.
+        sidecar.unlink()
+        code, _payload, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("cannot re-bind", err)
+
+    def test_re_bind_scope_drift_refuses_and_stale_refusal_routes(self) -> None:
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        sidecar_bytes = sidecar.read_bytes()
+        # Genuine scope drift: the post-landing delta touches a
+        # record-scope path, so the re-bind refuses fail-closed with the
+        # sidecar untouched.
+        repo.commit_file(
+            "src/app.py", "three\n", "a real change inside the reviewed scope"
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("touches record-scope path(s)", err)
+        self.assertIn("src/app.py", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+        # verify-digest refuses the drifted record stale, and the stale
+        # refusal's routing tail names the re-bind subcommand for the
+        # additive case.
+        code, _payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("stale review record", err)
+        self.assertIn("re-bind subcommand", err)
+
+    def test_verify_digest_moved_head_refusal_stays_byte_identical(self) -> None:
+        # The moved-HEAD refusal's full text is pinned byte-for-byte: the
+        # routing update touches only the digest-mismatch stale refusal's
+        # tail, never this message.
+        repo, md, base, head, recomputed = self.verify_fixture()
+        reviews = md.parent
+        moved = repo.commit_allow_empty("closeout bookkeeping")
+        code, _payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            err.strip(),
+            "ERROR: refusing the moved HEAD for "
+            f"{md.name}: HEAD {moved} is past the recorded verified head "
+            f"{head} while the reviewed-scope digest {recomputed} is "
+            "unchanged; a HEAD move past the recorded verified head "
+            "refuses without a verified corrections chain terminating at "
+            "the current bytes",
+        )
+
+    def test_verify_digest_help_names_re_bind_route(self) -> None:
+        # The verify-digest subparser's help text renders in the top-level
+        # subcommand listing (argparse never prints a subparser's own help
+        # string in its sub-help), so the assertion reads the top-level
+        # --help stream.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                helper.main(["--help"])
+        self.assertEqual(ctx.exception.code, 0)
+        # Whitespace-normalized: argparse wraps help text at the terminal
+        # width, so the assertion reads the wrapped stream joined.
+        self.assertIn("re-bind subcommand", " ".join(out.getvalue().split()))
+
+    def test_re_bind_empty_delta_refuses_vacuous(self) -> None:
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        # First the additive re-bind binds the chain terminal at the
+        # current head; a subsequent pure HEAD move past that after-head
+        # changes no paths, so the empty delta is not additive and
+        # re-binds nothing, with the sidecar untouched.
+        additive = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, _receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        moved = repo.commit_allow_empty("pure HEAD move")
+        sidecar_bytes = sidecar.read_bytes()
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, additive
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("changes no paths", err)
+        self.assertIn("empty delta is not additive", err)
+        self.assertIn(moved, err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def test_re_bind_expect_head_disagreement_refuses(self) -> None:
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        sidecar_bytes = sidecar.read_bytes()
+        # The delta anchor binds to the record's own recorded verified
+        # head: an --expect-head that is not the seal entry's certified
+        # head refuses before any delta is computed.
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, base
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("is not the recorded verified head", err)
+        self.assertIn("round seal entry's certified range", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def test_re_bind_renamed_record_scope_path_refuses(self) -> None:
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        sidecar_bytes = sidecar.read_bytes()
+        # Rename-blind scope check (r1 F2): a delta commit renaming a
+        # record-scope path (git rename detection prints only the
+        # destination path by default) must still refuse fail-closed, so
+        # both path derivations run --no-renames and the refusal names
+        # the OLD path.
+        repo.git("mv", "src/app.py", "src/renamed.py")
+        repo.commit_all("rename the reviewed path")
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("touches record-scope path(s)", err)
+        self.assertIn("src/app.py", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def re_bind_net_nil_fixture(self):
+        """The re-bind fixture with the seal entry deliberately left
+        uncommitted (the seal reads from the working tree, never from
+        git) and the seal directory gitignored (the same seam as the
+        reviews corpus), so no later commit sweeps the seal bytes into
+        the delta and the net-nil shape (a delta whose paths all net out
+        of the tree) is observable without the seal commit masking it."""
+        if cr is None:  # pragma: no cover - repo layout regression
+            self.fail(f"corrections_record import failed: {_CR_IMPORT_ERROR}")
+        repo = cr.build_scratch_repo(self)
+        repo.write_file(
+            ".gitignore", "docs/reviews/\n.ai-playbook/\n"
+        )
+        repo.commit_file(
+            "src/notes.py", "# scratch notes\n", "seed a non-reviewed notes path"
+        )
+        base = repo.commit_file("src/app.py", "one\n", "seed the reviewed scope")
+        head = repo.commit_file("src/app.py", "two\n", "the reviewed change")
+        diff = subprocess.run(
+            ["git", "-C", str(repo.root), "diff", base + "..." + head],
+            capture_output=True,
+            env=cr.hermetic_git_env(),
+        ).stdout
+        digest = hashlib.sha256(diff).hexdigest()
+        reviews = repo.root / "docs" / "reviews"
+        reviews.mkdir(parents=True)
+        md, sidecar = self.write_pair(
+            reviews, f"{self.today}-demo-code-review-r1", digest
+        )
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        payload["artifact_slug"] = "demo-src"
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        rel = cr.seal_relpath("src/app.py", "demo-src")
+        seal_path = repo.root / rel
+        seal_path.parent.mkdir(parents=True, exist_ok=True)
+        seal_path.write_text(
+            repo._seal_entry_block(
+                1, "src/app.py", head, digest, head, reviewed=(base, head, digest)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return repo, md, sidecar, base, head, digest
+
+    def test_re_bind_net_nil_delta_refuses_and_writes_nothing(self) -> None:
+        repo, md, sidecar, base, head, _digest = self.re_bind_net_nil_fixture()
+        reviews = md.parent
+        # First a successful additive re-bind binds the chain terminal at
+        # A (the r2 F4 rebuild: the net-nil guard's real catch class is a
+        # CHAINED re-bind whose second additive commit reverts the
+        # first's bytes, so the recomputed whole-window digest returns to
+        # the recorded value while the name-only delta stays non-empty;
+        # the earlier add-then-delete fixture collapsed to the
+        # empty-delta refusal before the guard).
+        additive = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(receipt["status"], "rebound", receipt)
+        self.assertEqual(receipt["verified_head"], additive, receipt)
+        bound_bytes = sidecar.read_bytes()
+        # The second additive commit restores the path's exact pre-A
+        # bytes: the tree nets out to the certified state, but the
+        # name-only delta over the anchor still names the path, so the
+        # empty-delta refusal does NOT fire and the net-nil guard does,
+        # with the rebound sidecar bytes untouched.
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n",
+            "restore the pre-A bytes of the note path",
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, additive
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("is net-nil", err)
+        self.assertIn("equals the recorded digest", err)
+        self.assertIn(additive, err)
+        self.assertEqual(sidecar.read_bytes(), bound_bytes)
+
+    def test_re_bind_pure_seal_capture_delta_refuses_at_grading(self) -> None:
+        # r2 F1: the classification leg excludes the seal path, so a
+        # delta whose ONLY changed path is the round-seal capture carries
+        # no classifiable hunk and refuses at grading (fail-closed); the
+        # documented route never promises a seal-only delta, and the
+        # sidecar stays untouched.
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        sidecar_bytes = sidecar.read_bytes()
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("fails grading", err)
+        self.assertIn("no classifiable hunks", err)
+        self.assertIn("every changed path is excluded", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def test_re_bind_markdown_capture_delta_refuses_at_grading(self) -> None:
+        # r2 F1: a Markdown capture row is the originally witnessed
+        # additive class, but the classification leg supports Python and
+        # Bash only, so a docs capture delta refuses at grading and
+        # routes to a fresh adversarial round instead, sidecar untouched.
+        # The added capture file carries no trailing newline, so both
+        # delta sides are newline-less and the pinned fragment is the
+        # unsupported-language refusal (a newline-terminated addition
+        # takes the sibling trailing-newline refusal one branch earlier,
+        # same classification leg, same fail-closed verdict).
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        sidecar_bytes = sidecar.read_bytes()
+        repo.commit_file(
+            "docs/guide.md", "guide", "add a docs capture row"
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("fails grading", err)
+        self.assertIn("no classifier support for .md files", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def test_verify_digest_accepted_stale_refuses_wrong_base(self) -> None:
+        # r2 F2: the accepted-stale receipt quotes the caller's operands,
+        # so the --base operand ties the way the writer's sealed_base tie
+        # does: a chained record verified with a --base that is not an
+        # ancestor-or-equal of the chain terminal's after_base (here the
+        # terminal's own after-head, at or past the terminal window
+        # start) refuses naming the operand tie; the correct base keeps
+        # the named accepted-stale pass.
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        additive = repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        sidecar_bytes = sidecar.read_bytes()
+        code, payload, err = self.verify_record(
+            repo.root, md, reviews, additive, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(payload, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("accepted-stale", err)
+        self.assertIn("cannot be tied to the recorded chain state", err)
+        self.assertIn(additive, err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+        code, payload, err = self.verify_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["outcome"], "accepted-stale", payload)
+
+    def test_re_bind_head_moved_under_lock_refuses_before_write(self) -> None:
+        # r2 F3: a HEAD advance between the git derivations/grading and
+        # the locked write refuses with nothing written, naming the
+        # retry, instead of a success receipt whose row did not take
+        # effect. Deterministic seam: the module's HEAD resolver returns
+        # a different commit on its second (under-lock) call; the real
+        # race needs concurrency, and this pins the same arm the manual
+        # concurrent probe exercises.
+        repo, md, sidecar, base, head, _digest = self.re_bind_fixture()
+        reviews = md.parent
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        sidecar_bytes = sidecar.read_bytes()
+        real_resolve = helper._resolve_head_commit
+        calls = {"count": 0}
+
+        def two_faced_head(repo_arg):
+            calls["count"] += 1
+            resolved = real_resolve(repo_arg)
+            if calls["count"] >= 2:
+                return "f" * 40
+            return resolved
+
+        helper._resolve_head_commit = two_faced_head
+        self.addCleanup(
+            setattr, helper, "_resolve_head_commit", real_resolve
+        )
+        original_cwd = os.getcwd()
+        os.chdir(repo.root)
+        try:
+            with self.assertRaises(helper.SelectionRefused) as ctx:
+                helper.re_bind_digest(md, reviews, base, head)
+        finally:
+            os.chdir(original_cwd)
+        message = str(ctx.exception)
+        self.assertIn("HEAD moved", message)
+        self.assertIn("nothing was written", message)
+        self.assertIn("re-derive from disk and retry", message)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+
+    def test_re_bind_preseeded_grading_failure_refuses(self) -> None:
+        # r2 overflow F5: the grading-failure refusal arm over a
+        # pre-seeded chain. A type-valid corrections row whose before
+        # refs disagree with the recorded certified range (after_head
+        # still the recorded verified head) fails the grading owner's
+        # certified-range ref rules before any byte is written; the
+        # refusal names the grading failure and the sidecar stays
+        # untouched.
+        repo, md, sidecar, base, head, digest = self.re_bind_fixture()
+        reviews = md.parent
+        root = repo.git("rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        seeded = {
+            "kind": "script-verified",
+            "before_digest": digest,
+            "after_digest": hashlib.sha256(b"seeded").hexdigest(),
+            "hunks": [
+                {"header": "@@ -1 +1 @@", "digest": digest},
+            ],
+            "recorded_at": self.today,
+            "recorded_by": "fixture",
+            "before_base": root,
+            "before_head": head,
+            "after_base": head,
+            "after_head": head,
+        }
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        payload["extensions"] = {
+            "corrections": [seeded],
+            "certified_range": {"base": base, "head": head},
+        }
+        sidecar.write_text(json.dumps(payload), encoding="utf-8")
+        sidecar_bytes = sidecar.read_bytes()
+        repo.commit_file(
+            "src/notes.py",
+            "# scratch notes\n# appended note\n",
+            "append a comment-only note outside the reviewed scope",
+        )
+        code, receipt, err = self.re_bind_record(
+            repo.root, md, reviews, base, head
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt, {})
+        self.assertNotIn("\n", err.strip(), err)
+        self.assertIn("fails grading", err)
+        self.assertIn("row 0's before refs", err)
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
 
     # -- recover-orphan additions (review round record lifecycle gaps
     #    plan, Task 3) ------------------------------------------------------

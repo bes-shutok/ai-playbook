@@ -1,7 +1,7 @@
 # Backlog: make the docs-branch runner select a supported Python runtime
 
 - **Filed:** 2026-10-11, maintenance execution of plan 2026-10-10
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-28-docs-branch-supported-python-runtime.md)
 Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** medium

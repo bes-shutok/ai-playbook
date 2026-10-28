@@ -84,10 +84,10 @@ Files:
 Primary class anchors:
 - `_message_class` in `scripts/friction_audit_quant.py`, which normalizes error text before message-class aggregation.
 
-- [ ] Given two 1302 messages that differ only in their trailing bracketed request ID, `_message_class` returns the same class label retaining `1302` and the lowercase description without the ID. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given equivalent 1308 quota messages, `_message_class` returns the same class label retaining `1308`, distinct from the 1302 label. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given an unrelated numeric message, normalization still collapses its digit run to `<n>`. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `scripts: normalize Agent rate-limit message classes` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given two 1302 messages that differ only in their trailing bracketed request ID, `_message_class` returns the same class label retaining `1302` and the lowercase description without the ID. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given equivalent 1308 quota messages, `_message_class` returns the same class label retaining `1308`, distinct from the 1302 label. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given an unrelated numeric message, normalization still collapses its digit run to `<n>`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `scripts: normalize Agent rate-limit message classes` [class: IMPLEMENTATION_REQUIRED]
 
 ## Validation Commands
 

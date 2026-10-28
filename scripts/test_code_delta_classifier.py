@@ -8,6 +8,8 @@ against scratch git repos built by corrections_record's fixture builder
 is touched and no absolute personal path is embedded.
 """
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -597,6 +599,124 @@ class RangeRoundTripTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("no classifiable hunks", proc.stdout)
         self.assertNotIn("every changed path lies under", proc.stdout)
+
+
+class ReviewedScopeMintTest(unittest.TestCase):
+    """The minting entry points consume the reviewed-scope byte function
+    (code-family-cert-digest-scope plan, Task 1): minted digests bind the
+    reviewed scope, a bookkeeping-only fix delta is the named refusal, an
+    all-bookkeeping certified range is a tool error, and a mixed-vintage
+    corrections_record sibling degrades to the named-gap tool-error shape
+    instead of crashing."""
+
+    BACKLOG_ROW = "docs/history/backlog/residual-row.md"
+
+    def scope_fixture(self):
+        repo = cr.build_scratch_repo(self)
+        b0 = repo.commit_file(SRC, V0, "base")
+        c1 = repo.commit_file(SRC, V1, "feature one")
+        return repo, {"b0": b0, "c1": c1}
+
+    def test_minted_digests_bind_the_reviewed_scope(self):
+        # A fix commit that rides a bookkeeping append mints its digests
+        # over the reviewed-scope bytes: the after digest equals the
+        # filtered diff hash and differs from the whole-diff hash that
+        # carries the bookkeeping bytes.
+        repo, fx = self.scope_fixture()
+        close = repo.commit_allow_empty("round close")
+        outcome0, certified = cr.reviewed_scope_bytes(
+            repo.root, fx["b0"], fx["c1"])
+        self.assertEqual(outcome0, cr.SCOPE_BYTES, outcome0)
+        repo.append_seal_entry(SLUG, 1, SRC, fx["c1"],
+                               cr.sha256_hex(certified), close,
+                               reviewed=(fx["b0"], fx["c1"],
+                                         cr.sha256_hex(certified)))
+        repo.write_file(SRC, b"def f():\n    return 2\n# reviewed note\n")
+        repo.write_file(self.BACKLOG_ROW, "# residual row\n")
+        mixed = repo.commit_all("fix plus residual append")
+        outcome, filtered = cr.reviewed_scope_bytes(
+            repo.root, fx["c1"], mixed)
+        self.assertEqual(outcome, cr.SCOPE_BYTES, outcome)
+        whole = cr.diff_bytes(repo.root, fx["c1"], mixed)
+        self.assertIn(b"residual row", whole)
+        self.assertNotEqual(whole, filtered)
+        proc = run_cli("--fix-commits", fx["c1"], mixed, "--base", fx["b0"],
+                       "--repo", str(repo.root), "--emit-row")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        rows = [line for line in proc.stdout.splitlines()
+                if line.startswith("corrections-row-json: ")]
+        self.assertEqual(len(rows), 1, proc.stdout)
+        row = json.loads(rows[0].split(": ", 1)[1])
+        self.assertEqual(row["before_digest"], cr.sha256_hex(certified))
+        self.assertEqual(row["after_digest"], cr.sha256_hex(filtered))
+        self.assertNotEqual(row["after_digest"], cr.sha256_hex(whole))
+        # The verifier re-derives the same reviewed-scope bytes and
+        # accepts the minted hop; the hop chain ends at the append commit
+        # at HEAD.
+        ok, msg = cdc.verify_code_corrections(
+            repo.root, SRC, 1, row["before_digest"], [row],
+            certified_range={"base": fx["b0"], "head": fx["c1"]},
+            slug=SLUG)
+        self.assertTrue(ok, msg)
+
+    def test_bookkeeping_only_fix_delta_refuses_the_mint(self):
+        # A fix commit touching only the bookkeeping prefixes filters to
+        # zero reviewed bytes: the named refusal fires, no after digest is
+        # printed, and no row is minted.
+        repo, fx = self.scope_fixture()
+        bk = repo.commit_file(self.BACKLOG_ROW, "# residual row\n",
+                              "bookkeeping only fix")
+        proc = run_cli("--fix-commits", fx["c1"], bk, "--base", fx["b0"],
+                       "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(last_outcome(proc), "OUTCOME: fail")
+        self.assertIn("bookkeeping-only", proc.stdout)
+        self.assertIn("reviewed-scope", proc.stdout)
+        self.assertNotIn("after diff digest", proc.stdout)
+        self.assertNotIn("corrections-row-json", proc.stdout)
+
+    def test_bookkeeping_only_certified_range_is_a_tool_error(self):
+        # A certified range that filters to zero reviewed bytes binds no
+        # digest: the before side refuses as a tool error naming the
+        # outcome, never the plumbing shape.
+        repo, fx = self.scope_fixture()
+        bk = repo.commit_file(self.BACKLOG_ROW, "# residual row\n",
+                              "bookkeeping only")
+        proc = run_cli("--fix-commits", bk, bk, "--base", fx["c1"],
+                       "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(last_outcome(proc), "OUTCOME: tool_error")
+        self.assertIn("bookkeeping-only", proc.stderr)
+
+    def test_mixed_vintage_sibling_degrades_to_the_named_gap(self):
+        # A corrections_record copy without the byte function degrades
+        # both classifier entry points to the named-gap tool-error shape,
+        # never an AttributeError crash.
+        repo, fx = self.scope_fixture()
+        good = repo.commit_file(SRC, V2, "feature two")
+        saved = cr.reviewed_scope_bytes
+        del cr.reviewed_scope_bytes
+        try:
+            out_buf, err_buf = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out_buf), \
+                    contextlib.redirect_stderr(err_buf):
+                code = cdc.main(["--fix-commits", fx["c1"], good,
+                                 "--base", fx["b0"],
+                                 "--repo", str(repo.root)])
+            self.assertEqual(code, 3)
+            self.assertEqual(out_buf.getvalue().splitlines()[-1],
+                             "OUTCOME: tool_error")
+            self.assertIn("reviewed_scope_bytes", err_buf.getvalue())
+            self.assertIn("reviewed-scope byte function",
+                          err_buf.getvalue())
+            ok, msg = cdc.verify_code_corrections(
+                repo.root, SRC, 1, "a" * 64, [], certified_range=None,
+                slug=SLUG)
+        finally:
+            cr.reviewed_scope_bytes = saved
+        self.assertFalse(ok)
+        self.assertIn("reviewed_scope_bytes", msg)
+        self.assertIn("reviewed-scope byte function", msg)
 
 
 if __name__ == "__main__":

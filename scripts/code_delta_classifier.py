@@ -35,8 +35,11 @@ the hunk list; ``classify_delta`` grades a whole file delta;
 ``verify_code_corrections`` runs the certified-range ref rules and
 corrections_record's verifier legs over a code corrections chain, with
 the classification leg re-run per hop over the fix diff re-derived from
-git. The seal path (``.ai-playbook/review-certs/``) is excluded from
-diff classification. A diff section without parseable ``---``/``+++``
+git as the reviewed-scope bytes. Paths excluded before classification:
+the seal path (``.ai-playbook/review-certs/``) and the pinned
+bookkeeping prefixes (``docs/history/backlog/``), which the
+reviewed-scope digest never binds. A diff section without parseable
+``---``/``+++``
 headers refuses the hop fail-closed, and a pure rename or mode section
 refuses too (rename and mode changes are runtime or path visible, never
 comment content); a C-quoted path token (git's core.quotePath form) is decoded
@@ -655,7 +658,7 @@ _RENAME_MODE_PREFIXES = ("rename from ", "rename to ",
                          "old mode ", "new mode ")
 
 
-def diff_sections(diff_bytes):
+def diff_sections(diff_text):
     """Per-file section records of a unified diff text: ``old`` and
     ``new`` (the decoded paths; None for /dev/null and for a quoted
     token that does not decode), ``old_devnull`` and ``new_devnull``,
@@ -665,7 +668,7 @@ def diff_sections(diff_bytes):
     neither content headers nor rename or mode markers (a binary or
     unparseable section), and a pure rename or mode section refuse the
     hop fail-closed at the consumer."""
-    text = diff_bytes.decode("utf-8", "replace")
+    text = diff_text.decode("utf-8", "replace")
     sections = []
     current = None
     for line in text.splitlines():
@@ -714,12 +717,12 @@ def section_refusal(section):
             "binary or unparseable section); the hop fails closed")
 
 
-def parse_diff_paths(diff_bytes):
+def parse_diff_paths(diff_text):
     """(old_path, new_path) per file section of a unified diff text; None
     stands for /dev/null on an added or deleted side and for a quoted
     path token that does not decode."""
     return [(section["old"], section["new"])
-            for section in diff_sections(diff_bytes)]
+            for section in diff_sections(diff_text)]
 
 
 def seal_excluded(path):
@@ -727,6 +730,16 @@ def seal_excluded(path):
     The seal path is excluded from diff classification."""
     normalized = os.path.normpath(str(path)).replace(os.sep, "/")
     return normalized.startswith(cr.SEAL_DIR_RELPATH + "/")
+
+
+def bookkeeping_excluded(path):
+    """True for paths under the pinned bookkeeping prefixes: the
+    reviewed-scope digest never binds them, so the classification leg
+    skips them beside the seal path. The prefixes are corrections_record's
+    pinned set, referenced through the module, never copied."""
+    normalized = os.path.normpath(str(path)).replace(os.sep, "/")
+    return any(normalized.startswith(prefix)
+               for prefix in cr.BOOKKEEPING_PREFIXES)
 
 
 def _read_side(repo, commit, path):
@@ -756,8 +769,9 @@ def _side_absent_refusal(path, side, commit):
 
 NO_CLASSIFIABLE_REASON = ("bytes changed with no classifiable hunks: "
                           "every changed path is excluded (the seal "
-                          "path), or its diff section is unparseable or "
-                          "binary; a pure rename or mode section carries "
+                          "path or a bookkeeping prefix), or its diff "
+                          "section is unparseable or binary; a pure "
+                          "rename or mode section carries "
                           "its own refusal")
 
 
@@ -765,7 +779,8 @@ def hop_unclassified(repo, after_base, after_head, after_diff_bytes):
     """The unclassified verdicts for one correction hop: the returned
     list is empty when every classifiable hunk of the fix carries the
     comment-only class. The after diff's sections pick the files (the
-    seal path is excluded; a binary or unparseable section, a section
+    seal path and the bookkeeping prefixes are excluded before
+    classification; a binary or unparseable section, a section
     whose quoted path does not decode, and a side the diff names that
     resolves to no blob refuse). The blobs at the chained refs carry the
     per-language proof. The after base must chain from the certified
@@ -783,6 +798,9 @@ def hop_unclassified(repo, after_base, after_head, after_diff_bytes):
         if path is None:
             continue
         if seal_excluded(path):
+            continue
+        if bookkeeping_excluded(path):
+            # Defense-in-depth: unreachable when callers feed git-layer-filtered reviewed-scope bytes; guards direct calls.
             continue
         classified = True
         before_path = old if old is not None else path
@@ -844,6 +862,18 @@ def _ref_rule_reason(rows, certified_range):
     return None
 
 
+# The named-gap degradation message for a mixed-vintage pair: a
+# corrections_record copy that predates the reviewed-scope byte function
+# cannot derive code-family digests, and both entry points below
+# feature-detect it and degrade to this tool-error shape instead of
+# crashing (code-family-cert-digest-scope plan, Task 1 rollout guard).
+_VINTAGE_GAP = ("corrections_record.py predates the reviewed-scope byte "
+                "function (reviewed_scope_bytes): a mixed-vintage "
+                "corrections_record/code_delta_classifier pair cannot "
+                "derive the reviewed-scope digests; upgrade the sibling "
+                "corrections_record.py next to this script")
+
+
 def verify_code_corrections(repo, artifact_path, round_number,
                             source_digest, rows, certified_range,
                             slug=None, head="HEAD", seal_repo=None,
@@ -852,12 +882,17 @@ def verify_code_corrections(repo, artifact_path, round_number,
     rules, then corrections_record's verifier legs (anchor, seal
     integrity, digest binding to the re-derived diffs, linkage, hop
     dating, terminal), then the classification leg re-run per hop over
-    the fix diff re-derived from git with the seal path excluded. An
+    the fix diff re-derived from git as the reviewed-scope bytes, with
+    the seal path and the bookkeeping prefixes excluded before
+    classification. An
     operator-acked row's receipt resolves out of band against the
     witness record path injected by the caller (None keeps the unattended
     default: the receipt leg refuses and re-review applies).
     Returns (True, prefixed success message) or (False, prefixed refusal
     naming the violated rule)."""
+    reviewed_scope_bytes = getattr(cr, "reviewed_scope_bytes", None)
+    if reviewed_scope_bytes is None:
+        return False, cr.leg_reason("classify", _VINTAGE_GAP)
     try:
         for row in rows:
             cr.validate_row(row, cr.FAMILY_CODE)
@@ -874,12 +909,17 @@ def verify_code_corrections(repo, artifact_path, round_number,
     if not ok or not rows:
         return ok, message
     for index, row in enumerate(rows):
-        after_diff = cr.diff_bytes(repo, row["after_base"],
-                                   row["after_head"])
-        if after_diff is None:
+        hop_outcome, after_diff = reviewed_scope_bytes(
+            repo, row["after_base"], row["after_head"])
+        if hop_outcome == cr.SCOPE_UNRESOLVED:
             return False, cr.leg_reason(
                 "classify", "git plumbing failed while re-deriving the "
                             "hop %d fix diff" % index)
+        if hop_outcome == cr.SCOPE_BOOKKEEPING_ONLY:
+            return False, cr.leg_reason(
+                "classify", "the hop %d fix delta filters to zero "
+                "reviewed-scope bytes (bookkeeping-only); no reviewed "
+                "content classifies at this hop" % index)
         verdicts = hop_unclassified(repo, row["after_base"],
                                     row["after_head"], after_diff)
         if verdicts:
@@ -1000,12 +1040,20 @@ def main(argv=None):
     if after is None:
         return tool_error("the after head %r does not resolve to a "
                           "commit" % args.fix_commits[1])
-    before_diff = cr.diff_bytes(root, base, before)
-    if before_diff is None:
+    reviewed_scope_bytes = getattr(cr, "reviewed_scope_bytes", None)
+    if reviewed_scope_bytes is None:
+        return tool_error(_VINTAGE_GAP)
+    before_outcome, before_diff = reviewed_scope_bytes(root, base, before)
+    if before_outcome == cr.SCOPE_UNRESOLVED:
         return indeterminate("git diff %s...%s failed over resolved refs"
                              % (base, before))
-    after_diff = cr.diff_bytes(root, before, after)
-    if after_diff is None:
+    if before_outcome == cr.SCOPE_BOOKKEEPING_ONLY:
+        return tool_error("the certified range %s...%s filters to zero "
+                          "reviewed-scope bytes (bookkeeping-only); "
+                          "there is no reviewed content to certify over"
+                          % (base, before))
+    after_outcome, after_diff = reviewed_scope_bytes(root, before, after)
+    if after_outcome == cr.SCOPE_UNRESOLVED:
         return indeterminate("git diff %s...%s failed over resolved refs"
                              % (before, after))
     print("repo: %s" % root)
@@ -1013,6 +1061,13 @@ def main(argv=None):
     print("before head: %s" % before)
     print("after head: %s" % after)
     print("before diff digest: %s" % cr.sha256_hex(before_diff))
+    if after_outcome == cr.SCOPE_BOOKKEEPING_ONLY:
+        print("refusal: %sno fix to classify: the fix delta filters to "
+              "zero reviewed-scope bytes (bookkeeping-only); the "
+              "correction hop is unclassifiable and the default re-review "
+              "applies" % cr.MARKER_PREFIX)
+        emit_outcome(1)
+        return 1
     print("after diff digest: %s" % cr.sha256_hex(after_diff))
     if before == after:
         print("refusal: %sno fix to classify: the before and after heads "

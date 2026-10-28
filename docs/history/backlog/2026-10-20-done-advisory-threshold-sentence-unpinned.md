@@ -1,7 +1,7 @@
 # Backlog: no placement pin quotes the done advisory's direct-commit threshold sentence after the 2026-10-20 re-aim; re-aim comments outgrow the one-clause convention
 
 - **Filed:** 2026-10-20, Phase 3 r1 Low findings F3 and F4 of the done-immediate-commit-single-homing execution
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** review-loop deferred candidates (one round, two findings on the same rows)

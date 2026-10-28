@@ -60,15 +60,43 @@ informationally only, never enumerated), and then:
   explicit caller input, never derived: the record path, its reviews
   directory, the recorded base commit, and the latest recorded verified
   head. The recomputation uses the canonical derivation (the
-  ``git diff <base>...<head>`` bytes hashed with SHA-256, imported from
-  ``corrections_record.py`` so no second freshness notion exists),
-  compares against the sidecar's ``source_digest`` through the same read
-  helper the overwrite guard uses, and refuses stale with both digests
-  named. A HEAD move past the recorded verified head refuses even when
-  the reviewed-scope bytes are unchanged, unless the sidecar records a
-  corrections chain whose terminal binds the current bytes and HEAD (the
-  chain the staging validator grades), which yields the named
-  accepted-stale pass instead. The subcommand mutates nothing.
+  reviewed-scope bytes of ``git diff <base>...<head>`` through
+  ``corrections_record.reviewed_scope_bytes``, imported from
+  ``corrections_record.py`` so no second freshness notion exists, hashed
+  with SHA-256), compares against the sidecar's ``source_digest`` through
+  the same read helper the overwrite guard uses, and refuses stale with
+  both digests named. A HEAD move past the recorded verified head whose
+  reviewed-scope bytes are unchanged is accepted without a chain when the
+  advance's own delta classifies bookkeeping-only (the named
+  bookkeeping-advance pass); a HEAD move otherwise refuses unless the
+  sidecar records a corrections chain whose terminal binds the current
+  bytes and HEAD (the chain the staging validator grades), which yields
+The subcommand mutates nothing.
+- ``re-bind``: the explicit corrections writer beside ``verify-digest``
+  for the additive post-landing class: a commit landing after the recorded
+  verified head whose changed paths are disjoint from the record-scope
+  paths (``git diff --name-only <base>...<certified head>``) and whose
+  changed content the corrections arm's per-hop classification leg
+  accepts (comment-only Python/Bash hunks, with seal-path captures
+  beside them; other additive classes such as Markdown/docs/JSON capture
+  rows or substantive code refuse at grading and still route to a fresh
+  adversarial round) re-prices the reviewed-scope digest without
+  touching the reviewed scope. The
+  subcommand recomputes the digest over the recorded base through the
+  canonical derivation, refuses the fail-closed classes (a delta touching
+  any record-scope path, a vacuous pure-HEAD move, a net-nil delta whose
+  recomputed digest equals the recorded one, an anchor disagreeing
+  with the record's own recorded verified head or not an ancestor of
+  HEAD, operands that cannot be tied to the record's recorded state, an
+  absent or damaged record, an unresolvable round seal entry), mints a
+  ``script-verified`` code-family row through ``corrections_record.py``'s
+  schema builder with the delta-path witness in the hunk headers (one
+  hunk per additive commit/path), grades the resulting chain through
+  ``code_delta_classifier.verify_code_corrections`` (the grading owner
+  the staging validator's corrections arm delegates to), and writes it
+  into the sidecar's ``extensions.corrections`` (with
+  ``extensions.certified_range`` written when absent) under the
+  corrections advisory lock with an expect-sha256 drift guard.
 
 Standard library only.
 """
@@ -696,23 +724,97 @@ except ImportError:  # direct-script invocation where scripts/ is not sys.path[0
 
 # The canonical reviewed-scope digest derivation and the commit resolver,
 # imported (not copied) from the corrections machinery so verify-digest
-# grades against exactly the diff-bytes-plus-sha256 shape the seal
-# validator grades and the classifiers consume: one freshness notion.
+# grades against exactly the reviewed-scope bytes shape the seal
+# validator grades and the classifiers consume: one freshness notion. The
+# re-bind writer beside verify-digest reuses the same module's row schema
+# builder, seal resolver, and advisory lock discipline, and grades the
+# resulting chain through the code-delta classifier's code-family
+# verifier (``verify_code_corrections``, the grading owner the staging
+# validator's corrections arm delegates to), which wraps this module's
+# chain verifier with the certified-range ref rules and the per-hop
+# classification leg.
 try:
     from corrections_record import (
+        FAMILY_CODE as _CORRECTIONS_FAMILY_CODE,
+        KIND_SCRIPT_VERIFIED as _CORRECTIONS_SCRIPT_VERIFIED,
+        CorrectionsSchemaError as _corrections_schema_error,
+        correction_row_digest as _correction_row_digest,
+        corrections_array_reason as _corrections_array_reason,
         diff_bytes as _diff_bytes,
+        git_bytes as _git_bytes,
         git_text as _git_text,
+        is_ancestor as _is_ancestor,
+        load_seal_entry as _load_seal_entry,
         resolve_commit as _resolve_commit,
+        row_keys as _corrections_row_keys,
+        seal_relpath as _seal_relpath,
+        atomic_write_bytes as _atomic_write_bytes,
         sha256_hex as _sha256_hex,
+        sidecar_round as _corrections_sidecar_round,
+        validate_row as _validate_corrections_row,
+        AdvisoryLockBusy as _AdvisoryLockBusy,
+        AdvisoryLockOpenError as _AdvisoryLockOpenError,
+        corrections_advisory_lock as _corrections_advisory_lock,
     )
 except ImportError:  # direct-script invocation where scripts/ is not sys.path[0]
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from corrections_record import (
+        FAMILY_CODE as _CORRECTIONS_FAMILY_CODE,
+        KIND_SCRIPT_VERIFIED as _CORRECTIONS_SCRIPT_VERIFIED,
+        CorrectionsSchemaError as _corrections_schema_error,
+        correction_row_digest as _correction_row_digest,
+        corrections_array_reason as _corrections_array_reason,
         diff_bytes as _diff_bytes,
+        git_bytes as _git_bytes,
         git_text as _git_text,
+        is_ancestor as _is_ancestor,
+        load_seal_entry as _load_seal_entry,
         resolve_commit as _resolve_commit,
+        row_keys as _corrections_row_keys,
+        seal_relpath as _seal_relpath,
+        atomic_write_bytes as _atomic_write_bytes,
         sha256_hex as _sha256_hex,
+        sidecar_round as _corrections_sidecar_round,
+        validate_row as _validate_corrections_row,
+        AdvisoryLockBusy as _AdvisoryLockBusy,
+        AdvisoryLockOpenError as _AdvisoryLockOpenError,
+        corrections_advisory_lock as _corrections_advisory_lock,
     )
+
+
+# The code-family grading owner: cdc.verify_code_corrections wraps
+# corrections_record.verify_corrections with the certified-range ref
+# rules and the per-hop classification leg, and it is the verifier the
+# staging validator's corrections arm actually runs (its code-family
+# branch), so the re-bind writer grades through it and never through the
+# raw corrections_record verifier (whose looser ref contract would accept
+# rows the validator refuses).
+try:
+    from code_delta_classifier import (
+        verify_code_corrections as _cdc_verify_code_corrections,
+    )
+except ImportError:  # direct-script invocation where scripts/ is not sys.path[0]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from code_delta_classifier import (
+        verify_code_corrections as _cdc_verify_code_corrections,
+    )
+
+# The reviewed-scope byte function, feature-detected beside the imports
+# above (the code-family-cert-digest-scope plan's rollout guard): a
+# corrections_record copy that predates it leaves this None and
+# verify-digest degrades to the named-gap usage error instead of crashing
+# on a mixed-vintage pair. The outcome constants ride the same tolerant
+# import; the refusal routing reads them only when the function exists.
+try:
+    from corrections_record import (
+        reviewed_scope_bytes as _reviewed_scope_bytes,
+        SCOPE_BOOKKEEPING_ONLY as _SCOPE_BOOKKEEPING_ONLY,
+        SCOPE_UNRESOLVED as _SCOPE_UNRESOLVED,
+    )
+except ImportError:  # an older sibling without the byte function
+    _reviewed_scope_bytes = None
+    _SCOPE_BOOKKEEPING_ONLY = "bookkeeping-only"
+    _SCOPE_UNRESOLVED = "unresolved"
 
 
 def _fence_mask(lines: list[str]) -> tuple[list[bool], int | None]:
@@ -1095,8 +1197,9 @@ def _unique_path(
     return candidate
 
 
-def _corrections_chain_terminal(sidecar: Path) -> tuple[str | None, str | None]:
-    """The recorded corrections chain's terminal ``(after_digest, after_head)``.
+def _corrections_chain_terminal(sidecar: Path) -> tuple[str | None, str | None, str | None]:
+    """The recorded corrections chain's terminal ``(after_digest,
+    after_head, after_base)``.
 
     The sidecar's ``extensions.corrections`` array is the receipt the
     graded corrections flow records: the staging validator owns verifying
@@ -1105,29 +1208,110 @@ def _corrections_chain_terminal(sidecar: Path) -> tuple[str | None, str | None]:
     that graded surface. verify-digest consults that recorded ownership
     rather than re-grading it: the terminal row's ``after_digest`` and
     ``after_head`` are what "terminates at the current bytes" means
-    mechanically here. Anything absent or malformed reads as no chain, so
-    the plain exact-match and refusal arms stand unchanged.
+    mechanically here, and the terminal's ``after_base`` names the refs
+    window the terminal digest binds (the freshness comparison
+    re-derives the digest over that window). Anything absent or
+    malformed reads as no chain, so the plain exact-match and refusal
+    arms stand unchanged.
     """
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None, None
+        return None, None, None
     if not isinstance(payload, dict):
-        return None, None
+        return None, None, None
     extensions = payload.get("extensions")
     if not isinstance(extensions, dict):
-        return None, None
+        return None, None, None
     rows = extensions.get("corrections")
     if not isinstance(rows, list) or not rows:
-        return None, None
+        return None, None, None
     terminal = rows[-1]
     if not isinstance(terminal, dict):
-        return None, None
+        return None, None, None
     after_digest = terminal.get("after_digest")
     after_head = terminal.get("after_head")
-    if not isinstance(after_digest, str) or not isinstance(after_head, str):
-        return None, None
-    return after_digest, after_head
+    after_base = terminal.get("after_base")
+    if (
+        not isinstance(after_digest, str)
+        or not isinstance(after_head, str)
+        or not isinstance(after_base, str)
+    ):
+        return None, None, None
+    return after_digest, after_head, after_base
+
+
+def _freshness_record_pair(
+    record_path: Path, reviews_dir: Path, verb: str, subcommand: str
+) -> tuple[Path, Path, str]:
+    """The shared record-state refusals for the freshness subcommands
+    (verify-digest and re-bind): an absent record, a backup-shaped name,
+    a record outside --dir, an orphan half without its sidecar twin, and
+    a sidecar without a readable source_digest string, all decided before
+    any git operand is consulted. ``verb`` and ``subcommand`` are
+    substituted into the refusal texts, so verify-digest's texts stay
+    byte-stable while re-bind speaks its own name."""
+    # The orphaned-half refusal speaks of the record in the third person:
+    # "a record verifies as" (byte-stable with the pre-split verify-digest
+    # text) and "a record re-binds as", so decline the verb instead of
+    # interpolating the naive "{verb}s" (which would render "verifys").
+    verb_s = (verb[:-1] + "ies") if verb.endswith("y") else verb + "s"
+    record = Path(record_path)
+    if not record.is_file():
+        raise SelectionRefused(
+            f"cannot {verb} the absent record {record}: no record exists "
+            f"at that path; {subcommand} checks the explicit --record and "
+            "never derives one"
+        )
+    if BACKUP_INFIX in record.name:
+        raise SelectionRefused(
+            f"cannot {verb} the backup pair {record.name}: backup-shaped "
+            "names are archived copies, never the live record; pass the "
+            "live round record"
+        )
+    resolved_dir = Path(reviews_dir).resolve()
+    try:
+        record.resolve().relative_to(resolved_dir)
+    except ValueError:
+        raise SelectionUsageError(
+            f"invalid --record {record}: it resolves outside the reviews "
+            f"directory {resolved_dir} named by --dir; {subcommand} "
+            "checks a record inside the corpus the caller names"
+        ) from None
+    sidecar = _sidecar_twin(record)
+    if not sidecar.is_file():
+        raise SelectionRefused(
+            f"cannot {verb} the orphaned record half {record.name}: its "
+            f"sidecar twin {sidecar.name} is missing; a record {verb_s} as "
+            "a Markdown/sidecar pair only, so restore the missing twin "
+            "or remove the orphan"
+        )
+    recorded_digest = _read_sidecar_digest(sidecar)
+    return record, sidecar, recorded_digest
+
+
+def _resolve_operand_commit(repo: Path, value: str, flag: str, noun: str) -> str:
+    """Resolve one explicit caller commit operand, or raise the shared
+    usage error (the operand is never guessed)."""
+    commit = _resolve_commit(repo, value)
+    if commit is None:
+        raise SelectionUsageError(
+            f"invalid --{flag} {value!r}: git cannot resolve it to a commit "
+            f"in the invoking repository; the {noun} is an explicit caller "
+            "input and is never guessed"
+        )
+    return commit
+
+
+def _resolve_head_commit(repo: Path) -> str:
+    """Resolve the invoking repository's HEAD, or refuse fail-closed."""
+    head_commit = _resolve_commit(repo, "HEAD")
+    if head_commit is None:
+        raise SelectionRefused(
+            "cannot resolve the invoking repository's HEAD; the freshness "
+            "comparison refuses rather than verify against an unknown HEAD"
+        )
+    return head_commit
 
 
 def verify_digest(
@@ -1142,26 +1326,56 @@ def verify_digest(
     latest recorded verified head (from the session manifest, or the
     corrections chain's after-head when a chain carries the record). The
     digest is recomputed over the invoking process's repository with the
-    canonical derivation (``git diff <base>...<head>`` bytes through
-    ``corrections_record.diff_bytes``, hashed with
+    canonical derivation (the reviewed-scope bytes of
+    ``git diff <base>...<head>`` through
+    ``corrections_record.reviewed_scope_bytes``, hashed with
     ``corrections_record.sha256_hex``) and compared against the sidecar's
     ``source_digest`` through the existing read helper.
 
-    Decision order: record-state refusals first (an absent record, a
-    backup-shaped name, a record outside --dir, an orphan half without
-    its sidecar twin, a sidecar without a readable ``source_digest``
-    string), then the git operands, then the comparison with the
-    corrections precedence pinned: a chain whose terminal binds the
-    current bytes and HEAD yields the named accepted-stale pass ahead of
-    any refusal, so corrections-carried records never verify permanently
-    stale; without such a chain a digest mismatch is the named stale
-    refusal (both digests and the record named) and a HEAD move past the
-    recorded verified head refuses even when the reviewed-scope bytes are
-    unchanged. The pass receipts name the verified HEAD beside the digest
-    comparison; the accepted-stale pass names both heads, the chain's
-    after-head being the movement. The subcommand mutates nothing: every
-    path here only reads.
+    Decision order: the mixed-vintage capability check first (a
+    corrections_record copy predating the reviewed-scope byte function is
+    a usage error naming the gap, never a crash), then record-state
+    refusals (an absent record, a backup-shaped name, a record outside
+    --dir, an orphan half without its sidecar twin, a sidecar without a
+    readable ``source_digest`` string), then the git operands, then the
+    comparison with the corrections precedence pinned: a chain whose
+    terminal binds the current bytes and HEAD yields the named
+    accepted-stale pass ahead of any refusal, so corrections-carried
+    records never verify permanently stale; without such a chain a digest
+    mismatch is the named stale refusal (both digests and the record
+    named). A HEAD move past the recorded verified head refuses even when
+    the reviewed-scope bytes are unchanged, with one amendment
+    (code-family-cert-digest-scope plan, Task 1): the advance's own delta
+    classifying bookkeeping-only on positive evidence (the raw diff
+    non-empty and the filtered bytes empty, read from the byte function's
+    distinct outcome, never inferred from a plumbing refusal) is accepted
+    with the verified head advanced; a raw-empty advance, a reviewed-path
+    delta, and a plumbing failure over the advance probe keep refusing.
+    The terminal binding re-derives the terminal row's
+    ``after_digest`` over the terminal's own refs window
+    (``after_base...HEAD``, the window the grading owner's binding leg
+    pinned the digest to) with ``after_head`` equal to HEAD: a
+    delta-anchored row's terminal digest covers its own hop window, not
+    the caller's whole ``--base...HEAD`` window, so binding the
+    whole-window digest would refuse the very chains the re-bind writer
+    records; the accepted-stale pass ties the caller's --base the way
+    the writer's sealed_base tie does (not an ancestor-or-equal of the
+    terminal's ``after_base`` refuses, naming the operand tie), so
+    corrections-carried records never verify permanently stale under a
+    mislabeled base operand.
+    The pass receipts name the verified HEAD beside the digest comparison;
+    the accepted-stale pass names both heads, the chain's after-head being
+    the movement; the bookkeeping-advance pass names both heads and the
+    advance it accepted. The subcommand mutates nothing: every path here
+    only reads.
     """
+    if _reviewed_scope_bytes is None:
+        raise SelectionUsageError(
+            "corrections_record predates the reviewed-scope byte function "
+            "(reviewed_scope_bytes): verify-digest cannot derive the "
+            "reviewed-scope digest against a mixed-vintage sibling; "
+            "upgrade corrections_record.py next to this script"
+        )
     record = Path(record_path)
     if not record.is_file():
         raise SelectionRefused(
@@ -1214,18 +1428,41 @@ def verify_digest(
             "cannot resolve the invoking repository's HEAD; the freshness "
             "comparison refuses rather than verify against an unknown HEAD"
         )
-    diff = _diff_bytes(repo, base_commit, head_commit)
-    if diff is None:
+    scope_outcome, diff = _reviewed_scope_bytes(repo, base_commit,
+                                                head_commit)
+    if scope_outcome == _SCOPE_UNRESOLVED:
         raise SelectionRefused(
             f"cannot recompute the reviewed-scope digest: the diff "
             f"{base_commit}...{head_commit} is unresolvable in the "
             "invoking repository; refusing the freshness comparison"
         )
+    if scope_outcome == _SCOPE_BOOKKEEPING_ONLY:
+        raise SelectionRefused(
+            f"cannot recompute the reviewed-scope digest: the delta "
+            f"{base_commit}...{head_commit} filters to zero "
+            f"reviewed-scope bytes (bookkeeping-only) in the invoking "
+            "repository; the record binds reviewed content this range "
+            "carries none of, so the freshness comparison refuses"
+        )
     recomputed = _sha256_hex(diff)
-    chain_after_digest, chain_after_head = _corrections_chain_terminal(sidecar)
-    chain_binds_current = (
-        chain_after_digest == recomputed and chain_after_head == head_commit
-    )
+    (
+        chain_after_digest,
+        chain_after_head,
+        chain_after_base,
+    ) = _corrections_chain_terminal(sidecar)
+    # The graded terminal binds the current bytes over its OWN refs
+    # window (after_base...HEAD), never the caller's whole window: the
+    # re-bind writer's delta-anchored rows pin the terminal digest to the
+    # hop window, exactly the binding the grading owner's digest leg
+    # enforces. An unresolvable terminal window reads as a non-binding
+    # chain (fail-closed: the refusal arms stand).
+    chain_binds_current = False
+    if chain_after_digest is not None and chain_after_head == head_commit:
+        terminal_diff = _diff_bytes(repo, chain_after_base, head_commit)
+        if terminal_diff is not None:
+            chain_binds_current = (
+                _sha256_hex(terminal_diff) == chain_after_digest
+            )
     if recomputed == recorded_digest and head_commit == expected_commit:
         return {
             "outcome": "fresh",
@@ -1236,6 +1473,28 @@ def verify_digest(
             "verified_head": head_commit,
         }
     if chain_binds_current:
+        # The accepted-stale receipt quotes the caller's operands
+        # (reviewed_base, recomputed_digest), so the --base operand ties
+        # the way the writer's sealed_base tie does: it must resolve to
+        # an ancestor-or-equal of the terminal row's after_base (the
+        # window start the terminal digest binds). The operand is a
+        # required caller input, so this guard lives only on the chain
+        # arm; every no-chain arm stands byte-unchanged below it.
+        base_ties = _is_ancestor(repo, base_commit, descendant=chain_after_base)
+        if base_ties is None:
+            raise SelectionRefused(
+                f"refusing the accepted-stale pass for {record.name}: git "
+                "plumbing failed while tying --base to the corrections "
+                "chain terminal's after_base"
+            )
+        if base_ties is False:
+            raise SelectionRefused(
+                f"refusing the accepted-stale pass for {record.name}: "
+                f"--base {base_commit} is not an ancestor of the "
+                f"corrections chain terminal's after_base "
+                f"{chain_after_base}; the freshness operands cannot be "
+                "tied to the recorded chain state"
+            )
         return {
             "outcome": "accepted-stale",
             "record": str(record),
@@ -1253,15 +1512,655 @@ def verify_digest(
             f"digest {recomputed} over {base_commit}...{head_commit}; the "
             "record is not current evidence; run a fresh round on the "
             "recomputed digest or re-bind it through the staging "
-            "validator's corrections arm"
+            "validator's corrections arm; an additive post-landing commit "
+            "whose delta touches zero record-scope paths and whose "
+            "changed content the re-bind grading accepts ("
+            f"{_RE_BIND_GRADING_ACCEPTS}) re-binds "
+            "through the re-bind subcommand; other additive classes "
+            "(Markdown/docs/JSON captures, substantive code) route to a "
+            "fresh round"
         )
-    raise SelectionRefused(
+    # The reviewed-scope digest is unchanged and HEAD moved past the
+    # recorded verified head. The advance accepts only on positive
+    # evidence from the byte function over the advance range itself: its
+    # delta classifying bookkeeping-only (raw diff non-empty, filtered
+    # bytes empty) advances the verified head; a raw-empty advance, a
+    # plumbing failure (never advance evidence), or any other outcome
+    # keeps the movement refusal.
+    advance_outcome, _advance_bytes = _reviewed_scope_bytes(
+        repo, expected_commit, head_commit)
+    if advance_outcome == _SCOPE_BOOKKEEPING_ONLY:
+        return {
+            "outcome": "fresh",
+            "record": str(record),
+            "reviewed_base": base_commit,
+            "recorded_digest": recorded_digest,
+            "recomputed_digest": recomputed,
+            "verified_head": head_commit,
+            "expected_head": expected_commit,
+            "bookkeeping_advance": {
+                "from": expected_commit,
+                "to": head_commit,
+            },
+        }
+    refusal = (
         f"refusing the moved HEAD for {record.name}: HEAD {head_commit} is "
         f"past the recorded verified head {expected_commit} while the "
         f"reviewed-scope digest {recomputed} is unchanged; a HEAD move "
         "past the recorded verified head refuses without a verified "
         "corrections chain terminating at the current bytes"
     )
+    if advance_outcome == _SCOPE_UNRESOLVED:
+        refusal += (
+            " (the advance-range reviewed-scope probe failed over "
+            f"{expected_commit}...{head_commit}; a plumbing failure is "
+            "never advance evidence)"
+        )
+    raise SelectionRefused(refusal)
+
+
+# The re-bind writer's advisory-lock patience, mirroring the corrections
+# append writer's locked-writer discipline (corrections_record.append_corrections).
+# The grading-owner classification tail, single-homed so the three
+# rendered surfaces (the verify-digest stale refusal and the two subcommand
+# help texts) cannot drift apart on the next touch of the accepted-class
+# wording. Byte-stable: each surface embeds the constant verbatim.
+_RE_BIND_GRADING_ACCEPTS = (
+    "comment-only script hunks, with seal-path captures beside them"
+)
+
+_RE_BIND_LOCK_DEADLINE = 5.0
+
+# The sidecar's dual-typed seal-round field (``"r1"`` or an integer),
+# mirroring the staging validator's corrections-round selector so both
+# surfaces resolve the same seal round from one recorded field.
+def _git_name_only(repo: Path, *args: str) -> list[str] | None:
+    """The non-empty lines of a git command printing one path per line,
+    or None on a plumbing failure."""
+    text = _git_text(repo, *args)
+    if text is None:
+        return None
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def _re_bind_witness_hunks(
+    record_name: str, repo: Path, expect_commit: str, head_commit: str
+) -> list[dict]:
+    """The delta-path witness: one hunk per additive commit/path.
+
+    A merge commit's own ``diff-tree`` output without ``-m`` shows only
+    the combined/empty path set, so an additive delta whose content lands
+    exclusively through merge commits would record zero witness hunks;
+    the derivation instead witnesses each commit against its parents (the
+    first parent first, a path already witnessed against an earlier
+    parent skipped), which makes the merge's brought-in paths observable.
+    A root commit keeps the empty-tree ``--root`` derivation."""
+    commits_text = _git_text(repo, "rev-list", f"{expect_commit}..{head_commit}")
+    if commits_text is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record_name}: the delta commits "
+            f"{expect_commit}..{head_commit} are unresolvable; refusing "
+            "the re-bind"
+        )
+    hunks = []
+    for commit in commits_text.split():
+        parents_text = _git_text(
+            repo, "rev-list", "--parents", "-n", "1", commit
+        )
+        if parents_text is None:
+            raise SelectionRefused(
+                f"cannot re-bind {record_name}: git plumbing failed while "
+                f"witnessing commit {commit}"
+            )
+        parent_commits = parents_text.split()[1:]
+        candidates: list[tuple[str | None, str]] = []
+        if not parent_commits:
+            paths = _git_name_only(
+                repo,
+                "diff-tree",
+                "-r",
+                "--name-only",
+                "--no-commit-id",
+                "--root",
+                commit,
+            )
+            if paths is None:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: git plumbing failed "
+                    f"while witnessing commit {commit}"
+                )
+            candidates = [(None, path) for path in paths]
+        else:
+            seen: set[str] = set()
+            for parent in parent_commits:
+                paths = _git_name_only(
+                    repo, "diff", "--no-renames", "--name-only", parent, commit
+                )
+                if paths is None:
+                    raise SelectionRefused(
+                        f"cannot re-bind {record_name}: git plumbing "
+                        f"failed while witnessing commit {commit}"
+                    )
+                for path in paths:
+                    if path not in seen:
+                        seen.add(path)
+                        candidates.append((parent, path))
+        for parent, path in candidates:
+            if parent is None:
+                patch = _git_bytes(
+                    repo,
+                    "diff-tree",
+                    "-p",
+                    "--no-commit-id",
+                    "--root",
+                    commit,
+                    "--",
+                    path,
+                )
+            else:
+                patch = _git_bytes(
+                    repo, "diff", "--no-renames", parent, commit, "--", path
+                )
+            if patch is None:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: git plumbing failed "
+                    f"while witnessing commit {commit} path {path}"
+                )
+            hunks.append(
+                {
+                    "header": f"re-bind additive delta {commit} {path}",
+                    "digest": _sha256_hex(patch),
+                }
+            )
+    return hunks
+
+
+def _re_bind_locked_write(
+    record_name: str,
+    repo: Path,
+    sidecar: Path,
+    pre_bytes: bytes,
+    declared_slug: str,
+    resulting_rows: list[dict],
+    write_range: bool,
+    grade_range: dict,
+    head_commit: str,
+) -> None:
+    """The locked nested write: the corrections append writer's flock plus
+    expect-sha256 discipline over the sidecar's extensions.corrections,
+    shared scaffolding with corrections_record.append_corrections (the
+    advisory-lock context manager and the bounded atomic write). Every
+    failure refuses with the sidecar untouched."""
+    expected_sha = _sha256_hex(pre_bytes)
+    try:
+        with _corrections_advisory_lock(
+            repo, declared_slug, timeout=_RE_BIND_LOCK_DEADLINE
+        ):
+            try:
+                fresh_bytes = sidecar.read_bytes()
+            except OSError as exc:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar is "
+                    "unreadable under the advisory lock: "
+                    f"{exc}"
+                ) from exc
+            if _sha256_hex(fresh_bytes) != expected_sha:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar changed "
+                    "under the advisory lock: a concurrent certification "
+                    "round or an unwitnessed mutation; re-derive from disk "
+                    "and retry"
+                )
+            try:
+                doc = json.loads(fresh_bytes.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar is not "
+                    f"decodable JSON under the advisory lock: {exc}"
+                ) from exc
+            if not isinstance(doc, dict):
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar is not a "
+                    "JSON object under the advisory lock"
+                )
+            extensions_doc = doc.get("extensions")
+            if extensions_doc is None:
+                extensions_doc = {}
+                doc["extensions"] = extensions_doc
+            if not isinstance(extensions_doc, dict):
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar extensions "
+                    "member is not an object"
+                )
+            extensions_doc["corrections"] = resulting_rows
+            if write_range:
+                # The graded chain must name the certified range it was
+                # graded against (the staging validator refuses a declared
+                # chain without one), so a first re-bind records the round
+                # seal entry's certified range beside the chain.
+                extensions_doc["certified_range"] = grade_range
+            written = (
+                json.dumps(doc, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            # The derivations and grading above ran against a snapshot
+            # HEAD; re-resolve under the held lock so a concurrent HEAD
+            # advance can never yield a success receipt whose row did not
+            # take effect. A moved HEAD refuses with nothing written,
+            # naming the retry.
+            live_head = _resolve_head_commit(repo)
+            if live_head != head_commit:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: HEAD moved from "
+                    f"{head_commit} to {live_head} while the delta was "
+                    "being derived and graded; nothing was written; "
+                    "re-derive from disk and retry"
+                )
+            try:
+                _atomic_write_bytes(sidecar, written)
+            except OSError as exc:
+                raise SelectionRefused(
+                    f"cannot re-bind {record_name}: the sidecar is not "
+                    f"writable under the advisory lock: {exc}"
+                ) from exc
+    except _AdvisoryLockBusy as exc:
+        raise SelectionRefused(
+            f"cannot re-bind {record_name}: the corrections advisory lock "
+            f"is busy: {exc}"
+        ) from None
+    except _AdvisoryLockOpenError as exc:
+        raise SelectionRefused(
+            f"cannot re-bind {record_name}: {exc}"
+        ) from None
+
+
+def re_bind_digest(
+    record_path: Path, reviews_dir: Path, base: str, expect_head: str
+) -> dict:
+    """The explicit corrections re-bind for the additive post-landing class.
+
+    The witnessed class: commits land on the base branch after the
+    record's recorded verified head, the reviewed-scope digest over the
+    recorded base is re-priced, but the delta's changed paths are disjoint
+    from the record-scope paths (``git diff --name-only
+    <base>...<certified head>``, the reviewed window the recorded digest
+    was computed over; the caller's --expect-head ties to it before the
+    anchor moves with a chain terminal) and the delta's changed content
+    is accepted by the grading owner's per-hop classification leg
+    (comment-only Python/Bash hunks, with seal-path captures beside them;
+    other additive classes such as Markdown/docs/JSON capture rows or
+    substantive code refuse at grading and still route to a fresh
+    adversarial round). verify-digest stays read-only
+    and refuses such a record as stale; this subcommand is the writer
+    beside it.
+
+    Decision order: the shared record-state refusals first, then the
+    record's seal state (round, artifact_slug, the round seal entry;
+    records without a resolvable round seal entry cannot re-bind), then
+    the git operands, then the anchor binding: the delta anchor is the
+    record's own recorded verified head (the corrections chain's
+    after-head when a chain carries the record, else the seal entry's
+    certified head), refusing disagreement with --expect-head, a --base
+    or --expect-head that cannot be tied to the record's recorded state,
+    and an anchor that is not an ancestor of HEAD. The delta is computed
+    over expect_head..HEAD; an empty delta (a pure HEAD move) refuses as
+    vacuous, a net-nil delta whose recomputed digest equals the recorded
+    one refuses as its vacuous subclass, and any delta path intersecting
+    the record-scope path set refuses fail-closed (both path derivations
+    run ``--no-renames``, so a rename can never hide a record-scope path
+    behind its destination). The recomputed digest over the recorded base
+    through the canonical derivation (``corrections_record.diff_bytes``
+    hashed with ``corrections_record.sha256_hex``, verify-digest's
+    recompute leg) must differ from the recorded digest, and the window
+    digest over base..certified head must equal it (the tie to the
+    recorded state).
+
+    On success the row is minted born-conformant through
+    ``corrections_record.row_keys`` plus ``validate_row`` as a
+    delta-anchored ``script-verified`` code-family row, the shape the
+    grading owner's ref rules require: the before side carries the sealed
+    state (row 0's before refs equal the certified range
+    ``(reviewed_base, reviewed_head)`` of the round seal entry for a
+    first re-bind; a chained row's before refs both equal the previous
+    row's after head), ``after_base`` equals ``before_head`` (the
+    anchor), ``after_head`` is HEAD, and ``after_digest`` is the SHA-256
+    over the anchor..HEAD delta bytes (the window the grading owner's
+    binding leg re-derives); the delta-path witness rides the
+    schema-tolerated hunk ``header`` free text, one hunk per additive
+    commit/path. The resulting chain is then graded through
+    ``code_delta_classifier.verify_code_corrections`` before any byte is
+    written (the grading owner the staging validator's corrections arm
+    delegates to, wrapping the corrections_record legs with the
+    certified-range ref rules and the per-hop classification leg), with
+    ``extensions.certified_range`` written into the sidecar when absent
+    in the ``{"base", "head"}`` shape the grading expects; any leg
+    failure refuses with the sidecar untouched. The write replaces
+    ``extensions.corrections`` under the corrections advisory lock keyed
+    on the artifact slug with an expect-sha256 drift guard over the
+    sidecar bytes and an under-lock HEAD re-resolution (a HEAD move
+    between the derivations and the write refuses with nothing written,
+    naming the retry). The chain's serialized form is the locked writer's
+    (``json.dumps(..., indent=2, sort_keys=True)``); the Markdown record
+    is never touched.
+    """
+    record, sidecar, recorded_digest = _freshness_record_pair(
+        record_path, reviews_dir, "re-bind", "re-bind"
+    )
+    repo = Path.cwd()
+    try:
+        pre_bytes = sidecar.read_bytes()
+        payload = json.loads(pre_bytes.decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the sidecar is unreadable "
+            f"({exc}); repair the sidecar before re-binding"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the sidecar is not a JSON "
+            "object; repair the sidecar before re-binding"
+        )
+    extensions = payload.get("extensions")
+    if extensions is not None and not isinstance(extensions, dict):
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the sidecar extensions member "
+            "is not an object; repair the sidecar before re-binding"
+        )
+    existing_rows = (
+        extensions.get("corrections") if isinstance(extensions, dict) else None
+    )
+    if existing_rows is not None:
+        reason = _corrections_array_reason(existing_rows)
+        if reason is not None:
+            raise SelectionRefused(
+                f"cannot re-bind {record.name}: the recorded corrections "
+                f"chain is malformed: {reason}"
+            )
+    certified_range = (
+        extensions.get("certified_range")
+        if isinstance(extensions, dict)
+        else None
+    )
+    round_number = _corrections_sidecar_round(payload)
+    if round_number is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the sidecar round does not "
+            "resolve to a seal round number; records without a "
+            "resolvable round seal entry cannot re-bind"
+        )
+    declared_slug = payload.get("artifact_slug")
+    if not isinstance(declared_slug, str) or not declared_slug.strip():
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the sidecar carries no "
+            "artifact_slug, so the round seal entry cannot be resolved; "
+            "records without a resolvable round seal entry cannot re-bind"
+        )
+    try:
+        seal_rel = _seal_relpath("", declared_slug)
+    except _corrections_schema_error as exc:
+        raise SelectionRefused(str(exc)) from exc
+    entry = _load_seal_entry(repo, seal_rel, round_number, _CORRECTIONS_FAMILY_CODE)
+    if entry is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the round seal entry for round "
+            f"{round_number} at {seal_rel} does not resolve; records "
+            "without a resolvable round seal entry cannot re-bind"
+        )
+    sealed_base = entry.fields.get("reviewed_base")
+    sealed_head = entry.fields.get("reviewed_head")
+    if not sealed_base or not sealed_head:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the round seal entry for round "
+            f"{round_number} carries no certified range; records without a "
+            "resolvable round seal entry cannot re-bind"
+        )
+    base_commit = _resolve_operand_commit(repo, base, "base", "base")
+    expect_commit = _resolve_operand_commit(
+        repo, expect_head, "expect-head", "recorded verified head"
+    )
+    head_commit = _resolve_head_commit(repo)
+    # Anchor binding: the delta anchor is the record's own recorded
+    # verified head, never an independent caller claim.
+    chain_after_digest, chain_after_head, _chain_after_base = (
+        _corrections_chain_terminal(sidecar)
+    )
+    if base_commit != sealed_base:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: --base {base_commit} is not the "
+            f"recorded reviewed base {sealed_base} of the round "
+            f"{round_number} seal entry; the operands cannot be tied to "
+            "the record's recorded state"
+        )
+    if chain_after_head is not None:
+        anchor = chain_after_head
+        if expect_commit != anchor:
+            raise SelectionRefused(
+                f"cannot re-bind {record.name}: --expect-head "
+                f"{expect_commit} disagrees with the recorded verified "
+                f"head {anchor} (the corrections chain terminal); the "
+                "delta anchor binds to the record's own recorded verified "
+                "head"
+            )
+    else:
+        anchor = sealed_head
+        if expect_commit != anchor:
+            raise SelectionRefused(
+                f"cannot re-bind {record.name}: --expect-head "
+                f"{expect_commit} is not the recorded verified head "
+                f"{sealed_head} (the round seal entry's certified range); "
+                "the operands cannot be tied to the record's recorded "
+                "state"
+            )
+    anchored = _is_ancestor(repo, anchor, descendant=head_commit)
+    if anchored is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: git plumbing failed while "
+            f"checking the recorded verified head {anchor} against HEAD"
+        )
+    if anchored is False:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the recorded verified head "
+            f"{anchor} is not an ancestor of HEAD {head_commit}; the "
+            "additive delta is unresolvable"
+        )
+    # The record-scope path set and the delta path set, both derived from
+    # git. The record-scope path set is the reviewed window the recorded
+    # digest was computed over: ``git diff --name-only
+    # <base>...<certified head>`` (in the witnessed first re-bind the
+    # certified head is the caller's --expect-head, the anchor agreement
+    # above having tied them; when a chain already carries the record the
+    # anchor has moved past it and the reviewed window stays the
+    # certified one, so repeated additive re-binds never grow the
+    # reviewed scope).
+    record_scope = _git_name_only(
+        repo,
+        "diff",
+        "--no-renames",
+        "--name-only",
+        f"{base_commit}...{sealed_head}",
+    )
+    if record_scope is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the record-scope diff "
+            f"{base_commit}...{sealed_head} is unresolvable; refusing "
+            "the re-bind"
+        )
+    delta_paths = _git_name_only(
+        repo,
+        "diff",
+        "--no-renames",
+        "--name-only",
+        f"{expect_commit}...{head_commit}",
+    )
+    if delta_paths is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the delta diff "
+            f"{expect_commit}...{head_commit} is unresolvable; refusing "
+            "the re-bind"
+        )
+    if not delta_paths:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the delta "
+            f"{expect_commit}..{head_commit} changes no paths (a pure "
+            "HEAD move); an empty delta is not additive and re-binds "
+            "nothing"
+        )
+    drifting = sorted(set(delta_paths).intersection(record_scope))
+    if drifting:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the delta "
+            f"{expect_commit}..{head_commit} touches record-scope path(s) "
+            f"{', '.join(drifting)}; a delta touching the reviewed scope "
+            "refuses fail-closed"
+        )
+    # The tie to the record's recorded state: the recorded digest was
+    # computed over exactly the certified window.
+    window_diff = _diff_bytes(repo, base_commit, sealed_head)
+    if window_diff is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the diff "
+            f"{base_commit}...{sealed_head} is unresolvable; refusing "
+            "the re-bind"
+        )
+    window_digest = _sha256_hex(window_diff)
+    if window_digest != recorded_digest:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the recomputed digest "
+            f"{window_digest} over {base_commit}...{sealed_head} "
+            f"differs from the sidecar source_digest {recorded_digest}; "
+            "the operands cannot be tied to the record's recorded state"
+        )
+    # verify_digest's recompute leg: the canonical derivation over the
+    # recorded base against live HEAD.
+    head_diff = _diff_bytes(repo, base_commit, head_commit)
+    if head_diff is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the reviewed-scope diff "
+            f"{base_commit}...{head_commit} is unresolvable; refusing "
+            "the re-bind"
+        )
+    recomputed = _sha256_hex(head_diff)
+    if recomputed == recorded_digest:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the delta "
+            f"{expect_commit}..{head_commit} is net-nil: the recomputed "
+            f"reviewed-scope digest {recomputed} equals the recorded "
+            "digest; a net-nil delta is not additive and re-binds nothing"
+        )
+    # The delta-path witness: one hunk per additive commit/path, each
+    # commit witnessed against its parents so a merge-carried additive
+    # delta records its brought-in paths instead of zero hunks.
+    hunks = _re_bind_witness_hunks(record.name, repo, expect_commit, head_commit)
+    # The born-conformant row: minted through the schema builder, so the
+    # key set is row_keys' exactly. The row is delta-anchored, the shape
+    # the grading owner's certified-range ref rules require: the before
+    # side carries the sealed state (the certified range for a first
+    # re-bind; a chained row's before refs both equal the previous row's
+    # after head, its before digest the terminal digest), the after side
+    # starts at the anchor (after_base == before_head) and ends at HEAD,
+    # and after_digest binds the anchor..HEAD delta bytes.
+    if chain_after_head is not None:
+        before_base = chain_after_head
+        before_digest = chain_after_digest
+    else:
+        before_base = sealed_base
+        before_digest = recorded_digest
+    delta_diff = _diff_bytes(repo, expect_commit, head_commit)
+    if delta_diff is None:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the delta diff "
+            f"{expect_commit}...{head_commit} is unresolvable; refusing "
+            "the re-bind"
+        )
+    after_digest = _sha256_hex(delta_diff)
+    values = {
+        "kind": _CORRECTIONS_SCRIPT_VERIFIED,
+        "before_digest": before_digest,
+        "after_digest": after_digest,
+        "hunks": hunks,
+        "recorded_at": DATE_SOURCE().isoformat(),
+        "recorded_by": "review_record_selection re-bind",
+        "before_base": before_base,
+        "before_head": expect_commit,
+        "after_base": expect_commit,
+        "after_head": head_commit,
+    }
+    row = {
+        key: values[key]
+        for key in sorted(
+            _corrections_row_keys(
+                _CORRECTIONS_SCRIPT_VERIFIED, _CORRECTIONS_FAMILY_CODE
+            )
+        )
+    }
+    try:
+        _validate_corrections_row(row, _CORRECTIONS_FAMILY_CODE)
+    except _corrections_schema_error as exc:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the minted corrections row is "
+            f"not born-conformant: {exc}"
+        ) from exc
+    # Grade the resulting chain before any byte is written, through the
+    # grading owner the staging validator's corrections arm delegates to
+    # (code_delta_classifier.verify_code_corrections, which wraps the
+    # corrections_record legs with the certified-range ref rules and the
+    # per-hop classification leg); a leg failure refuses with the
+    # sidecar untouched. The certified range rides the call in the
+    # ``{"base", "head"}`` shape: the sidecar's recorded range when one
+    # exists, else the round seal entry's certified range, which the
+    # write below records into the sidecar.
+    sidecar_range = (
+        certified_range if isinstance(certified_range, dict) else None
+    )
+    write_range = sidecar_range is None
+    grade_range = (
+        sidecar_range
+        if sidecar_range is not None
+        else {"base": sealed_base, "head": sealed_head}
+    )
+    resulting_rows = list(existing_rows or []) + [row]
+    verified, message = _cdc_verify_code_corrections(
+        repo,
+        entry.fields.get("artifact", ""),
+        round_number,
+        recorded_digest,
+        resulting_rows,
+        grade_range,
+        head=head_commit,
+        slug=declared_slug,
+    )
+    if not verified:
+        raise SelectionRefused(
+            f"cannot re-bind {record.name}: the resulting corrections "
+            f"chain fails grading: {message}"
+        )
+    # The locked nested write: the corrections append writer's flock plus
+    # expect-sha256 discipline over the sidecar's extensions.corrections,
+    # shared scaffolding with corrections_record.append_corrections.
+    _re_bind_locked_write(
+        record.name,
+        repo,
+        sidecar,
+        pre_bytes,
+        declared_slug,
+        resulting_rows,
+        write_range,
+        grade_range,
+        head_commit,
+    )
+    return {
+        "status": "rebound",
+        "record": str(record),
+        "sidecar": str(sidecar),
+        "seal": seal_rel,
+        "round": round_number,
+        "reviewed_base": base_commit,
+        "anchor": expect_commit,
+        "verified_head": head_commit,
+        "before_digest": before_digest,
+        "after_digest": after_digest,
+        "row_digest": _correction_row_digest(row),
+        "delta_paths": sorted(delta_paths),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1349,7 +2248,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser(
         "verify-digest",
         help="recompute the reviewed-scope digest at a record-reading "
-        "boundary and refuse a stale record",
+        "boundary and refuse a stale record; an additive post-landing "
+        "commit whose delta touches zero record-scope paths and whose "
+        "changed content the re-bind grading accepts ("
+        f"{_RE_BIND_GRADING_ACCEPTS}) re-binds "
+        "through the re-bind subcommand",
     )
     verify_parser.add_argument(
         "--record",
@@ -1372,6 +2275,38 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="the latest recorded verified head (from the session "
         "manifest, or the corrections chain's after-head)",
+    )
+
+    rebind_parser = subparsers.add_parser(
+        "re-bind",
+        help="re-bind a record through the corrections chain after an "
+        "additive post-landing commit whose delta touches zero "
+        "record-scope paths and whose changed content the corrections "
+        "classification leg accepts ("
+        f"{_RE_BIND_GRADING_ACCEPTS}; the writer beside verify-digest)",
+    )
+    rebind_parser.add_argument(
+        "--record",
+        required=True,
+        help="the record Markdown to re-bind (the latest round's record)",
+    )
+    rebind_parser.add_argument(
+        "--dir",
+        required=True,
+        help="reviews directory the record belongs to",
+    )
+    rebind_parser.add_argument(
+        "--base",
+        required=True,
+        help="the recorded base commit the reviewed-scope diff is "
+        "computed over",
+    )
+    rebind_parser.add_argument(
+        "--expect-head",
+        required=True,
+        help="the record's own recorded verified head (from the session "
+        "manifest, or the corrections chain's after-head); the delta "
+        "anchor binds to it",
     )
     return parser
 
@@ -1465,6 +2400,12 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.record), Path(args.dir), args.base, args.expect_head
             )
             print(json.dumps(outcome))
+            return 0
+        if args.command == "re-bind":
+            receipt = re_bind_digest(
+                Path(args.record), Path(args.dir), args.base, args.expect_head
+            )
+            print(json.dumps(receipt))
             return 0
         parser.error(f"unknown command {args.command!r}")  # pragma: no cover
     except SelectionRefused as exc:

@@ -833,16 +833,15 @@ class TestPromptLogPruneAudit:
         self.write(repo, LOG_REL, log_text(sections))
         return self.commit(repo, message)
 
-    def audit(self, log_path: Path, base: str) -> subprocess.CompletedProcess:
+    def audit(
+        self, log_path: Path, base: str, head: str | None = None
+    ) -> subprocess.CompletedProcess:
+        args = [sys.executable, str(SCRIPT), "--prune-audit", "--base", base]
+        if head is not None:
+            args += ["--head", head]
+        args.append(str(log_path))
         return subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--prune-audit",
-                "--base",
-                base,
-                str(log_path),
-            ],
+            args,
             capture_output=True,
             text=True,
             timeout=60,
@@ -2428,6 +2427,118 @@ class TestPromptLogPruneAudit:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "PENDING-SCAN-WARNING:" in proc.stdout
         assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_head_pin_audits_pinned_commit_when_head_moved(self, tmp_path):
+        # --head audits base..pinned at the pinned commit: a receipted
+        # removal at the pinned tip passes even though the working tree's
+        # HEAD has moved to a later commit carrying a receipt-less removal,
+        # while the omitted --head call keeps the existing base..HEAD
+        # behavior and flags that same removal.
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [
+                entry("pinned-entry", ["2026-10-01-pinned-origin.md"]),
+                entry("later-entry", ["2026-10-01-later-origin.md"]),
+            ],
+            "seed the log with two entries",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The pinned tip removes one entry with its own in-commit receipt.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("later-entry", ["2026-10-01-later-origin.md"])],
+                ["PLAN-PROMPTS-PRUNE: pinned-entry -> landing"],
+            ),
+        )
+        self.commit(repo, "prune pinned-entry with its receipt")
+        pinned = self.git(repo, "rev-parse", "HEAD").strip()
+        # HEAD moves past the pinned tip with a receipt-less removal.
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune later-entry without any receipt")
+        head = self.git(repo, "rev-parse", "HEAD").strip()
+        assert pinned != head
+
+        pinned_proc = self.audit(repo / LOG_REL, base, head=pinned)
+        assert pinned_proc.returncode == 0, (
+            pinned_proc.stdout + pinned_proc.stderr
+        )
+        assert "PRUNE-OK: pinned-entry" in pinned_proc.stdout
+        assert "REMOVED-WITHOUT-WITNESS" not in pinned_proc.stdout
+        summary = next(
+            line
+            for line in pinned_proc.stdout.splitlines()
+            if line.startswith("prune-audit summary:")
+        )
+        assert f"in {base}..{pinned}" in summary
+        assert self.final_line(pinned_proc) == "OUTCOME: pass"
+
+        head_proc = self.audit(repo / LOG_REL, base)
+        assert head_proc.returncode == 1, head_proc.stdout + head_proc.stderr
+        short = self.git(repo, "rev-parse", "--short", head).strip()
+        assert (
+            f"REMOVED-WITHOUT-WITNESS: later-entry (commit {short}"
+            in head_proc.stdout
+        )
+        assert f"in {base}..{head}" in head_proc.stdout
+        assert self.final_line(head_proc) == "OUTCOME: fail"
+
+    def test_head_pin_reports_pinned_tip_identity_and_range(self, tmp_path):
+        # The summary and the pending scan report the pinned tip's own
+        # identity, never the working tree HEAD's.
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("solo-entry", ["2026-10-01-solo-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune solo-entry without any receipt")
+        pinned = self.git(repo, "rev-parse", "HEAD").strip()
+        short = self.git(repo, "rev-parse", "--short", pinned).strip()
+        proc = self.audit(repo / LOG_REL, base, head=pinned)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert f"(commit {short}" in proc.stdout
+        summary = next(
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("prune-audit summary:")
+        )
+        assert f"in {base}..{pinned}" in summary
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_head_unresolvable_ref_is_tool_error(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo, [entry("solo-entry", ["2026-10-01-solo-origin.md"])], "seed the log"
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        proc = self.audit(repo / LOG_REL, base, head="no-such-ref")
+        assert proc.returncode == 3, proc.stdout + proc.stderr
+        assert (
+            "head ref does not resolve to a commit: no-such-ref" in proc.stdout
+        )
+        assert self.final_line(proc) == "OUTCOME: tool_error"
+
+    def test_help_describes_pinned_head_endpoint(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "--head" in proc.stdout
+        # argparse wraps help at the terminal width, so compare on
+        # whitespace-normalized text
+        normalized = " ".join(proc.stdout.split())
+        assert "pins the audited range's upper endpoint" in normalized
+        assert (
+            "the audit enumerates base..head at the pinned commit"
+            in normalized
+        )
 
 
 class TestCollateralServedDiscovery:

@@ -1,7 +1,7 @@
 # Backlog: learn missed its own workflow failure
 
 - **Filed:** 2026-10-27, current-session operator correction
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-27-learn-missed-skill-issue-capture.md)
 - **Priority:** high
 - **Origin class:** self-serving
 - **Class:** fix-class (a missed skill-use issue required the user to prompt again)

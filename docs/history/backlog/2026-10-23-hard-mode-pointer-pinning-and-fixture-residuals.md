@@ -1,7 +1,7 @@
 # Backlog: hard-mode pointer pinning and fixture-builder residuals
 
 Filed: 2026-10-23
-Status: open
+Status: covered (docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md)
 Driving force: code-quality
 
 Trigger: any change to SKILL_CLAUSE_POINTERS, the pointer print site, or the arm's fixture builders; the pinning/remedy work should ride the next change on that surface.

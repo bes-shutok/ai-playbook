@@ -4,7 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** high
-- **Cluster:** docs/history/backlog/2026-10-05-authoring-certification-staging-series-gate.md, docs/history/plans/completed/2026-10-09-primary-class-anchors-grammar-drift.md (two surfaces certified against a shared span; the later consumer refuses on drift), docs/history/plans/completed/2026-10-08-done-closeout-ceremony-friction.md (shares the done_sweep_gates surface; named kept-open outside that row's demotion program)
+- **Cluster:** docs/history/plans/completed/2026-10-06-authoring-staging-preflight-gates.md (the retired staging-series-gate slug's covering plan; durable home), docs/history/plans/completed/2026-10-09-primary-class-anchors-grammar-drift.md (two surfaces certified against a shared span; the later consumer refuses on drift), docs/history/plans/completed/2026-10-08-done-closeout-ceremony-friction.md (shares the done_sweep_gates surface; named kept-open outside that row's demotion program)
 
 Cluster: docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor.md (shared surface: this row's stale-anchor verification greps target prompt-templates.md spans, which that row's changelog extraction and template split relocate; sequence the span reconciliation after the split lands)
 - **Origin class:** witnessed defect (two landed plans, one shared file seam, no execution-order fence)
@@ -17,7 +17,7 @@ Cluster: docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor
 
 Observed: two certified plans sit at the plans root and both prescribe replacing the same span in `agents/skills/maintenance/prompt-templates.md` (the payload certification sentence `record the residual findings in the plan), and the workflow is processed`, still present on main at count 1):
 
-- `docs/history/plans/2026-10-06-authoring-staging-preflight-gates.md` Task 2 (landed `87e43962`, first-landed, owns the `2026-10-05-authoring-certification-staging-series-gate.md` origin coverage): replaces the span with the parenthetical certification-ordering-duty form.
+- `docs/history/plans/2026-10-06-authoring-staging-preflight-gates.md` Task 2 (landed `87e43962`, first-landed, owns the `2026-10-05-authoring-certification-staging-series-gate.md` origin coverage (row retired; durable home: docs/history/plans/completed/2026-10-06-authoring-staging-preflight-gates.md)): replaces the span with the parenthetical certification-ordering-duty form.
 - `docs/history/plans/2026-10-07-done-readiness-closeout-boundary.md` Task 2 (landed `9c62b368`, later, whose commit message already acknowledges "the sibling staging-series origin keeping the peer plan's earlier coverage first-landed-wins"): replaces the same span with the assembled-series full-gate form (`...); after the final round's staging records are assembled, run the full readiness gate...`).
 
 Both replacements deliver the same duty (the full gate over the final bytes before the ready state is treated as reached); they differ in wording and in side effects (the peer form also rewrites the blueprint's certification-sentence shape and carries its own validation gate literal `record the residual findings in the plan); after the final round`). Whichever plan executes second fails its Task 2 anchor: the quoted span no longer exists, the executor's anchor verification refuses, and the plan needs a mid-execution correction round.
