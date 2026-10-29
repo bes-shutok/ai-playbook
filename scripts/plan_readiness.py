@@ -1673,49 +1673,11 @@ def _gated_probe_reason(problem: str, min_date: str, round_no: int, round_date: 
 _GATE_INDETERMINATE_PREFIX = "readiness indeterminate: "
 
 
-def _validate_verification_head(
-    value: str, plan_operand: Path
-) -> tuple[str | None, str | None]:
-    """Validate an explicit ``--verification-head`` value against the
-    plan's source repository: a full 40-character lowercase hex commit OID
-    present as a commit object. Returns ``(oid, None)`` when valid and
-    ``(None, reason)`` otherwise; callers reject BEFORE corrections
-    verification runs."""
-    oid = value.strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", oid):
-        return None, (
-            "--verification-head must be a full 40-character lowercase hex "
-            f"commit OID, not an abbreviated or malformed value: {value!r}"
-        )
-    env = (
-        corrections_record.hermetic_git_env()
-        if corrections_record is not None
-        else None
-    )
-    try:
-        toplevel = subprocess.run(
-            [
-                "git", "-C", str(plan_operand.parent),
-                "rev-parse", "--show-toplevel",
-            ],
-            capture_output=True, text=True, timeout=5, env=env,
-        )
-        probe = subprocess.run(
-            ["git", "-C", plan_operand.parent, "cat-file", "-e",
-             "%s^{commit}" % oid],
-            capture_output=True, text=True, timeout=5, env=env,
-        ) if toplevel.returncode == 0 and toplevel.stdout.strip() else None
-    except (subprocess.SubprocessError, OSError):
-        return None, (
-            "--verification-head could not run git against the plan's "
-            "source repository"
-        )
-    if probe is None or probe.returncode != 0:
-        return None, (
-            f"--verification-head {oid} is not a commit present in the "
-            "plan's source repository"
-        )
-    return oid, None
+# The explicit ``--verification-head`` checker is the ONE shared helper in
+# corrections_record (``validate_verification_head``), imported from here and
+# from the staging validator; this CLI's local copy was the duplicated twin
+# whose outcome-redundant ``rev-parse --show-toplevel`` pre-check collapsed
+# the could-not-run and absent-commit conditions into one mislabeled reason.
 
 
 def _plan_corrections_context(
@@ -3215,11 +3177,25 @@ def _main(argv: list[str] | None = None) -> int:
     # The explicit verification head is validated against the plan's source
     # repository BEFORE any readiness evaluation (and so before corrections
     # verification): an abbreviated, malformed, empty, or unavailable value
-    # is a tool error, never a graded refusal.
+    # is a tool error, never a graded refusal. The shared helper validates
+    # the supplied value for EVERY source plan, a plan outside any Git
+    # worktree included, and gives each failure condition its own
+    # tool-error reason.
     verification_head: str | None = None
     if args.verification_head is not None:
-        verification_head, head_error = _validate_verification_head(
-            args.verification_head, plan_operand
+        if corrections_record is None:
+            print(
+                "readiness FAILED: --verification-head cannot be validated: "
+                "corrections_record.py is not importable next to this "
+                "validator copy",
+                file=sys.stderr,
+            )
+            print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
+        verification_head, head_error = (
+            corrections_record.validate_verification_head(
+                plan_operand.parent, args.verification_head
+            )
         )
         if head_error is not None:
             print(f"readiness FAILED: {head_error}", file=sys.stderr)

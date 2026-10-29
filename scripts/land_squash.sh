@@ -1034,6 +1034,23 @@ META_REPO="$(meta_field "$LOCK_META" repo_root)"
 resolve_repo_root
 [[ "$META_REPO" == "$REPO_ROOT" ]] || tool_error "merge lock record repo_root '${META_REPO}' does not equal this repository's primary checkout root '${REPO_ROOT}' (a stale sibling-repo environment)"
 
+# Primary land lock ownership (plan docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md):
+# the primary done lock is acquired before the merge lock and held through
+# snapshot, landing, and recovery; the helper verifies both lock environments
+# before its snapshot.
+DONE_DIR="${DONE_LOCK_DIR:-}"
+DONE_TOKEN="${DONE_LOCK_TOKEN:-}"
+[[ -n "$DONE_DIR" ]] || tool_error "land requires DONE_LOCK_DIR set and non-empty (the Primary land lock ownership takes the primary done lock before the merge lock; acquire it via scripts/done-lock.sh and export the printed environment)"
+[[ -n "$DONE_TOKEN" ]] || tool_error "land requires DONE_LOCK_TOKEN set and non-empty (the Primary land lock ownership takes the primary done lock before the merge lock; acquire it via scripts/done-lock.sh and export the printed environment)"
+[[ -d "$DONE_DIR" ]] || tool_error "done lock directory does not exist: ${DONE_DIR}"
+DONE_META="${DONE_DIR}/meta.env"
+[[ -f "$DONE_META" ]] || tool_error "done lock record meta.env is missing: ${DONE_DIR}"
+DONE_META_TOKEN="$(meta_field "$DONE_META" lock_token)"
+[[ -n "$DONE_META_TOKEN" ]] || tool_error "done lock record carries an empty lock_token: ${DONE_META}"
+[[ "$DONE_TOKEN" == "$DONE_META_TOKEN" ]] || tool_error "DONE_LOCK_TOKEN does not equal the record's lock_token (a stale generation or a fabricated environment)"
+DONE_META_REPO="$(meta_field "$DONE_META" repo_root)"
+[[ "$DONE_META_REPO" == "$REPO_ROOT" ]] || tool_error "done lock record repo_root '${DONE_META_REPO}' does not equal this primary checkout root '${REPO_ROOT}' (the Primary land done lock is keyed to the primary worktree)"
+
 HEAD_SYMREF="$(git -C "$REPO_ROOT" symbolic-ref --quiet HEAD)" || {
   DETACHED_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   tool_error "primary checkout HEAD is detached (checked-out HEAD: ${DETACHED_SHA}); the helper operates on the primary checkout's checked-out base branch; --expected-tip: ${EXPECTED_TIP}"

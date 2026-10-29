@@ -1,7 +1,7 @@
 # Light boundary r1 review follow-ups: stale done-setup directives and deferred shrink set
 
 - **Filed:** 2026-10-19, Phase 3 r1 review address pass of the done-final-only-learn-intermediate plan run; source reference `docs/history/plans/2026-10-18-done-final-only-learn-intermediate.md` (r5-certified)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-29-light-boundary-stale-setup-directives-and-residuals.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** review finding
@@ -23,3 +23,7 @@ One small plan or ad-hoc pass: reword `AGENTS.md` line 73 and add a supersession
 ## Phase 3 r2 certification residuals (added 2026-10-19, certifying round over bf0943426)
 
 The r2 fresh-adversarial round returned zero blocking findings and four new non-blocking residuals, all tracked here rather than folded (no skill-text edits after the certified digest): (1) `scripts/check_maintenance_pins.sh` placement pin anchors "committed right after the change", a span the branch's done rewrite removed, so the warning-only suite prints an unsuppressed advisory red each run while exiting 0; re-key the pin to its canonical home (execute-plan SKILL.md's immediate-commit span) or retire it with a recorded-red entry. (2) done SKILL.md's frontmatter rider-commit list omits the Step 1.9 off-tree backlog row class that done Step 1 and learn SKILL.md both sanction; one-phrase summary fix. (3) `agents/skills/maintenance/templates-CHANGELOG.md` lacks an entry for the blueprint reword; append at the next maintenance-template edit. (4) review-loop's new standalone exit-closeout rule duplicates the done four-leg list from the Consumes done entry 37 lines below; cut the parenthetical and keep the anchor in the same pin-safe prose pass as the r1 shrink set.
+
+## Additional witness (2026-10-29)
+
+During an execute-plan run, `AGENTS.md` still required done-boundary setup as the first worktree action, while the live task workflow reserved done setup for final closeout and started with Phase 0. Resolving that conflict required a documented self-heal disposition before editing, confirming the first-action wording remains unresolved. Priority reaffirmed: medium.

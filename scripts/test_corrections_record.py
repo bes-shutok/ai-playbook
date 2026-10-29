@@ -377,6 +377,49 @@ class AnchorLegTest(unittest.TestCase):
         self.assertIsNone(cr.load_seal_entry(repo5.root, rel5, 3,
                                              cr.FAMILY_CODE))
 
+    def test_legacy_bytes_boundary_slot_resolves_intended_path(self):
+        # The legacy artifact slot ending at the "bytes)" boundary: the
+        # canonical corpus shape still resolves its intended path, a glued
+        # parenthetical fragment after the path is dropped rather than
+        # captured into the artifact identity, and a fragment-only slot
+        # never becomes a path (r1 R2: the extraction used to capture
+        # trailing fragments as the artifact path).
+        # Corpus compatibility: the pipe row whose prose ends in the
+        # squash-landing parenthetical keeps resolving the intended path.
+        repo, rel, _start, _close = self.legacy_repo(self.LEGACY_SHAPES[1])
+        entry = cr.load_seal_entry(repo.root, rel, 3, cr.FAMILY_PLAN)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.fields["artifact"], PLAN_REL)
+        # Glued parenthetical at the slot boundary: the path token carries
+        # "(the certified bytes)" glued after it, and the extraction must
+        # end the slot at that bytes) boundary instead of swallowing the
+        # fragment into the artifact identity.
+        repo_glued = cr.build_scratch_repo(self)
+        start_glued = repo_glued.commit_file(PLAN_REL, D1, "seed plan")
+        close_glued = repo_glued.commit_allow_empty("round 3 close")
+        rel_glued = cr.seal_relpath(PLAN_REL, PLAN_SLUG)
+        repo_glued.write_file(rel_glued, (
+            "- r3 2026-10-14 %s(the certified bytes) round-start %s "
+            "round-start-digest %s round-close %s certified-digest %s "
+            "zero blocking\n"
+            % (PLAN_REL, start_glued, hx(D1), close_glued, hx(D1))))
+        entry_glued = cr.load_seal_entry(repo_glued.root, rel_glued, 3,
+                                         cr.FAMILY_PLAN)
+        self.assertIsNotNone(entry_glued)
+        self.assertEqual(entry_glued.fields["artifact"], PLAN_REL)
+        # A fragment-only slot (no intended path anywhere in the row)
+        # never becomes a path: the row stays an unresolvable prose line.
+        repo_fragment = cr.build_scratch_repo(self)
+        start_fragment = repo_fragment.commit_file(PLAN_REL, D1, "seed plan")
+        close_fragment = repo_fragment.commit_allow_empty("round 3 close")
+        rel_fragment = cr.seal_relpath(PLAN_REL, PLAN_SLUG)
+        repo_fragment.write_file(rel_fragment, (
+            "- r3 2026-10-14 (sealed bytes)/certified round-start %s "
+            "round-start-digest %s round-close %s\n"
+            % (start_fragment, hx(D1), close_fragment)))
+        self.assertIsNone(cr.load_seal_entry(
+            repo_fragment.root, rel_fragment, 3, cr.FAMILY_PLAN))
+
     def test_load_seal_entry_distinguishes_plan_and_code_rounds(self):
         repo = cr.build_scratch_repo(self)
         start = repo.commit_file(PLAN_REL, D1, "seed plan")
@@ -509,24 +552,43 @@ class AnchorLegTest(unittest.TestCase):
     def test_candidate_read_failure_refuses_without_older_match(self):
         # A candidate whose ls-tree names the path but whose blob read
         # fails refuses the scan at that candidate; the matching HEAD
-        # bytes are never accepted through a failed read.
+        # bytes are never accepted through a failed read. The older
+        # matching candidate (the sealed D1 seed) sits BEHIND the failing
+        # newest candidate, so the refusal proves the scan stops at the
+        # failed read instead of consuming the older match (r1 C4: the
+        # former fixture fired at the first candidate with no older match
+        # staged, so the property held by construction).
         repo = cr.build_scratch_repo(self)
-        repo.commit_file(PLAN_REL, D1, "seed plan")
+        seed = repo.commit_file(PLAN_REL, D1, "seed plan")
         hop = repo.commit_file(PLAN_REL, D2, "move to D2")
         orphan = orphan_commit(repo)
-        repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, orphan, hx(D2), hop,
-                              message="seal: orphan with hop digest")
+        repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, orphan, hx(D1), hop,
+                              message="seal: orphan with sealed digest")
         real_git_bytes = cr.git_bytes
+        head = repo.head()
+        failed_reads = []
 
-        def failing_blob(repo_arg, *args):
-            if args and args[0] == "cat-file":
+        def failing_newest_blob(repo_arg, *args):
+            # The blob read fails only at the NEWEST candidate (HEAD, whose
+            # plan blob carries D2); every older candidate stays readable,
+            # so an implementation that skips failed reads would resolve
+            # the sealed D1 seed behind it and this assertion would fail.
+            if args and args[0] == "cat-file" and args[:2] == (
+                    "cat-file", "blob") and str(head) in str(args[-1]):
+                failed_reads.append(args[-1])
                 return None
             return real_git_bytes(repo_arg, *args)
 
-        with mock.patch.object(cr, "git_bytes", side_effect=failing_blob):
-            ok, msg = vplan(repo, [], hx(D2), D2)
+        with mock.patch.object(cr, "git_bytes",
+                               side_effect=failing_newest_blob):
+            ok, msg = vplan(repo, [], hx(D1), D1)
         self.assertFalse(ok)
         assert_refusal(self, msg, "anchor", "reading the blob")
+        # The failure injection is real: the newest candidate's blob read
+        # was attempted and failed, and the older D1 seed was never
+        # consumed through it.
+        self.assertTrue(failed_reads, "the blob-read failure never fired")
+        self.assertNotIn(str(seed), failed_reads[0])
 
     def test_verification_context_uses_one_pinned_head(self):
         # Every HEAD-dependent leg receives the same resolved snapshot id:
@@ -2576,6 +2638,117 @@ class FixtureBuilderTest(unittest.TestCase):
         self.assertEqual(entries[0].fields["round_start_digest"],
                          hx(b"two\n"))
         self.assertEqual(entries[0].fields["round_close_commit"], start)
+
+
+class SealResidualRegressionTest(unittest.TestCase):
+    """Focused regression checks for the certification-seal review
+    residuals (2026-10-29 seal-landing-survival-review-residuals plan,
+    Task 1, RED): one prose annotation inside an earlier round block must
+    not silence a later valid round's record, a malformed round beside a
+    valid round must fail closed while naming its offending line and
+    staying distinguishable from a valid file with no matching entry, and
+    the legacy artifact slot ending at the ``bytes)`` boundary must
+    resolve the intended path without malformed suffix fragments becoming
+    a path."""
+
+
+    ANNOTATION_LINE = "reviewer note: appended mid-round by the annotation witness"
+
+
+    def _plan_seal_rel(self):
+        return cr.seal_relpath(PLAN_REL, PLAN_SLUG)
+
+
+    def _round_block(self, number, artifact, start_commit, start_digest,
+                     close_commit, extra_lines=()):
+        lines = [
+            "## round %d" % number,
+            "artifact: %s" % artifact,
+            "round_start_commit: %s" % start_commit,
+            "round_start_digest: %s" % start_digest,
+            "round_close_commit: %s" % close_commit,
+        ]
+        lines.extend(extra_lines)
+        return "\n".join(lines)
+
+
+    def test_annotated_round_leaves_later_record_resolvable(self):
+        # An annotation line inside round 1's block must not make the
+        # whole seal file unparsable: the later round 2 record still
+        # resolves and verifies while the annotated round itself stays
+        # unresolvable (fail-closed per round, never per file).
+        repo = cr.build_scratch_repo(self)
+        start1 = repo.commit_file(PLAN_REL, D1, "seed plan")
+        close1 = repo.commit_allow_empty("round 1 close")
+        start2 = repo.commit_file(PLAN_REL, D2, "round 2 seed")
+        close2 = repo.commit_allow_empty("round 2 close")
+        rel = self._plan_seal_rel()
+        repo.write_file(rel, "\n".join([
+            self._round_block(1, PLAN_REL, start1, hx(D1), close1,
+                              extra_lines=(self.ANNOTATION_LINE,)),
+            "",
+            self._round_block(2, PLAN_REL, start2, hx(D2), close2),
+        ]) + "\n")
+        # The later record resolves beside the annotated round.
+        entry = cr.load_seal_entry(repo.root, rel, 2, cr.FAMILY_PLAN)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.fields["artifact"], PLAN_REL)
+        self.assertEqual(entry.fields["round_start_commit"], start2)
+        self.assertEqual(entry.fields["round_start_digest"], hx(D2))
+        # The annotated round itself stays unresolvable.
+        self.assertIsNone(cr.load_seal_entry(repo.root, rel, 1,
+                                             cr.FAMILY_PLAN))
+        # End to end: the later record's zero-hop clean shape verifies.
+        ok, msg = cr.verify_corrections(
+            repo.root, PLAN_REL, cr.FAMILY_PLAN, 2, hx(D2), [],
+            current_bytes=D2)
+        self.assertTrue(ok, msg)
+
+
+    def test_malformed_round_fails_closed_names_line_and_differs_from_absence(self):
+        # A malformed round beside a valid round in one file: the valid
+        # round stays resolvable, a request to resolve the malformed round
+        # fails closed, the offending line is named, and the parse failure
+        # is distinguishable from a valid file with no matching entry.
+        repo = cr.build_scratch_repo(self)
+        start = repo.commit_file(PLAN_REL, D1, "seed plan")
+        close = repo.commit_allow_empty("round 3 close")
+        rel = self._plan_seal_rel()
+        repo.write_file(rel, "\n".join([
+            self._round_block(3, PLAN_REL, start, hx(D1), close),
+            "",
+            "## round 4",
+            "artifact: %s" % PLAN_REL,
+            self.ANNOTATION_LINE,
+        ]) + "\n")
+        # The valid round beside the malformed one stays resolvable.
+        self.assertIsNotNone(cr.load_seal_entry(repo.root, rel, 3,
+                                                cr.FAMILY_PLAN))
+        # A request to resolve the malformed round fails closed.
+        ok_malformed, msg_malformed = cr.verify_corrections(
+            repo.root, PLAN_REL, cr.FAMILY_PLAN, 4, hx(D1), [],
+            current_bytes=D1)
+        self.assertFalse(ok_malformed)
+        self.assertTrue(msg_malformed.startswith(cr.MARKER_PREFIX),
+                        msg_malformed)
+        # Absence: a valid seal file with no round-4 entry at all.
+        repo_absent = cr.build_scratch_repo(self)
+        start_absent = repo_absent.commit_file(PLAN_REL, D1, "seed plan")
+        close_absent = repo_absent.commit_allow_empty("round 3 close")
+        repo_absent.write_file(
+            rel, self._round_block(3, PLAN_REL, start_absent, hx(D1),
+                                   close_absent) + "\n")
+        ok_absent, msg_absent = cr.verify_corrections(
+            repo_absent.root, PLAN_REL, cr.FAMILY_PLAN, 4, hx(D1), [],
+            current_bytes=D1)
+        self.assertFalse(ok_absent)
+        self.assertTrue(msg_absent.startswith(cr.MARKER_PREFIX),
+                        msg_absent)
+        # The parse failure names the offending line; absence names none;
+        # the two outcomes are distinguishable at the reporting surface.
+        self.assertIn(self.ANNOTATION_LINE, msg_malformed)
+        self.assertNotIn(self.ANNOTATION_LINE, msg_absent)
+        self.assertNotEqual(msg_malformed, msg_absent)
 
 
 if __name__ == "__main__":

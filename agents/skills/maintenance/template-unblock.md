@@ -14,6 +14,10 @@ successor-dispatch duty is this unblock child's own queue-prepend plus re-dispat
 (no further chaining); the user has pre-authorized
 everything below: never block on questions, decide and proceed; never push to origin.
 
+EFFORT DIRECTIVE: this session runs at {EFFORT_DIRECTIVE} effort, the level the deciding
+turn paired for this dispatch under the Child model and effort policy; keep that level
+for the whole run.
+
 FIRST ACTION, before any gate or phase: restore the maintenance loop parent state-first, without listing first, per the recipe in
 agents/skills/maintenance/zcode.md ("Recurring automation recipe"), following that recipe's full decision ladder, its HOST CAVEAT, and its
 park-path pairing rule; a refused re-arm records the "rearm_note" field per the recipe
@@ -109,6 +113,7 @@ and compaction itself is operator-only.
 </prompt>
 
 {REPO_ROOT}: <repository root>
+{EFFORT_DIRECTIVE}: <the effort level the Child model and effort policy pairing selects for this dispatch>
 <blocked_on>: <bare-ref-name>
 ```
 

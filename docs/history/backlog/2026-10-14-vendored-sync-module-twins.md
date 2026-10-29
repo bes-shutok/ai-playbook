@@ -1,6 +1,6 @@
 # Backlog: vendored-sync landing path, the two extracted skill module twins
 
-Status: open
+Status: covered (docs/history/plans/2026-10-29-vendored-sync-module-twins.md)
 Priority: low
 Class: vendored-sync landing path
 Origin class: docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 3

@@ -26,7 +26,7 @@ Authoring claim: docs/tmp/authoring-claims/2026-10-07-corrections-graded-freshne
 - **Needs-recert class:** the D1 dispatchability class in `agents/skills/maintenance/decisions.md` that keeps a plan dispatchable after an oracle failure, the execution child's PRE-STEP in `agents/skills/maintenance/template-execution.md` performing the re-certification.
 - **Producer skills:** the three skills whose round-close text writes seal entries: `agents/skills/plans/SKILL.md` (review loop rule 6), `agents/skills/review-plan/SKILL.md` (the plan-family round-close seal paragraph), and `agents/skills/execute-plan/SKILL.md` (the code-family round-close seal paragraph).
 - **Landing closeout:** the first bullet of `## Plan Lifecycle` in `agents/skills/plans/SKILL.md` (origin coverage, riders, prune audit, conflict discipline), the plans skill's home for what a plan landing must do.
-- **Degraded grading:** the validator warning `corrections grading degraded to the exact-match digest rule` emitted when no seal entry resolves for a round.
+- **Degraded grading:** the staging validator's warning `corrections grading degraded to the exact-match digest rule` emitted when no seal entry resolves for a round.
 - **Dispatching entry:** the `docs/history/backlog/PLAN-PROMPTS.md` entry `certification-seal-landing-survival` whose scope arms this plan implements (design input, distinct from the Backlog origins it cites).
 
 ## Why
@@ -94,7 +94,7 @@ Decision points requiring a grill: none remain.
 - `bash scripts/check-no-em-dash.sh touched`, `bash scripts/scan-public-hygiene.sh`, and `bash scripts/check_maintenance_pins.sh` exit 0 (the pins suite recorded zero `PIN FAIL` lines at main d2426ba81 on 2026-10-20, so no baseline failure is tolerated).
 
 **Ship when:**
-- the post-squash commands use one immutable landed verification OID and the reconciled source worktree, their outputs match Task 2's receipt outcome matrix, and the receipt-matrix rows are exercised against the observed landing of this plan. Every receipt carries the repo-relative plan and review paths, the landing-context proof commands and both prescribed validator command strings (a skipped staging-validator invocation is marked `not run`, never represented as executed), outcome states, warning state, and before/after identities. The named primary, fallback, or transcript destination matches the matrix; maintenance recovers transcript reports before sunset. Persistence failures and diagnostic warnings remain non-blocking.
+- the post-squash commands use one immutable landed verification OID and the reconciled source worktree, their outputs match Task 2's receipt outcome matrix, and the receipt-matrix rows are exercised against the observed landing of this plan. Every receipt carries the repo-relative plan and review paths, the landing-context proof commands and both prescribed validator command strings (a skipped staging-validator invocation is marked `not run`, never represented as executed), outcome states, warning state, and before/after identities. The named primary, fallback, or transcript destination matches the matrix; maintenance recovers transcript reports before sunset. Deferral boundary: the matrix-destination match is unverifiable in-branch (the receipt ledgers stay empty until a landing runs), so its exercise is deferred to the landing itself and the landed receipts are the exercise record. Persistence failures and diagnostic warnings remain non-blocking.
 
 ## Review Scope
 
@@ -143,7 +143,7 @@ Run the relevant focused suites and existing repository gates from the repositor
 - `bash scripts/scan-public-hygiene.sh`
 - `bash scripts/check_maintenance_pins.sh touched`
 
-The focused suites cover the new resolver, missing-anchor handling, legacy and block seal parsing, family collisions, one-snapshot verification, producer grammar, and needs-recert routing. Verify the warning-only lifecycle procedure by running its prescribed post-squash commands and comparing the receipt with Task 2's outcome matrix, observed command outputs, warning state, identities, and selected persistence destination. Exercise each matrix row. Do not add a bespoke shell validator for this plan.
+The focused suites cover the new resolver, missing-anchor handling, legacy and block seal parsing, family collisions, one-snapshot verification, producer grammar, and the needs-recert routing's unchanged-bytes predicate over a graded anchor refusal; the D1 selection rule itself is maintenance skill text no suite case exercises. Verify the warning-only lifecycle procedure by running its prescribed post-squash commands and comparing the receipt with Task 2's outcome matrix, observed command outputs, warning state, identities, and selected persistence destination. Exercise each matrix row. Do not add a bespoke shell validator for this plan.
 
 ### Task 1: Resolve a squash-orphaned anchor pair by byte identity
 
@@ -350,7 +350,7 @@ Prescribed replacement in `agents/skills/execute-plan/SKILL.md` (the code-family
 the seal block grammar and plan-family example documented in the review-plan skill. Code-family entries carry `family: code`, `staging_round: rN`, and the certified range as `reviewed_base:`, `reviewed_head:`, and `range_digest:`; lookup uses family and staging round.
 ```
 
-- [x] Confirm the origin records why sanctioned override and warning-only are rejected and strict legacy compatibility is the false-positive remedy; apply the three prescribed replacements and the worked example at their named anchors; each paragraph's prefix through its colon stays byte-identical, code-family staging metadata is named, and each affected skill file deletes equivalent redundant operative bytes in the same change while preserving its contract; record before/after byte counts per file in the task log. [class: IMPLEMENTATION_REQUIRED]
+- [x] Confirm the origin records why sanctioned override and warning-only are rejected and strict legacy compatibility is the false-positive remedy; apply the three prescribed replacements and the worked example at their named anchors; each paragraph's prefix through its colon stays byte-identical, code-family staging metadata is named, and the byte payment lands outside the two grammar-bearing skill files: the review-plan and execute-plan replacements are net-additive, and the same change's equivalent deletions land in the plans skill's replaced rule 6 clause and the Task 4 maintenance files (decisions.md, template-execution.md), each contract preserved; record before/after byte counts per file in the task log. [class: IMPLEMENTATION_REQUIRED]
 - [x] Verify the stale clause is gone from all three files, legacy and block entries parse under the shared parser contract, and review-plan contains the canonical example. [class: REPOSITORY_TEST]
 - [x] Commit: `skills: the round-close seal paragraphs show the parser's block grammar with one worked example`. [class: IMPLEMENTATION_REQUIRED]
 

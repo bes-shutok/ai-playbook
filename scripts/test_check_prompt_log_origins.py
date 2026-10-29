@@ -16,6 +16,7 @@ and system/global git configuration disabled.
 
 from __future__ import annotations
 
+import io
 import os
 import shlex
 import shutil
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -1776,7 +1778,9 @@ class TestPromptLogPruneAudit:
             "prune-audit summary: 0 removals (0 by log ledger)"
             " across 1 log-touching commit(s)" in summary
         )
-        assert summary.endswith("1 warning(s)")
+        # The pending receipt flag count is an append at line end only
+        # (the pending-receipt-removal-audit-promotion plan); zero here.
+        assert summary.endswith("1 warning(s), 0 pending receipt flag(s)")
 
     def test_normal_shape_receipt_with_removal_never_warns(self, tmp_path):
         repo = tmp_path
@@ -1803,7 +1807,7 @@ class TestPromptLogPruneAudit:
             for line in proc.stdout.splitlines()
             if line.startswith("prune-audit summary:")
         )
-        assert summary.endswith(", 0 warning(s)")
+        assert summary.endswith(", 0 warning(s), 0 pending receipt flag(s)")
         assert self.final_line(proc) == "OUTCOME: pass"
 
     def test_re_apply_repair_receipt_commits_warn_once(self, tmp_path):
@@ -2208,13 +2212,13 @@ class TestPromptLogPruneAudit:
         )
         self.git(repo, "add", LOG_REL)
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {LOG_REL} "
             f"index (HEAD {head})" in proc.stdout
         )
-        assert "1 warning(s)" in proc.stdout
-        assert self.final_line(proc) == "OUTCOME: pass"
+        assert "1 warning(s), 1 pending receipt flag(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
 
     def test_pending_worktree_receipt_removal_warns(self, tmp_path):
         repo = tmp_path
@@ -2228,14 +2232,14 @@ class TestPromptLogPruneAudit:
             ),
         )
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {LOG_REL} "
             f"worktree (HEAD {head})" in proc.stdout
         )
-        assert "1 warning(s)" in proc.stdout
+        assert "1 warning(s), 1 pending receipt flag(s)" in proc.stdout
         assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 1
-        assert self.final_line(proc) == "OUTCOME: pass"
+        assert self.final_line(proc) == "OUTCOME: fail"
 
     def test_pending_removal_attributes_only_its_own_log(self, tmp_path):
         repo = tmp_path
@@ -2249,7 +2253,7 @@ class TestPromptLogPruneAudit:
             ),
         )
         proc = self.audit(repo / exec_rel, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel}"
             in proc.stdout
@@ -2302,7 +2306,7 @@ class TestPromptLogPruneAudit:
         # compares HEAD against an empty image and warns once.
         self.git(repo, "rm", "--cached", "--quiet", exec_rel)
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel} "
             f"index (HEAD {head})" in proc.stdout
@@ -2312,15 +2316,15 @@ class TestPromptLogPruneAudit:
             f"index (HEAD {head})" in proc.stdout
         )
         assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 2
-        assert "2 warning(s)" in proc.stdout
-        assert self.final_line(proc) == "OUTCOME: pass"
+        assert "2 warning(s), 2 pending receipt flag(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
         # Unstaged whole-file deletion (plain rm, index still holding the
         # receipts): the worktree layer compares the index image against
         # the empty worktree and carries the delta.
         self.git(repo, "reset", "--quiet")
         (repo / exec_rel).unlink()
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             f"PENDING-RECEIPT-REMOVAL: gone-entry -> abc1234 {exec_rel} "
             f"worktree (HEAD {head})" in proc.stdout
@@ -2330,7 +2334,7 @@ class TestPromptLogPruneAudit:
             f"worktree (HEAD {head})" in proc.stdout
         )
         assert proc.stdout.count("PENDING-RECEIPT-REMOVAL:") == 2
-        assert "2 warning(s)" in proc.stdout
+        assert "2 warning(s), 2 pending receipt flag(s)" in proc.stdout
 
     def test_pending_duplicate_receipt_delta_counts_copies(self, tmp_path):
         repo = tmp_path
@@ -2357,22 +2361,22 @@ class TestPromptLogPruneAudit:
         self.write(repo, LOG_REL, head_text.replace(
             "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n", "", 1))
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert (
             "PENDING-RECEIPT-REMOVAL: twin-entry -> aaa1111 "
             f"{LOG_REL} worktree" in proc.stdout
         )
-        assert "1 warning(s)" in proc.stdout
+        assert "1 warning(s), 1 pending receipt flag(s)" in proc.stdout
         # Removing the second copy as well deletes the second line: two
         # warnings, one per deleted line.
         self.write(repo, LOG_REL, head_text.replace(
             "PLAN-PROMPTS-PRUNE: twin-entry -> aaa1111\n", ""))
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert proc.stdout.count(
             f"PENDING-RECEIPT-REMOVAL: twin-entry -> aaa1111 {LOG_REL} worktree"
         ) == 2
-        assert "2 warning(s)" in proc.stdout
+        assert "2 warning(s), 2 pending receipt flag(s)" in proc.stdout
 
     @pytest.mark.skipif(
         not hasattr(os, "geteuid") or os.geteuid() == 0,
@@ -2388,7 +2392,8 @@ class TestPromptLogPruneAudit:
         base = self.git(repo, "rev-parse", "HEAD").strip()
         # A committed receipt-without-removal (one committed warning)
         # plus a pending worktree removal (one pending warning) share
-        # the summary's warning count with OUTCOME still pass.
+        # the summary's warning count; the pending removal is the
+        # flagged audit class now, so the outcome fails.
         self.write(
             repo,
             LOG_REL,
@@ -2406,14 +2411,14 @@ class TestPromptLogPruneAudit:
             ),
         )
         proc = self.audit(repo / LOG_REL, base)
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
         assert "RECEIPT-WITHOUT-REMOVAL:" in proc.stdout
         assert (
             f"PENDING-RECEIPT-REMOVAL: ghost-entry -> 0f39e725c {LOG_REL} "
             "worktree" in proc.stdout
         )
-        assert "2 warning(s)" in proc.stdout
-        assert self.final_line(proc) == "OUTCOME: pass"
+        assert "2 warning(s), 1 pending receipt flag(s)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
 
     def test_pending_scan_read_failure_warns_without_stopping(self, tmp_path):
         repo = tmp_path
@@ -3043,3 +3048,344 @@ class TestCollateralServedDiscovery:
     def final_line_is_tool_error(self, proc: subprocess.CompletedProcess) -> bool:
         lines = proc.stdout.strip().splitlines()
         return bool(lines) and lines[-1] == "OUTCOME: tool_error"
+
+class TestReceiptRepair:
+    """The ``--repair`` landing mode and the promoted receipt-line audit
+    class (the pending-receipt-removal-audit-promotion plan): exact
+    restoration from committed bytes, one-for-one reconciliation by
+    full-line identity and multiplicity, idempotence, read-only
+    defaults, and the named unrecoverable/conflict conditions."""
+
+    def git(self, repo: Path, *args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, f"git {args}: {proc.stderr}"
+        return proc.stdout
+
+    def write(self, repo: Path, rel: str, text: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def commit(self, repo: Path, message: str) -> str:
+        self.git(repo, "add", "-A")
+        self.git(
+            repo,
+            "-c",
+            "user.name=Prune Audit Fixture",
+            "-c",
+            "user.email=prune-audit-fixture@example.test",
+            "commit",
+            "-m",
+            message,
+        )
+        return self.git(repo, "rev-parse", "HEAD").strip()
+
+    def seed(self, repo: Path, receipts: list[str]) -> str:
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live.md"])], receipts
+            ),
+        )
+        return self.commit(repo, "seed the log with entries and receipts")
+
+    def run(self, repo: Path, base: str, repair: bool) -> subprocess.CompletedProcess:
+        args = [sys.executable, str(SCRIPT), "--prune-audit", "--base", base]
+        if repair:
+            args.append("--repair")
+        args.append(str(repo / LOG_REL))
+        return subprocess.run(
+            args, capture_output=True, text=True, timeout=60, env=fixture_env()
+        )
+
+    def final_line(self, proc: subprocess.CompletedProcess) -> str:
+        lines = proc.stdout.strip().splitlines()
+        assert lines, proc.stdout + proc.stderr
+        return lines[-1]
+
+    def strip_receipt(self, repo: Path, line: str, commit_message: str) -> str:
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        return self.commit(repo, commit_message)
+
+    def test_committed_deletion_is_restored_and_rerun_passes(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: ghost-a -> abc1234"
+        base = self.seed(repo, [line])
+        self.strip_receipt(repo, line, "delete the receipt line without a witness")
+        first = self.run(repo, base, repair=False)
+        assert first.returncode == 1, first.stdout + first.stderr
+        assert "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: ghost-a" in first.stdout
+        assert self.final_line(first) == "OUTCOME: fail"
+        # The landing repair restores the exact bytes and the rerun passes.
+        proc = self.run(repo, base, repair=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "PRUNE-OK: ghost-a -> landing (repair reconciliation" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail" or self.final_line(proc) == "OUTCOME: pass"
+        assert self.final_line(proc) == "OUTCOME: pass"
+        worktree = (repo / LOG_REL).read_text(encoding="utf-8")
+        assert line in worktree
+        assert line in self.git(repo, "show", f":{LOG_REL}")
+        # Idempotence: the second repair makes no further change.
+        before = worktree
+        again = self.run(repo, base, repair=True)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert (repo / LOG_REL).read_text(encoding="utf-8") == before
+
+    def test_multiplicity_one_pending_readd_reconciles_one_deletion(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: dup -> abc1234"
+        base = self.seed(repo, [line, line])
+        self.strip_receipt(repo, line, "delete both identical receipt copies")
+        # One pending restoration of the identical line.
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}") + line + "\n",
+        )
+        proc = self.run(repo, base, repair=False)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        # Exactly one occurrence reconciled; the second stays named.
+        assert proc.stdout.count("(repair reconciliation") == 1
+        assert "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: dup" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_ambiguous_source_is_named_never_invented(self, tmp_path):
+        repo = tmp_path
+        base = self.seed(
+            repo,
+            [
+                "PLAN-PROMPTS-PRUNE: amb -> aaa1111",
+                "PLAN-PROMPTS-PRUNE: amb -> bbb2222",
+            ],
+        )
+        # One commit deletes both distinct variants of the same slug:
+        # no unique exact source exists, so the repair names the line
+        # and never invents either variant.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live.md"])], []
+            ),
+        )
+        self.commit(repo, "delete both ambiguous receipt variants")
+        proc = self.run(repo, base, repair=True)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "RECEIPT-REPAIR-UNRECOVERABLE: amb" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+        worktree = (repo / LOG_REL).read_text(encoding="utf-8")
+        assert "PLAN-PROMPTS-PRUNE: amb" not in worktree
+
+    def test_default_invocation_is_read_only(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: ghost-a -> abc1234"
+        base = self.seed(repo, [line])
+        self.strip_receipt(repo, line, "delete the receipt line without a witness")
+        before_worktree = (repo / LOG_REL).read_bytes()
+        before_index = self.git(repo, "show", f":{LOG_REL}")
+        proc = self.run(repo, base, repair=False)
+        assert proc.returncode == 1
+        assert (repo / LOG_REL).read_bytes() == before_worktree
+        assert self.git(repo, "show", f":{LOG_REL}") == before_index
+
+    def test_pending_deletion_is_repaired_in_both_images(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: ghost-a -> abc1234"
+        base = self.seed(repo, [line])
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        self.git(repo, "add", LOG_REL)
+        proc = self.run(repo, base, repair=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        worktree = (repo / LOG_REL).read_text(encoding="utf-8")
+        index = self.git(repo, "show", f":{LOG_REL}")
+        assert line in worktree
+        assert line in index
+
+    def test_unrelated_staged_bytes_survive_the_repair(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: ghost-a -> abc1234"
+        base = self.seed(repo, [line])
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        self.git(repo, "add", LOG_REL)
+        # An unrelated staged edit in another file.
+        self.write(repo, "docs/unrelated.txt", "keep me\n")
+        self.git(repo, "add", "docs/unrelated.txt")
+        proc = self.run(repo, base, repair=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        staged = self.git(repo, "diff", "--cached", "--name-only")
+        assert "docs/unrelated.txt" in staged
+        assert (
+            self.git(repo, "show", ":docs/unrelated.txt") == "keep me\n"
+        )
+
+
+class TestReceiptRepairSafety:
+    """The repair mode's safety arms (the plan's Done-when bar): the
+    fresh-read retry settles a concurrent unrelated edit, a persistently
+    moving image reports the conflict and inserts nothing, and a partway
+    index-update failure rolls the worktree insertion back."""
+
+    def git(self, repo: Path, *args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, f"git {args}: {proc.stderr}"
+        return proc.stdout
+
+    def write(self, repo: Path, rel: str, text: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def commit(self, repo: Path, message: str) -> str:
+        self.git(repo, "add", "-A")
+        self.git(
+            repo,
+            "-c",
+            "user.name=Prune Audit Fixture",
+            "-c",
+            "user.email=prune-audit-fixture@example.test",
+            "commit",
+            "-m",
+            message,
+        )
+        return self.git(repo, "rev-parse", "HEAD").strip()
+
+    def final_line(self, proc: subprocess.CompletedProcess) -> str:
+        lines = proc.stdout.strip().splitlines()
+        assert lines, proc.stdout + proc.stderr
+        return lines[-1]
+
+    def seed_pending_deletion(self, repo: Path) -> tuple[str, str]:
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        line = "PLAN-PROMPTS-PRUNE: ghost-a -> abc1234"
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("live-entry", ["2026-10-01-live.md"])], [line]
+            ),
+        )
+        base = self.commit(repo, "seed the log")
+        return base, line
+
+    def test_partway_index_failure_rolls_worktree_back(self, tmp_path):
+        import check_prompt_log_origins as m
+
+        repo = tmp_path
+        base, line = self.seed_pending_deletion(repo)
+        # The staged deletion leaves the log untracked in the index, so
+        # the repair's index update leg has no tracked mode to keep and
+        # fails after the worktree insertion landed: the rollback arm.
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        self.git(repo, "rm", "--cached", "--quiet", LOG_REL)
+        args = [
+            sys.executable, str(SCRIPT),
+            "--prune-audit", "--repair", "--base", base, str(repo / LOG_REL),
+        ]
+        proc = subprocess.run(
+            args, capture_output=True, text=True, timeout=60, env=fixture_env()
+        )
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "RECEIPT-REPAIR-CONFLICT" in proc.stdout
+        assert "rolled back" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+        # Both images retain their pre-repair content.
+        assert line not in (repo / LOG_REL).read_text(encoding="utf-8")
+
+    def test_concurrent_edit_settles_on_the_fresh_read_retry(self, tmp_path):
+        import check_prompt_log_origins as m
+
+        repo = tmp_path
+        base, line = self.seed_pending_deletion(repo)
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        self.commit(repo, "delete the receipt line")
+        real_reader = m._worktree_text
+        state = {"reads": 0}
+
+        def flaky_reader(path):
+            text = real_reader(path)
+            state["reads"] += 1
+            if state["reads"] == 1:
+                # A concurrent writer lands an unrelated byte after the
+                # compose read, so the fresh-read verification mismatches
+                # once and the compose retries.
+                path.write_text(
+                    text + "concurrent unrelated byte\n", encoding="utf-8"
+                )
+            return real_reader(path)
+
+        log_path = repo / LOG_REL
+        out = io.StringIO()
+        with mock.patch.object(m, "_worktree_text", flaky_reader):
+            code = m.prune_audit_repair(log_path, repo, base, out)
+        assert code == 0, out.getvalue()
+        text = log_path.read_text(encoding="utf-8")
+        assert line in text
+        assert "concurrent unrelated byte" in text
+
+    def test_persistent_conflict_inserts_nothing(self, tmp_path):
+        import check_prompt_log_origins as m
+
+        repo = tmp_path
+        base, line = self.seed_pending_deletion(repo)
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        self.commit(repo, "delete the receipt line")
+        real_reader = m._worktree_text
+        state = {"reads": 0}
+
+        def churning_reader(path):
+            text = real_reader(path)
+            state["reads"] += 1
+            path.write_text(
+                text + f"churn {state['reads']}\n", encoding="utf-8"
+            )
+            return real_reader(path)
+
+        log_path = repo / LOG_REL
+        out = io.StringIO()
+        with mock.patch.object(m, "_worktree_text", churning_reader):
+            code = m.prune_audit_repair(log_path, repo, base, out)
+        assert code == 1
+        assert "RECEIPT-REPAIR-CONFLICT" in out.getvalue()
+        assert "kept changing" in out.getvalue()
+        # The repair inserted nothing: the receipt line is still absent.
+        assert line not in log_path.read_text(encoding="utf-8")

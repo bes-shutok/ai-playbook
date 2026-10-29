@@ -10,7 +10,7 @@ Quarantine: 2026-10-27
 - **Driving force:** safety
 - **Urgency:** high
 - **Cluster:** `docs/history/backlog/2026-10-26-done-lock-context-recovery-after-compaction.md`
-- **Cluster:** `docs/history/backlog/2026-10-27-done-finalize-release-leg-failed-despite-env.md` (same surface - `done_run.sh` finalize's done-lock release - different defect: this row owns the `--from-holder` generation-binding risk, that row witnesses the plain env-based release leg failing in the manifest-complete first pass)
+- **Cluster:** `docs/history/backlog/EXEC-PROMPTS.md` EXEC-PROMPTS-PRUNE receipt `done-finalize-release-refusal-observability` (covered 2026-10-29; same surface - `done_run.sh` finalize's done-lock release - different defect: this row owns the `--from-holder` generation-binding risk, the covered row witnessed the plain env-based release leg failing in the manifest-complete first pass)
 - **Source:** `.ai-playbook/reviews/2026-10-18-plan-review-done-live-owner-closeout-recovery-pe4f3ada4-r6.md`, F1; observed during authoring of `docs/history/plans/2026-10-18-done-live-owner-closeout-recovery.md`
 
 ## Problem

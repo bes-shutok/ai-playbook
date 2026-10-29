@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -6286,6 +6287,217 @@ class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
         self.assertIn("--worktree", err)
         self.assertIsNotNone(manifest)
+
+    def test_zero_plan_skeleton_shape_adjudicates_exact_tree(self):
+        # The zero-plan producer's emitted skeleton shape (lesson 289's
+        # hand-build remedy): only the branch record and an empty migrated
+        # list, no migrated/renamed/skipped/failed twin keys - the shape
+        # done_run.sh writes beside the run-ID skip record - and the
+        # branch-only pass adjudicates it to exact-tree-accounted.
+        tree = self._git(self.primary, "rev-parse", "HEAD^{tree}").stdout.strip()
+        root = self._git(self.primary, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        snap = self._git(
+            self.primary, "commit-tree", tree, "-p", root, "-m", "zero-plan snapshot vintage"
+        ).stdout.strip()
+        branch = "wt-zero-skeleton"
+        self._git(self.primary, "branch", branch, snap)
+        manifest_dir = self.primary / "docs/tmp/done-session"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "worktree-migrate-baseline-run-z1-manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "branch": [
+                        {"branch": branch, "source": str(self.root / "proj-wt-zero")}
+                    ],
+                    "migrated": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} exact-tree-accounted at {snap}", out)
+
+    def test_zero_plan_skeleton_with_scoped_copy_entry_adjudicates(self):
+        # The scoped-copy arm's append (the Worktree-first standard's
+        # baseline-less closeout arm): each verified transfer adds its
+        # migrated entry to the skeleton's migrated list, and the appended
+        # shape still adjudicates - the entry's destination verifies under
+        # the target.
+        tree = self._git(self.primary, "rev-parse", "HEAD^{tree}").stdout.strip()
+        root = self._git(self.primary, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        snap = self._git(
+            self.primary, "commit-tree", tree, "-p", root, "-m", "zero-plan snapshot vintage"
+        ).stdout.strip()
+        branch = "wt-zero-scoped"
+        self._git(self.primary, "branch", branch, snap)
+        record_rel = ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md"
+        digest = hashlib.sha256((self.primary / record_rel).read_bytes()).hexdigest()
+        manifest_dir = self.primary / "docs/tmp/done-session"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "worktree-migrate-baseline-run-z2-manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "branch": [
+                        {"branch": branch, "source": str(self.root / "proj-wt-zero")}
+                    ],
+                    "migrated": [
+                        {
+                            "destination": record_rel,
+                            "verified": True,
+                            "sha256": digest,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} exact-tree-accounted at {snap}", out)
+
+
+class ZeroPlanMigrateSkeletonProducerTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] The done_run.sh zero/multi-plan producer's
+    migrate-shape twin (lesson 289's witnessed hand-build): the bash function
+    is extracted with its two manifest helpers and exercised against fixture
+    manifests, pinning the emitted file the branch-only pass consumes."""
+
+    @staticmethod
+    def _extract_functions() -> str:
+        text = (SCRIPT_PATH.parent / "done_run.sh").read_text(encoding="utf-8")
+        lines = text.splitlines()
+        blocks = []
+        for name in (
+            "manifest_scalar",
+            "manifest_field",
+            "write_zero_multi_plan_skip_record",
+        ):
+            start = next(
+                i for i, ln in enumerate(lines) if ln.startswith(f"{name}() {{")
+            )
+            end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+            blocks.append("\n".join(lines[start : end + 1]))
+        return "\n".join(blocks)
+
+    def _run_producer(
+        self, session: Path, manifest: Path, cwd: Path
+    ) -> subprocess.CompletedProcess:
+        script = (
+            f"{self._extract_functions()}\n"
+            f"write_zero_multi_plan_skip_record {shlex.quote(str(session))} "
+            f"{shlex.quote(str(manifest))}\n"
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True,
+            text=True,
+            cwd=str(cwd),
+            env=_hermetic_git_env(session.parent),
+        )
+
+    @staticmethod
+    def _manifest_fixture(path: Path, owned: list[str]) -> Path:
+        path.write_text(
+            json.dumps({"run_id": "run-z9", "owned_plan_paths": owned}),
+            encoding="utf-8",
+        )
+        return path
+
+    def _init_fixture_repo(self, root: Path, branch: str) -> Path:
+        repo = root / "proj"
+        repo.mkdir()
+        env = _hermetic_git_env(root)
+        subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True, env=env)
+        _write(repo / "seed.txt", b"seed\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.email=t@fixture", "-c",
+             "user.name=t", "add", "-A"],
+            check=True, env=env,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.email=t@fixture", "-c",
+             "user.name=t", "commit", "-q", "-m", "init: fixture repo"],
+            check=True, env=env,
+        )
+        return repo
+
+    def test_zero_plan_run_emits_skeleton_beside_skip_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._init_fixture_repo(root, "wt-zero-plan-x")
+            session = root / "docs/tmp/done-session"
+            session.mkdir(parents=True)
+            manifest = self._manifest_fixture(session / "run-manifest.json", [])
+            proc = self._run_producer(session, manifest, cwd=repo)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("migrate-shape manifest skeleton present", proc.stdout)
+            skeleton = session / "worktree-migrate-baseline-run-z9-manifest.json"
+            self.assertTrue(skeleton.is_file(), proc.stdout + proc.stderr)
+            data = json.loads(skeleton.read_text(encoding="utf-8"))
+            self.assertEqual(
+                data,
+                {
+                    "branch": [
+                        {"branch": "wt-zero-plan-x", "source": str(repo.resolve())}
+                    ],
+                    "migrated": [],
+                },
+            )
+            self.assertTrue(
+                (session / "worktree-migrate-baseline-run-z9-skip.json").is_file()
+            )
+
+    def test_skeleton_write_is_idempotent_per_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._init_fixture_repo(root, "wt-zero-plan-x")
+            session = root / "docs/tmp/done-session"
+            session.mkdir(parents=True)
+            manifest = self._manifest_fixture(session / "run-manifest.json", [])
+            first = self._run_producer(session, manifest, cwd=repo)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            skeleton = session / "worktree-migrate-baseline-run-z9-manifest.json"
+            bytes_first = skeleton.read_bytes()
+            second = self._run_producer(session, manifest, cwd=repo)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(skeleton.read_bytes(), bytes_first)
+            self.assertNotIn("migrate-shape manifest skeleton present", second.stdout)
+
+    def test_single_plan_run_writes_neither_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._init_fixture_repo(root, "wt-one-plan-x")
+            session = root / "docs/tmp/done-session"
+            session.mkdir(parents=True)
+            manifest = self._manifest_fixture(
+                session / "run-manifest.json", ["docs/history/plans/2026-10-29-x.md"]
+            )
+            proc = self._run_producer(session, manifest, cwd=repo)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(
+                sorted(p.name for p in session.iterdir()), ["run-manifest.json"]
+            )
+
+    def test_no_git_checkout_skips_skeleton_and_keeps_skip_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = root / "docs/tmp/done-session"
+            session.mkdir(parents=True)
+            manifest = self._manifest_fixture(session / "run-manifest.json", [])
+            proc = self._run_producer(session, manifest, cwd=root)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue(
+                (session / "worktree-migrate-baseline-run-z9-skip.json").is_file()
+            )
+            self.assertFalse(
+                (session / "worktree-migrate-baseline-run-z9-manifest.json").exists()
+            )
+            self.assertIn("skeleton not written", proc.stderr)
 
 
 class GateManifestSlugResolutionTest(unittest.TestCase):

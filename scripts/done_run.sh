@@ -17,6 +17,7 @@
 #        [--owned-plan PATH]... [--owned-review PATH]... [--owned-path PATH]...
 #        [--foreign-review PATH]... [--foreign-review-from FILE] [--claim-none]
 #   done_run.sh commit --stage PATH... --subject TEXT
+#        [--expected-ref REF --expected-oid OID]
 #        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
 #        [--side-commit REPO_PATH]... [--manifest PATH] [--run-id RUN_ID]
@@ -184,6 +185,28 @@
 # bytes unchanged and skips a flagged advisory row without refusing the
 # landing.
 #
+# The primary rolling-log transaction (--expected-ref/--expected-oid given
+# as one pair) binds a write to either rolling prompt log
+# (docs/history/backlog/PLAN-PROMPTS.md or docs/history/backlog/EXEC-
+# PROMPTS.md) to the caller-selected branch: the caller selects the symbolic
+# ref and starting OID under the primary done lock before the final log
+# read or edit and passes them unchanged; the runner rechecks the pair
+# before staging and inside captured_tree_landing before and after the tree
+# capture (the post-hook and pre-transaction HEAD-identity checks then
+# carry the same captured pair through the compare-and-swap), the declared
+# set is limited to the two log paths, a two-path pre-stage guard refuses
+# when either log already has a staged delta, and an early guard refuses
+# any other staged path before staging. Once staging begins, one cleanup
+# owner (an EXIT trap) unstages and verifies only this writer's declared
+# owned log delta on every refusal before the captured-ref swap succeeds;
+# it disarms immediately after the swap, so a later ledger-append or
+# post-commit-hook failure reports that the landed commit stands, and an
+# unverifiable cleanup reports blocked recovery (the two-path guard then
+# refuses the next primary log writer). The mode never takes the repo-wide
+# merge lock: the docs-branch sync (a final-closeout leg) is skipped.
+# Pair-less calls, worktree log commits, and every other behavior keep
+# their existing paths unchanged.
+#
 # Env: DONE_LOCK_SCRIPT overrides the lock script (default: this repo's
 # scripts/done-lock.sh, then the deployed home copy); the sweep-gates lib is
 # resolved from this repo's scripts/ then the deployed home copy. All other
@@ -281,6 +304,27 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
       > "$record" || return 1
   fi
   echo "done_run setup: zero/multi-plan run: migration skip record present: $(basename "$record")"
+  # Migrate-shape twin (lesson 289): a branch-only gate-removal pass reads
+  # the migration manifest's shape, which no zero-plan producer wrote before
+  # this skeleton, so setup emits it at the same session resolution with the
+  # same run-id idempotency. Separate file; the session manifest stays
+  # field-frozen. The scoped-copy arm appends each verified transfer to the
+  # skeleton's migrated list (the Worktree-first standard's baseline-less
+  # closeout arm).
+  local skeleton repo_top run_branch
+  skeleton="$session/worktree-migrate-baseline-$run_id-manifest.json"
+  if [ ! -f "$skeleton" ]; then
+    repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || repo_top=""
+    run_branch=""
+    [ -n "$repo_top" ] && run_branch="$(git -C "$repo_top" branch --show-current 2>/dev/null)"
+    if [ -n "$repo_top" ] && [ -n "$run_branch" ]; then
+      printf '%s\n' "{\"branch\": [{\"branch\": \"$run_branch\", \"source\": \"$repo_top\"}], \"migrated\": []}" \
+        > "$skeleton" || return 1
+      echo "done_run setup: zero/multi-plan run: migrate-shape manifest skeleton present: $(basename "$skeleton")"
+    else
+      echo "done_run setup: zero/multi-plan run: no checkout root or current branch resolved; migrate-shape manifest skeleton not written (the branch-only hand-build remedy keeps applying)" >&2
+    fi
+  fi
   return 0
 }
 
@@ -614,6 +658,49 @@ commit_die() { # rc message...: fail loud with the named evidence
   exit "$rc"
 }
 
+# --- primary rolling-log transaction ----------------------------------------
+# The two rolling prompt logs and the pair-selected mode's state. The pair
+# (--expected-ref canonicalized to a full symbolic ref, --expected-oid) is
+# selected by the caller under the primary done lock and rechecked by the
+# runner before staging and through captured_tree_landing; plan
+# docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md
+# (Task 1).
+PLAN_PROMPTS_REL="docs/history/backlog/PLAN-PROMPTS.md"
+EXEC_PROMPTS_REL="docs/history/backlog/EXEC-PROMPTS.md"
+
+arm_rolling_log_cleanup() { # arm the one cleanup owner before staging begins
+  ROLLING_CLEANUP_ARMED=1
+  trap rolling_log_cleanup EXIT
+}
+
+disarm_rolling_log_cleanup() { # kill the owner; the captured ref has advanced
+  ROLLING_CLEANUP_ARMED=0
+  trap - EXIT
+}
+
+# The one cleanup owner for every refusal before the captured-ref
+# compare-and-swap succeeds: unstage only this writer's declared owned log
+# deltas, verify that delta is empty again, and leave every unrelated staged
+# and worktree byte unchanged. An unverifiable cleanup reports blocked
+# recovery; the two-path pre-stage guard then refuses the next primary log
+# writer until the residue is resolved. The trap preserves the refusal's
+# original exit status.
+rolling_log_cleanup() {
+  trap - EXIT
+  ROLLING_CLEANUP_ARMED=0
+  local path owned_delta
+  for path in ${DECLARED+"${DECLARED[@]}"}; do
+    git reset -q -- "$path" 2>/dev/null || true
+  done
+  owned_delta="$(git diff --cached --name-only HEAD -- \
+    ${DECLARED+"${DECLARED[@]}"} 2>/dev/null || true)"
+  if [ -n "$owned_delta" ]; then
+    echo "done_run commit: rolling-log cleanup: BLOCKED RECOVERY: the owned log delta could not be unstaged cleanly: $(printf '%s' "$owned_delta" | tr '\n' ' '); resolve the residue before the next primary log write (the two-path pre-stage guard refuses either rolling log while it stands)" >&2
+  else
+    echo "done_run commit: rolling-log cleanup: owned log delta unstaged and verified empty; unrelated staged and worktree bytes unchanged" >&2
+  fi
+}
+
 facts_toml_value() { # key -> value from the repo facts TOML block
   local repo_top key="$1"
   repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
@@ -814,7 +901,8 @@ captured_tree_landing() {
     git_dir msg_file tree_after new_oid gpgsign \
     auth_declared_now staged_blob_now declared_path \
     base_ref base_sha dirt_gate correction_path correction_blob \
-    tree_blob rpath rpath_ci ci staged_path staged_now
+    tree_blob rpath rpath_ci ci staged_path staged_now \
+    rl_ref rl_oid
   local -a sign_args=() dirt_paths=() regressed_paths=()
   # 0. Capture-window fence: re-assert the staged-scope equality
   #    immediately before the tree capture. Anything staged into the index
@@ -834,9 +922,36 @@ captured_tree_landing() {
         landing_die 1 "captured-tree landing: a foreign path entered the staged index before the tree capture: $staged_path; refusing before the ref update; nothing committed"
     done < <(printf '%s\n' "$staged_now")
   fi
+  # 0b. The rolling-log ref precondition (pair-carrying calls only): the
+  #     caller-selected symbolic ref and starting OID must still equal
+  #     primary HEAD before the tree capture; a mismatch uses the existing
+  #     recovery (reselect under the done lock) without a ref update. The
+  #     commit then builds from that captured primary HEAD as sole parent
+  #     through the existing captured-HEAD compare-and-swap below, whose
+  #     post-hook and pre-transaction HEAD-identity checks carry the same
+  #     captured pair forward.
+  if [ "$ROLLING_LOG" -eq 1 ]; then
+    trace_stage rolling-log-ref-precondition
+    rl_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"
+    [ "$rl_ref" = "$EXPECTED_REF" ] || \
+      landing_die 1 "rolling-log ref precondition: HEAD's symbolic target (${rl_ref:-detached}) does not match the expected ref ($EXPECTED_REF) before the tree capture; recover and reselect under the done lock, then retry; refusing without a ref update; nothing committed"
+    rl_oid="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+    [ "$rl_oid" = "$EXPECTED_OID" ] || \
+      landing_die 1 "rolling-log ref precondition: HEAD's OID (${rl_oid:-unresolved}) does not match the expected starting OID ($EXPECTED_OID) before the tree capture; recover and reselect under the done lock, then retry; refusing without a ref update; nothing committed"
+  fi
   # 1. Record the accepted staged tree (the guards' declared-set tree).
   tree_accepted="$(git write-tree)" || \
     landing_die 2 "captured-tree landing: cannot record the accepted staged tree (write-tree failed)"
+  # 1b. The rolling-log pair must still hold immediately after the tree
+  #     capture: a ref move inside the capture window refuses here without
+  #     a ref update, the cleanup owner unstaging this writer's owned delta.
+  if [ "$ROLLING_LOG" -eq 1 ]; then
+    rl_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"
+    rl_oid="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+    if [ "$rl_ref" != "$EXPECTED_REF" ] || [ "$rl_oid" != "$EXPECTED_OID" ]; then
+      landing_die 1 "rolling-log ref precondition: primary HEAD moved during the tree capture (${rl_ref:-detached} at ${rl_oid:-unresolved}, expected $EXPECTED_REF at $EXPECTED_OID); recover and reselect under the done lock, then retry; refusing without a ref update; nothing committed"
+    fi
+  fi
   # 2. The dirt regression gate, exactly once, against the captured tree:
   #    done commits classify the immutable tree (--tree mode), never the
   #    mutable worktree, so a worktree-only cleanup after this capture
@@ -1024,6 +1139,11 @@ captured_tree_landing() {
       landing_die 1 "captured-tree landing: the ref transaction refused the detached HEAD compare-and-swap (a reference-transaction hook may have vetoed, or HEAD moved); nothing committed"
     echo "done_run commit: captured-tree landing: landed $new_oid on detached HEAD (captured at $head_oid)"
   fi
+  # 12b. The rolling-log cleanup owner disarms immediately after the
+  #      captured-ref swap: a later ledger-append or post-commit-hook
+  #      failure reports that the landed commit stands and never rolls it
+  #      back.
+  disarm_rolling_log_cleanup
   # 13. The owned-commits ledger append fused after the swap; recorded once.
   #     A failed append refuses loudly naming the landed commit that stands.
   AUTH_LANDED_OID="$new_oid"
@@ -1091,6 +1211,7 @@ cmd_commit() {
   AUTH_MARKER=""; AUTH_MANIFEST=""; AUTH_RUN_ID=""; AUTH_MANIFEST_DIGEST=""
   AUTH_LANDED_OID=""
   DIRT_CORRECTION_PATHS=(); DIRT_CORRECTION_BLOBS=()
+  ROLLING_LOG=0; EXPECTED_REF=""; EXPECTED_OID=""; ROLLING_CLEANUP_ARMED=0
   shift # subcommand
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1103,6 +1224,22 @@ cmd_commit() {
       --learn-receipts-from) receipts_file="$2"; shift 2;;
       --manifest) COMMIT_MANIFEST="$2"; shift 2;;
       --run-id) RUN_ID_ARG="$2"; shift 2;;
+      --expected-ref)
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --expected-ref needs <symbolic-branch-ref>" >&2
+          exit 3;;
+        esac
+        EXPECTED_REF="$2"; shift 2;;
+      --expected-oid)
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --expected-oid needs <full-hex-starting-oid>" >&2
+          exit 3;;
+        esac
+        printf '%s' "$2" | grep -qE '^[0-9a-f]{40}$|^[0-9a-f]{64}$' || {
+          echo "done_run commit: --expected-oid: malformed expected starting OID: $2 (want a full hex object id)" >&2
+          exit 3;
+        }
+        EXPECTED_OID="$2"; shift 2;;
       --authorize-ancestor-restoration)
         if [ -n "$AUTH_PATH" ]; then
           echo "done_run commit: --authorize-ancestor-restoration given more than once; one authorized path per invocation" >&2
@@ -1142,6 +1279,22 @@ cmd_commit() {
   done
   [ -n "$subject" ] || commit_die 3 "a --subject is required (the why-first landing message)"
 
+  # The expected symbolic-ref and starting-OID pair selects the primary
+  # rolling-log transaction. A partial pair is a usage refusal before
+  # anything mutates (refs, index, and worktree unchanged); a complete pair
+  # canonicalizes to a full symbolic ref and rides unchanged through
+  # staging, tree capture, and the captured-HEAD compare-and-swap.
+  if [ -n "$EXPECTED_REF" ] || [ -n "$EXPECTED_OID" ]; then
+    if [ -z "$EXPECTED_REF" ] || [ -z "$EXPECTED_OID" ]; then
+      commit_die 3 "--expected-ref and --expected-oid are one pair; give both or neither (ref='${EXPECTED_REF:-none}', oid='${EXPECTED_OID:-none}')"
+    fi
+    case "$EXPECTED_REF" in
+      refs/*) ;;
+      *) EXPECTED_REF="refs/heads/$EXPECTED_REF";;
+    esac
+    ROLLING_LOG=1
+  fi
+
   local repo_top session plans_dir deliverables
   repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || \
     commit_die 3 "not inside a git repository"
@@ -1156,6 +1309,43 @@ cmd_commit() {
   if [ -n "$AUTH_PATH" ] || [ "${#DIRT_CORRECTION_PATHS[@]}" -gt 0 ]; then
     trace_stage authorize-run-tuple
     resolve_authorized_run_tuple
+  fi
+
+  # 0a. The primary rolling-log pre-stage guards (pair-carrying calls only;
+  #     ordinary calls keep their existing paths). Every refusal here
+  #     precedes any staging and any cleanup arming: refs, the index, and
+  #     worktree bytes stay unchanged.
+  if [ "$ROLLING_LOG" -eq 1 ]; then
+    local rl_ref="" rl_oid="" rl_residue="" rl_path="" rl_foreign="" rl_owned=0
+    trace_stage rolling-log-pre-stage-guard
+    [ "${#STAGE_ARGS[@]}" -gt 0 ] || \
+      commit_die 3 "rolling-log mode declares its owned log paths via --stage; none given"
+    for path in ${STAGE_ARGS+"${STAGE_ARGS[@]}"}; do
+      case "$path" in
+        "$PLAN_PROMPTS_REL"|"$EXEC_PROMPTS_REL") ;;
+        *) commit_die 3 "rolling-log mode stages only the rolling prompt logs ($PLAN_PROMPTS_REL, $EXEC_PROMPTS_REL): $path";;
+      esac
+    done
+    rl_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"
+    [ "$rl_ref" = "$EXPECTED_REF" ] || \
+      commit_die 1 "rolling-log ref precondition: HEAD's symbolic target (${rl_ref:-detached}) does not match the expected ref ($EXPECTED_REF); recover under the done lock (reselect the intended ref), then retry; nothing staged, no ref update"
+    rl_oid="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+    [ "$rl_oid" = "$EXPECTED_OID" ] || \
+      commit_die 1 "rolling-log ref precondition: HEAD's OID (${rl_oid:-unresolved}) does not match the expected starting OID ($EXPECTED_OID); recover under the done lock (reselect the new tip), then retry; nothing staged, no ref update"
+    rl_residue="$(git diff --cached --name-only HEAD -- \
+      "$PLAN_PROMPTS_REL" "$EXEC_PROMPTS_REL")"
+    [ -z "$rl_residue" ] || \
+      commit_die 1 "rolling-log pre-stage guard: a staged delta already exists on a rolling prompt log; resolve it before any primary log write; residue left untouched: $(printf '%s' "$rl_residue" | tr '\n' ' ')"
+    while IFS= read -r rl_path; do
+      [ -n "$rl_path" ] || continue
+      rl_owned=0
+      for path in ${STAGE_ARGS+"${STAGE_ARGS[@]}"}; do
+        [ "$path" = "$rl_path" ] && rl_owned=1
+      done
+      [ "$rl_owned" -eq 1 ] || rl_foreign="$rl_foreign $rl_path"
+    done < <(git diff --cached --name-only HEAD)
+    [ -z "$rl_foreign" ] || \
+      commit_die 1 "rolling-log pre-stage guard: a staged path outside the declared owned log set refuses before staging; bytes left untouched:$rl_foreign"
   fi
 
   # 0b. Guard-firing appends: the advisory rows supplied for this landing are
@@ -1233,6 +1423,11 @@ cmd_commit() {
       STAGE_LIST+=("$path")
     fi
   done
+  # Staging begins here in rolling-log mode: arm the one cleanup owner so
+  # every later pre-CAS refusal restores this writer's owned delta.
+  if [ "$ROLLING_LOG" -eq 1 ]; then
+    arm_rolling_log_cleanup
+  fi
   if [ "${#STAGE_LIST[@]}" -gt 0 ]; then
     git add -- ${STAGE_LIST+"${STAGE_LIST[@]}"} || \
       commit_die 3 "git add refused the declared pathspec; stage the surviving paths in their own invocation and re-run"
@@ -1742,6 +1937,11 @@ sys.exit(1)
     # line names the skipped leg so the skip stays visible in the run record
     trace_stage docs-sync-skip
     echo "done_run commit: per-task boundary: skipping the docs-branch sync (a final-closeout leg; the run's final closeout owns the publication)"
+  elif [ "$ROLLING_LOG" -eq 1 ]; then
+    # rolling-log boundary: primary log writes hold the primary done lock
+    # only and never take the repo-wide merge lock the sync would acquire
+    trace_stage docs-sync-skip
+    echo "done_run commit: rolling-log boundary: skipping the docs-branch sync (a final-closeout leg; primary log writes hold the done lock only)"
   else
     SYNC="$(resolve_helper docs_branch_sync.sh)"
     [ -n "$SYNC" ] || { rm -rf "$tmpd"; commit_die 3 "no docs_branch_sync.sh resolved (repo-local scripts/ or deployed home)"; }
@@ -1806,6 +2006,9 @@ sys.exit(1)
       commit_die 1 "authorized landing: the staged set is empty at the landing (the authorized correction paths' content left the index: ${DIRT_CORRECTION_PATHS[*]}); nothing committed"
     fi
     echo "done_run commit: no staged changes; landing commit skipped"
+    # no captured-ref swap will run on this path: the armed rolling-log
+    # cleanup owner has nothing to own and disarms here
+    disarm_rolling_log_cleanup
   elif [ "${#DECLARED[@]}" -eq 0 ]; then
     FOREIGN_SET="$(printf '%s\n' "$STAGED_NOW" | tr '\n' ' ')"
     rm -rf "$tmpd"
@@ -2165,6 +2368,15 @@ cmd_finalize() {
   printf '%s\n' "$REL_OUT"
   if [ "$release_rc" -ne 0 ]; then
     echo "done_run finalize: done-lock release refused (rc=$release_rc); read the OUTCOME line above through the outcome contract, then run status" >&2
+    # Observability (report-only): name the inputs the failed release actually
+    # read, so a silent refusal never costs a diagnosis round guessing the env.
+    if [ "$from_holder" -eq 1 ]; then
+      echo "done_run finalize: release inputs: the from-holder arm (no session env consumed; the hold's own acquire-time records gate the release)" >&2
+    elif [ -z "${DONE_LOCK_DIR:-}" ] || [ -z "${DONE_LOCK_TOKEN:-}" ]; then
+      echo "done_run finalize: release inputs: DONE_LOCK_DIR/DONE_LOCK_TOKEN empty or unset (env lost with its tool-call shell); re-derive both from the hold's meta.env and re-run finalize" >&2
+    else
+      echo "done_run finalize: release inputs: lock dir ${DONE_LOCK_DIR}; token prefix ${DONE_LOCK_TOKEN:0:8}... (the env this shell actually read)" >&2
+    fi
     [ "$finalize_rc" -eq 0 ] && finalize_rc="$release_rc"
   fi
 
@@ -2195,7 +2407,30 @@ cmd_finalize() {
   if printf '%s\n' "$ST_OUT" | grep -qE ': free( |$)'; then
     echo "done_run finalize: done lock status: free"
   else
-    echo "done_run finalize: FAILED: done lock status is not free after the release; do not report completion while a hold survives" >&2
+    # Honesty (report-only): the FAILED line distinguishes a completed
+    # manifest (a release-only retry is safe) from an incomplete one, so the
+    # next invocation is chosen from state, not guessed.
+    local manifest_complete
+    manifest_complete="unknown"
+    if [ ! -f "${RUN_MANIFEST:-}" ]; then
+      manifest_complete="no-manifest"
+    else
+      manifest_complete="$(python3 -c 'import json,sys
+try:
+    print("true" if json.load(open(sys.argv[1])).get("complete") else "false")
+except Exception:
+    print("unknown")' "$RUN_MANIFEST" 2>/dev/null)" || manifest_complete="unknown"
+    fi
+    case "$manifest_complete" in
+      true)
+        echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is complete, so a release-only retry of this finalize with corrected DONE_LOCK_DIR/DONE_LOCK_TOKEN env is safe; do not report completion while a hold survives" >&2;;
+      false)
+        echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is NOT complete, so the run needs its full finalize re-run after the hold resolves, not a release-only retry; do not report completion while a hold survives" >&2;;
+      no-manifest)
+        echo "done_run finalize: FAILED: done lock status is not free after the release; no run manifest was bound, so there is no finalize state to resume; do not report completion while a hold survives" >&2;;
+      *)
+        echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest's completion state is unreadable, so re-derive it from the manifest before choosing a release-only retry; do not report completion while a hold survives" >&2;;
+    esac
     [ "$finalize_rc" -eq 0 ] && finalize_rc=1
   fi
 

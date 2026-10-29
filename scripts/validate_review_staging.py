@@ -4329,17 +4329,21 @@ def _payload_declares_corrections(payload: dict) -> bool:
 
 # Corrections grading's indeterminate classification: these phrases are
 # corrections_record's own refusal wordings for git plumbing failures over
-# resolved inputs and unresolvable anchor/evidence refs (pinned by that
-# module's selftest); a refusal carrying one classifies indeterminate per
-# the staging validator's OUTCOME_CONTRACT row, everything else is the
-# modeled fail class. The receipt leg's "unresolvable witness" refusal is
-# deliberately NOT a marker: an incomplete or unresolvable operator ack is
-# a modeled verification failure, not uncertainty about the evidence.
+# resolved inputs, unresolvable anchor/evidence refs, and an anchor object
+# Git cannot classify (a present non-commit object is uncertainty about the
+# evidence, never a proven refusal, so the leg grades indeterminate with its
+# prescribed wording preserved); a refusal carrying one classifies
+# indeterminate per the staging validator's OUTCOME_CONTRACT row, everything
+# else is the modeled fail class. The receipt leg's "unresolvable witness"
+# refusal is deliberately NOT a marker: an incomplete or unresolvable
+# operator ack is a modeled verification failure, not uncertainty about the
+# evidence.
 _CORRECTIONS_INDETERMINATE_MARKERS = (
     "git plumbing failed",
     "is unresolvable",
     "names an unresolvable ref",
     "no resolvable entry",
+    "Git cannot classify commit object",
 )
 
 
@@ -4481,29 +4485,12 @@ def _resolve_primary_checkout(repo):
     return None, "git worktree list --porcelain printed no worktree entry"
 
 
-def _validate_verification_head(value: str, repo) -> str | None:
-    """None when ``value`` is a full 40-character lowercase hex commit OID
-    present in ``repo``, otherwise the named rejection reason. Callers run
-    this BEFORE corrections verification so an abbreviated, malformed, or
-    unavailable value is a tool error, never a verification refusal."""
-    oid = value.strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", oid):
-        return (
-            "--verification-head must be a full 40-character lowercase hex "
-            "commit OID, not an abbreviated or malformed value"
-        )
-    cr = _sibling_module("corrections_record")
-    probe = (
-        cr.run_git(repo, "cat-file", "-e", "%s^{commit}" % oid)
-        if cr is not None
-        else None
-    )
-    if probe is None or probe.returncode != 0:
-        return (
-            "--verification-head %s is not a commit present in the source "
-            "repository" % oid
-        )
-    return None
+# The explicit ``--verification-head`` checker is the ONE shared helper in
+# corrections_record (``validate_verification_head``); this validator's local
+# copy was the duplicated twin (the D1 review residual) whose single
+# ``^{commit}`` probe could not tell an unavailable Git or an out-of-repo
+# source from an absent commit. Both call sites below import it and give
+# each failure condition its own tool-error reason.
 
 
 def _run_graded_stale_arm(
@@ -4525,7 +4512,10 @@ def _run_graded_stale_arm(
     a verified re-bind adds a warning and never rewrites the declared
     digest; a sidecar whose round has no seal entry (a certification
     predating the seal file, or the seal file absent from this worktree)
-    degrades to today's exact-match rule with a named warning. Returns
+    degrades to today's exact-match rule with a named warning that
+    distinguishes a seal parse failure (the round entry is malformed,
+    offending line named) from absence (no resolving entry in a valid
+    file). Returns
     True when the graded arm owned the freshness disposition (the legacy
     stale comparison is then not applied)."""
     cr = _sibling_module("corrections_record")
@@ -4624,6 +4614,22 @@ def _run_graded_stale_arm(
                 "anchor", "the seal file %s has no resolvable entry for "
                           "round %d" % (rel, round_number))
             return True
+        # The degraded-grading warning distinguishes a malformed round
+        # entry (a seal parse failure naming the offending line) from a
+        # valid file with no resolving entry (absence: a certification
+        # predating the seal file, or the seal file absent from this
+        # worktree). The declared-record arm above keeps its exact
+        # fail-closed indeterminate wording either way.
+        offending = cr.seal_round_parse_failure(repo, rel, round_number,
+                                                family)
+        if offending is not None:
+            result.add_warning(
+                "corrections grading degraded to the exact-match digest "
+                "rule: the seal entry for round %d in %s is malformed at "
+                "line %r (a seal parse failure, not an absent entry)"
+                % (round_number, rel, offending)
+            )
+            return False
         result.add_warning(
             "corrections grading degraded to the exact-match digest rule: "
             "no certification seal entry resolves for round %d in %s (a "
@@ -18854,6 +18860,144 @@ def _selftest_corrections_grading(root: Path, check) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Plan family over a colliding seal, driven through the production
+    # CLI (2026-10-29 seal-landing-survival-review-residuals plan, Task 1;
+    # r1 T5): the colliding-seal exercise above drives only the code-family
+    # call and plan-family-over-colliding-seal was proven only at unit
+    # level, so an integration regression on the plan path would not trip
+    # the selftest. The seal file carries a same-round code block whose
+    # anchors are orphans: a family-blind loader would resolve the
+    # refusing code block (or nothing) and this check would fail.
+    # ------------------------------------------------------------------
+    collision_plan_repo, collision_plan_fx = _grading_plan_fixture(
+        cleanup, round_number=2, with_seal=False)
+    collision_plan_row = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(collision_plan_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", collision_plan_fx["start"], "--emit-row"))
+    trap_tree = collision_plan_repo.git(
+        "rev-parse", "%s^{tree}" % collision_plan_fx["start"]).stdout.strip()
+    trap_a = collision_plan_repo.git(
+        "commit-tree", trap_tree, "-m", "trap orphan a").stdout.strip()
+    trap_b = collision_plan_repo.git(
+        "commit-tree", trap_tree, "-m", "trap orphan b").stdout.strip()
+    collision_plan_seal_rel = cr.seal_relpath(
+        _CORRECTIONS_PLAN_REL, _CORRECTIONS_PLAN_SLUG)
+    collision_plan_repo.write_file(collision_plan_seal_rel, "\n".join([
+        "## round 2",
+        "artifact: %s" % _CORRECTIONS_PLAN_REL,
+        "round_start_commit: %s" % collision_plan_fx["start"],
+        "round_start_digest: %s" % cr.sha256_hex(_CORRECTIONS_D1),
+        "round_close_commit: %s" % collision_plan_fx["close"],
+        "",
+        "## round 2",
+        "artifact: %s" % _CORRECTIONS_SRC_REL,
+        "round_start_commit: %s" % trap_a,
+        "round_start_digest: %s" % cr.sha256_hex(b"trap bytes"),
+        "round_close_commit: %s" % trap_b,
+        "reviewed_base: %s" % trap_a,
+        "reviewed_head: %s" % trap_a,
+        "range_digest: %s" % cr.sha256_hex(b"trap bytes"),
+        "family: code",
+        "staging_round: r2",
+    ]) + "\n")
+    collision_plan_repo.commit_all("colliding seal rounds: plan beside code")
+    collision_plan_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(_CORRECTIONS_D2),
+        slug=_CORRECTIONS_PLAN_SLUG, round_value="r2")
+    collision_plan_payload["extensions"] = {
+        "corrections": [collision_plan_row]}
+    collision_plan_stage = _grading_stage(
+        root, "plan-collision-cli", collision_plan_payload)
+    collision_plan_rc, collision_plan_out, collision_plan_err = cli_call(
+        ["--hard", str(collision_plan_stage),
+         "--source-plan",
+         str(collision_plan_repo.root / _CORRECTIONS_PLAN_REL)])
+    check(
+        "CLI plan family over a colliding seal: the plan round resolves beside a same-round code block whose orphan anchors would refuse, and the graded plan gate passes (exit 0) with no corrections refusal on stderr",
+        collision_plan_rc == 0
+        and collision_plan_out.rstrip().endswith("OUTCOME: pass")
+        and "corrections verification:" not in collision_plan_err,
+    )
+
+    # ------------------------------------------------------------------
+    # Multi-hop verification-head threading with the refusal-absence pin
+    # (same plan, Task 1; r2-F1): the head-cli-orphan-threaded arm above
+    # is zero-hop and pins the unthreaded refusal only via a stderr
+    # substring. This family adds the multi-hop shape: a two-hop
+    # corrections chain whose seal resolves only through the threaded
+    # verification head over an orphaned worktree HEAD, with the threaded
+    # pass arm pinned to the ABSENCE of any corrections refusal on stderr
+    # and the unthreaded companion pinning the orphan premise (each arm
+    # fails when its named call path or precondition is removed). The two
+    # hops ride DIFFERENT lines so each minted row stays single-class:
+    # hop one is the em-dash arm on the first content line, hop two the
+    # curly-quote arm on the second. The bytes are built from escapes at
+    # run time: these source bytes never carry the characters themselves.
+    # ------------------------------------------------------------------
+    multihop_d1 = ("# plan\n\nalpha \u2014 bravo.\n\n"
+                   "gamma \u201cdelta\u201d.\n").encode("utf-8")
+    multihop_d2 = ("# plan\n\nalpha, bravo.\n\n"
+                   "gamma \u201cdelta\u201d.\n").encode("utf-8")
+    multihop_d3 = ("# plan\n\nalpha, bravo.\n\n"
+                   'gamma "delta".\n').encode("utf-8")
+    multihop_repo = cr.build_scratch_repo(cleanup)
+    multihop_start = multihop_repo.commit_file(
+        _CORRECTIONS_PLAN_REL, multihop_d1, "seed plan")
+    multihop_close = multihop_repo.commit_allow_empty("round 1 close")
+    multihop_repo.append_seal_entry(
+        _CORRECTIONS_PLAN_SLUG, 1, _CORRECTIONS_PLAN_REL, multihop_start,
+        cr.sha256_hex(multihop_d1), multihop_close)
+    multihop_hop1 = multihop_repo.commit_file(
+        _CORRECTIONS_PLAN_REL, multihop_d2, "first correction")
+    multihop_row1 = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(multihop_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", multihop_start, "--emit-row"))
+    multihop_repo.commit_file(
+        _CORRECTIONS_PLAN_REL, multihop_d3, "second correction")
+    multihop_row2 = _minted_row(_run_cli(
+        "plan_delta_classifier.py",
+        "--plan", str(multihop_repo.root / _CORRECTIONS_PLAN_REL),
+        "--since", multihop_hop1, "--emit-row"))
+    multihop_real_head = multihop_repo.head()
+    multihop_floating_tree = multihop_repo.git(
+        "rev-parse", "HEAD^{tree}").stdout.strip()
+    multihop_floating = multihop_repo.git(
+        "commit-tree", multihop_floating_tree, "-m",
+        "orphan multihop worktree head").stdout.strip()
+    multihop_repo.git("update-ref", "HEAD", multihop_floating)
+    multihop_payload = _grading_v1_payload(
+        "plan", cr.sha256_hex(multihop_d3),
+        slug=_CORRECTIONS_PLAN_SLUG)
+    multihop_payload["extensions"] = {
+        "corrections": [multihop_row1, multihop_row2]}
+    multihop_stage = _grading_stage(
+        root, "head-cli-multihop-threaded", multihop_payload)
+    multihop_unthreaded_rc, _multihop_unthreaded_out, \
+        multihop_unthreaded_err = cli_call(
+            ["--hard", str(multihop_stage),
+             "--source-plan",
+             str(multihop_repo.root / _CORRECTIONS_PLAN_REL)])
+    check(
+        "CLI multi-hop verification-head premise: with the orphaned worktree HEAD and no --verification-head, the two-hop chain's seal refuses with the no-first-parent-ancestor reason (exit 1)",
+        multihop_unthreaded_rc == 1
+        and "corrections verification:" in multihop_unthreaded_err
+        and "no first-parent ancestor" in multihop_unthreaded_err,
+    )
+    multihop_rc, multihop_out, multihop_err = cli_call(
+        ["--hard", str(multihop_stage),
+         "--source-plan",
+         str(multihop_repo.root / _CORRECTIONS_PLAN_REL),
+         "--verification-head", multihop_real_head])
+    check(
+        "CLI multi-hop verification-head threading: the pinned head resolves the two-hop chain to a pass (exit 0) with no corrections refusal on the threaded path",
+        multihop_rc == 0
+        and multihop_out.rstrip().endswith("OUTCOME: pass")
+        and "corrections verification:" not in multihop_err,
+    )
+
+    # ------------------------------------------------------------------
     # Task 2 (corrections-chain-operator-ack plan): the operator-ack
     # witness threads through the graded gates from the primary checkout's
     # correction_authorizations array. The plan family never resolves a
@@ -20946,11 +21090,36 @@ def _main(argv: list[str] | None = None) -> int:
                     source_path, plan_repo_root
                 )
             cr_module = _sibling_module("corrections_record")
-            toplevel = (
-                cr_module.git_text(source_path.parent, "rev-parse",
-                                   "--show-toplevel")
-                if cr_module is not None else None
-            )
+            try:
+                toplevel = (
+                    cr_module.git_text(source_path.parent, "rev-parse",
+                                       "--show-toplevel")
+                    if cr_module is not None else None
+                )
+            except OSError:
+                # Git itself is unavailable (a missing binary): the probe
+                # classifies as no-repository, and a supplied
+                # --verification-head below degrades to its named
+                # could-not-run tool error instead of a crash.
+                toplevel = None
+            # A supplied --verification-head is validated for EVERY source
+            # plan, a source plan outside any Git worktree included: the
+            # validation sits outside the repository guard, so the value is
+            # a tool error naming the flag, never silently ignored, and the
+            # shared helper gives each failure condition its own reason.
+            supplied_head = None
+            if args.verification_head is not None:
+                if cr_module is None:
+                    return verification_head_tool_error(
+                        "--verification-head cannot be validated: "
+                        "corrections_record.py is not importable next to "
+                        "this validator copy")
+                supplied_head, head_error = (
+                    cr_module.validate_verification_head(
+                        source_path.parent, args.verification_head)
+                )
+                if head_error is not None:
+                    return verification_head_tool_error(head_error)
             if cr_module is not None and toplevel:
                 repo_root = Path(toplevel.strip())
                 # The plan family's witness authority is selected only by
@@ -20968,17 +21137,11 @@ def _main(argv: list[str] | None = None) -> int:
                     "current_bytes": source_bytes,
                     "witness_path": args.ack_witness or None,
                 }
-                # The explicit verification head is validated against the
-                # plan's source repository BEFORE corrections verification
-                # runs; an invalid value is a tool error, never a graded
-                # refusal.
-                if args.verification_head is not None:
-                    head_error = _validate_verification_head(
-                        args.verification_head, repo_root)
-                    if head_error is not None:
-                        return verification_head_tool_error(head_error)
-                    corrections_context["head"] = \
-                        args.verification_head.strip()
+                # The validated head pins every HEAD-dependent corrections
+                # check; the validation above ran before any context was
+                # built, so an invalid value never reaches verification.
+                if supplied_head is not None:
+                    corrections_context["head"] = supplied_head
     else:
         _SOURCE_PATH_FOR_ERROR = None
 
@@ -21052,8 +21215,13 @@ def _main(argv: list[str] | None = None) -> int:
                 "--source-code-plan must name a code-source sidecar "
                 "(source_kind code)"
             )
-        code_toplevel = cr_module.git_text(
-            args.source_code_repo, "rev-parse", "--show-toplevel")
+        try:
+            code_toplevel = cr_module.git_text(
+                args.source_code_repo, "rev-parse", "--show-toplevel")
+        except OSError:
+            # Git itself is unavailable: the probe classifies as
+            # no-repository and the existing refusal below reports it.
+            code_toplevel = None
         if not code_toplevel:
             payload = {
                 "ok": False,
@@ -21089,11 +21257,11 @@ def _main(argv: list[str] | None = None) -> int:
         # its expected digest at the unreviewed worktree HEAD.
         code_head = "HEAD"
         if args.verification_head is not None:
-            head_error = _validate_verification_head(
-                args.verification_head, code_repo)
+            code_oid, head_error = cr_module.validate_verification_head(
+                code_repo, args.verification_head)
             if head_error is not None:
                 return verification_head_tool_error(head_error)
-            code_head = args.verification_head.strip()
+            code_head = code_oid
         code_range = _extensions_member(
             code_sidecar, CERTIFIED_RANGE_EXTENSION_KEY)
         if isinstance(code_range, dict) and \

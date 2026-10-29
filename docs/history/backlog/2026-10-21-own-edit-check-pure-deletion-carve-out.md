@@ -1,6 +1,6 @@
 # Backlog: the own-edit check's pure-deletion arm omits the intentional-deletion carve-out
 
-Status: open
+Status: covered (docs/history/plans/2026-10-29-own-edit-intentional-deletion-carve-out.md)
 Priority: low
 Class: fix-class (one qualifier sentence in each of two rules)
 Origin class: review-residual (ad-hoc panel over the learn-commit-own-edit-check-mechanical-shape landing, finding F2)

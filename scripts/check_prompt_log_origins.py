@@ -184,6 +184,14 @@ RECEIPT_LINE_RE = re.compile(
 # ``PLAN-PROMPTS-PRUNE: <slug> -> <token> (<reason prose>)``. This is
 # the in-log ledger grammar only; the commit-message scan above keeps
 # its strict anchored end-of-line shape unchanged.
+# The exact receipt-ledger line identity used by the repair
+# reconciliation: the whole ledger line (both prefixes, trailing prose
+# tolerated), so one pending exact re-add matches one committed deletion
+# byte-for-byte rather than by (slug, token) pair alone.
+RECEIPT_FULL_LINE_RE = re.compile(
+    r"^(?:PLAN-PROMPTS-PRUNE|EXEC-PROMPTS-PRUNE):[ \t]+.*$", re.MULTILINE
+)
+
 LEDGER_RECEIPT_LINE_RE = re.compile(
     r"^(?:PLAN-PROMPTS-PRUNE|EXEC-PROMPTS-PRUNE):[ \t]+(\S+)[ \t]+->[ \t]+(\S+)",
     re.MULTILINE,
@@ -782,6 +790,41 @@ def missing_ledger_pairs(old_text: str, new_text: str) -> list[tuple[str, str]]:
     return removed
 
 
+def _line_slug(line: str) -> str | None:
+    """The receipt slug a ledger line carries, or None when the line is
+    not a parseable ledger line."""
+    match = LEDGER_RECEIPT_LINE_RE.match(line + "\n")
+    return match.group(1) if match else None
+
+
+def _line_removals(old_text: str, new_text: str) -> list[str]:
+    """Exact receipt-ledger lines present in ``old_text`` but missing
+    from ``new_text``, walked in old-image order with multiplicity: the
+    full-line mirror of ``missing_ledger_pairs``, so a genuinely deleted
+    line counts and a pre-existing identical line never does."""
+    new = Counter(RECEIPT_FULL_LINE_RE.findall(new_text))
+    removed: list[str] = []
+    for line in RECEIPT_FULL_LINE_RE.findall(old_text):
+        if new.get(line, 0):
+            new[line] -= 1
+        else:
+            removed.append(line)
+    return removed
+
+
+def _line_additions(old_text: str, new_text: str) -> list[str]:
+    """Exact receipt-ledger lines newly present in ``new_text`` relative
+    to ``old_text``, walked in new-image order with multiplicity."""
+    old = Counter(RECEIPT_FULL_LINE_RE.findall(old_text))
+    added: list[str] = []
+    for line in RECEIPT_FULL_LINE_RE.findall(new_text):
+        if old.get(line, 0):
+            old[line] -= 1
+        else:
+            added.append(line)
+    return added
+
+
 def _pending_layer_text(
     repo_root: Path, log_rel: str, layer: str
 ) -> str:
@@ -817,7 +860,7 @@ def pending_receipt_removal_warnings(
     head_short: str,
     out: TextIO,
     head_commit: str = "HEAD",
-) -> int:
+) -> tuple[int, Counter]:
     """Warning-only pending-receipt-removal scan for one rolling log:
     compare the log's audited-tip image against the index (the ``index``
     layer) and the index against the working tree (the ``worktree``
@@ -834,13 +877,15 @@ def pending_receipt_removal_warnings(
     unmatched localized message degrades to the same explicit warning.
     Returns the warnings emitted."""
     warnings = 0
+    missing_index: Counter = Counter()
+    missing_worktree: Counter = Counter()
     try:
         index_text = _pending_layer_text(repo_root, log_rel, "index")
         worktree_text = _pending_layer_text(repo_root, log_rel, "worktree")
         head_proc = run_git(repo_root, "show", f"{head_commit}:{log_rel}")
     except (AuditToolError, subprocess.TimeoutExpired, OSError, UnicodeDecodeError) as exc:
         out.write(f"PENDING-SCAN-WARNING: {log_rel}: {exc}\n")
-        return 1
+        return 1, missing_index, missing_worktree
     head_text = head_proc.stdout
     if head_proc.returncode != 0:
         if "does not exist" in head_proc.stderr:
@@ -865,11 +910,22 @@ def pending_receipt_removal_warnings(
                 f"PENDING-RECEIPT-REMOVAL: {slug} -> {token} "
                 f"{log_rel} {layer} (HEAD {head_short})\n"
             )
-    return warnings
+    # The net missing lines (HEAD image minus the working-tree image,
+    # full-line identity with multiplicity): the repair path's restore
+    # worklist for this log. Read failures above leave it empty, so an
+    # unavailable image can never be guessed at.
+    missing_index = Counter(_line_removals(head_text, index_text))
+    missing_worktree = Counter(_line_removals(index_text, worktree_text))
+    return warnings, missing_index, missing_worktree
 
 
 def walk_audit_commits(
-    repo_root: Path, commits: list[str], log_rels: list[str], out: TextIO
+    repo_root: Path,
+    commits: list[str],
+    log_rels: list[str],
+    out: TextIO,
+    unwitnessed: list[dict] | None = None,
+    reconcile: dict[str, Counter] | None = None,
 ) -> tuple[int, int, int, int]:
     """Print one classification line per removal, oldest commit first,
     and return (removals, ledger_receipts, flagged, warnings). Raises
@@ -877,7 +933,18 @@ def walk_audit_commits(
     enumerated rolling logs (the audited log plus its sibling when it
     names one). The log-ledger count includes the in-commit receipt
     class (a newly added same-log ``landing`` line naming the removed
-    slug)."""
+    slug).
+
+    Repair-mode extensions (the pending-receipt-removal-audit-promotion
+    plan): ``reconcile`` maps each log to a budget Counter of exact
+    pending re-added receipt lines; an otherwise-unwitnessed committed
+    removal whose exact removed lines all draw from that budget (one
+    draw per occurrence, by full-line identity) classifies
+    ``PRUNE-OK: <slug> -> landing (repair reconciliation)`` instead of
+    flagging. ``unwitnessed`` collects one record per flagged removal
+    (slug, log, exact removed lines, and whether the exact source bytes
+    could be established from the removal commit's pre-image) for the
+    landing repair's restore worklist."""
     removals = 0
     ledger_receipts = 0
     flagged = 0
@@ -933,10 +1000,11 @@ def walk_audit_commits(
             if newly_added_receipt_pairs(old_text, post_text) and not removed:
                 warnings += 1
                 out.write(f"RECEIPT-WITHOUT-REMOVAL: {short} {log_rel}\n")
-        if not any(removed for removed, _, _, _ in per_log):
-            continue
-        candidates = witness_candidates(repo_root, sha)
-        for removed, added, post_text, old_text in per_log:
+        any_removed = any(removed for removed, _, _, _ in per_log)
+        candidates = witness_candidates(repo_root, sha) if any_removed else []
+        for log_rel, (removed, added, post_text, old_text) in zip(
+            log_rels, per_log
+        ):
             added_receipts = newly_added_receipt_pairs(old_text, post_text)
             for slug in removed:
                 removals += 1
@@ -1011,10 +1079,107 @@ def walk_audit_commits(
                         f"PRUNE-OK: {slug} -> {ledger} (log ledger receipt)\n"
                     )
                     continue
+                # Repair reconciliation (one flagged class, the
+                # pending-receipt-removal-audit-promotion plan): the
+                # exact removed lines draw from the pending re-add
+                # budget, one draw per occurrence by full-line identity.
+                removed_lines = _line_removals(old_text, post_text)
+                budget = reconcile.get(log_rel) if reconcile else None
+                if budget is not None and removed_lines:
+                    trial = {
+                        line: budget.get(line, 0) for line in removed_lines
+                    }
+                    affordable = True
+                    for line in removed_lines:
+                        if trial[line] <= 0:
+                            affordable = False
+                            break
+                        trial[line] -= 1
+                    if affordable:
+                        for line in removed_lines:
+                            budget[line] -= 1
+                        ledger_receipts += 1
+                        out.write(
+                            f"PRUNE-OK: {slug} -> landing"
+                            " (repair reconciliation)\n"
+                        )
+                        continue
                 flagged += 1
                 out.write(
                     f"REMOVED-WITHOUT-WITNESS: {slug} (commit {short} {subject})\n"
                 )
+                if unwitnessed is not None:
+                    sourceable = bool(old_text) and len(set(removed_lines)) <= 1
+                    unwitnessed.append(
+                        {
+                            "slug": slug,
+                            "log_rel": log_rel,
+                            "lines": removed_lines,
+                            "sourceable": sourceable,
+                        }
+                    )
+            # Pure receipt-line deletions (the receipt's entry stays in the
+            # log): every receipt-ledger line removed by the commit whose
+            # slug matches no entry removed in the same commit is its own
+            # flagged audit class, reconciled only by an exact pending
+            # re-add one-for-one (the pending-receipt-removal-audit-promotion
+            # plan's committed-history detection layer).
+            budget = reconcile.get(log_rel) if reconcile else None
+            for line in _line_removals(old_text, post_text):
+                line_slug = _line_slug(line)
+                if line_slug is None:
+                    continue
+                if any(
+                    receipt_compare_slug(removed_slug)
+                    == receipt_compare_slug(line_slug)
+                    for removed_slug in removed
+                ):
+                    continue
+                # The retoken shape: the same commit re-adds a receipt line
+                # for the same slug (a witness token refresh beside a
+                # surviving entry), so nothing was lost.
+                if any(
+                    receipt_compare_slug(added_slug)
+                    == receipt_compare_slug(line_slug)
+                    for added_slug, _token in newly_added_receipt_pairs(
+                        old_text, post_text
+                    )
+                ):
+                    continue
+                if budget is not None and budget.get(line, 0) > 0:
+                    budget[line] -= 1
+                    ledger_receipts += 1
+                    out.write(
+                        f"PRUNE-OK: {line_slug} -> landing"
+                        f" (repair reconciliation, commit {short})\n"
+                    )
+                    continue
+                flagged += 1
+                out.write(
+                    f"RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: {line_slug} "
+                    f"(commit {short} {subject})\n"
+                )
+                if unwitnessed is not None:
+                    # Ambiguity: the same commit removes more than one
+                    # distinct receipt variant of this slug, so no unique
+                    # exact source exists and the repair must never
+                    # invent either variant.
+                    variants = {
+                        candidate
+                        for candidate in _line_removals(old_text, post_text)
+                        if _line_slug(candidate) == line_slug
+                    }
+                    unwitnessed.append(
+                        {
+                            "slug": line_slug,
+                            "log_rel": log_rel,
+                            "lines": [line],
+                            "sourceable": bool(old_text)
+                            and len(variants) <= 1,
+                        }
+                    )
+
+
     return removals, ledger_receipts, flagged, warnings
 
 
@@ -1024,6 +1189,7 @@ def prune_audit(
     base_ref: str,
     out: TextIO,
     head_ref: str = "HEAD",
+    unwitnessed: list[dict] | None = None,
 ) -> int:
     """Audit base..head removals of the prompt log against plan-file
     witnesses at each removal commit; returns the exit code and writes
@@ -1067,9 +1233,40 @@ def prune_audit(
     if listing.returncode != 0:
         return write_tool_error(out, f"git rev-list failed: {listing.stderr.strip()}")
     commits = listing.stdout.split()
+    # The pending re-add budget (the reconciliation class): exact
+    # receipt lines newly present in the working tree over the audited
+    # endpoint's image, consumed one draw per occurrence by the
+    # committed walk, so one exact pending re-add reconciles exactly one
+    # matching committed deletion by line identity and multiplicity and
+    # unmatched deletions stay flagged.
+    reconcile: dict[str, Counter] = {}
+    for rel in log_rels:
+        try:
+            endpoint_proc = run_git(repo_root, "show", f"{head_commit}:{rel}")
+            endpoint_text = (
+                endpoint_proc.stdout
+                if endpoint_proc.returncode == 0
+                else ""
+            )
+        except UnicodeDecodeError:
+            # An undecodable endpoint image contributes no budget; the
+            # committed walk reports the blob on its own terms.
+            endpoint_text = ""
+        try:
+            worktree_text = (repo_root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            worktree_text = ""
+        reconcile[rel] = Counter(
+            _line_additions(endpoint_text, worktree_text)
+        )
     try:
         removals, ledger_receipts, flagged, warnings = walk_audit_commits(
-            repo_root, commits, log_rels, out
+            repo_root,
+            commits,
+            log_rels,
+            out,
+            unwitnessed=unwitnessed,
+            reconcile=reconcile,
         )
     except AuditToolError as exc:
         return write_tool_error(out, str(exc))
@@ -1098,21 +1295,321 @@ def prune_audit(
         )
         warnings += 1
         head_short = ""
+    # The pending scan now feeds the flagged audit class (the
+    # pending-receipt-removal-audit-promotion plan promoted it from a
+    # warning): each net missing receipt line flags, and the repair
+    # path is the only way a landing continues past it.
+    pending_missing: dict[str, tuple[Counter, Counter]] = {}
+    # The pending images are pending relative to the working tree's own
+    # HEAD, never the audit's pinned endpoint: an explicit --head audits
+    # an exact committed range, while the pending layers describe the
+    # uncommitted landing state (the repair path re-derives against the
+    # literal HEAD too, so the two never disagree).
+    real_head = run_git(repo_root, "rev-parse", "--short", "HEAD")
+    real_head_short = real_head.stdout.strip() if real_head.returncode == 0 else ""
     for rel in log_rels:
-        warnings += pending_receipt_removal_warnings(
-            repo_root, rel, head_short, out, head_commit
+        layer_warnings, missing_index, missing_worktree = (
+            pending_receipt_removal_warnings(
+                repo_root, rel, real_head_short, out, "HEAD"
+            )
         )
+        warnings += layer_warnings
+        pending_missing[rel] = (missing_index, missing_worktree)
+    pending_flags = sum(
+        sum(index_counts.values()) + sum(worktree_counts.values())
+        for index_counts, worktree_counts in pending_missing.values()
+    )
     out.write(
         f"prune-audit summary: {removals} removals "
         f"({ledger_receipts} by log ledger) across {len(commits)} "
         f"log-touching commit(s) in {base_commit}..{head_commit}, "
-        f"{warnings} warning(s)\n"
+        f"{warnings} warning(s), {pending_flags} pending receipt "
+        f"flag(s)\n"
     )
-    if flagged:
+    if flagged or pending_flags:
         out.write("OUTCOME: fail\n")
         return 1
     out.write("OUTCOME: pass\n")
     return 0
+
+
+def _stage_index_blob(repo_root: Path, log_rel: str, blob: str) -> bool:
+    """Point the index at ``blob`` for ``log_rel``, keeping the tracked
+    mode; False when the path is not tracked or the update refuses."""
+    listing = run_git(repo_root, "ls-files", "--stage", "--", log_rel)
+    if listing.returncode != 0 or not listing.stdout.strip():
+        return False
+    mode = listing.stdout.split()[0]
+    proc = run_git(
+        repo_root, "update-index", "--cacheinfo", f"{mode},{blob},{log_rel}"
+    )
+    return proc.returncode == 0
+
+
+def _hash_object_bytes(repo_root: Path, data: str) -> str | None:
+    """Write ``data`` into the object database and return its blob SHA,
+    or None on a plumbing failure."""
+    proc = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo_root,
+        input=data,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _worktree_text(path: Path) -> str:
+    """The log's working-tree image; the seam the repair's compose and
+    fresh-read verification both read through."""
+    return path.read_text(encoding="utf-8")
+
+
+def _append_lines(text: str, lines: list[str]) -> str:
+    """The image with the receipt lines appended after its current
+    content, never reordering or rewriting a byte of what is already
+    there."""
+    if not text.endswith("\n") and text:
+        text += "\n"
+    return text + "".join(line + "\n" for line in lines)
+
+
+def _receipt_repair_apply(
+    repo_root: Path,
+    log_rels: list[str],
+    need: dict[str, Counter],
+    out: TextIO,
+) -> bool:
+    """Restore the needed exact receipt lines into both pending images
+    (working tree and index) of each log, preserving every unrelated
+    byte of both images: the lines append after each image's current
+    content, and the index update stages a hash-object blob of the
+    index image plus the inserted lines, never the working-tree file.
+    Before writing, both images are re-read and must still match the
+    compose input; one mismatch retries the compose once, and a second
+    mismatch leaves everything untouched with a named conflict report.
+    If the paired write fails partway (the working-tree bytes landed
+    but the index update failed), the inserted working-tree bytes roll
+    back and both images are verified to retain their pre-repair
+    content. Returns True when every needed line is in place in both
+    images."""
+    for log_rel in log_rels:
+        wanted = need.get(log_rel)
+        if not wanted:
+            continue
+        index_lines = list(wanted[0].elements())
+        worktree_lines = list(wanted[1].elements())
+        path = repo_root / log_rel
+        applied = False
+        for attempt in (1, 2):
+            index_text = _pending_layer_text(repo_root, log_rel, "index")
+            try:
+                worktree_text = _worktree_text(path)
+            except (OSError, UnicodeDecodeError) as exc:
+                out.write(
+                    f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the working-tree "
+                    f"image is unreadable: {exc}\n"
+                )
+                return False
+            # Fresh-read verification: the composed images must still be
+            # the images on disk at the write instant; a concurrent edit
+            # between the compose and the write retries the compose once.
+            try:
+                fresh_index = _pending_layer_text(repo_root, log_rel, "index")
+                fresh_worktree = _worktree_text(path)
+            except (OSError, UnicodeDecodeError) as exc:
+                out.write(
+                    f"RECEIPT-REPAIR-CONFLICT: {log_rel}: an image turned "
+                    f"unreadable under the repair: {exc}\n"
+                )
+                return False
+            if (fresh_index, fresh_worktree) != (index_text, worktree_text):
+                continue
+            new_worktree = _append_lines(worktree_text, worktree_lines)
+            new_index = _append_lines(index_text, index_lines)
+            try:
+                path.write_text(new_worktree, encoding="utf-8")
+            except OSError as exc:
+                out.write(
+                    f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the working-tree "
+                    f"write failed: {exc}\n"
+                )
+                return False
+            blob = _hash_object_bytes(repo_root, new_index)
+            if blob is None or not _stage_index_blob(repo_root, log_rel, blob):
+                # Partway failure: the working-tree insertion rolls back
+                # and both images are verified to hold their pre-repair
+                # content, including any concurrent unrelated edits the
+                # fresh read captured.
+                try:
+                    path.write_text(worktree_text, encoding="utf-8")
+                except OSError as exc:
+                    out.write(
+                        f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the index "
+                        f"update failed and the worktree rollback failed "
+                        f"too: {exc}\n"
+                    )
+                    return False
+                rolled_index = _pending_layer_text(repo_root, log_rel, "index")
+                rolled_worktree = path.read_text(encoding="utf-8")
+                if (rolled_index, rolled_worktree) != (index_text, worktree_text):
+                    out.write(
+                        f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the rollback "
+                        "did not restore the pre-repair images\n"
+                    )
+                    return False
+                out.write(
+                    f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the index update "
+                    "failed; the inserted worktree bytes rolled back\n"
+                )
+                return False
+            applied = True
+            break
+        if not applied:
+            out.write(
+                f"RECEIPT-REPAIR-CONFLICT: {log_rel}: the log's images kept "
+                "changing between the compose and the write; the repair is "
+                "unapplied and both images are untouched\n"
+            )
+            return False
+    return True
+
+
+def _log_head_text(repo_root: Path, log_rel: str) -> str:
+    """The log's HEAD image, or the empty string on benign absence (the
+    log was never committed); other read failures raise."""
+    proc = run_git(repo_root, "show", f"HEAD:{log_rel}")
+    if proc.returncode != 0:
+        if "does not exist" in proc.stderr:
+            return ""
+        raise AuditToolError(
+            f"git show HEAD:{log_rel} failed: {proc.stderr.strip()}"
+        )
+    return proc.stdout
+
+
+def prune_audit_repair(
+    log_path: Path,
+    repo_root: Path,
+    base_ref: str,
+    out: TextIO,
+    head_ref: str = "HEAD",
+) -> int:
+    """The landing-only repair mode: run the audit, and when it flags
+    restorable receipt-line deletions (pending missing lines, committed
+    unwitnessed removals with uniquely sourced exact bytes), restore the
+    exact bytes into both pending images, reconcile each restoration
+    against its exact committed deletion on one rerun, and succeed only
+    when the rerun passes. An exact source that cannot be established,
+    a repair that cannot be safely applied after one fresh-read retry,
+    or a rerun that still fails names its specific condition and
+    returns the audit's failure. The default invocation's outcomes are
+    unchanged; this mode is only for landing closeout."""
+    log_rel = log_path.resolve().relative_to(repo_root.resolve()).as_posix()
+    log_rels = [log_rel]
+    sibling = SIBLING_LOG_RELS.get(log_rel)
+    if sibling is not None and sibling != log_rel:
+        log_rels.append(sibling)
+    unwitnessed: list[dict] = []
+    code = prune_audit(
+        log_path, repo_root, base_ref, out, head_ref, unwitnessed=unwitnessed
+    )
+    if code == 0:
+        return 0
+    # The same one-for-one budget the audit's own reconciliation used,
+    # consumed here while composing the restore need.
+    pending_budget: dict[str, Counter] = {}
+    for rel in log_rels:
+        try:
+            endpoint_text = _log_head_text(repo_root, rel)
+            worktree_text = (repo_root / rel).read_text(encoding="utf-8")
+            pending_budget[rel] = Counter(
+                _line_additions(endpoint_text, worktree_text)
+            )
+        except (AuditToolError, OSError, UnicodeDecodeError):
+            pending_budget[rel] = Counter()
+    # The need is per image: the index must regain the head image's
+    # missing receipt lines, the working tree must regain the index
+    # image's missing lines on top of those, and each committed
+    # unwitnessed removal's exact lines ride both images so the landing
+    # commit carries the restoration.
+    need: dict[str, tuple[Counter, Counter]] = {}
+
+    def _need_for(rel: str) -> tuple[Counter, Counter]:
+        return need.setdefault(rel, (Counter(), Counter()))
+
+    restorable = False
+    for record in unwitnessed:
+        if not record["sourceable"]:
+            out.write(
+                f"RECEIPT-REPAIR-UNRECOVERABLE: {record['slug']} in "
+                f"{record['log_rel']}: the exact source bytes cannot be "
+                "established from the removal commit's pre-image; the "
+                "line is named here, never invented or altered\n"
+            )
+            continue
+        restorable = True
+        index_need, worktree_need = _need_for(record["log_rel"])
+        for line in record["lines"]:
+            # A pending re-add already present for this exact line
+            # reconciles one committed deletion one-for-one; the repair
+            # restores only the uncovered remainder.
+            if pending_budget.get(record["log_rel"], {}).get(line, 0) > 0:
+                pending_budget[record["log_rel"]][line] -= 1
+                continue
+            index_need.update([line])
+            worktree_need.update([line])
+    for rel in log_rels:
+        try:
+            head_text = _log_head_text(repo_root, rel)
+            index_text = _pending_layer_text(repo_root, rel, "index")
+            try:
+                worktree_text = (repo_root / rel).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                if head_text:
+                    # A committed log whose whole working-tree file is
+                    # gone is a whole-file loss the receipt repair must
+                    # never paper over with a receipt-lines-only file.
+                    out.write(
+                        f"RECEIPT-REPAIR-UNRECOVERABLE: {rel}: the "
+                        "working-tree image is absent while the log is "
+                        "committed; a whole-file loss is not receipt-"
+                        "repairable\n"
+                    )
+                    continue
+                # Benign absence: the log was never committed, so there
+                # is no older image and no receipts can be missing.
+                worktree_text = ""
+        except (AuditToolError, OSError, UnicodeDecodeError) as exc:
+            out.write(
+                f"RECEIPT-REPAIR-UNRECOVERABLE: {rel}: the pending "
+                f"images cannot be read to source the restoration: {exc}\n"
+            )
+            continue
+        missing_index = Counter(_line_removals(head_text, index_text))
+        missing_worktree = Counter(_line_removals(index_text, worktree_text))
+        if missing_index or missing_worktree:
+            restorable = True
+            index_need, worktree_need = _need_for(rel)
+            index_need.update(missing_index.elements())
+            worktree_need.update(missing_index.elements())
+            worktree_need.update(missing_worktree.elements())
+    if not restorable:
+        # Nothing restorable: the flags stand and the report already
+        # names every unrecoverable line; the repair invocation ends
+        # with its own terminal outcome line.
+        out.write("OUTCOME: fail\n")
+        return code
+    if not _receipt_repair_apply(repo_root, log_rels, need, out):
+        out.write("OUTCOME: fail\n")
+        return 1
+    # The reconciliation budget: the repaired working tree's exact
+    # receipt additions over HEAD, consumed one draw per occurrence by
+    # the rerun's committed walk.
+    return prune_audit(log_path, repo_root, base_ref, out, head_ref)
 
 
 def prune_audit_cli(
@@ -1120,6 +1617,7 @@ def prune_audit_cli(
     base_ref: str | None,
     out: TextIO,
     head_arg: str | None = None,
+    repair: bool = False,
 ) -> int:
     """Resolve the audited log and its repository, then run the audit.
     The default log is this script's own repo root's tracked log; an
@@ -1146,6 +1644,10 @@ def prune_audit_cli(
         if not log_path.is_file():
             return write_tool_error(out, f"prompt log not found: {log_path}")
         repo_root = REPO_ROOT
+    if repair:
+        return prune_audit_repair(
+            log_path, repo_root, base_ref, out, head_ref
+        )
     return prune_audit(log_path, repo_root, base_ref, out, head_ref)
 
 
@@ -1658,11 +2160,28 @@ def main(argv: list[str] | None = None) -> int:
             "pinned commit and the summary reports the audited range"
         ),
     )
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help=(
+            "with --prune-audit, the landing-only repair mode: receipt-"
+            "line deletions the audit flags are restored from their "
+            "exact committed bytes into both pending images, the audit "
+            "is rerun, and the landing continues only when the rerun "
+            "passes; an exact source that cannot be established, a "
+            "repair that cannot be safely applied after one fresh-read "
+            "retry, or a rerun that still fails names its specific "
+            "condition and fails. Never pass this from a survey: the "
+            "default invocation stays read-only"
+        ),
+    )
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
     if args.prune_audit:
-        return prune_audit_cli(args.log, args.base, sys.stdout, args.head)
+        return prune_audit_cli(
+            args.log, args.base, sys.stdout, args.head, repair=args.repair
+        )
     if args.collateral_served:
         return collateral_served_cli(args.log, args.base, sys.stdout)
     if args.log:

@@ -98,3 +98,7 @@ _Avoid_: silent company classification, path-ownership inference
 
 **Review scope and complexity policy**:
 Defines review effort from scope and complexity signals in the plan and changed work. Affected components/contracts, interactions, behavior/state transitions, concurrency/safety boundaries, and reasoning effort are signals; plan size is one signal and does not decide effort alone. The shared panel-selection policy is the single source of truth, with one shared default absent justification for adjustment.
+
+**Stacked pull request**:
+A pull request whose branch is based on an unmerged predecessor pull request. The child branch includes the dependency chain, while its pull request diff shows only the changes added after its immediate parent.
+_Avoid_: separate pull requests that all target the base branch

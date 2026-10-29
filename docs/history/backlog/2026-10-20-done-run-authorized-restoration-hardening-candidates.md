@@ -4,6 +4,7 @@
 - **Status:** open (candidates 1-3 superseded: fixed by the fix-and-fold round and owned durably by docs/history/backlog/2026-10-20-authorized-restoration-revert-formatting-blob-substitution.md; this row now carries the remaining minor candidates)
 - **Workflow:** backlog
 - **Priority:** low
+- **Cluster:** docs/history/backlog/2026-10-29-done-run-commit-manifest-binding-refusal.md (same scripts/done_run.sh commit path; a fresh 2026-10-29 witness of the newest-root-confirmed-marker binding refusing on a peer run's finalized foreign-suffix manifest)
 - **Origin class:** review-minor hardening candidates (non-blocking, no unauthorized-content path)
 - **Class:** fix-class
 - **Driving force:** reliability (each candidate closes a silent or narrow-failure window on the authorized landing without widening the guard)

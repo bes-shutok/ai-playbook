@@ -1,7 +1,7 @@
 # Backlog: reconcile reviewed plan bytes with an in-flight task handoff
 
 - **Filed:** 2026-10-10, Task 1 done boundary
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-29-execute-plan-plan-digest-handoff-drift.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** observed execution handoff blocker

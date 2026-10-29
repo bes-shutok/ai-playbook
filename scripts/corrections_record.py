@@ -464,6 +464,51 @@ def commit_object_status(repo, object_id):
     return "present" if kind.strip() == "commit" else "error"
 
 
+def validate_verification_head(repo, value):
+    """The one verification-head checker both CLIs run for every supplied
+    ``--verification-head`` value BEFORE corrections verification, so an
+    invalid value is a tool error, never a graded refusal. Returns
+    ``(oid, None)`` when ``value`` is a full 40-character lowercase hex
+    commit OID present as a commit object in the repository containing
+    ``repo`` (git resolves the repository from the given directory, so a
+    plan's own directory works directly), and ``(None, reason)``
+    otherwise, with a DISTINCT tool-error reason per condition: a
+    malformed OID names the flag and the shape; git that cannot run (a
+    missing binary, or a source directory outside any Git worktree) names
+    the could-not-run condition; a conclusively absent object, or a
+    present non-commit object, names the not-a-commit condition. The
+    ``cat-file`` exit vocabulary alone classifies the conditions (exit 1
+    is a conclusive absence, any other failure is could-not-run), so no
+    separate worktree probe is needed and no condition can borrow
+    another's wording."""
+    oid = value.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", oid):
+        return None, (
+            "--verification-head must be a full 40-character lowercase hex "
+            "commit OID, not an abbreviated or malformed value: %r"
+            % (value,))
+    try:
+        exists = run_git(repo, "cat-file", "-e", oid)
+        kind = (
+            git_text(repo, "cat-file", "-t", oid)
+            if exists.returncode == 0 else None
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None, (
+            "--verification-head could not run git against the source "
+            "repository")
+    if exists.returncode == 1 or (
+            kind is not None and kind.strip() != "commit"):
+        return None, (
+            "--verification-head %s is not a commit present in the source "
+            "repository" % oid)
+    if exists.returncode != 0 or kind is None:
+        return None, (
+            "--verification-head could not run git against the source "
+            "repository")
+    return oid, None
+
+
 def tree_blob_bytes(repo, commit, path):
     """(bytes, None) when the commit's tree carries a blob at path,
     (None, None) when the path is absent from that tree (a non-match),
@@ -563,10 +608,13 @@ def seal_text(repo, rel):
 # recognized by an anchored grammar and normalized into the same entry
 # model as block records. A row-shaped line whose labeled fields do not
 # all extract stays prose (the round lookup then reports the seal
-# unresolvable), never a partially filled entry.
+# unresolvable), never a partially filled entry. The artifact slot is
+# paren-free: a path token ends at the first "(" so a glued parenthetical
+# ("...plan.md(the certified bytes)") resolves the path alone, and a
+# fragment-only token ("bytes)/certified") is never a path (r1 R2).
 _LEGACY_ROW_RE = re.compile(r"^(?:- )?r(\d+) (.+)$")
 _LEGACY_ARTIFACT_RE = re.compile(r"\bartifact (\S+)")
-_LEGACY_PATH_RE = re.compile(r"(?:^| )(\S+/\S+)")
+_LEGACY_PATH_RE = re.compile(r"(?:^| )([^\s()]+/[^\s()]*)")
 _LEGACY_START_COMMIT_A_RE = re.compile(r"\bround-start commit ([0-9a-f]+)")
 _LEGACY_START_PAIR_B_RE = re.compile(
     r"\bround-start ([0-9a-f]+) digest ([0-9a-f]+)\b")
@@ -579,6 +627,17 @@ _LEGACY_CLOSE_COMMIT_A_RE = re.compile(r"\bround-close commit ([0-9a-f]+)")
 _LEGACY_CLOSE_COMMIT_B_RE = re.compile(r"\bround-close ([0-9a-f]+)\b")
 
 
+def _legacy_artifact_slot(raw):
+    """The normalized artifact path from a raw artifact-slot token: the
+    token ends at the first "(" (a glued parenthetical is prose, not
+    path), and a token still carrying a ")" is a suffix fragment, never a
+    path."""
+    cut = raw.split("(", 1)[0]
+    if not cut or ")" in cut:
+        return None
+    return cut
+
+
 def _legacy_row_entry(line):
     """One recognized legacy one-line seal row as a SealEntry, or None for
     every other line. The grammar extracts exactly the canonical fields;
@@ -587,9 +646,15 @@ def _legacy_row_entry(line):
     if match is None:
         return None
     body = match.group(2)
+    artifact = None
     artifact_match = _LEGACY_ARTIFACT_RE.search(body)
-    artifact = artifact_match.group(1) if artifact_match else None
+    if artifact_match is not None:
+        artifact = _legacy_artifact_slot(artifact_match.group(1))
     if artifact is None:
+        # The unlabeled scan is paren-free by construction: the grammar
+        # never captures "(" or ")" into the candidate, so a glued
+        # parenthetical after the path ends the slot there and a
+        # fragment-only slot finds no candidate at all.
         path_match = _LEGACY_PATH_RE.search(body)
         artifact = path_match.group(1) if path_match else None
     if artifact is None:
@@ -631,30 +696,54 @@ def _legacy_row_entry(line):
     return SealEntry(int(match.group(1)), fields, line)
 
 
-def parse_seal(text):
-    """The seal entries in file order. A malformed header or field line
-    yields an unparsable marker consumed by the caller as an unresolvable
-    seal. A legacy one-line seal row outside any block (the committed
-    corpus's prose shape) normalizes to an entry when its labeled fields
-    all extract; row-shaped prose that does not parse stays skipped."""
+def parse_seal_detailed(text):
+    """(entries, malformed) for the seal text: ``entries`` are the
+    well-formed blocks in file order (plus any legacy one-line rows), and
+    ``malformed`` lists one ``(round_number, fields, offending_line)``
+    record per block that hit a line neither field-shaped nor blank.
+    A malformed block yields no entry of its own, and the rest of the
+    file keeps parsing: one prose annotation inside an earlier round
+    unresolves that round only, never every round's seal (r1 C8). The
+    partial fields parsed before the offending line ride along so the
+    caller can tell whether the requested round's resolution depends on
+    the malformed block."""
     entries = []
+    malformed = []
     current = None
+    current_fields = []
+    broken_line = None
     for line in text.splitlines():
         header = SEAL_ROUND_RE.match(line)
         if header:
-            current = (int(header.group(1)), [])
-            entries.append(current)
+            if current is not None:
+                if broken_line is not None:
+                    malformed.append((current, dict(current_fields),
+                                      broken_line))
+                else:
+                    entries.append((current, current_fields))
+            current = int(header.group(1))
+            current_fields = []
+            broken_line = None
             continue
         if current is None:
             legacy = _legacy_row_entry(line)
             if legacy is not None:
                 entries.append(legacy)
             continue
+        if broken_line is not None:
+            # The block already hit its offending line: the rest of the
+            # block is absorbed and the round stays unresolvable.
+            continue
         field = SEAL_FIELD_RE.match(line)
         if field:
-            current[1].append((field.group(1), field.group(2)))
+            current_fields.append((field.group(1), field.group(2)))
         elif line.strip():
-            return None
+            broken_line = line
+    if current is not None:
+        if broken_line is not None:
+            malformed.append((current, dict(current_fields), broken_line))
+        else:
+            entries.append((current, current_fields))
     parsed = []
     for item in entries:
         if isinstance(item, SealEntry):
@@ -665,24 +754,69 @@ def parse_seal(text):
                                 "\n".join(["## round %d" % number]
                                           + ["%s: %s" % kv
                                              for kv in lines])))
-    return parsed
+    return parsed, malformed
+
+
+def parse_seal(text):
+    """The well-formed seal entries in file order. A block carrying a
+    malformed line produces no entry (its round is unresolvable) while
+    unrelated rounds keep parsing; parse_seal_detailed exposes the
+    malformed rounds and their offending lines. A legacy one-line seal
+    row outside any block (the committed corpus's prose shape) normalizes
+    to an entry when its labeled fields all extract; row-shaped prose
+    that does not parse stays skipped."""
+    return parse_seal_detailed(text)[0]
+
+
+def _malformed_block_selects(block_round, fields, round_number, family):
+    """Whether a malformed round block would otherwise participate in the
+    family's selection for the requested round: plan-family blocks select
+    by the numeric header with no family field or ``family: plan``,
+    code-family blocks by ``family: code`` plus ``staging_round: rN``."""
+    if family == FAMILY_CODE:
+        return (fields.get("family") == FAMILY_CODE
+                and fields.get("staging_round") == "r%d" % round_number)
+    return (block_round == round_number
+            and fields.get("family", FAMILY_PLAN) == FAMILY_PLAN)
+
+
+def seal_round_parse_failure(repo, rel, round_number, family=FAMILY_PLAN):
+    """The offending line when the requested round's seal resolution
+    depends on a malformed round block in the seal file, or None when the
+    file is absent or the round is simply missing: parse failure and
+    absence stay distinguishable at the reporting surface (r1 C8)."""
+    text = seal_text(repo, rel)
+    if text is None:
+        return None
+    _entries, malformed = parse_seal_detailed(text)
+    for block_round, fields, line in malformed:
+        if _malformed_block_selects(block_round, fields, round_number,
+                                    family):
+            return line
+    return None
 
 
 def load_seal_entry(repo, rel, round_number, family=FAMILY_PLAN):
     """The single seal entry for the round and family, or None when the
-    seal is unresolvable (missing file, unparsable text, zero or multiple
-    family matches, or a failing field shape). Plan-family entries select
-    by the numeric round header with no family field or ``family: plan``;
-    code-family entries select by ``family: code`` plus ``staging_round:
-    rN`` and never by the block number alone, so plan and code entries
-    sharing a staging number coexist and duplicates refuse. The seal is
-    read from the working tree, never from git."""
+    seal is unresolvable (missing file, zero or multiple family matches,
+    a failing field shape, or a malformed round block the lookup depends
+    on). Plan-family entries select by the numeric round header with no
+    family field or ``family: plan``; code-family entries select by
+    ``family: code`` plus ``staging_round: rN`` and never by the block
+    number alone, so plan and code entries sharing a staging number
+    coexist and duplicates refuse. A malformed block (a line neither
+    field-shaped nor blank) is never an entry and fails closed the
+    lookups that would otherwise select it, while unrelated rounds in the
+    same file stay resolvable. The seal is read from the working tree,
+    never from git."""
     text = seal_text(repo, rel)
     if text is None:
         return None
-    entries = parse_seal(text)
-    if entries is None:
-        return None
+    entries, malformed = parse_seal_detailed(text)
+    for block_round, fields, _line in malformed:
+        if _malformed_block_selects(block_round, fields, round_number,
+                                    family):
+            return None
     if family == FAMILY_CODE:
         token = "r%d" % round_number
         matching = [e for e in entries
@@ -1651,9 +1785,21 @@ def verify_corrections(repo, artifact_path, family, round_number,
         return False, str(exc)
     entry = load_seal_entry(srepo, rel, round_number, family)
     if entry is None:
+        # A malformed round block the lookup depends on is a parse
+        # failure naming its offending line, never a silent absence (r1
+        # C8); a valid file with no resolving entry keeps the anchor
+        # refusal.
+        offending = seal_round_parse_failure(srepo, rel, round_number,
+                                             family)
+        if offending is not None:
+            return False, leg_reason(
+                "seal", "the seal entry for round %d in %s is malformed "
+                        "at line %r; the seal parse failed rather than "
+                        "the entry being absent"
+                        % (round_number, rel, offending))
         return False, leg_reason(
             "anchor", "the seal file %s has no resolvable entry for round "
-            "%d" % (rel, round_number))
+                      "%d" % (rel, round_number))
     if entry.fields.get("artifact") != artifact_path:
         return False, leg_reason(
             "anchor", "the seal entry names artifact %r, not %r"
@@ -1683,8 +1829,12 @@ def verify_corrections(repo, artifact_path, family, round_number,
                 return False, leg_reason(
                     "anchor", "the seal entry's %s is not an ancestor of HEAD"
                     % _ANCHOR_COMMIT_LABELS[key])
+            # The code-family arm returned above, so every reach of this
+            # leg is plan-family: the landed-anchor rescue runs
+            # unconditioned (the family conjunct here was written but
+            # unreachable-false and removed per its review residual).
             scan_error = None
-            if landed_anchor is None and family == FAMILY_PLAN:
+            if landed_anchor is None:
                 landed_anchor, scan_error = resolve_landed_anchor(
                     srepo, artifact_path,
                     entry.fields["round_start_digest"], head_sha)

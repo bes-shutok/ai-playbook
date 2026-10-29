@@ -1,7 +1,7 @@
 # Backlog: handle plan edits before a new plan has a Git baseline
 
 - **Filed:** 2026-10-28, plan-authoring recovery
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-29-plan-delta-classifier-new-plan-baseline.md)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** observed workflow tool error

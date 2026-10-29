@@ -52,10 +52,18 @@ class FixtureMixin:
 
     # Host Git selectors cleared before every fixture Git call (fixture
     # setup, helper calls, runner subprocesses): a session-bound selector
-    # must never redirect a fixture call away from the temporary repo.
+    # must never redirect a fixture call away from the temporary repo. The
+    # object/alternate/ceiling/namespace/shallow routing variables are
+    # cleared for the same reason (plan
+    # docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md
+    # Task 1): a host object store, alternate, ceiling, namespace, or
+    # shallow marker must never reroute a fixture Git call or a runner
+    # subprocess.
     HOST_GIT_SELECTORS = (
         "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
         "GIT_CONFIG_PARAMETERS", "GIT_EXTERNAL_DIFF", "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE",
     )
 
     def setUp(self) -> None:
@@ -212,10 +220,11 @@ class FixtureMixin:
         env["DONE_RUN_TRACE_FILE"] = str(self.tmp / "run-trace.txt")
         return env
 
-    def run_commit(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    def run_commit(self, *args: str, env: dict | None = None,
+                   cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["bash", str(RUNNER), "commit", *args],
-            cwd=str(self.fixture),
+            cwd=str(cwd or self.fixture),
             env=env or self.commit_env(),
             capture_output=True,
             text=True,
@@ -1157,7 +1166,13 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         canonical Phase 0 baseline (a post-baseline review record transfers
         to the primary checkout, and no run-ID baseline is captured at commit
         time), and one trace line names the skipped leg; the landing commit
-        still lands."""
+        still lands. The fixture also pins the producer/consumer path
+        agreement end to end: the plan file is date-prefixed and the
+        baseline sits at the date-stripped canonical slug dir, the path the
+        plans Phase 0.1 producer is instructed to write and the
+        ``plan_session_slug()`` consumer resolves (the execute-plan Step 0.4
+        canonical session-slug rule), so a producer that keeps the
+        date-prefixed stem fails this lookup."""
         self.init_fixture_repo()
         plans = self.fixture / "docs" / "history" / "plans"
         plans.mkdir(parents=True)
@@ -1897,7 +1912,9 @@ NO_MANIFEST_REFUSAL_PIN = (
     "landing (staged path(s): closeout.md); "
     "sanctioned cleanup: the land_squash.sh probe-then-reland path (run "
     "scripts/land_squash.sh probe, resolve or compose, then "
-    "scripts/land_squash.sh land under the merge lock); operator escape "
+    "scripts/land_squash.sh land under the Primary land lock ownership "
+    "(the primary done lock acquired before the merge lock, both held "
+    "through the landing, released merge then done)); operator escape "
     "for dead residue only (done-lock.sh merge-status free AND the path "
     "is not peer-live dirt): git restore --staged --worktree -- <path> "
     "per residue path; record-only allowlist path(s) are never escapable"
@@ -4596,6 +4613,8 @@ class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
     POISONED_SELECTORS = (
         "GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
         "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+        "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE",
     )
 
     def setUp(self) -> None:
@@ -4613,6 +4632,13 @@ class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
         os.environ["GIT_CONFIG_COUNT"] = "1"
         os.environ["GIT_CONFIG_KEY_0"] = "user.name"
         os.environ["GIT_CONFIG_VALUE_0"] = "Host Override"
+        os.environ["GIT_OBJECT_DIRECTORY"] = "/nonexistent-host-objects"
+        os.environ["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = (
+            "/nonexistent-host-alternates"
+        )
+        os.environ["GIT_CEILING_DIRECTORIES"] = "/nonexistent-host-ceiling"
+        os.environ["GIT_NAMESPACE"] = "host-namespace"
+        os.environ["GIT_SHALLOW_FILE"] = "/nonexistent-host-shallow"
         super().setUp()
 
     def tearDown(self) -> None:
@@ -4635,10 +4661,7 @@ class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
                 os.environ[name] = value
 
     def test_host_selectors_cleared_and_config_isolated_to_fixture(self) -> None:
-        for var in (
-            "GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
-            "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-        ):
+        for var in self.POISONED_SELECTORS:
             self.assertNotIn(var, os.environ)
         self.assertEqual(os.environ.get("GIT_CONFIG_NOSYSTEM"), "1")
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
@@ -5837,6 +5860,681 @@ class DoneRunCloseoutBaselineArmTest(FixtureMixin, unittest.TestCase):
         self.assertTrue(record.is_file())
         self.assertEqual(record.read_text(encoding="utf-8"), "# review record\n")
         self.assertTrue(worktree.is_dir())
+
+
+class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan
+    docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md):
+    the expected symbolic-ref/starting-OID pair binds a primary rolling-log
+    write to the caller-selected branch through staging and the captured-
+    tree compare-and-swap; one cleanup owner restores only the writer-owned
+    delta on every refusal before the captured-ref swap; ordinary pair-less
+    calls and worktree log commits keep their existing paths."""
+
+    PLAN_LOG = "docs/history/backlog/PLAN-PROMPTS.md"
+    EXEC_LOG = "docs/history/backlog/EXEC-PROMPTS.md"
+    ENTRY = "\n- appended prompt entry\n"
+    EM_DASH = "\u2014"
+
+    # The private-runner-copy doctoring mechanism (same shape as
+    # DoneRunCapturedTreeLandingFenceTest): each doctored helper replaces a
+    # symlinked repo script the runner copy resolves first.
+    TEMP_RUNNER_HELPERS = (
+        "revert_set_classifier.py", "staged_scope_guard.py",
+        "done_sweep_gates.sh", "done_sweep_gates_lib.py",
+        "dirt_regression_gate.py", "reverse_squash_guard.py",
+        "docs_branch_sync.sh",
+    )
+    DOCTOR_RS_GUARD_STAGES_FOREIGN = (
+        "import subprocess\n"
+        "with open('stranger-window.txt', 'w') as handle:\n"
+        "    handle.write('staged in the capture window\\n')\n"
+        "subprocess.run(['git', 'add', 'stranger-window.txt'], check=True)\n"
+        "print('OUTCOME: pass')\n"
+    )
+
+    # ---- fixture helpers -------------------------------------------------- #
+
+    def log_fixture(self) -> tuple[dict, str, str]:
+        """Both rolling prompt logs tracked at HEAD, a held done boundary,
+        and the caller selection (symbolic ref + starting OID) read under
+        that hold; returns (setup exports, expected_ref, expected_oid)."""
+        self.init_fixture_repo()
+        log_dir = self.fixture / "docs" / "history" / "backlog"
+        log_dir.mkdir(parents=True)
+        (log_dir / "PLAN-PROMPTS.md").write_text("# PLAN prompts\n")
+        (log_dir / "EXEC-PROMPTS.md").write_text("# EXEC prompts\n")
+        self.git("add", self.PLAN_LOG, self.EXEC_LOG)
+        self.git("commit", "-qm", "seed the rolling prompt logs")
+        setup_proc, exports = self.setup_session("--owned-path", self.PLAN_LOG)
+        branch = self.git("branch", "--show-current").stdout.strip()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        return exports, "refs/heads/" + branch, head
+
+    def rolling_env(self, exports: dict) -> dict:
+        env = self.commit_env()
+        env.update(exports)
+        return env
+
+    def head(self) -> str:
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def staged_paths(self) -> list[str]:
+        out = self.git("diff", "--cached", "--name-only", "HEAD").stdout
+        return [line for line in out.splitlines() if line.strip()]
+
+    def worktree_dirty(self, rel: str) -> bool:
+        status = self.git("status", "--porcelain", "--", rel).stdout
+        return status.startswith(" M ")
+
+    def assert_no_rolling_cleanup(
+        self, proc: subprocess.CompletedProcess,
+    ) -> None:
+        self.assertNotIn(
+            "rolling-log cleanup", proc.stdout + proc.stderr,
+        )
+
+    def assert_cleanup_verified(
+        self, proc: subprocess.CompletedProcess,
+    ) -> None:
+        self.assertIn(
+            "owned log delta unstaged and verified empty",
+            proc.stdout + proc.stderr,
+        )
+
+    def install_hook(self, name: str, body: str) -> Path:
+        hooks = self.fixture / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        hook = hooks / name
+        hook.write_text("#!/bin/sh\n" + body)
+        hook.chmod(0o755)
+        return hook
+
+    def temp_runner_dir(self, doctor: dict[str, str]) -> Path:
+        runner_dir = self.tmp / "runner"
+        runner_dir.mkdir()
+        shutil.copy2(RUNNER, runner_dir / "done_run.sh")
+        for name in self.TEMP_RUNNER_HELPERS:
+            os.symlink(REPO_ROOT / "scripts" / name, runner_dir / name)
+        for name, body in doctor.items():
+            target = runner_dir / name
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.write_text(body)
+        return runner_dir
+
+    def run_temp_commit(
+        self, runner_dir: Path, exports: dict, *args: str,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(runner_dir / "done_run.sh"), "commit", *args],
+            cwd=str(self.fixture),
+            env=self.rolling_env(exports),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    def ref_move_guard_body(self, ref: str, target: str) -> str:
+        """A doctored reverse-squash guard that advances the branch ref
+        mid-run (the ref-only land-worktree shape) and passes."""
+        return (
+            "import subprocess\n"
+            "subprocess.run(['git', 'update-ref', "
+            f"'{ref}', '{target}'], check=True)\n"
+            "print('OUTCOME: pass')\n"
+        )
+
+    def write_git_reset_shim(self) -> Path:
+        """A PATH shim whose git fails every `git reset` (the one mutating
+        call the cleanup owner makes) and passes everything else through."""
+        shim_dir = self.tmp / "git-shim"
+        shim_dir.mkdir()
+        real_git = shutil.which("git")
+        shim = shim_dir / "git"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "reset" ]; then\n'
+            "  exit 1\n"
+            "fi\n"
+            f'exec "{real_git}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        return shim_dir
+
+    # ---- the pair lifecycle ----------------------------------------------- #
+
+    def test_pair_lands_on_captured_primary_head_as_sole_parent(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append the prompt entry",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        landing = self.head()
+        # the commit builds from the captured primary HEAD as sole parent
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, oid])
+        self.assertEqual(
+            self.git("symbolic-ref", "-q", "HEAD").stdout.strip(), ref,
+        )
+        # only the declared owned log path rides the commit
+        shown = self.git("show", "--name-only", "--format=", landing).stdout
+        self.assertEqual(
+            [line for line in shown.splitlines() if line.strip()],
+            [self.PLAN_LOG],
+        )
+        self.assertIn(
+            self.ENTRY.strip(),
+            self.git("show", f"HEAD:{self.PLAN_LOG}").stdout,
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines()[-1], landing)
+        # the pair precondition ran pre-stage and at the landing; the
+        # cleanup owner stayed disarmed on success; no merge lock was taken
+        stages = self.trace_stages(self.rolling_env(exports))
+        self.assertIn("rolling-log-pre-stage-guard", stages)
+        self.assertIn("rolling-log-ref-precondition", stages)
+        self.assert_no_rolling_cleanup(proc)
+        self.assertIn(
+            "rolling-log boundary: skipping the docs-branch sync",
+            proc.stdout + proc.stderr,
+        )
+
+    def test_partial_pair_refuses_before_staging_with_nothing_changed(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        count_before = self.commit_count()
+        for partial in (["--expected-ref", ref], ["--expected-oid", oid]):
+            proc = self.run_commit(
+                "--stage", self.PLAN_LOG, "--subject", "log: append",
+                *partial, env=self.rolling_env(exports),
+            )
+            self.assertEqual(proc.returncode, 3, proc.stderr)
+            self.assertIn("give both or neither", proc.stderr)
+            self.assertEqual(self.head(), oid)
+            self.assertEqual(self.staged_paths(), [])
+            self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+            self.assert_no_rolling_cleanup(proc)
+        self.assertEqual(self.commit_count(), count_before)
+
+    def test_pair_mismatch_refuses_before_staging_then_reselection_retries(self) -> None:
+        exports, ref, stale_oid = self.log_fixture()
+        # the shared checkout moves to a new tip after the caller's
+        # selection (the wrong-branch incident shape)
+        (self.fixture / "seed.txt").write_text("seed\nmoved\n")
+        self.git("add", "seed.txt")
+        self.git("commit", "-qm", "move the checkout tip")
+        new_oid = self.head()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append on a stale selection",
+            "--expected-ref", ref, "--expected-oid", stale_oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("rolling-log ref precondition", proc.stderr)
+        self.assertIn("recover", proc.stderr)
+        # no ref movement, nothing staged, no cleanup ran
+        self.assertEqual(self.head(), new_oid)
+        self.assertEqual(self.staged_paths(), [])
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_no_rolling_cleanup(proc)
+        # pre-read recovery: the caller reselects the new tip under the
+        # same hold and retries through the pair
+        retry = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append after reselection",
+            "--expected-ref", ref, "--expected-oid", new_oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents[1], new_oid)
+
+    def test_ordinary_no_pair_call_keeps_existing_path(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG, "--subject", "log: ordinary append",
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("rolling-log", combined)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents[1], oid)
+        # the ordinary refusal class is untouched: an unknown argument is a
+        # usage refusal carrying no rolling-log mode text
+        refused = self.run_commit(
+            "--no-such-flag", env=self.rolling_env(exports),
+        )
+        self.assertEqual(refused.returncode, 3)
+        self.assertIn("unknown argument", refused.stderr)
+        self.assert_no_rolling_cleanup(refused)
+
+    def test_worktree_log_commit_keeps_selected_branch_placement(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        primary_head = self.head()
+        wt = self.tmp / "log-wt"
+        self.git("worktree", "add", "-b", "wt-log", str(wt))
+        # the worktree log writer holds its own worktree-scoped boundary
+        # (a zero-plan claim: the migration skip record covers the leg) and
+        # commits its edit on its own selected branch, with no pair
+        # the worktree writer's lib context roots at the worktree (its own
+        # worktree-scoped done-session holds its marker); the fixture's
+        # default pin targets the primary repo and would misbind the marker
+        wt_env_extra = {"DONE_SWEEP_REPO_ROOT": str(wt)}
+        wt_setup = self.run_setup("--claim-none", cwd=wt, env_extra=wt_env_extra)
+        self.assertEqual(wt_setup.returncode, 0, wt_setup.stderr)
+        wt_exports = self.eval_exports(wt_setup.stdout)
+        (wt / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        wt_commit_env = self.rolling_env(wt_exports)
+        wt_commit_env.update(wt_env_extra)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG, "--subject", "log: worktree append",
+            "--boundary-class", "per-task",
+            env=wt_commit_env, cwd=wt,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # the primary ref and its checkout are untouched
+        self.assertEqual(self.head(), primary_head)
+        wt_tip = self.git("rev-parse", "refs/heads/wt-log").stdout.strip()
+        parents = self.git("rev-list", "--parents", "-1", wt_tip).stdout.split()
+        self.assertEqual(parents, [wt_tip, oid])
+        self.assertIn(
+            self.ENTRY.strip(),
+            self.git("show", f"{wt_tip}:{self.PLAN_LOG}").stdout,
+        )
+        self.assertNotIn("rolling-log", proc.stdout + proc.stderr)
+
+    # ---- foreign staged paths: early guard and capture-window fence ------- #
+
+    def test_foreign_staged_path_refuses_before_git_add(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / "stranger.txt").write_text("foreign staged bytes\n")
+        self.git("add", "stranger.txt")
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append beside a foreign staging",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "a staged path outside the declared owned log set", proc.stderr,
+        )
+        self.assertIn("stranger.txt", proc.stderr)
+        # refused before git add: only the foreign bytes are staged, the
+        # writer's log edit never entered the index, no commit, no ref move
+        self.assertEqual(self.staged_paths(), ["stranger.txt"])
+        self.assertEqual(self.head(), oid)
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_no_rolling_cleanup(proc)
+
+    def test_foreign_path_in_capture_window_refuses_and_cleans_owned_delta(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        # the foreign path enters the index after the early guard (the
+        # runner's own pre-landing helper window) and before the tree
+        # capture: the capture-window fence refuses, the cleanup owner
+        # unstages only the writer-owned delta, the foreign bytes stay
+        # staged, and no commit or ref movement happens
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": self.DOCTOR_RS_GUARD_STAGES_FOREIGN,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under a capture-window staging race",
+            "--expected-ref", ref, "--expected-oid", oid,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "a foreign path entered the staged index before the tree "
+            "capture: stranger-window.txt",
+            proc.stdout + proc.stderr,
+        )
+        self.assertEqual(self.staged_paths(), ["stranger-window.txt"])
+        self.assertEqual(self.head(), oid)
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_cleanup_verified(proc)
+
+    # ---- done-lock consumers against an active primary log write ---------- #
+
+    def test_done_consumer_refuses_before_mutation_while_log_write_holds(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        # a named done-lock consumer (the closeout boundary setup) refuses
+        # before writing any boundary state while the writer's hold stands
+        # (the raised dead-holder grace keeps the writer's exported
+        # generation unstealable for the probe)
+        session = self.done_session()
+        before = sorted(p.name for p in session.iterdir())
+        contender = self.run_setup(
+            "--label", "contender",
+            env_extra={
+                "DONE_LOCK_AGENT_MAX_WAIT_SECS": "2",
+                "DONE_LOCK_DEAD_HOLDER_GRACE_SECS": "3600",
+            },
+        )
+        self.assertNotEqual(contender.returncode, 0)
+        self.assertIn("another done holds the lock", contender.stderr)
+        self.assertEqual(sorted(p.name for p in session.iterdir()), before)
+        # the log writer completes under its hold; refs and bytes unchanged
+        # for anything the writer does not own
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under the writer hold",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+
+    def test_log_writer_waits_without_staging_while_consumer_holds(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        # the writer's lock acquisition waits and fails fast while the
+        # closeout boundary holds the done lock (the raised dead-holder
+        # grace keeps the boundary's exported generation unstealable):
+        # nothing is staged
+        writer_env = self.runner_env()
+        writer_env["DONE_LOCK_DEAD_HOLDER_GRACE_SECS"] = "3600"
+        writer_acq = subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "wait-acquire", "--label", "log-writer",
+             "--max-wait", "1"],
+            cwd=str(self.fixture), env=writer_env,
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertNotEqual(writer_acq.returncode, 0)
+        self.assertEqual(self.staged_paths(), [])
+        self.assertEqual(self.head(), oid)
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        # after checkout stability (the hold releases), the writer lands on
+        # the same selected tip
+        env = self.runner_env()
+        env["DONE_LOCK_DIR"] = exports["DONE_LOCK_DIR"]
+        env["DONE_LOCK_TOKEN"] = exports["DONE_LOCK_TOKEN"]
+        release = subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "release-repo"],
+            cwd=str(self.fixture), env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(release.returncode, 0, release.stderr)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append after the hold clears",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+
+    # ---- worktree merge-lock overlap --------------------------------------- #
+
+    def test_primary_log_write_completes_while_worktree_merge_lock_held(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        wt = self.tmp / "peer-wt"
+        self.git("worktree", "add", "-b", "wt-peer", str(wt))
+        # the worktree writer pauses after taking the merge lock, before
+        # any ref update
+        merge_acq = subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "merge-acquire",
+             "--label", "wt-log-writer"],
+            cwd=str(wt), env=self.runner_env(),
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(merge_acq.returncode, 0, merge_acq.stderr)
+        merge_exports = self.eval_exports(merge_acq.stdout)
+        # the primary log write completes while the merge lock stays held
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append while the merge lock is held",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        primary_landing = self.head()
+        parents = self.git("rev-list", "--parents", "-1", primary_landing).stdout
+        self.assertEqual(len(parents.split()), 2)
+        self.assertIn(
+            "skipping the docs-branch sync", proc.stdout + proc.stderr,
+        )
+        # the paused worktree writer completes, advancing only its own
+        # selected branch and leaving the primary checkout's bytes alone
+        (wt / self.EXEC_LOG).write_text("# EXEC prompts\n" + self.ENTRY)
+        subprocess.run(
+            ["git", "-C", str(wt), "add", self.EXEC_LOG],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(wt), "commit", "-qm", "log: peer append"],
+            check=True, capture_output=True,
+        )
+        wt_tip = self.git("rev-parse", "refs/heads/wt-peer").stdout.strip()
+        self.assertEqual(self.head(), primary_landing)
+        self.assertEqual(
+            self.git("show", f"{primary_landing}:{self.EXEC_LOG}").stdout,
+            "# EXEC prompts\n",
+        )
+        self.assertEqual(
+            self.git("show", f"{wt_tip}:{self.EXEC_LOG}").stdout,
+            "# EXEC prompts\n" + self.ENTRY,
+        )
+        env = self.runner_env()
+        env.update(merge_exports)
+        release = subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "merge-release-repo"],
+            cwd=str(wt), env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(release.returncode, 0, release.stderr)
+
+    # ---- ref move between selection and CAS (the land-worktree shape) ----- #
+
+    def test_ref_move_between_selection_and_cas_refuses_and_reselects(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        # the ref-only landing's own commit exists off to the side; the
+        # branch sits back at the caller's selection tip
+        # a content-free landing tip: any tree delta would read as a staged
+        # phantom once the caller's selection rewinds the ref below it
+        moved_tip = self.git(
+            "commit-tree", f"{oid}^{{tree}}", "-p", oid,
+            "-m", "ref-only landing tip",
+        ).stdout.strip()
+        self.git("update-ref", ref, moved_tip)
+        self.git("update-ref", ref, oid)
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        # the ref move lands mid-run (the runner's pre-landing helper
+        # window), between the log writer's selection and its CAS
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": self.ref_move_guard_body(ref, moved_tip),
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under a ref-only landing",
+            "--expected-ref", ref, "--expected-oid", oid,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "does not match the expected starting OID", proc.stdout + proc.stderr,
+        )
+        # the landing the ref-only mode advanced stays standing; the writer
+        # moved nothing itself
+        self.assertEqual(self.head(), moved_tip)
+        # the owned delta is cleaned; the writer's log edit stays an
+        # unstaged worktree byte; unrelated staged bytes stay untouched
+        self.assertEqual(self.staged_paths(), [])
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_cleanup_verified(proc)
+        # the writer reselects the new tip and retries through the pair
+        retry = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append after reselecting the moved tip",
+            "--expected-ref", ref, "--expected-oid", moved_tip,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), moved_tip])
+
+    # ---- representative pre-CAS refusals clean only the owned delta ------- #
+
+    def test_pre_landing_gate_refusal_cleans_only_owned_delta(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.EXEC_LOG).write_text("# EXEC prompts\n- peer note\n")
+        (self.fixture / self.PLAN_LOG).write_text(
+            f"# PLAN prompts\n- entry with an em dash {self.EM_DASH} here\n"
+        )
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append an em dash entry",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "the landing sweep refused the staged set", proc.stderr,
+        )
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [])
+        self.assert_cleanup_verified(proc)
+        # the peer log's unstaged worktree bytes stay untouched
+        self.assertTrue(self.worktree_dirty(self.EXEC_LOG))
+
+    def test_post_hook_cas_refusal_cleans_only_owned_delta(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        self.install_hook(
+            "reference-transaction",
+            '[ "$1" = prepared ] || exit 0\n'
+            "while read -r _old _new r; do\n"
+            f'  case "$r" in {ref}) exit 1;;\n'
+            "  esac\n"
+            "done\n"
+            "exit 0\n",
+        )
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under a vetoed swap",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "the ref transaction refused the captured branch ref "
+            "compare-and-swap", proc.stderr,
+        )
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [])
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_cleanup_verified(proc)
+
+    # ---- a post-CAS failure never rolls the landed commit back ------------ #
+
+    def test_ledger_append_failure_after_cas_keeps_commit_and_cleanup_disarmed(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        # the fused ledger append cannot write: its path is a directory
+        blocked = self.done_session() / "owned-commits-blockme.txt"
+        blocked.mkdir()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append whose ledger append fails",
+            "--run-id", "blockme",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("the owned-commits ledger append failed", proc.stderr)
+        self.assertIn("the landed commit stands", proc.stderr)
+        # the captured ref advanced; the commit stands with sole parent
+        landing = self.head()
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [landing, oid])
+        # cleanup stayed disarmed (no cleanup message); the landed commit
+        # consumed the staged delta, so the index matches the advanced HEAD
+        self.assertEqual(self.staged_paths(), [])
+        self.assert_no_rolling_cleanup(proc)
+
+    # ---- unverifiable cleanup reports blocked recovery -------------------- #
+
+    def _unverifiable_cleanup_case(self, writer_log: str) -> None:
+        exports, ref, oid = self.log_fixture()
+        other_log = (
+            self.EXEC_LOG if writer_log == self.PLAN_LOG else self.PLAN_LOG
+        )
+        shim_dir = self.write_git_reset_shim()
+        env = self.rolling_env(exports)
+        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
+        # the writer's refusal driver: an em dash fails the landing sweep
+        # before the CAS, and the shim fails the cleanup's git reset, so
+        # the owned delta cannot be verified empty
+        (self.fixture / writer_log).write_text(
+            f"# log\n- entry with an em dash {self.EM_DASH} here\n"
+        )
+        proc = self.run_commit(
+            "--stage", writer_log,
+            "--subject", "log: append whose cleanup cannot verify",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("BLOCKED RECOVERY", proc.stderr)
+        self.assertEqual(self.staged_paths(), [writer_log])
+        residue_blob = self.git("ls-files", "-s", writer_log).stdout.split()[1]
+        # a later writer of the same log refuses before git add, leaving
+        # the residue bytes untouched
+        (self.fixture / writer_log).write_text("# log\n- a later entry\n")
+        later = self.run_commit(
+            "--stage", writer_log, "--subject", "log: later same-log write",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(later.returncode, 1, later.stderr)
+        self.assertIn(
+            "a staged delta already exists on a rolling prompt log",
+            later.stderr,
+        )
+        self.assertEqual(self.staged_paths(), [writer_log])
+        self.assertEqual(
+            self.git("ls-files", "-s", writer_log).stdout.split()[1],
+            residue_blob,
+        )
+        self.assert_no_rolling_cleanup(later)
+        # a later writer of the peer log refuses on the same residue
+        (self.fixture / other_log).write_text("# peer log\n- peer entry\n")
+        peer = self.run_commit(
+            "--stage", other_log, "--subject", "log: later peer-log write",
+            "--expected-ref", ref, "--expected-oid", oid,
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(peer.returncode, 1, peer.stderr)
+        self.assertIn(writer_log, peer.stderr)
+        self.assertEqual(
+            self.git("diff", "--cached", "--name-only", "HEAD", "--",
+                     other_log).stdout,
+            "",
+        )
+        self.assert_no_rolling_cleanup(peer)
+
+    def test_unverifiable_plan_log_cleanup_blocks_later_writers(self) -> None:
+        self._unverifiable_cleanup_case(self.PLAN_LOG)
+
+    def test_unverifiable_exec_log_cleanup_blocks_later_writers(self) -> None:
+        self._unverifiable_cleanup_case(self.EXEC_LOG)
 
 
 if __name__ == "__main__":

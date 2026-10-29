@@ -1390,11 +1390,15 @@ if p.count("SUCCESSOR DISPATCH") != 1:
     print("PIN FAIL: successor anchor must appear exactly once in prompt-templates.md (execution blueprint only)"); sys.exit(1)
 need(p, "## Authoring child"); need(p, "## Execution child")
 auth = p.split("## Authoring child")[1].split("## Execution child")[0]
+# placeholder sets restated 2026-10-29 (plan
+# docs/history/plans/2026-10-28-window-dispatch-hardening.md Task 3): the
+# effort directive pin joins both sets (authoring body 3 -> 4, execution
+# inner block 2 -> 3)
 ph = set(re.findall(r"\{[A-Za-z_]+\}", auth))
-if ph != {"{schedule_time}", "{backlog_item}", "{REPO_ROOT}"}:
+if ph != {"{schedule_time}", "{backlog_item}", "{REPO_ROOT}", "{EFFORT_DIRECTIVE}"}:
     print("PIN FAIL: authoring body placeholder set drifted: %s" % sorted(ph)); sys.exit(1)
 exec_ph = set(re.findall(r"\{[A-Za-z_]+\}", inner))
-if exec_ph != {"{REPO_ROOT}", "{some_plan}"}:
+if exec_ph != {"{REPO_ROOT}", "{some_plan}", "{EFFORT_DIRECTIVE}"}:
     print("PIN FAIL: execution inner placeholder set drifted: %s" % sorted(exec_ph)); sys.exit(1)
 if "cron expression" in paras[0]:
     print("PIN FAIL: re-arm paragraph hardcodes the cadence; creation must follow the recipe"); sys.exit(1)
@@ -2297,7 +2301,7 @@ pin "P57 S21 ref-based archival read" grep -qF 'the archival arm is read ref-bas
 pin "P57 S7 fleet-cap execution-isolation sentence" grep -qF 'EXECUTION ISOLATION (landed 2026-09-24, P57' "$GU"
 pin "P57 S8 Invariants worktree-isolated fleet-member clause" grep -qF 'execution children run in per-execution ad-hoc worktrees per the Worktree-first standard' "$GU"
 pin "P57 S9 stance rework-executed lead-in (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'REWORK EXECUTED (landed 2026-09-24, P57'"
-pin "P57 S9 stance overlap-shapes tail (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'up to four concurrent children across mixed kinds with executions worktree-isolated'"
+pin "P57 S9 stance overlap-shapes tail (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'up to three concurrent children across mixed kinds with executions worktree-isolated'"
 expect_absent "retired INTERIM EXECUTION CONSTRAINT heading must be absent from SKILL.md (the ledger's lowercase historical wording must not satisfy or break this)" 'INTERIM EXECUTION CONSTRAINT' "$S"
 expect_absent "superseded Until-P57 sanctioned-overlap-shapes sentence must be absent from SKILL.md" 'Until P57, the sanctioned overlap shapes' "$S"
 [ "$(grep -cF '2026-09-24 (P57 per-execution worktree isolation' "$CL")" -eq 1 ] || { recorded_red_check "P57 ledger date string count != 1 (re-aimed to the extracted changelog, changelog extraction plan Task 1)" "PIN FAIL: P57 ledger date string count != 1 (re-aimed to the extracted changelog, changelog extraction plan Task 1)" || fail=1; }
@@ -3004,14 +3008,19 @@ pin "revert-set classifier fail-closed resolution in the commit runner" grep -qF
 # All presence pins (at-least-once).
 L="$repo/docs/history/backlog/PLAN-PROMPTS.md"
 pin "scoped Prune-rule own-entry bullet in the log" grep -qF 'A landing prunes only its own dispatch entry' "$L"
-pin "prune-audit invocation named in the log's scoped rule" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <merge-base>' "$L"
+# Re-aimed 2026-10-28 (the pending-receipt-removal-audit-promotion plan): the
+# landing, authoring-closeout, and log-rule invocations carry the landing-only
+# --repair flag, and the survey pin keeps the default read-only form with a
+# companion pin refusing --repair there, so the scopes cannot swap.
+pin "prune-audit invocation named in the log's scoped rule" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --repair --base <merge-base>' "$L"
 pin "prune receipt duty wired in the plans closeout" grep -qF 'PLAN-PROMPTS-PRUNE: <slug> -> <witness path>' "$repo/agents/skills/plans/SKILL.md"
-pin "prune-audit invocation wired in the plans closeout" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <merge-base>' "$repo/agents/skills/plans/SKILL.md"
+pin "prune-audit invocation wired in the plans closeout" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --repair --base <merge-base>' "$repo/agents/skills/plans/SKILL.md"
 pin "prune receipt duty delegated in the authoring blueprint" grep -qF 'PLAN-PROMPTS-PRUNE: <slug> -> <witness path>' "$TA"
-pin "prune-audit invocation delegated in the authoring blueprint" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <merge-base>' "$TA"
+pin "prune-audit invocation delegated in the authoring blueprint" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --repair --base <merge-base>' "$TA"
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
 pin "rider parenthetical names receipt and audit gate in execute-plan" grep -qF 'one `PLAN-PROMPTS-PRUNE: <slug> -> <witness path>` receipt line per removed entry, gated by the pre-rider prune audit' "$repo/agents/skills/execute-plan/worktree-first.md"
 pin "consultative prune-audit arm wired in the maintenance survey" grep -qF 'python3 scripts/check_prompt_log_origins.py --prune-audit --base <ref>' "$DE"
+pin "maintenance survey never opts into receipt repair" bash -c "! grep -qF -- '--prune-audit --repair' '$DE'"
 
 # --- execution-claim gateway wiring pins (plan
 # docs/history/plans/2026-10-07-execution-claim-write-enforcement.md Task 2) ---
@@ -4089,13 +4098,13 @@ prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'the `Frozen:` mark
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Full removal (the heading empties) writes exactly one receipt using the last removed origin'\''s class and witness in the original `Origins:` order'
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Ambiguous origin-to-scope pairing or missing, duplicate, or shared binding evidence (duplicate own-entry headings included) leaves that target byte-identical with the reason reported; other independent targets stay eligible, and the log stays unchanged when no target qualifies.'
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'a landing that removes only some of the entry'\''s origins keeps or clears the mark per the `Coverage and removal rule`'\''s freeze-retention clause'
-prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'acquires or reuses the primary done lock, then the repo-wide merge lock (the repository'\''s `scripts/done-lock.sh` lock families), before any staging or index write and before the final log read, holding both through the commit and failure recovery'
-prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'the write refuses when a pre-staged delta already exists on its owned paths, stages and commits only those owned paths, and on commit failure unstages and verifies only its own staged delta before release'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'acquires or reuses the primary done lock (the repository'\''s `scripts/done-lock.sh` done lock), before any staging or index write and before the final log read, holding it through the commit and failure recovery'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'The runner refuses before staging when either rolling-log path already has a staged delta (the caller-side pre-staged-owned-path refusal is retired; the runner owns the two-path check), stages and commits only the declared owned paths through that transaction'
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Done-lock acquisition failure does no work'
-prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'merge-lock acquisition failure releases the done lock token-fenced and does no work'
-prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'Release is merge then done on every exit, attempting the done release even when the merge release fails'
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'A session working from a worktree keys the primary done lock from primary-checkout context (the Phase 0 freeze included)'
 prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'worktree branch commits stay isolated under the existing merge-lock guard, and no new lock is added'
+prune_range_pin "$repo/docs/history/backlog/PLAN-PROMPTS.md" 'verifies the selected pair against primary `HEAD` under the done lock before the final log read or edit'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'release token-fenced as `release-repo`; primary log writes never take the merge lock'
 # EXEC-PROMPTS.md carries the ad-hoc log's operation-specific deltas.
 prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'receipt line per fully removed entry, a partial removal adding none'
 prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'every pre-existing `EXEC-PROMPTS-PRUNE` receipt line stays byte-for-byte and in order'
@@ -4117,7 +4126,6 @@ prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each write that 
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run under the log'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md`; the concrete primitives'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run from primary-checkout context so the done key resolves to the primary worktree'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'a worktree session addresses the primary checkout through an explicit-rooted form, never its own worktree'\''s key'
-prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'release token-fenced as `merge-release-repo`, then `release-repo`'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'an acquisition refusal defers the write per the monitor duty (the monitor never rewrites a log to recover a refused write)'
 # worktree-first.md: the primary-placement commit class, its lock refusal, and the landing closeout prune (by label).
 prune_range_pin "$repo/agents/skills/execute-plan/worktree-first.md" 'a primary-placement commit that writes a rolling prompt log, the Phase 0 freeze included, is the log'\''s `Write boundary rule` write'

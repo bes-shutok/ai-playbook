@@ -128,6 +128,7 @@ def base_env():
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     for key in ("MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN",
+                "DONE_LOCK_DIR", "DONE_LOCK_TOKEN",
                 "LAND_SQUASH_TEST_FAULT", "LAND_SQUASH_TEST_FAULT_PATH"):
         env.pop(key, None)
     return env
@@ -233,6 +234,36 @@ def acquire_merge_lock(repo, lock_root):
     return values["MERGE_LOCK_DIR"], values["MERGE_LOCK_TOKEN"]
 
 
+def acquire_done_lock(repo, lock_root=None):
+    """Acquire a live primary done lock on repo via done-lock.sh; returns
+    (dir, token). The lock root defaults to a git-internal directory so the
+    fixture never adds porcelain-visible paths to the scratch repo."""
+    env = base_env()
+    env["DONE_LOCK_ROOT"] = str(lock_root or (Path(repo) / ".git" / "done-locks"))
+    env["DONE_LOCK_HOLDER_PID"] = str(os.getpid())
+    proc = subprocess.run(
+        ["bash", str(DONE_LOCK), "acquire", "--label", "fixture"],
+        capture_output=True, text=True, check=False, cwd=str(repo), env=env,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    values = {}
+    for line in proc.stdout.splitlines():
+        if line.startswith("export "):
+            key, _, value = line[len("export "):].partition("=")
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            values[key] = value
+    # The session fence is done-lock's status witness, not fixture state:
+    # remove it so the scratch repo carries only fixture-created paths.
+    session = Path(repo) / ".ai-playbook" / "done-lock.session"
+    try:
+        session.unlink()
+        session.parent.rmdir()
+    except OSError:
+        pass
+    return values["DONE_LOCK_DIR"], values["DONE_LOCK_TOKEN"]
+
+
 def set_meta_field(lock_dir, key, value):
     meta = Path(lock_dir) / "meta.env"
     lines = []
@@ -264,13 +295,16 @@ def outcome_lines(proc):
 
 def run_helper(args, cwd, lock=None, fault=None, fault_path=None,
                lock_dir_override=None, lock_token_override=None,
-               with_lock_env=True, staged_wait=None):
+               with_lock_env=True, staged_wait=None, done_lock=None):
     """Run the helper in the scratch repo; the lock env is injected only when
     with_lock_env is true (probe runs without it, per its contract)."""
     env = base_env()
     if with_lock_env and lock is not None:
         env["MERGE_LOCK_DIR"] = lock_dir_override if lock_dir_override is not None else lock[0]
         env["MERGE_LOCK_TOKEN"] = lock_token_override if lock_token_override is not None else lock[1]
+    if done_lock is not None:
+        env["DONE_LOCK_DIR"] = done_lock[0]
+        env["DONE_LOCK_TOKEN"] = done_lock[1]
     if fault is not None:
         env["LAND_SQUASH_TEST_FAULT"] = fault
     if fault_path is not None:
@@ -290,12 +324,21 @@ def probe(root, branch):
     return run_helper(["probe", "--branch", branch], cwd=root, with_lock_env=False)
 
 
-def land(root, branch, expected_tip, message, expected_base=None, **kwargs):
+def land(root, branch, expected_tip, message, expected_base=None,
+         done_lock="auto", **kwargs):
+    """Run the land mode. done_lock="auto" acquires a primary done lock on
+    root (the Primary land ownership fixture default); None omits the done
+    environment (the missing-done matrix row); a (dir, token) tuple injects
+    that environment verbatim."""
+    if done_lock == "auto" and kwargs.get("lock") is not None:
+        done_lock = acquire_done_lock(root)
+    elif done_lock == "auto":
+        done_lock = None
     args = ["land", "--branch", branch, "--expected-tip", expected_tip,
             "--message", message]
     if expected_base is not None:
         args += ["--expected-base", expected_base]
-    return run_helper(args, cwd=root, **kwargs)
+    return run_helper(args, cwd=root, done_lock=done_lock, **kwargs)
 
 
 def land_worktree(root, branch, expected_tip, message, expected_base=None,
@@ -689,6 +732,9 @@ class LandSquashHelperTest(unittest.TestCase):
         env = base_env()
         env["MERGE_LOCK_DIR"] = lock[0]
         env["MERGE_LOCK_TOKEN"] = lock[1]
+        done = acquire_done_lock(repo)
+        env["DONE_LOCK_DIR"] = done[0]
+        env["DONE_LOCK_TOKEN"] = done[1]
         proc = subprocess.run(
             ["bash", str(scratch / "land_squash.sh"), "land",
              "--branch", "feature", "--expected-tip", tip,
@@ -1874,6 +1920,139 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         self.assertNotEqual(landing, base_tip)
         receipt = self.receipt_text(repo, landing)
         self.assertIn("exit code: 2", receipt)
+
+
+class LandLockOwnershipTest(LandSquashHelperTest):
+    """The landing lock-mode matrix and the primary land / rolling-log write
+    lock orders (plan 2026-10-25-primary-log-branch-drift-at-commit.md
+    Task 2): Primary `land` verifies both lock owners before its snapshot;
+    ref-only `land-worktree` holds the merge lock only."""
+
+    def test_land_missing_done_lock_refused_before_snapshot(self):
+        # Matrix row 1: a valid matching merge lock with no done lock
+        # refuses specifically for the missing done lock, before the
+        # snapshot; the helper creates no lock state of its own.
+        repo, lock = self.locked_repo("no-done")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+        before = fingerprint(repo)
+        done_root = repo / ".git" / "done-locks"
+
+        proc = land(repo, "feature", tip, "land it", lock=lock,
+                    done_lock=None)
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
+        self.assertIn("DONE_LOCK_DIR", proc.stdout)
+        self.assertIn("Primary land", proc.stdout)
+        self.assertEqual(fingerprint(repo), before)
+        # the helper acquired nothing: no done lock state exists after the
+        # refusal (the post-call status probe)
+        self.assertFalse(done_root.exists())
+
+    def test_land_worktree_runs_merge_only_while_done_held(self):
+        # Matrix row 2: ref-only land-worktree with a valid merge lock and
+        # the done lock held advances only the selected ref and never
+        # touches the done lock.
+        repo, wt, lock = self.worktree_repo("wt-done-held")
+        done = acquire_done_lock(repo)
+        base_tip = rev(repo, "refs/heads/main")
+        commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
+        source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land feature",
+                             expected_base=base_tip, lock=lock,
+                             done_lock=done)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(rev(repo, "refs/heads/main"),
+                         rev(repo, "refs/heads/main"))
+        landing = rev(repo, "refs/heads/main")
+        self.assertNotEqual(landing, base_tip)
+        self.assertEqual(rev(repo, "%s^{tree}" % landing),
+                         rev(repo, "feature^{tree}"))
+        # the held done lock is untouched: its record still carries the
+        # fixture's token and the hold is still live
+        meta = Path(done[0]) / "meta.env"
+        self.assertIn("lock_token=%s" % done[1], meta.read_text())
+        env = base_env()
+        env["DONE_LOCK_DIR"] = done[0]
+        env["DONE_LOCK_TOKEN"] = done[1]
+        env["DONE_LOCK_ROOT"] = str(repo / ".git" / "done-locks")
+        status = subprocess.run(
+            ["bash", str(DONE_LOCK), "status"], capture_output=True,
+            text=True, check=False, cwd=str(repo), env=env)
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertIn(done[0], status.stdout)
+
+    def test_log_writer_holding_done_blocks_land_snapshot(self):
+        # Lock order 1: a primary log writer holds the done lock after
+        # staging its owned delta; primary `land` cannot snapshot or
+        # restore over it. The helper refuses on the staged-delta
+        # pre-refusal before its snapshot, the staged delta survives, and
+        # the held done lock is untouched.
+        repo, lock = self.locked_repo("writer-first")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+        log_rel = "docs/history/backlog/PLAN-PROMPTS.md"
+        log_path = repo / log_rel
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("writer entry\n")
+        git(repo, "add", log_rel)
+        done = acquire_done_lock(repo)
+        before = fingerprint(repo)
+
+        proc = land(repo, "feature", tip, "land it", lock=lock,
+                    done_lock=done)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+        self.assertIn(log_rel, proc.stdout)
+        self.assertIn("staged", proc.stdout)
+        self.assertEqual(fingerprint(repo), before)
+        meta = Path(done[0]) / "meta.env"
+        self.assertIn("lock_token=%s" % done[1], meta.read_text())
+
+    def test_land_holding_done_blocks_log_writer(self):
+        # Lock order 2: primary `land` holds both locks through its
+        # landing; a log writer cannot acquire the done lock until
+        # checkout stability, and the log bytes stay unchanged.
+        repo, lock = self.locked_repo("land-first")
+        done = acquire_done_lock(repo)
+        log_rel = "docs/history/backlog/PLAN-PROMPTS.md"
+        log_path = repo / log_rel
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_before = "entry\n"
+        log_path.write_text(log_before)
+        git(repo, "add", log_rel)
+        git(repo, "commit", "-q", "-m", "log entry")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+
+        # the writer's done-lock acquire refuses while land's hold stands
+        env = base_env()
+        env["DONE_LOCK_ROOT"] = str(repo / ".git" / "done-locks")
+        env["DONE_LOCK_HOLDER_PID"] = str(os.getpid())
+        writer_acquire = subprocess.run(
+            ["bash", str(DONE_LOCK), "acquire", "--label", "log-writer"],
+            capture_output=True, text=True, check=False, cwd=str(repo),
+            env=env)
+        self.assertNotEqual(writer_acquire.returncode, 0,
+                            writer_acquire.stdout + writer_acquire.stderr)
+        self.assertEqual(log_path.read_text(), log_before)
+
+        # with both locks held, land's landing completes and the log write
+        # is still pending (the writer retries after the release)
+        proc = land(repo, "feature", tip, "land it", lock=lock,
+                    done_lock=done)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(rev(repo, "%s^{tree}" % rev(repo, "refs/heads/main")),
+                         rev(repo, "feature^{tree}"))
 
 
 if __name__ == "__main__":

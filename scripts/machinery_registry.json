@@ -1662,6 +1662,22 @@
         "class": "incident",
         "ref": "docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md"
       }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:primary-log-ref-precondition",
+      "kind": "protocol",
+      "note": "Primary rolling-log writes carry the caller-selected symbolic ref and starting OID through scripts/done_run.sh's captured-tree transaction (--expected-ref/--expected-oid); a mismatch refuses before staging or commit, and the caller recovers and reselects. Pre-registered demotion commitment (plan docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md Gate delta): review by 2027-01-25; if no additional true catch occurs by then, that reviewed change demotes the mismatch refusal to warning-only and removes this row. Promotion basis: the existing true catch, the 2026-10-25 wrong-branch commit (witness below). Expected catch frequency: rare shared-checkout branch switches during a primary log write; false-positive cost: one recovery/reselection with the log bytes and refs unchanged. The same landing retires the primary log writer's repo-wide merge-lock acquisition refusal, balancing one added refusal with one retired refusal.",
+      "paths": [
+        "scripts/done_run.sh"
+      ],
+      "tests": [
+        "scripts/test_done_run_wrapper.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/backlog/2026-10-25-primary-log-branch-drift-at-commit.md"
+      }
     }
   ],
   "removals": [

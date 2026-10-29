@@ -101,9 +101,9 @@ Files:
 - `docs/history/backlog/EXEC-PROMPTS.md`
 
 Checklist:
-- [ ] Replace Stage 4's existing entry-carries line with concise wording that requires the prompt to inherit the Ad-hoc backlog arm by reference and forbids restating or shortening its duties. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Replace the EXEC-PROMPTS header boilerplate with a shorter pointer to Investigate Stage 4 as the prompt-emission owner. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the maintenance pins suite, the em-dash added-lines gate, and the public hygiene scan. [class: REPOSITORY_TEST]
+- [x] Replace Stage 4's existing entry-carries line with concise wording that requires the prompt to inherit the Ad-hoc backlog arm by reference and forbids restating or shortening its duties. [class: IMPLEMENTATION_REQUIRED]
+- [x] Replace the EXEC-PROMPTS header boilerplate with a shorter pointer to Investigate Stage 4 as the prompt-emission owner. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the maintenance pins suite, the em-dash added-lines gate, and the public hygiene scan. [class: REPOSITORY_TEST]
 
 Acceptance criteria:
 - Each emitted ad-hoc prompt directs its session to the Ad-hoc backlog arm by reference.
@@ -122,13 +122,17 @@ Files:
 - `docs/history/backlog/2026-10-26-exec-entry-prompt-shadows-adhoc-arm-machinery.md` (Task 2)
 
 Checklist:
-- [ ] For an exec mandate matching `exec N plan(s)`, consider dispatchable plans before EXEC-PROMPTS entries and ad-hoc items; a higher-urgency non-plan candidate does not take precedence. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Fall through to non-plan segments only when no dispatchable candidate remains in the plans segment; for example, with only a ready EXEC-PROMPTS entry available, select it. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Record the plans-segment preference in `decision_reason` without changing mode binding or in-segment ordering; an unqualified exec mandate keeps the existing merged-urgency order. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the maintenance pins suite, the em-dash added-lines gate, and the public hygiene scan. [class: REPOSITORY_TEST]
-- [ ] After both contracts land, mark the origin covered by this plan and apply the plans skill completion disposition when archiving it. [class: IMPLEMENTATION_REQUIRED]
+- [x] For an exec mandate matching `exec N plan(s)`, consider dispatchable plans before EXEC-PROMPTS entries and ad-hoc items; a higher-urgency non-plan candidate does not take precedence. [class: IMPLEMENTATION_REQUIRED]
+- [x] Fall through to non-plan segments only when no dispatchable candidate remains in the plans segment; for example, with only a ready EXEC-PROMPTS entry available, select it. [class: IMPLEMENTATION_REQUIRED]
+- [x] Record the plans-segment preference in `decision_reason` without changing mode binding or in-segment ordering; an unqualified exec mandate keeps the existing merged-urgency order. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the maintenance pins suite, the em-dash added-lines gate, and the public hygiene scan. [class: REPOSITORY_TEST]
+- [x] After both contracts land, mark the origin covered by this plan and apply the plans skill completion disposition when archiving it. [class: IMPLEMENTATION_REQUIRED]
 
 Acceptance criteria:
 - An `exec N plan(s)` mandate selects a dispatchable plans target ahead of a higher-urgency non-plan candidate and falls through only when the plans segment has no dispatchable target.
 - The recorded decision explains the `exec N plan(s)` segment preference; an unqualified mandate retains existing merged-urgency ordering.
 - No new machinery or task execution is added.
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-26-exec-entry-prompt-shadows-adhoc-arm-machinery.md`: completed by this plan. The ad-hoc prompt now inherits the Ad-hoc arm by reference, and plans-worded exec mandates consider dispatchable plans first. The origin is removed in this archive pass.

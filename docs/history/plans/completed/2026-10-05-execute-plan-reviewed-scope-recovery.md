@@ -76,13 +76,13 @@ Files:
 - `agents/skills/execute-plan/SKILL.md`
 - `scripts/test_execute_plan_referral_contract.py`
 
-- [ ] State that a reviewed task `Files:` widening pauses before the next task claim and uses the plans skill's Active-plan referral placement in the existing run and worktree. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Require live workers to reach a recorded terminal result, and require a fresh `ready=yes` review plus full and pre-implementation readiness for current plan bytes before updating the manifest and briefing digests. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Preserve completed task boundaries and resume from the first incomplete task; unexpected pre-edit identity or source-digest drift, unknown worker state, held lock, or failed readiness leaves the referral pending without plan or run-state edits, retries, or new claims; an authorized post-edit digest change is rebound only after fresh review/readiness. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add no runtime command, state field, or refusal class. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Extend `ActivePlanReferralContractTest` to assert the unexpected pre-edit refusal and the expected post-edit refresh/resume sequence as distinct outcomes. [class: REPOSITORY_TEST]
-- [ ] Verify the `agents/skills/execute-plan/SKILL.md` net byte change is zero or negative after the wording replacement. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `execute-plan: clarify reviewed scope referrals` [class: IMPLEMENTATION_REQUIRED]
+- [x] State that a reviewed task `Files:` widening pauses before the next task claim and uses the plans skill's Active-plan referral placement in the existing run and worktree. [class: IMPLEMENTATION_REQUIRED]
+- [x] Require live workers to reach a recorded terminal result, and require a fresh `ready=yes` review plus full and pre-implementation readiness for current plan bytes before updating the manifest and briefing digests. [class: IMPLEMENTATION_REQUIRED]
+- [x] Preserve completed task boundaries and resume from the first incomplete task; unexpected pre-edit identity or source-digest drift, unknown worker state, held lock, or failed readiness leaves the referral pending without plan or run-state edits, retries, or new claims; an authorized post-edit digest change is rebound only after fresh review/readiness. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add no runtime command, state field, or refusal class. [class: IMPLEMENTATION_REQUIRED]
+- [x] Extend `ActivePlanReferralContractTest` to assert the unexpected pre-edit refusal and the expected post-edit refresh/resume sequence as distinct outcomes. [class: REPOSITORY_TEST]
+- [x] Verify the `agents/skills/execute-plan/SKILL.md` net byte change is zero or negative after the wording replacement. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `execute-plan: clarify reviewed scope referrals` [class: IMPLEMENTATION_REQUIRED]
 
 ## Review Scope
 

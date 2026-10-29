@@ -197,7 +197,7 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, heart
 
 ## Worktree-first standard
 
-Load on demand: read agents/skills/execute-plan/worktree-first.md when a worktree setup, adoption, or closeout decision is made.
+Load on demand: read agents/skills/execute-plan/worktree-first.md when a worktree setup, adoption, or closeout decision is made. Landing-mode lock ownership (Primary `land`: the primary done lock before the merge lock, both held through the landing, released merge then done; ref-only `land-worktree`: merge lock only) is defined in the standard's Landing-mode lock ownership paragraph and owned there.
 
 ## Phase 0: Run Setup (Run Once at Start)
 
@@ -311,7 +311,7 @@ This is a pre-Phase-1 plan-maintenance pass (its own commit, not one of the plan
 
 ### Step 0.5: Plan readiness gate (hard gate, before any task implementation)
 
-Run `python3 scripts/plan_readiness.py --pre-round <plan-path>` against the active plan before implementation and again when its digest or task scope changes. Confirm the plan path, required task structure, review freshness, and declared validation commands. Record command and result in the session manifest. A stale or malformed plan stops before implementation; repair it through the plans skill's marker-protected edit path and obtain the required fresh review. A stale-record readiness refusal splits on the plan bytes: when the plan bytes changed after the review, take that fresh-review path and never relabel the old record; when the plan bytes are unchanged and only the highest staged record is stale (a completed review whose canonical pair was never staged, for example after an interrupted synthesis), recover through the review-staging skill's existing procedure instead: allocate the round through the record selector (its `recover-orphan` subcommand when the refusal names an orphaned record half), produce the canonical pair only from the complete durable panel and usage evidence, run the staging preflight and hard source-plan validation, then rerun readiness; incomplete evidence takes the fresh-review path.
+Run `python3 scripts/plan_readiness.py --pre-round <plan-path>` against the active plan before implementation and again when its digest or task scope changes. Confirm the plan path, required task structure, review freshness, and declared validation commands. Record command and result in the session manifest. A stale or malformed plan stops before implementation; repair it through the plans skill's marker-protected edit path and obtain the required fresh review. A stale-record readiness refusal splits on the plan bytes: bytes changed after the review take the fresh-review path and never relabel the old record; unchanged bytes with only the highest staged record stale (a completed review whose canonical pair was never staged, for example after an interrupted synthesis) recover through the review-staging skill's existing procedure: allocate the round through the record selector (its `recover-orphan` subcommand when the refusal names an orphaned record half), produce the canonical pair only from the complete durable panel and usage evidence, run the staging preflight and hard source-plan validation, then rerun readiness; incomplete evidence takes the fresh-review path.
 
 On resume, read the session manifest, task logs, current plan digest, and review artifacts from disk. Continue from the first incomplete task only when those records agree. If a worker may still be active, follow the Live-session discovery ladder before editing or relaunching.
 
@@ -893,43 +893,45 @@ Before a retry after a refused launch or interrupted wait, record the branch tip
 
 ## User Interruption
 
-If the user stops mid-plan, classify the interruption state first, then apply the standing guidance below in every state.
+Classify the interruption state first, then apply the standing guidance below in every state.
 
-**Status questions never record an interruption.** A status question requires a concise state report followed by continued work; only an explicit user request to stop, pause, or abort authorizes the `interrupt` mutation; an ambiguous turn asks the user whether they want a status report or a stop before anything is recorded. Status-versus-stop example: the turn "where does the run stand?" gets the concise state report and the plan continues with its topmost incomplete task; the turn "stop the run" authorizes the `interrupt` operation below and then halts.
+**Status questions never record an interruption.** A status question gets a state report then continued work; only an explicit request to stop, pause, or abort authorizes the `interrupt` mutation; an ambiguous turn asks report-or-stop before anything is recorded. Example: "where does the run stand?" gets the report and work continues; "stop the run" authorizes the `interrupt` operation and halts.
 
 ### Interruption state table
 
 | Interruption state | Evidence | Required action |
 |---|---|---|
-| Wait cancelled after launch; worker may be live | Host-native session handle and recent session/log evidence | Re-observe the same worker. Do not edit task paths or launch a duplicate until terminal status is verified. |
-| Worker returned but checkpoint is not recorded | Worker result and append-only task log | Verify the result and validation, record the checkpoint, then proceed. |
-| Failed, partial, timed-out, or cancelled worker | Result/log plus current worker liveness | Use bounded retry or inline fallback only after verifying termination. If liveness is unknown, stop for operator disposition. |
-| Retry needed | Same plan digest and task identity | Retry the same task and scope; never widen scope or alter the plan just to retry. |
+| Wait cancelled after launch; worker may be live | Host-native session handle and recent log evidence | Re-observe the same worker. Do not edit task paths or launch a duplicate until terminal status is verified. |
+| Worker returned but checkpoint is not recorded | Worker result and append-only task log | Verify the result and validation, record the checkpoint, proceed. |
+| Failed, partial, timed-out, or cancelled worker | Result/log plus current worker liveness | Use bounded retry or inline fallback only after verified termination. Unknown liveness: stop for operator disposition. |
+| Retry needed | Same plan digest and task identity | Retry the same task and scope; never widen scope or alter the plan to retry. |
 | Resume routing | Session manifest, plan digest, task logs, review state, run-level claim | Resume the same run and worktree. |
 
 ### Active-plan referral
 
-When a user requests a scope change and names the plan bound to this active run, classify it as an active-plan referral and bind it to the manifest's recorded plan path before applying this table. Before plan authoring, record each referral in the existing manifest as `Active-plan referral: plan_path=<...>; run_session_id=<...>; backlog_origin=<...>; request=<...>; decision=<...>; next_action=<...>`; the covered-origin gate requires the matching entry and current session. A referral pauses new claims but never cancels a live worker. An explicit stop, pause, or abort takes precedence and leaves the referral pending until resume.
+When a user requests a scope change and names the plan bound to this active run, classify it as an active-plan referral and bind it to the manifest's recorded plan path. Before plan authoring, record each referral in the manifest as `Active-plan referral: plan_path=<...>; run_session_id=<...>; backlog_origin=<...>; request=<...>; decision=<...>; next_action=<...>`; the covered-origin gate requires the matching entry and current session. An explicit stop, pause, or abort takes precedence and leaves the referral pending until resume.
+
+**Reviewed task-scope change (reviewed task `Files:` widening):** the same referral, processed before the next task claim via the plans skill's Active-plan referral placement in the existing run and worktree, live workers observed to a terminal result. Changed plan bytes stay pending until a fresh `ready=yes` review plus full and pre-implementation readiness pass and the new digest is recorded in the same run's manifest and briefing; completed task boundaries are preserved; the run resumes at the first incomplete task. Unexpected pre-edit drift, unknown worker state, a held lock, or failed review or readiness leaves the referral pending, nothing edited, retried, or claimed.
 
 | Referral state | Evidence | Required action |
 |---|---|---|
 | Before the next task claim | Matching path; no worker launched | Process referral before claiming the next task. |
-| Worker is live | Same worker handle | Keep referral pending; re-observe per the interruption table; no plan edit or task claim until terminal. |
-| Successful worker | Terminal success and validation | Record its actual result and successful boundary; process referral before another claim. |
-| Failed, partial, timed-out, or cancelled worker | Terminal result and liveness | Record the actual terminal result; never mark an unsuccessful attempt successful. Process referral before retry; apply the generic interruption table's bounded-retry rule. |
-| After a recorded task boundary | Manifest checkpoint | Process referral before the next claim; do not replay or rewrite the completed boundary. |
+| Worker is live | Same worker handle | Keep referral pending; no plan edit or task claim until terminal. |
+| Successful worker | Terminal success and validation | Record its actual result and successful boundary. |
+| Failed, partial, timed-out, or cancelled worker | Terminal result and liveness | Record the actual terminal result; never mark an unsuccessful attempt successful; apply the generic interruption table's bounded-retry rule. |
+| After a recorded task boundary | Manifest checkpoint | Do not replay or rewrite the completed boundary. |
 | Explicit stop, pause, or abort | User directive | Stop wins. Record the interrupt; leave referral pending without plan edits or a new claim. |
 | Identity mismatch | Request path differs from active plan path | Do not mutate this run: no plan write, claim, retry, or replacement. Use ordinary interruption handling. |
-| Worker liveness is unknown | No verified terminal result | Keep referral pending; no plan write, new claim, retry, or replacement. Stop for operator disposition. |
+| Worker liveness is unknown | No verified terminal result | Keep referral pending; no plan write, new claim, retry, or replacement. |
 
 Keep this standing guidance in every interruption state:
 
-- Report the current task, unchecked items, and last successful **boundary commit** (SHA + message).
-- If work exists only as uncommitted changes, say so explicitly; that means Step 1.4 was never run for those tasks.
+- Report the current task, unchecked items, and last successful **boundary commit**.
+- If work exists only as uncommitted changes, say so; Step 1.4 was never run for those tasks.
 - Do not mark incomplete work as `[x]`.
 - **Preserve** `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; do not run Phase 5 cleanup.
-- On explicit stop, pause, or abort, record the request and current task/worker state in the session manifest. Leave run-level claim handling to the execution-claim procedure and preserve session logs for resume.
-- Offer to resume from the topmost incomplete task (or run **Recovery** below if the user wants execute-plan compliance on already-implemented work). On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent.
+- On explicit stop, pause, or abort, record the request and current task/worker state in the manifest, leave claim handling to the execution-claim procedure, and preserve session logs for resume.
+- Offer to resume from the topmost incomplete task (or **Recovery** for already-implemented work). On resume, the orchestrator first updates the manifest's `updated:` (and confirms `workflow_state: active`) before relaunching sub-agents.
 
 ## Recovery: retroactive execute-plan compliance
 

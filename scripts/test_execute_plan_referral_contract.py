@@ -123,6 +123,43 @@ class ActivePlanReferralContractTest(unittest.TestCase):
             with self.subTest(witness=witness):
                 self.assertTrue(witness in self.phase0, f"missing Phase 0 witness: {witness}")
 
+    def test_reviewed_scope_widening_routes_to_plans_placement(self) -> None:
+        for witness in (
+            "reviewed task-scope change",
+            "reviewed task `files:` widening",
+            "plans skill's active-plan referral placement",
+            "in the existing run and worktree",
+            "before the next task claim",
+            "terminal result",
+        ):
+            with self.subTest(witness=witness):
+                self.assertIn(witness, self.referral)
+
+    def test_pre_edit_drift_refuses_mutation(self) -> None:
+        self.assertIn(
+            "unexpected pre-edit drift, unknown worker state, a held lock, or failed review or readiness leaves the referral pending, nothing edited",
+            self.referral,
+        )
+
+    def test_post_edit_refresh_then_resume_same_run(self) -> None:
+        for witness in (
+            "ready=yes",
+            "pre-implementation readiness",
+            "new digest is recorded in the same run's manifest and briefing",
+            "completed task boundaries are preserved",
+            "resumes at the first incomplete task",
+        ):
+            with self.subTest(witness=witness):
+                self.assertIn(witness, self.referral)
+        self.assertLess(
+            self.referral.index("ready=yes"),
+            self.referral.index("new digest is recorded in the same run's manifest and briefing"),
+        )
+        self.assertLess(
+            self.referral.index("new digest is recorded in the same run's manifest and briefing"),
+            self.referral.index("resumes at the first incomplete task"),
+        )
+
     def test_authoring_claim_lives_until_placement_matched_closeout(self) -> None:
         self.assertIn("normal plans authoring claim", self.phase0)
         self.assertIn("keep it through execute-plan completion", self.phase0)

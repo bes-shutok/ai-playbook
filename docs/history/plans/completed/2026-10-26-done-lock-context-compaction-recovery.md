@@ -80,11 +80,11 @@ Scope extensions (maintenance-selected arm): durable token or witness handoff ac
 Files:
 - `agents/skills/done/SKILL.md`
 
-- [ ] Given context compaction removed the original Step 0 token or witness, expect the done skill to stop before release and forbid inferring ownership from current metadata or the manifest. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given unrelated authorized work remains after that stop, expect the skill to direct it to a distinct new run in a separate checkout using that checkout's own lock and manifest, never reusing the original manifest or lock witness; the original worktree and lock remain untouched. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the original checkout is resumed, expect the skill to permit token-checked recovery only when the original witness and token are available. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify the change adds no lock, gate, validator, ledger, or recovery ceremony. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: clarify done-lock continuation after compaction` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given context compaction removed the original Step 0 token or witness, expect the done skill to stop before release and forbid inferring ownership from current metadata or the manifest. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given unrelated authorized work remains after that stop, expect the skill to direct it to a distinct new run in a separate checkout using that checkout's own lock and manifest, never reusing the original manifest or lock witness; the original worktree and lock remain untouched. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the original checkout is resumed, expect the skill to permit token-checked recovery only when the original witness and token are available. [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify the change adds no lock, gate, validator, ledger, or recovery ceremony. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: clarify done-lock continuation after compaction` [class: IMPLEMENTATION_REQUIRED]
 
 ## Plan invariants
 
@@ -92,3 +92,7 @@ Files:
 - Missing ownership evidence never becomes permission to release.
 - The raw token remains out of durable records.
 
+
+## Disposition of migrated backlog items
+
+- Origin row `docs/history/backlog/2026-10-26-done-lock-context-recovery-after-compaction.md` was flipped `Status: covered (docs/history/plans/2026-10-26-done-lock-context-compaction-recovery.md)` and is deleted in the same completion pass; this archived plan is the durable home of the covered claim. Execution witness: worktree commit 49428c90f (docs: clarify done-lock continuation after compaction), Phase 3 code review r1 clean.

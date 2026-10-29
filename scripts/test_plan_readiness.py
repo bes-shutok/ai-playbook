@@ -4005,6 +4005,21 @@ def _graded_markdown(last_fix: str | None = None) -> str:
     return markdown
 
 
+def _seal_declared_round_start_digest(repo_root: Path) -> str | None:
+    """The round-1 seal entry's declared ``round_start_digest``, read back
+    from the seal file on disk (the declared side of the needs-recert
+    unchanged-bytes predicate), or None when the seal file or the field is
+    missing."""
+    seal_rel = cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG)
+    seal_path = repo_root / seal_rel
+    if not seal_path.is_file():
+        return None
+    for line in seal_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("round_start_digest: "):
+            return line.split(": ", 1)[1].strip()
+    return None
+
+
 class PlanReadinessGradedTest(unittest.TestCase):
     """The graded full-gate fixtures over scratch repos: the typography
     re-bind passes, the honest clean shape passes with no record, the same
@@ -4522,26 +4537,34 @@ class PlanReadinessGradedTest(unittest.TestCase):
             self.assertIn("--verification-head", err)
 
     def test_seal_example_loads(self):
+        # The producer-skill parse witness: the plan-family seal grammar
+        # example in review-plan/SKILL.md must parse and load. The
+        # precondition fails LOUDLY (r1 T3/D7: the former skip arms left
+        # a missing skill file or a missing example passing silently, so
+        # both the skip and a producer-skill regression went unobserved).
         skill_path = (
             Path(plan_readiness.__file__).resolve().parent.parent
             / "agents" / "skills" / "review-plan" / "SKILL.md"
         )
         try:
             text = skill_path.read_text(encoding="utf-8")
-        except OSError:
-            self.skipTest(
-                "review-plan/SKILL.md is not readable beside this checkout")
+        except OSError as exc:
+            self.fail(
+                "review-plan/SKILL.md is not readable beside this checkout; "
+                "the seal-example producer precondition must fail loudly, "
+                "never skip: %s" % exc
+            )
         blocks = re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL)
         examples = [
             block for block in blocks
             if block.splitlines() and block.splitlines()[0] == "## round 1"
         ]
-        if not examples:
-            # Task 3 lands the plan-family example; until then the suite
-            # stays green with the pending-state skip.
-            self.skipTest(
-                "the plan-family seal grammar example is not in "
-                "review-plan/SKILL.md yet (plan Task 3 owns it)")
+        self.assertTrue(
+            examples,
+            "the plan-family seal grammar example is missing from "
+            "review-plan/SKILL.md; the producer-skill parse witness must "
+            "fail loudly, never skip",
+        )
         entries = cr.parse_seal(examples[0])
         self.assertEqual(len(entries), 1)
         artifact = entries[0].fields["artifact"]
@@ -4551,6 +4574,38 @@ class PlanReadinessGradedTest(unittest.TestCase):
         entry = cr.load_seal_entry(repo.root, rel, 1, cr.FAMILY_PLAN)
         self.assertIsNotNone(entry)
         self.assertEqual(entry.fields["artifact"], artifact)
+
+    def test_producer_seal_docs_stale_clause_absent(self):
+        # Negative sweep (r1 T3): the stale one-line seal-grammar clause
+        # the certification-seal landing replaced must stay absent from
+        # all three producer skills' seal documentation; the producer
+        # skill precondition fails loudly, never skips.
+        stale_clause = (
+            "one line carrying the round, the artifact path, "
+            "the round-start commit and digest"
+        )
+        skills_root = (
+            Path(plan_readiness.__file__).resolve().parent.parent
+            / "agents" / "skills"
+        )
+        for skill_name in ("plans/SKILL.md", "review-plan/SKILL.md",
+                           "execute-plan/SKILL.md"):
+            skill_path = skills_root / skill_name
+            try:
+                text = skill_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                self.fail(
+                    "producer skill %s is not readable beside this "
+                    "checkout; the stale-clause sweep precondition must "
+                    "fail loudly, never skip: %s" % (skill_name, exc)
+                )
+            self.assertNotIn(
+                stale_clause, text,
+                "%s still carries the stale one-line seal-grammar clause "
+                "the certification-seal landing replaced; the round-close "
+                "seal paragraphs must document the block grammar through "
+                "the review-plan example" % skill_name,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -5796,6 +5851,600 @@ class ExtractionRuleParityTest(unittest.TestCase):
         with self.assertRaises(ValueError) as refused:
             runtime_capabilities.check_checklist_action_classification("task-1", item)
         self.assertEqual(str(refused.exception), "task task-1 has an unclassified checklist action")
+
+
+# --------------------------------------------------------------------------- #
+# Certification-seal residual CLI checks (2026-10-29 seal-landing-survival-
+# review-residuals plan, Task 1, RED): the readiness CLI's verification-head
+# tool-error classes, the unclassifiable anchor's indeterminate routing, the
+# graded-refusal wording pin, and the needs-recert machine-side predicate.
+# Every CLI test in this section runs as a SUBPROCESS in a scratch repository
+# with a pinned cwd, a temporary HOME, fixture facts paths for plans and
+# reviews inside the scratch repository, a minimal PATH pinned to the
+# intended Git and Python, and the GIT_* family controlled through the
+# hermetic env builder.
+# --------------------------------------------------------------------------- #
+
+_CERT_RESIDUAL_SCRIPTS_DIR = Path(plan_readiness.__file__).resolve().parent
+
+
+class CertificationSealResidualCliTest(unittest.TestCase):
+    """Task 1 residual checks over the readiness CLI's verification-head
+    surface. Distinct tool-error outcomes per condition (malformed OID,
+    unavailable Git, absent commit, source plan outside any Git worktree)
+    with no condition mislabeled as another (r1 R4/C2/D1), the
+    unclassifiable commit-object anchor routed to the indeterminate
+    outcome instead of a graded refusal while keeping the prescribed
+    wording (r1 C3), the graded anchor-refusal wording preserved through
+    the CLI, and the needs-recert routing's machine-side predicate (a
+    graded anchor refusal whose plan bytes re-hash to the declared digest)
+    pinned with the indeterminate subset kept distinct (r1 T2/CD3/R3)."""
+
+    def setUp(self):
+        # Temporary HOME (never the operator's real home) and the scratch
+        # repository holding the fixture facts block and the plans/reviews
+        # directories the gate resolves inside it.
+        self.home = Path(tempfile.mkdtemp(prefix="seal-residual-home-"))
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.repo = cr.build_scratch_repo(self)
+        self.plans_dir = self.repo.root / "docs" / "history" / "plans"
+        self.reviews_dir = self.repo.root / ".ai-playbook" / "reviews"
+        self.plans_dir.mkdir(parents=True)
+        self.reviews_dir.mkdir(parents=True)
+        (self.repo.root / ".ai-playbook").mkdir(exist_ok=True)
+        (self.repo.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8"
+        )
+
+    # -- hermetic subprocess harness (the checkbox 2 environment) ---------
+
+    def _harness_env(self, git_on_path: bool = True) -> dict:
+        """The child environment: the GIT_* family reduced to the two
+        controlled config pointers, HOME pinned to the temporary home, and
+        PATH reduced to the intended Git directory plus the intended
+        Python directory (git omitted entirely for the unavailable-Git
+        arms)."""
+        env = cr.hermetic_git_env()
+        env["HOME"] = str(self.home)
+        parts = []
+        if git_on_path:
+            git_path = shutil.which("git")
+            self.assertIsNotNone(
+                git_path,
+                "git must be resolvable to pin it on the harness PATH")
+            parts.append(str(Path(git_path).resolve().parent))
+        parts.append(str(Path(sys.executable).parent))
+        env["PATH"] = os.pathsep.join(parts)
+        return env
+
+    def _run_cli(self, script_name, argv, git_on_path: bool = True,
+                 cwd=None):
+        script = _CERT_RESIDUAL_SCRIPTS_DIR / script_name
+        proc = subprocess.run(
+            [sys.executable, str(script)] + list(argv),
+            cwd=str(cwd if cwd is not None else self.repo.root),
+            env=self._harness_env(git_on_path),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    # -- fixture recipes ---------------------------------------------------
+
+    def _seed_repo_with_seal(self):
+        """D1 committed at the round start, the round-close commit, and the
+        on-disk seal entry binding them."""
+        start = self.repo.commit_file(
+            _GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = self.repo.commit_allow_empty("round 1 close")
+        self.repo.append_seal_entry(
+            _GRADED_SLUG, 1, _GRADED_PLAN_REL, start,
+            cr.sha256_hex(_GRADED_D1), close,
+        )
+        return start, close
+
+    def _write_round(self, digest_hex: str):
+        """The latest ready round pair for the declared digest."""
+        review = self.reviews_dir / (
+            "%s-plan-review-%s-r1.md" % (_GRADED_DATE, _GRADED_SLUG)
+        )
+        markdown = _graded_markdown()
+        if "- URL or Artifact:" not in markdown:
+            markdown = markdown.replace(
+                "## Metadata\n",
+                "## Metadata\n- URL or Artifact: %s\n" % _GRADED_PLAN_REL,
+                1,
+            )
+        review.write_text(markdown, encoding="utf-8")
+        review.with_suffix(".stats.json").write_text(
+            json.dumps(_graded_payload(digest_hex)), encoding="utf-8"
+        )
+        return review
+
+    def _write_orphaned_seal(self, sealed_digest_hex: str):
+        """Rewrite the round-1 seal entry with both anchors as distinct
+        parentless commits minted from HEAD's tree (the squash-landing
+        orphan shape) declaring ``sealed_digest_hex``."""
+        head_tree = self.repo.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        orphan_a = self.repo.git(
+            "commit-tree", head_tree, "-m", "orphan a").stdout.strip()
+        orphan_b = self.repo.git(
+            "commit-tree", head_tree, "-m", "orphan b").stdout.strip()
+        self.assertNotEqual(orphan_a, orphan_b)
+        self.repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % orphan_a,
+                "round_start_digest: %s" % sealed_digest_hex,
+                "round_close_commit: %s" % orphan_b,
+            ]) + "\n")
+        return orphan_a, orphan_b
+
+    def _seed_byte_identity_refusal(self):
+        """The graded-anchor-refusal-over-byte-identical-bytes shape: D2 is
+        the only committed plan content (so no first-parent commit carries
+        the sealed D1 bytes), the seal anchors are orphaned commits
+        declaring hx(D1), and the caller writes the current plan bytes on
+        disk before running the gate."""
+        self.repo.commit_file(_GRADED_PLAN_REL, _GRADED_D2, "seed plan")
+        self.repo.commit_allow_empty("round 1 close")
+        self._write_orphaned_seal(cr.sha256_hex(_GRADED_D1))
+
+    # -- the checks ---------------------------------------------------------
+
+    def test_cli_harness_pins_environment(self):
+        # The harness discipline itself: HOME is the temporary home, PATH
+        # is exactly the intended Git directory and the intended Python
+        # directory, and the GIT_* family is reduced to the two controlled
+        # config pointers; with git off the PATH the child resolves no git.
+        probe = (
+            "import os, sys; "
+            "print(os.environ.get('HOME', '')); "
+            "print(os.environ.get('PATH', '')); "
+            "print(','.join(sorted("
+            "k for k in os.environ if k.startswith('GIT_'))))"
+        )
+        on_path = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(self.repo.root),
+            env=self._harness_env(git_on_path=True),
+            capture_output=True, text=True, timeout=60,
+        )
+        home_line, path_line, git_line = on_path.stdout.splitlines()[:3]
+        self.assertEqual(home_line, str(self.home))
+        path_parts = path_line.split(os.pathsep)
+        self.assertEqual(len(path_parts), 2, path_line)
+        self.assertTrue(Path(path_parts[0]).joinpath("git").exists(),
+                        path_line)
+        self.assertTrue(Path(path_parts[1]).joinpath("python3").exists(),
+                        path_line)
+        self.assertEqual(
+            git_line, "GIT_CONFIG_GLOBAL,GIT_CONFIG_SYSTEM", git_line)
+        off_path = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(self.repo.root),
+            env=self._harness_env(git_on_path=False),
+            capture_output=True, text=True, timeout=60,
+        )
+        off_parts = off_path.stdout.splitlines()[1].split(os.pathsep)
+        self.assertEqual(len(off_parts), 1, off_path.stdout)
+        self.assertFalse(Path(off_parts[0]).joinpath("git").exists())
+
+    def test_readiness_verification_head_reasons_are_distinct_per_condition(self):
+        # Malformed OIDs, unavailable Git, and absent commits each get
+        # their own tool-error reason (r1 R4/D1), and a source plan
+        # outside any Git worktree with a well-formed OID is a tool error
+        # whose reason is NOT the absent-commit mislabel: the supplied
+        # value is validated, never silently misclassified.
+        self._seed_repo_with_seal()
+        self._write_round(cr.sha256_hex(_GRADED_D1))
+        plan_arg = str(self.plans_dir / _GRADED_PLAN_NAME)
+        rc_m, out_m, err_m = self._run_cli(
+            "plan_readiness.py",
+            [plan_arg, "--verification-head", "not-a-commit"])
+        self.assertEqual(rc_m, 3, (out_m, err_m))
+        self.assertIn("OUTCOME: tool_error", out_m)
+        self.assertIn("--verification-head", err_m)
+        rc_a, out_a, err_a = self._run_cli(
+            "plan_readiness.py",
+            [plan_arg, "--verification-head", "a" * 40])
+        self.assertEqual(rc_a, 3, (out_a, err_a))
+        self.assertIn("OUTCOME: tool_error", out_a)
+        self.assertIn("not a commit present", err_a)
+        rc_u, out_u, err_u = self._run_cli(
+            "plan_readiness.py",
+            [plan_arg, "--verification-head", "b" * 40],
+            git_on_path=False)
+        self.assertEqual(rc_u, 3, (out_u, err_u))
+        self.assertIn("OUTCOME: tool_error", out_u)
+        self.assertIn("could not run git", err_u)
+        outside_dir = Path(tempfile.mkdtemp(prefix="seal-residual-outside-"))
+        self.addCleanup(shutil.rmtree, outside_dir, True)
+        outside_plan = outside_dir / _GRADED_PLAN_NAME
+        outside_plan.write_bytes(_GRADED_D1)
+        rc_o, out_o, err_o = self._run_cli(
+            "plan_readiness.py",
+            [str(outside_plan), "--verification-head", "c" * 40])
+        self.assertEqual(rc_o, 3, (out_o, err_o))
+        self.assertIn("OUTCOME: tool_error", out_o)
+        self.assertIn("--verification-head", err_o)
+        # R4 (RED): the out-of-worktree condition must not reuse the
+        # absent-commit wording the probe-is-None arm falls into today.
+        self.assertNotIn("not a commit present", err_o)
+        # The tool-error reasons stay pairwise distinct per condition.
+        self.assertNotEqual(err_m, err_a)
+        self.assertNotEqual(err_a, err_u)
+        self.assertNotEqual(err_m, err_o)
+
+    def test_unclassifiable_anchor_is_indeterminate_not_graded(self):
+        # A seal anchor that Git cannot classify (a present non-commit
+        # object) is the indeterminate outcome (exit 2) while the
+        # prescribed refusal wording is preserved (r1 C3: the leg used to
+        # grade as a plain exit-1 refusal).
+        start, close = self._seed_repo_with_seal()
+        self._write_round(cr.sha256_hex(_GRADED_D1))
+        tree_id = self.repo.git(
+            "rev-parse", "%s^{tree}" % start).stdout.strip()
+        self.repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % tree_id,
+                "round_start_digest: %s" % cr.sha256_hex(_GRADED_D1),
+                "round_close_commit: %s" % close,
+            ]) + "\n")
+        rc, out, err = self._run_cli(
+            "plan_readiness.py",
+            [str(self.plans_dir / _GRADED_PLAN_NAME)])
+        self.assertEqual(rc, 2, (out, err))
+        self.assertTrue(out.rstrip().endswith("OUTCOME: indeterminate"), out)
+        self.assertIn("Git cannot classify commit object", err)
+        self.assertIn(tree_id, err)
+
+    def test_graded_anchor_refusal_wording_preserved(self):
+        # The graded anchor refusal keeps its existing CLI wording through
+        # the verification-head helper work: exit 1 with the anchor-leg
+        # marker and the no-first-parent-ancestor reason, never the
+        # indeterminate outcome.
+        self._seed_byte_identity_refusal()
+        self.repo.write_file(_GRADED_PLAN_REL, _GRADED_D1)
+        self._write_round(cr.sha256_hex(_GRADED_D1))
+        rc, out, err = self._run_cli(
+            "plan_readiness.py",
+            [str(self.plans_dir / _GRADED_PLAN_NAME)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("OUTCOME: fail", out)
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("anchor leg refused", err)
+        self.assertIn("no first-parent ancestor", err)
+        self.assertNotIn("OUTCOME: indeterminate", out)
+
+    def test_needs_recert_predicate_graded_subset_and_byte_identity(self):
+        # The maintenance routing's machine side (r1 T2/CD3/R3): the
+        # unchanged-bytes predicate (the current plan bytes re-hash to the
+        # declared digest) matches for byte-identical bytes behind a
+        # graded anchor refusal and does not match for changed bytes, and
+        # the indeterminate subset presents through its own prefixed
+        # channel, distinct from the graded exit-1 class the D1 rule keys
+        # on.
+        # Byte-identical: the predicate matches behind the graded refusal.
+        self._seed_byte_identity_refusal()
+        self.repo.write_file(_GRADED_PLAN_REL, _GRADED_D1)
+        self._write_round(cr.sha256_hex(_GRADED_D1))
+        rc, out, err = self._run_cli(
+            "plan_readiness.py",
+            [str(self.plans_dir / _GRADED_PLAN_NAME)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("anchor leg refused", err)
+        # The predicate is evaluated over disk-derived values on both
+        # sides: the current plan bytes read back from the worktree and
+        # the declared digest read back from the seal file (a constant
+        # compared to itself would pass by construction and discriminate
+        # nothing).
+        declared_unchanged = _seal_declared_round_start_digest(
+            self.repo.root)
+        self.assertIsNotNone(declared_unchanged)
+        current_unchanged = (
+            self.repo.root / _GRADED_PLAN_REL).read_bytes()
+        predicate_unchanged = (
+            cr.sha256_hex(current_unchanged) == declared_unchanged)
+        self.assertTrue(predicate_unchanged)
+        # Changed bytes: the same graded refusal, predicate does not match
+        # (the graded-correction population routes through needs-recert's
+        # boundary, not the unchanged-bytes recovery population).
+        self.repo.write_file(_GRADED_PLAN_REL, _GRADED_D3)
+        self._write_round(cr.sha256_hex(_GRADED_D3))
+        rc_changed, out_changed, err_changed = self._run_cli(
+            "plan_readiness.py",
+            [str(self.plans_dir / _GRADED_PLAN_NAME)])
+        self.assertEqual(rc_changed, 1, (out_changed, err_changed))
+        self.assertIn("anchor leg refused", err_changed)
+        declared_still_d1 = _seal_declared_round_start_digest(
+            self.repo.root)
+        self.assertIsNotNone(declared_still_d1)
+        current_changed = (
+            self.repo.root / _GRADED_PLAN_REL).read_bytes()
+        predicate_changed = (
+            cr.sha256_hex(current_changed) == declared_still_d1)
+        self.assertFalse(predicate_changed)
+        # The indeterminate subset (a declared record whose round has no
+        # resolvable seal entry) presents through the prefixed
+        # indeterminate channel, distinct from the graded exit-1 class
+        # above.
+        repo_no_seal = cr.build_scratch_repo(self, name="no-seal-repo")
+        plans_dir_ns = repo_no_seal.root / "docs" / "history" / "plans"
+        reviews_dir_ns = repo_no_seal.root / ".ai-playbook" / "reviews"
+        plans_dir_ns.mkdir(parents=True)
+        reviews_dir_ns.mkdir(parents=True)
+        (repo_no_seal.root / ".ai-playbook" / "facts.md").write_text(
+            _GRADED_FACTS_BODY, encoding="utf-8")
+        start_ns = repo_no_seal.commit_file(
+            _GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        hop_ns = repo_no_seal.commit_file(
+            _GRADED_PLAN_REL, _GRADED_D2, "apply the correction")
+        row_ns = PlanReadinessGradedTest._mint_row(
+            self,
+            GradedFixture(repo=repo_no_seal, plans_dir=plans_dir_ns,
+                          reviews_dir=reviews_dir_ns, start=start_ns,
+                          close=start_ns, hop=hop_ns))
+        review_ns = reviews_dir_ns / (
+            "%s-plan-review-%s-r1.md" % (_GRADED_DATE, _GRADED_SLUG))
+        markdown_ns = _graded_markdown()
+        if "- URL or Artifact:" not in markdown_ns:
+            markdown_ns = markdown_ns.replace(
+                "## Metadata\n",
+                "## Metadata\n- URL or Artifact: %s\n" % _GRADED_PLAN_REL,
+                1,
+            )
+        review_ns.write_text(markdown_ns, encoding="utf-8")
+        review_ns.with_suffix(".stats.json").write_text(
+            json.dumps(_graded_payload(cr.sha256_hex(_GRADED_D1))
+                       | {"extensions": {"corrections": [row_ns]}}),
+            encoding="utf-8")
+        rc_ind, out_ind, err_ind = self._run_cli(
+            "plan_readiness.py",
+            [str(plans_dir_ns / _GRADED_PLAN_NAME)],
+            cwd=repo_no_seal.root)
+        self.assertEqual(rc_ind, 2, (out_ind, err_ind))
+        self.assertTrue(
+            out_ind.rstrip().endswith("OUTCOME: indeterminate"), out_ind)
+        self.assertIn("readiness indeterminate:", err_ind)
+        self.assertNotIn("OUTCOME: fail", out_ind)
+
+
+# --------------------------------------------------------------------------- #
+# Certification-seal residual staging-CLI checks (2026-10-29 seal-landing-
+# survival-review-residuals plan, Task 1, RED): the BOTH-CLIs halves of the
+# verification-head checkboxes. The staging CLI must validate a supplied
+# --verification-head for every source plan, including a source plan outside
+# any Git worktree, where the plan-family guard silently ignores the value
+# today (r1 C2); the unavailable-Git condition must get its own tool-error
+# reason instead of the absent-commit mislabel (r1 R4, staging half); and an
+# anchor Git cannot classify must present as the indeterminate outcome
+# through this CLI (r1 C3), beside the graded anchor-refusal wording pin.
+# Every check runs in-process under the checkbox-2 harness discipline: a
+# scratch repository holding the plan and its seal, the cwd pinned there, a
+# temporary HOME, a minimal PATH pinned to the intended Git and Python, and
+# the GIT_* family reduced to the two controlled config pointers.
+# --------------------------------------------------------------------------- #
+
+from unittest import mock
+
+
+class CertificationSealStagingCliTest(unittest.TestCase):
+    """Task 1 residual checks over the staging CLI's verification-head
+    surface. A supplied --verification-head is validated even when the
+    source plan resolves outside a Git worktree (r1 C2, RED: the guard
+    ignores it today), the unavailable-Git condition carries its own
+    could-not-run reason while malformed-OID and absent-commit keep theirs
+    (r1 R4, RED on the unavailable arm), an unclassifiable anchor presents
+    as the indeterminate outcome with the prescribed wording preserved
+    (r1 C3, RED: a graded exit 1 today), and the graded anchor-refusal
+    wording survives through the same call path (pin)."""
+
+    _OUTSIDE_PLAN_BYTES = b"# Plan\n## Tasks\n1. do foo\n"
+
+    def setUp(self):
+        # Temporary HOME (never the operator's real home) and the scratch
+        # repository holding the plan, its seal, and the staged record.
+        self.home = Path(tempfile.mkdtemp(prefix="seal-residual-home-"))
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.repo = cr.build_scratch_repo(self)
+
+    # -- checkbox-2 harness (pinned cwd, temporary HOME, minimal PATH) ----
+
+    def _hermetic_env(self, git_on_path: bool = True) -> dict:
+        """The call environment: the GIT_* family reduced to the two
+        controlled config pointers, HOME pinned to the temporary home, and
+        PATH reduced to the intended Git directory plus the intended
+        Python directory (git omitted entirely for the unavailable-Git
+        arm)."""
+        env = cr.hermetic_git_env()
+        env["HOME"] = str(self.home)
+        parts = []
+        if git_on_path:
+            git_path = shutil.which("git")
+            self.assertIsNotNone(
+                git_path,
+                "git must be resolvable to pin it on the harness PATH")
+            parts.append(str(Path(git_path).resolve().parent))
+        parts.append(str(Path(sys.executable).parent))
+        env["PATH"] = os.pathsep.join(parts)
+        return env
+
+    def _run_cli(self, argv, git_on_path: bool = True):
+        """In-process staging CLI call under the checkbox-2 discipline:
+        the cwd pinned to the scratch repository, the environment swapped
+        for the hermetic one for the duration of the call, stdout and
+        stderr captured and returned beside the exit code."""
+        env = self._hermetic_env(git_on_path)
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        previous_cwd = os.getcwd()
+        os.chdir(self.repo.root)
+        try:
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    contextlib.redirect_stdout(out_buf), \
+                    contextlib.redirect_stderr(err_buf):
+                try:
+                    code = vrs.main(argv)
+                except SystemExit as exc:
+                    code = exc.code
+        finally:
+            os.chdir(previous_cwd)
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    # -- fixture recipes ---------------------------------------------------
+
+    def _stage_for(self, digest_hex: str, tag: str):
+        """A current-format graded staging record declaring ``digest_hex``
+        for the plan slug, written beside the scratch repository."""
+        payload = vrs._grading_v1_payload(
+            "plan", digest_hex, slug=_GRADED_SLUG)
+        return vrs._grading_stage(self.repo.root, tag, payload)
+
+    def _seed_repo(self):
+        """D1 committed at the round start plus the round-close commit;
+        returns the pair for seal recipes to bind."""
+        start = self.repo.commit_file(
+            _GRADED_PLAN_REL, _GRADED_D1, "seed plan")
+        close = self.repo.commit_allow_empty("round 1 close")
+        return start, close
+
+    # -- the checks ---------------------------------------------------------
+
+    def test_supplied_head_outside_worktree_is_tool_error_never_ignored(self):
+        # r1 C2 (RED): a source plan outside any Git worktree with a
+        # supplied verification head is a tool error naming the flag, for
+        # well-formed and malformed values alike; the plan-family guard
+        # must never silently drop the value (today it ignores both, and
+        # the run reaches a digest-only pass).
+        outside_dir = Path(tempfile.mkdtemp(prefix="seal-residual-outside-"))
+        self.addCleanup(shutil.rmtree, outside_dir, True)
+        outside_plan = outside_dir / "plan.md"
+        outside_plan.write_bytes(self._OUTSIDE_PLAN_BYTES)
+        stage = self._stage_for(
+            vrs.compute_source_digest("plan", self._OUTSIDE_PLAN_BYTES),
+            "outside-head-wellformed")
+        rc, out, err = self._run_cli(
+            ["--hard", str(stage), "--source-plan", str(outside_plan),
+             "--verification-head", "c" * 40])
+        self.assertEqual(rc, 3, (out, err))
+        self.assertIn("OUTCOME: tool_error", out)
+        self.assertIn("--verification-head", err)
+        stage_malformed = self._stage_for(
+            vrs.compute_source_digest("plan", self._OUTSIDE_PLAN_BYTES),
+            "outside-head-malformed")
+        rc_m, out_m, err_m = self._run_cli(
+            ["--hard", str(stage_malformed), "--source-plan",
+             str(outside_plan), "--verification-head", "not-a-commit"])
+        self.assertEqual(rc_m, 3, (out_m, err_m))
+        self.assertIn("OUTCOME: tool_error", out_m)
+        self.assertIn("--verification-head", err_m)
+
+    def test_head_reasons_distinct_inside_repo_including_git_unavailable(self):
+        # r1 R4 staging half (RED on the unavailable-Git arm): malformed
+        # OID and absent commit keep their named tool-error reasons, and
+        # git being unavailable gets its own could-not-run reason instead
+        # of the absent-commit mislabel the collapsed probe arm produces
+        # today.
+        self._seed_repo()
+        stage = self._stage_for(cr.sha256_hex(_GRADED_D1),
+                                "inside-head-reasons")
+        plan_arg = str(self.repo.root / _GRADED_PLAN_REL)
+        rc_m, out_m, err_m = self._run_cli(
+            ["--hard", str(stage), "--source-plan", plan_arg,
+             "--verification-head", "not-a-commit"])
+        self.assertEqual(rc_m, 3, (out_m, err_m))
+        self.assertIn("OUTCOME: tool_error", out_m)
+        self.assertIn("--verification-head", err_m)
+        rc_a, out_a, err_a = self._run_cli(
+            ["--hard", str(stage), "--source-plan", plan_arg,
+             "--verification-head", "a" * 40])
+        self.assertEqual(rc_a, 3, (out_a, err_a))
+        self.assertIn("OUTCOME: tool_error", out_a)
+        self.assertIn("is not a commit present", err_a)
+        try:
+            rc_u, out_u, err_u = self._run_cli(
+                ["--hard", str(stage), "--source-plan", plan_arg,
+                 "--verification-head", "b" * 40], git_on_path=False)
+        except OSError as exc:
+            self.fail(
+                "the staging CLI crashed on unavailable Git (%s); a "
+                "supplied verification head must degrade to the named "
+                "could-not-run-git tool error, never an unhandled "
+                "exception" % exc)
+        self.assertEqual(rc_u, 3, (out_u, err_u))
+        self.assertIn("OUTCOME: tool_error", out_u)
+        self.assertIn("could not run git", err_u)
+        self.assertNotIn("is not a commit present", err_u)
+
+    def test_unclassifiable_anchor_is_indeterminate_not_graded(self):
+        # r1 C3 through the staging CLI (RED): a seal anchor Git cannot
+        # classify (a tree object in the round-start field) presents as
+        # the indeterminate outcome with the prescribed wording and the
+        # offending object named, never as a graded exit-1 refusal.
+        start, close = self._seed_repo()
+        tree_id = self.repo.git(
+            "rev-parse", "%s^{tree}" % start).stdout.strip()
+        self.repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % tree_id,
+                "round_start_digest: %s" % cr.sha256_hex(_GRADED_D1),
+                "round_close_commit: %s" % close,
+            ]) + "\n")
+        stage = self._stage_for(cr.sha256_hex(_GRADED_D1),
+                                "tree-anchor-indeterminate")
+        rc, out, err = self._run_cli(
+            ["--hard", str(stage), "--source-plan",
+             str(self.repo.root / _GRADED_PLAN_REL)])
+        self.assertEqual(rc, 2, (out, err))
+        self.assertTrue(
+            out.rstrip().endswith("OUTCOME: indeterminate"), out)
+        self.assertIn("Git cannot classify commit object", err)
+        self.assertIn(tree_id, err)
+
+    def test_graded_anchor_refusal_wording_preserved(self):
+        # The graded anchor refusal keeps its existing staging-CLI wording
+        # (marker-prefixed, no-first-parent-ancestor, exit 1) through the
+        # Task 2 helper work: the squash-orphaned seal anchors declare D1
+        # while every committed plan blob carries D2, so neither anchor is
+        # an ancestor of HEAD and no first-parent candidate carries the
+        # sealed bytes; the fresh declared digest (the uncommitted worktree
+        # twin) cannot substitute for the committed history the scan walks.
+        self.repo.commit_file(_GRADED_PLAN_REL, _GRADED_D2, "seed plan")
+        self.repo.commit_allow_empty("round 1 close")
+        head_tree = self.repo.git(
+            "rev-parse", "HEAD^{tree}").stdout.strip()
+        orphan_a = self.repo.git(
+            "commit-tree", head_tree, "-m", "orphan a").stdout.strip()
+        orphan_b = self.repo.git(
+            "commit-tree", head_tree, "-m", "orphan b").stdout.strip()
+        self.repo.write_file(
+            cr.seal_relpath(_GRADED_PLAN_REL, _GRADED_SLUG),
+            "\n".join([
+                "## round 1",
+                "artifact: %s" % _GRADED_PLAN_REL,
+                "round_start_commit: %s" % orphan_a,
+                "round_start_digest: %s" % cr.sha256_hex(_GRADED_D1),
+                "round_close_commit: %s" % orphan_b,
+            ]) + "\n")
+        self.repo.write_file(_GRADED_PLAN_REL, _GRADED_D1)
+        stage = self._stage_for(cr.sha256_hex(_GRADED_D1),
+                                "graded-refusal-pin")
+        rc, out, err = self._run_cli(
+            ["--hard", str(stage), "--source-plan",
+             str(self.repo.root / _GRADED_PLAN_REL)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("OUTCOME: fail", out)
+        self.assertIn(cr.MARKER_PREFIX, err)
+        self.assertIn("no first-parent ancestor", err)
 
 
 if __name__ == "__main__":
