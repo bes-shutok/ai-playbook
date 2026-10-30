@@ -67,6 +67,61 @@ verified for Pi."). Its `pi` runtime entry remains in the registry's deferred
 set until a verified resume contract and repeatable session identity are
 available; no deferred runtime is silently treated as an eligible profile.
 
+## Agent-type affinity contract
+
+This section extends Execute-plan runtime profiles above: that section owns
+runtime identity and the inventory reference; this section adds the one shared
+compatibility rule that the four workflow entry surfaces apply by reference
+(maintenance D1/D2 selection in `agents/skills/maintenance/decisions.md`, the
+direct plan authoring entry in `agents/skills/plans/SKILL.md`, and the
+execute-plan entry and Phase 0 in `agents/skills/execute-plan/SKILL.md`). A
+consumer surface references this section by name or path and never restates
+the rule.
+
+- **Required agent type:** an optional metadata line
+  `Required agent type: <canonical runtime id>` on a backlog origin, taken
+  from the origin's explicit environment context and never inferred from the
+  creating session's identity; when a plan is authored for such an origin, the
+  same line is carried into the plan's metadata block
+  (`Required agent type: <id>`). Work without the line, at either the origin
+  or the plan stage, is runtime-neutral: every surface treats it as eligible
+  in any supported runtime and performs no comparison.
+- **Normalization:** the declared target and the invoking agent's supplied
+  active identity are both normalized through the existing runtime inventory
+  (`projects/.ai-playbook/execute-plan-runtime-inventory.toml`): a value equal
+  to a `canonical_ids` entry or an `aliases` member resolves to its canonical
+  ID. The inventory is an identity vocabulary, never an active-session
+  detector; the invoking agent, not the inventory, supplies the active
+  identity.
+- **Unrecognized declared target:** a declared value that resolves to no
+  canonical ID is invalid metadata: the surface holds only that origin or plan
+  open and reports the invalid ID; it is never treated as runtime-neutral and
+  never dispatched anywhere.
+- **Absent or unknown active identity:** for explicitly targeted work (an
+  origin or plan declaring the field), an invoking agent whose active identity
+  is absent or resolves to no canonical ID holds only that work open and
+  reports the required runtime; an identity is never guessed.
+- **Compatibility and mismatch:** with both identities resolvable, each
+  surface reports compatibility or mismatch before any setup or authoring
+  work. A mismatch names both identities, and the work is never dispatched
+  automatically to another runtime; the sanctioned exit is to leave the origin
+  or plan open for a later compatible session to select.
+- **Enforcement mode:** the mismatch outcome runs as a blocking hold at
+  every consumer surface: the surface reports the mismatch naming both
+  identities and holds the targeted origin or plan open before any setup or
+  authoring work, never dispatching it to another runtime; Task 2 of
+  `docs/history/plans/2026-10-27-agent-type-affinity-before-plan-work.md`
+  promoted it from warning-only after this check's first true catch was
+  recorded in `scripts/gate_liveness_ledger.json` (guard
+  `agent-type-affinity-check`), and the blocker is admitted as
+  `protocol:agent-type-affinity-check` in `scripts/machinery_registry.json`
+  (review by 2027-01-27). The catch evidence is the witnessed origin
+  `docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md`
+  (labeled `Required agent type: zcode`) against the 2026-10-27 Codex session
+  that selected it; the hold-and-report outcomes for an unrecognized target
+  and an absent or unknown identity are binding and unchanged by that
+  promotion.
+
 ## Verified Runtime Sources
 ### Shared Agent Skill Registry
 - Runtime source: `~/.agents/skills`
@@ -85,6 +140,10 @@ available; no deferred runtime is silently treated as an eligible profile.
 
 ### Pre-authoring investigation (`agents/skills/investigate/`)
 - `investigate` (`agents/skills/investigate/SKILL.md`): pre-authoring investigation that turns a backlog item or group into a tracked rolling-log entry with a recommended plan-creation prompt and rejected-alternative dispositions; complements `plans` Phase 1 and the maintenance monitor step.
+
+### Stacked plan workflows (`agents/skills/plan-stack/`, `agents/skills/execute-plan-stack/`)
+- `plan-stack` (`agents/skills/plan-stack/SKILL.md`): defines the stack-specific plan shape, with one pull request per ordered task, disjoint file ownership, and ancestor-only dependencies; delegates the ordinary plan lifecycle to `plans`.
+- `execute-plan-stack` (`agents/skills/execute-plan-stack/SKILL.md`): owns stack branch ordering, evidence verification, draft pull request creation, and run records; consumes the task-only execution boundary from `execute-plan`.
 
 ### Maintenance scheduler (`agents/skills/maintenance/`)
 - `maintenance`: unattended scheduler turn (surveys backlog, plans, and quota); its monitor step prunes and authors the top ready entry of docs/history/backlog/PLAN-PROMPTS.md in-session when the authoring lane is free.

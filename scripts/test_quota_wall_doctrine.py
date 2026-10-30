@@ -248,7 +248,9 @@ def test_doctrine_block_carries_the_two_class_rule():
         "one hardened probe",
         "pre_restart:",
         "pre_restart_paths:",
-        "throttle-window hold",
+        # re-aimed 2026-10-30 (review round: the undefined "throttle-window
+        # hold" term was dropped; the block now reads "throttle window")
+        "throttle window",
         "on the probe's death",
         "timed resume",
         "the recorded reset",
@@ -344,6 +346,143 @@ def test_witness_error_without_a_reset_time_is_transient():
 
 # --- Task 2: the launch ledger line shape (visibility receipt) ---
 
+# The dispatch_failed tracking-list pin (2026-10-30, the receipt-witness
+# follow-up): the failure receipt's tracking-list entry gets the same reader
+# pin the launch-wave entry carries, so deleting the pinned line is a suite
+# failure instead of a silent doctrine erosion.
+DISPATCH_FAILED_ENTRY_HEAD = "- `dispatch_failed`"
+
+
+def _dispatch_failed_entry() -> str:
+    """The Phase 3 tracking list's dispatch_failed bullet (one line).
+
+    Its absence is the RED arm, mirroring _ledger_entry: the failure-receipt
+    witnesses refuse to parse fixtures without the line contract's home.
+    """
+    text = _exec_text()
+    phase3 = text.find(PHASE3_HEADING)
+    if phase3 == -1:
+        pytest.fail(
+            "Phase 3 heading absent from agents/skills/execute-plan/SKILL.md"
+        )
+    anchor = text.find(TRACKING_LIST_ANCHOR, phase3)
+    head = text.find(DISPATCH_FAILED_ENTRY_HEAD, anchor) if anchor != -1 else -1
+    if head == -1:
+        pytest.fail(
+            "dispatch_failed line contract absent from the Phase 3 tracking "
+            "list in agents/skills/execute-plan/SKILL.md"
+        )
+    end = text.find("\n", head)
+    return text[head:] if end == -1 else text[head:end]
+
+
+# The tracking-list entry's contract literals, single-homed: the parser
+# gate and the dedicated contract test assert the same tuple, so the two
+# lists cannot drift independently.
+DISPATCH_FAILED_CONTRACT_LITERALS = (
+    "`dispatch_failed: <ISO timestamp> <worker role> <reason code> pre-start`",
+    "closed reason-code set",
+    "the two-line `pre_restart:`/`pre_restart_paths:` state pair",
+    "the bounded-retry budget owned by the Sub-Agent Launch Rules paragraph",
+    "never restated here",
+)
+
+# The typed line's timestamp token form: ISO minute precision, the form the
+# doctrine's own fixture vocabulary writes (2026-10-07T09:47Z).
+DISPATCH_FAILED_TS_RX = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z")
+
+
+def dispatch_failed_fields(line: str) -> dict:
+    """Test-local dispatch-failure record parser; its shape vocabulary is
+    read from the tracking-list entry the same way ledger_lines reads the
+    launch-wave entry.
+
+    Returns the typed line's timestamp, role, and closed-set reason code;
+    refuses any line outside the `dispatch_failed: <ISO timestamp> <worker
+    role> <reason code> pre-start` shape (the timestamp token must match the
+    ISO minute form; a single-token role per the doctrine's fixture
+    vocabulary). The `other` reason code carries the provider error text
+    quoted on the line (the closed set's clause in the Sub-Agent Launch
+    Rules paragraph), so trailing tokens after `other` are that quote and
+    are accepted, carried back as `error_text`.
+    """
+    entry = _dispatch_failed_entry()
+    for literal in DISPATCH_FAILED_CONTRACT_LITERALS:
+        assert literal in entry, literal
+    assert line.startswith("dispatch_failed:"), line
+    parts = line.split()
+    assert len(parts) >= 5, f"missing pre-start token: {line}"
+    assert parts[4] == "pre-start", line
+    assert parts[3] in REASON_CODES, (
+        f"reason code {parts[3]!r} outside the closed set: {line}"
+    )
+    assert DISPATCH_FAILED_TS_RX.fullmatch(parts[1]), line
+    fields = {"timestamp": parts[1], "role": parts[2], "reason_code": parts[3]}
+    if parts[3] == "other":
+        assert len(parts) > 5, (
+            f"other reason code carries no quoted provider error text: {line}"
+        )
+        fields["error_text"] = " ".join(parts[5:])
+    else:
+        assert len(parts) == 5, (
+            f"trailing tokens outside the other code's quoted-error shape: {line}"
+        )
+    return fields
+
+
+def test_dispatch_failed_tracking_entry_carries_the_line_contract():
+    entry = _dispatch_failed_entry()
+    # The typed line, its closed reason-code set, the pre-restart state pair,
+    # the budget pointer, and the delegation clause are the entry's contract;
+    # deleting any of them (the witnessed erosion class) fails here. The
+    # literal tuple is shared with the parser gate, so the two lists cannot
+    # drift apart.
+    for literal in DISPATCH_FAILED_CONTRACT_LITERALS:
+        assert literal in entry, literal
+
+
+def test_witness_dispatch_failed_line_parses_against_the_entry_contract():
+    fields = dispatch_failed_fields(
+        "dispatch_failed: 2026-10-29T23:41Z reviewer rate-limit pre-start"
+    )
+    assert fields == {
+        "timestamp": "2026-10-29T23:41Z",
+        "role": "reviewer",
+        "reason_code": "rate-limit",
+    }
+
+
+def test_witness_dispatch_failed_parser_refuses_out_of_set_reason_code():
+    with pytest.raises(AssertionError, match="outside the closed set"):
+        dispatch_failed_fields(
+            "dispatch_failed: 2026-10-29T23:41Z reviewer quota-wall pre-start"
+        )
+    with pytest.raises(AssertionError, match="pre-start"):
+        dispatch_failed_fields(
+            "dispatch_failed: 2026-10-29T23:41Z reviewer rate-limit"
+        )
+
+
+def test_witness_dispatch_failed_parser_refuses_malformed_timestamp():
+    with pytest.raises(AssertionError, match="notatime"):
+        dispatch_failed_fields(
+            "dispatch_failed: notatime reviewer rate-limit pre-start"
+        )
+
+
+def test_witness_dispatch_failed_other_code_carries_the_quoted_error_text():
+    fields = dispatch_failed_fields(
+        "dispatch_failed: 2026-10-29T23:41Z reviewer other pre-start "
+        "provider returned 529 origin-wall"
+    )
+    assert fields["reason_code"] == "other"
+    assert fields["error_text"] == "provider returned 529 origin-wall"
+    with pytest.raises(AssertionError, match="quoted provider error text"):
+        dispatch_failed_fields(
+            "dispatch_failed: 2026-10-29T23:41Z reviewer other pre-start"
+        )
+
+
 def _ledger_entry() -> str:
     """The Phase 3 tracking list's launch ledger bullet (one line).
 
@@ -384,7 +523,10 @@ def ledger_lines(lines: list[str]) -> list[dict]:
         "1-based launch sequence",
         "per-path pass number",
         "per-round wave ordinal",
-        "receipt wave 2 is not ledger ordinal 2",
+        # the "receipt wave 2 is not ledger ordinal 2" example clause was
+        # dropped 2026-10-30 (review round: it leaned on an absent
+        # wave_budget_receipts example); the parenthetical it leaned on is
+        # pinned by "per-round wave ordinal" above
         "launch-wave: <role> <n>",
         "the lines never collide across roles (the per-role ordinals may repeat)",
         "consumes no ordinal",
@@ -624,13 +766,53 @@ def test_witness_plan_record_witness_names_the_superseded_chat_direction():
     )
 
 
+def _committed_text() -> str:
+    """The directives file's newest committed (HEAD) revision's bytes."""
+    return _git_bytes(["show", f"HEAD:{DIRECTIVES_HEAD_PATH}"]).decode("utf-8")
+
+
+def _committed_records() -> dict[str, str]:
+    """The directives file's newest committed (HEAD) revision's records."""
+    return _directive_records(_committed_text())
+
+
 def test_witness_every_preexisting_record_is_textually_unchanged_against_baseline():
+    """Byte-level pin of every pre-existing record against the baseline.
+
+    A sanctioned post-record commit may edit a pre-existing record (the
+    2026-10-27 em-dash formatting pass over D-3..D-6 landed after this
+    plan's record): such a record is held byte-identically to the newest
+    committed (HEAD) revision instead, so any uncommitted drift from both
+    revisions stays red with the record id named, and a working-tree
+    deletion of a committed record is a named red too, never a bare
+    KeyError. The preamble carries the same two-revision acceptance: it
+    must equal the baseline preamble, or the newest committed (HEAD)
+    preamble when a sanctioned commit edited the preamble.
+    """
     tree_text = DIRECTIVES_FILE.read_text(encoding="utf-8")
     head_text = _baseline_directives_text()
+    committed_text = _committed_text()
     tree_records = _directive_records(tree_text)
     head_records = _directive_records(head_text)
+    committed_records = _directive_records(committed_text)
     for record_id, head_section in head_records.items():
-        assert tree_records[record_id] == head_section, record_id
+        assert record_id in tree_records, (
+            f"committed record {record_id} deleted from the working tree"
+        )
+        if tree_records[record_id] == head_section:
+            continue
+        committed_section = committed_records.get(record_id)
+        assert tree_records[record_id] == committed_section, (
+            f"record {record_id} drifted from both the baseline and the "
+            "committed (HEAD) revision"
+        )
     tree_preamble = tree_text[: RECORD_HEAD_RX.search(tree_text).start()]
     head_preamble = head_text[: RECORD_HEAD_RX.search(head_text).start()]
-    assert tree_preamble == head_preamble
+    if tree_preamble != head_preamble:
+        committed_preamble = committed_text[
+            : RECORD_HEAD_RX.search(committed_text).start()
+        ]
+        assert tree_preamble == committed_preamble, (
+            "working-tree preamble drifted from both the baseline and the "
+            "committed (HEAD) preamble"
+        )

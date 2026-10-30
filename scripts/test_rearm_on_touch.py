@@ -43,7 +43,7 @@ SCRIPT = SCRIPTS_DIR / "rearm_on_touch.py"
 # Mirror of the recognition literals for fixture construction. The pinned
 # source of record is agents/skills/maintenance/zcode.md ("Recurring
 # automation recipe"); this suite only mirrors them into fixtures.
-RECOGNITION_TITLE = "Maintenance scheduler turn (every 2 hours)"
+RECOGNITION_TITLE = "Maintenance scheduler turn"
 RECOGNITION_OPENING = "You are the maintenance scheduler for the repository at"
 
 
@@ -424,6 +424,32 @@ def test_listing_input_armed_again_bookkeeping(tmp_path):
     expected = with_field_value(raw_before, "parent_absent_since", "null")
     expected = with_field_value(expected, "rearm_note", "null")
     assert raw_after == expected
+
+
+def test_malformed_listing_is_tool_error(tmp_path):
+    """[class: REPOSITORY_TEST] --listing-json whose content is unparseable:
+    tool error (exit 3, the malformed arm's contract home) and a loud
+    error, never a silent pass; the state file stays byte-identical and
+    the verdict JSON stays the parseable payload with the final OUTCOME
+    line following it."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id="parent-live-1",
+                        parent_absent_since=None)
+    raw_before = state.read_text(encoding="utf-8")
+    listing_path = tmp_path / "listing.json"
+    listing_path.write_text("{ this is not json", encoding="utf-8")
+
+    proc = run_check(root, listing=listing_path)
+
+    assert proc.returncode == 3
+    verdict = parse_verdict(proc)
+    assert verdict["class"] == "malformed"
+    assert proc.stderr.strip(), "malformed listing must fail loud on stderr"
+    assert "listing input is not parseable JSON" in proc.stderr
+    assert state.read_text(encoding="utf-8") == raw_before, "state file was edited"
+    outcome_lines = [l for l in proc.stdout.splitlines() if l.startswith("OUTCOME:")]
+    assert outcome_lines == ["OUTCOME: tool_error"]
+    assert proc.stdout.splitlines()[-1] == "OUTCOME: tool_error"
 
 
 def test_adoption_guards(tmp_path):

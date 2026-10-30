@@ -235,8 +235,13 @@ class WorktreeCloseoutTest(unittest.TestCase):
             _write(root / "docs/tmp/scratch.md", b"scratch pad\n")
             _write(root / ".ai-playbook/review-certs/round-seal.md", b"seal entry\n")
             baseline = root / "baseline.json"
-            code, _stdout, stderr = _run_cli("capture", "--out", str(baseline), cwd=root)
+            code, stdout, stderr = _run_cli("capture", "--out", str(baseline), cwd=root)
             self.assertEqual(code, 0, stderr)
+            self.assertIn(
+                f"(checkout: {root.resolve()})",
+                stdout,
+                "the capture output did not name the checkout it captured in",
+            )
             data = json.loads(baseline.read_text(encoding="utf-8"))
             self.assertEqual(
                 data["dirs"],
@@ -664,6 +669,16 @@ class WorktreeCloseoutTest(unittest.TestCase):
                 code = _migrate(source, target, missing, manifest)
             self.assertNotEqual(code, 0)
             self.assertIn(str(missing), stderr.getvalue())
+            self.assertIn(
+                "remedy: check the primary checkout's session dir",
+                stderr.getvalue(),
+                "the refusal did not carry the primary-checkout remedy clause",
+            )
+            self.assertIn(
+                "a recapture here is a late baseline",
+                stderr.getvalue(),
+                "the refusal did not name the late-baseline deviation",
+            )
             self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
 
     def test_setup_capture_production_shape_then_migrate_accepts(self):
@@ -6361,6 +6376,491 @@ class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
         self.assertIn(f"branch-closeout: branch {branch} exact-tree-accounted at {snap}", out)
 
 
+class CloseoutReferenceStateTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] Closeout reference-state resolver witnesses
+    (plan 2026-10-29-done-gate-report-retention Task 1): the resolver
+    extracted from the gate's inline adjudication reports the LATEST branch
+    record and every verified migrated/renamed destination, and resolves
+    absent, unreadable, and malformed manifest shapes to unresolved/no
+    destinations without normalizing them (the gate keeps its shape-specific
+    skip, refusal, and tool-error outcomes; the consumer parity is pinned by
+    CloseoutReferenceConsumerParityTest)."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wrmg-refstate-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _manifest(self, body: bytes) -> Path:
+        path = self.root / "closeout-migration.json"
+        _write(path, body)
+        return path
+
+    def _checkout_shape(self, name: str) -> Path:
+        # A facts-resolved checkout-shaped directory (the gitless fixture
+        # shape GateManifestSlugResolutionTest pins): the candidate resolver
+        # reads only the facts block, never a git probe.
+        path = self.root / name
+        path.mkdir(parents=True)
+        _write(
+            path / ".ai-playbook/facts.md",
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\ntmp_dir = \"docs/tmp/\"\nmetrics_dir = \".ai-playbook/metrics/\"\n```\n",
+        )
+        return path
+
+    def test_resolvable_manifest_reports_latest_record_and_all_verified_destinations(self):
+        # Repeated branch records: the LATEST record is the authoritative
+        # binding. Every verified migrated and renamed destination remains
+        # represented, in manifest order, duplicates preserved; unverified
+        # rows, non-dictionary rows, and skipped-section rows are never
+        # references; the truthiness of the verified mark is judged exactly
+        # as the inline comprehension judged it.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "migrated": [
+                        {"destination": "docs/tmp/a.md", "verified": True},
+                        "a-string-row",
+                        {"destination": "docs/tmp/b.md", "verified": False},
+                        {"destination": "docs/tmp/a.md", "verified": True},
+                        {"destination": "docs/tmp/c.md", "verified": "truthy-mark"},
+                    ],
+                    "renamed": [
+                        {"destination": "docs/tmp/r.md", "verified": True},
+                        {"destination": "docs/tmp/unverified-r.md"},
+                    ],
+                    "skipped": [
+                        {"destination": "docs/tmp/skipped.md", "verified": True},
+                    ],
+                    "failed": [],
+                    "branch": [
+                        {"branch": "wt-old", "source": "/stale"},
+                        {"branch": "wt-run", "source": "/run"},
+                    ],
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsNone(state["read_error"])
+        self.assertIsNone(state["shape_error"])
+        self.assertIsNone(state["destinations_error"])
+        self.assertEqual(state["recorded"], "wt-run")
+        self.assertEqual(state["record"], {"branch": "wt-run", "source": "/run"})
+        self.assertEqual(
+            state["verified_destinations"],
+            ["docs/tmp/a.md", "docs/tmp/a.md", "docs/tmp/c.md", "docs/tmp/r.md"],
+        )
+
+    def test_absent_manifest_resolves_unresolved(self):
+        # A path with no file behind it is an unresolved read (the OSError
+        # family the consumer refuses on): no record, no destinations.
+        state = MODULE._resolve_closeout_reference_state(self.root / "absent.json")
+        self.assertIsInstance(state["read_error"], OSError)
+        self.assertIsNone(state["recorded"])
+        self.assertEqual(state["record"], {})
+        self.assertEqual(state["verified_destinations"], [])
+        self.assertIsNone(state["shape_error"])
+        self.assertIsNone(state["destinations_error"])
+
+    def test_unreadable_json_resolves_unresolved(self):
+        # Unreadable JSON (the ValueError family): unresolved, no
+        # destinations; the consumer keeps its named unreadable refusal.
+        manifest_path = self._manifest(b"{not json")
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsInstance(state["read_error"], ValueError)
+        self.assertIsNone(state["recorded"])
+        self.assertEqual(state["verified_destinations"], [])
+        self.assertIsNone(state["shape_error"])
+        self.assertIsNone(state["destinations_error"])
+
+    def test_array_root_resolves_unresolved_shape_error(self):
+        # A parsed array root is a shape error, never normalized: the
+        # resolver returns no references and carries the same AttributeError
+        # the inline manifest access raised (the consumer re-raises it so
+        # the caught OUTCOME: tool_error shape is preserved).
+        manifest_path = self._manifest(b"[]")
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsNone(state["read_error"])
+        self.assertIsInstance(state["shape_error"], AttributeError)
+        self.assertEqual(state["verified_destinations"], [])
+        self.assertIsNone(state["destinations_error"])
+        self.assertEqual(state["record"], {})
+        self.assertIsNone(state["recorded"])
+
+    def test_non_list_branch_field_leaves_record_unusable(self):
+        # A non-list truthy branch field (a string, a dict) resolves to an
+        # unusable record (record {} / recorded None) with no shape error:
+        # the consumer's named no-branch-record legacy skip keys off exactly
+        # this state; no shape is normalized.
+        for body in (
+            json.dumps({"branch": "wt-run", "migrated": []}).encode("utf-8"),
+            json.dumps({"branch": {"branch": "wt-run"}}).encode("utf-8"),
+        ):
+            state = MODULE._resolve_closeout_reference_state(self._manifest(body))
+            self.assertIsNone(state["shape_error"])
+            self.assertEqual(state["record"], {})
+            self.assertIsNone(state["recorded"])
+
+    def test_string_latest_branch_record_leaves_record_unusable(self):
+        # A non-dictionary latest branch record (append semantics gone
+        # wrong) resolves to an unusable record while the raw records value
+        # and the readable destinations stay factual.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "migrated": [{"destination": "docs/tmp/a.md", "verified": True}],
+                    "branch": [{"branch": "wt-old"}, "stale-late-record"],
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsNone(state["shape_error"])
+        self.assertEqual(state["records"], [{"branch": "wt-old"}, "stale-late-record"])
+        self.assertEqual(state["record"], {})
+        self.assertIsNone(state["recorded"])
+        self.assertEqual(state["verified_destinations"], ["docs/tmp/a.md"])
+
+    def test_string_row_in_migrated_is_ignored(self):
+        # A string row inside migrated is ignored exactly as the inline
+        # comprehension ignored it: never a reference, never an error.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "branch": [{"branch": "wt-run"}],
+                    "migrated": ["stray-row", {"destination": "docs/tmp/a.md", "verified": True}],
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsNone(state["destinations_error"])
+        self.assertEqual(state["verified_destinations"], ["docs/tmp/a.md"])
+
+    def test_integer_migrated_section_resolves_no_destinations(self):
+        # A non-iterable migrated section is a destinations error carrying
+        # the same TypeError the inline comprehension raised: no
+        # destinations resolve, the record stays usable (the consumer
+        # re-raises at its guard-check point), no normalization.
+        manifest_path = self._manifest(
+            json.dumps({"branch": [{"branch": "wt-run"}], "migrated": 5}).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsNone(state["read_error"])
+        self.assertIsNone(state["shape_error"])
+        self.assertIsInstance(state["destinations_error"], TypeError)
+        self.assertEqual(state["verified_destinations"], [])
+        self.assertEqual(state["recorded"], "wt-run")
+
+    def test_integer_renamed_section_discards_partial_destinations(self):
+        # A non-iterable renamed section after readable migrated rows
+        # discards the partial collection: an unsupported shape resolves to
+        # no destinations, never to a half-read reference set.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "branch": [{"branch": "wt-run"}],
+                    "migrated": [{"destination": "docs/tmp/a.md", "verified": True}],
+                    "renamed": 7,
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsInstance(state["destinations_error"], TypeError)
+        self.assertEqual(state["verified_destinations"], [])
+
+    def test_skipped_section_rows_are_never_references(self):
+        # skipped-section rows carry no presence requirement: their
+        # destinations are never references.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "branch": [{"branch": "wt-run"}],
+                    "migrated": [],
+                    "renamed": [],
+                    "skipped": [
+                        {"destination": "docs/tmp/skipped.md", "verified": True}
+                    ],
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertEqual(state["verified_destinations"], [])
+
+    def test_manifest_candidate_selection(self):
+        # The "which manifest" half of the reference state: the explicit
+        # --migration-manifest operand is authoritative (an absent explicit
+        # file yields (None, True) so the caller reports its distinct
+        # explicit-path skip and never falls back), the derived lookup
+        # probes the canonical closeout-migration.json first and the legacy
+        # migration-manifest.json twin second.
+        target = self._checkout_shape("primary")
+        plan = target / "docs/history/plans/2026-10-29-feat.md"
+        derived = target / "docs/tmp/execute-plan/feat/closeout-migration.json"
+        _write(derived, b"{}")
+        override = self.root / "override.json"
+        _write(override, b"{}")
+        chosen, explicit = MODULE._closeout_manifest_candidate(target, plan, str(override))
+        self.assertEqual(chosen, override)
+        self.assertTrue(explicit)
+        absent = self.root / "absent-override.json"
+        chosen, explicit = MODULE._closeout_manifest_candidate(target, plan, str(absent))
+        self.assertIsNone(chosen)
+        self.assertTrue(explicit)
+        legacy = target / "docs/tmp/execute-plan/feat/migration-manifest.json"
+        _write(legacy, b"{}")
+        chosen, explicit = MODULE._closeout_manifest_candidate(target, plan, None)
+        self.assertEqual(chosen, derived)
+        self.assertFalse(explicit)
+        derived.unlink()
+        chosen, explicit = MODULE._closeout_manifest_candidate(target, plan, None)
+        self.assertEqual(chosen, legacy)
+        self.assertFalse(explicit)
+        legacy.unlink()
+        chosen, explicit = MODULE._closeout_manifest_candidate(target, plan, None)
+        self.assertIsNone(chosen)
+        self.assertFalse(explicit)
+
+
+class CloseoutReferenceConsumerParityTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Consumer byte-parity witnesses (plan
+    2026-10-29-done-gate-report-retention Task 1): routing the gate's
+    exact-branch adjudication through the extracted reference resolver keeps
+    every outcome identical - the latest record governs liveness over
+    repeated records, every verified migrated and renamed destination stays
+    presence-checked, skipped entries impose no presence requirement, and
+    the malformed shapes keep their named skips, the unreadable refusal, and
+    the caught tool-error class. Branch-only mode adjudicates the same way
+    and gains no retention behavior."""
+
+    def _manifest_path(self) -> Path:
+        return self.primary / "docs/tmp/execute-plan/x/closeout-migration.json"
+
+    def _rewrite_manifest(self, mutate) -> Path:
+        path = self._manifest_path()
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        mutate(manifest)
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        return path
+
+    def test_repeated_records_latest_governs_liveness(self):
+        # Repeated branch records with a resolvable recorded ref: the
+        # LATEST record governs (the stale earlier record never refuses)
+        # while the verified migrated destination stays presence-checked.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m.update(
+                branch=[
+                    {"branch": "wt-stale", "source": "/stale"},
+                    {"branch": "wt-run", "source": str(self.worktree)},
+                ]
+            )
+        )
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        expected = self._branch_oid("wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch wt-run ancestry-accounted at {expected}", out)
+        self.assertIn(
+            f"branch-disposition: branch=wt-run disposition=ancestry-accounted oid={expected}",
+            out,
+        )
+
+    def test_repeated_records_latest_mismatch_refuses(self):
+        # When the LATEST record binds a different branch, the identity
+        # binding refuses against it - proof the last record, not an
+        # earlier one, governs.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m.update(
+                branch=[
+                    {"branch": "wt-run", "source": str(self.worktree)},
+                    {"branch": "wt-stale", "source": "/stale"},
+                ]
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("exact-branch identity mismatch", out)
+        self.assertIn("wt-stale", out)
+        self.assertIn("wt-run", out)
+
+    def test_renamed_verified_destination_presence_enforced(self):
+        # A verified renamed destination missing under the target refuses
+        # exactly like a migrated one: every verified destination from both
+        # sections remains represented.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m["renamed"].append(
+                {
+                    "source": "docs/tmp/vanished-renamed-source.md",
+                    "destination": "docs/tmp/vanished-renamed.md",
+                    "verified": True,
+                }
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("migrated artifact(s) missing under the target", out)
+        self.assertIn("docs/tmp/vanished-renamed.md", out)
+
+    def test_skipped_entry_imposes_no_presence_requirement(self):
+        # A skipped-section entry is no reference: its destination imposes
+        # no presence requirement and the accounted closeout passes.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m.update(
+                skipped=[
+                    {
+                        "source": "docs/tmp/never-existed.md",
+                        "destination": "docs/tmp/never-existed.md",
+                        "verified": True,
+                    }
+                ]
+            )
+        )
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("ancestry-accounted", out)
+        self.assertNotIn("missing under the target", out)
+        self.assertNotIn("never-existed.md", out)
+
+    def test_unreadable_manifest_refuses(self):
+        # Unreadable JSON at the derived manifest path: the named unreadable
+        # refusal (OUTCOME: fail), unchanged through the resolver.
+        self._seed_migration_manifest(landed=True)
+        self._manifest_path().write_bytes(b"{not json")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("unreadable", out)
+        self.assertIn("exact-branch binding cannot be verified", out)
+
+    def test_array_root_reaches_tool_error(self):
+        # A parsed array root reaches the caught tool-error class (exit 3)
+        # at the same point the inline manifest access raised: no
+        # normalization, no new refusal class.
+        self._seed_migration_manifest(landed=True)
+        self._manifest_path().write_bytes(b"[]")
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("AttributeError", err)
+
+    def test_integer_migrated_section_reaches_tool_error(self):
+        # A non-iterable migrated section reaches the caught tool-error
+        # class only after the identity binding passes - the inline
+        # guard-check ordering, preserved through the resolver.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(lambda m: m.update(migrated=5))
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("TypeError", err)
+
+    def test_non_list_branch_field_skips(self):
+        # A non-list truthy branch field keeps the named no-branch-record
+        # legacy skip; worktree mode passes with the skip line and no
+        # disposition.
+        self._seed_migration_manifest(landed=True)
+        self._manifest_path().write_bytes(
+            json.dumps({"branch": "wt-run", "migrated": [], "renamed": []}).encode("utf-8")
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            "branch-closeout: skipped (migration manifest carries no branch "
+            "record; legacy shape)",
+            out,
+        )
+        self.assertNotIn("branch-disposition:", out)
+
+    def test_string_latest_branch_record_skips(self):
+        # A non-dictionary latest branch record keeps the named
+        # recorded-branch-unresolved legacy skip.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m.update(
+                branch=[
+                    {"branch": "wt-run", "source": str(self.worktree)},
+                    "stale-late-record",
+                ]
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            "branch-closeout: skipped (recorded branch unresolved at "
+            "transfer; legacy shape)",
+            out,
+        )
+        self.assertNotIn("branch-disposition:", out)
+
+    def test_string_row_in_migrated_is_ignored(self):
+        # A string row inside migrated is ignored: no missing-destination
+        # reason, no tool error, and the real verified row still binds the
+        # accounted closeout.
+        self._seed_migration_manifest(landed=True)
+        self._rewrite_manifest(
+            lambda m: m.update(
+                migrated=["stray-row"] + [
+                    {
+                        "source": ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                        "destination": ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                        "verified": True,
+                    }
+                ]
+            )
+        )
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("ancestry-accounted", out)
+        self.assertNotIn("missing under the target", out)
+
+    def test_branch_only_repeated_records_latest_governs(self):
+        # Branch-only mode binds the LATEST record too, and gains no new
+        # behavior: the accounted verdict is unchanged (branch-only
+        # retention stays deferred to the linked follow-up item).
+        self._seed_migration_manifest(landed=False)
+        branch = "wt-done"
+        self._git(self.primary, "branch", branch, "HEAD")
+        expected = self._branch_oid(branch)
+        manifest_dir = self.primary / "docs/tmp/execute-plan/branch-only-parity"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "closeout-migration.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                            "destination": ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md",
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {"branch": "wt-other", "source": "branch-only"},
+                        {"branch": branch, "source": "branch-only"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} ancestry-accounted at {expected}", out)
+
+
 class ZeroPlanMigrateSkeletonProducerTest(unittest.TestCase):
     """[class: REPOSITORY_TEST] The done_run.sh zero/multi-plan producer's
     migrate-shape twin (lesson 289's witnessed hand-build): the bash function
@@ -6831,6 +7331,669 @@ class SkillSlugContractTest(unittest.TestCase):
         skill = self._read("agents/skills/execute-plan/SKILL.md")
         self.assertIn("Retained-branch reporting", skill)
         self.assertIn("branch-disposition", skill)
+
+
+# Plan: docs/history/plans/2026-10-29-done-gate-report-retention.md, Task 3.
+# The baseline-less scoped-transfer arm routes through cmd_migrate: the
+# explicitly captured scoped inventory supplies the expected transfer set
+# without a baseline or a dirs requirement; every expected item is validated
+# one-for-one inside the existing merge-lock transaction (a missing source or
+# a digest mismatch fails the transaction and appends no verified row); an
+# empty inventory appends nothing; and the whole copy/check/append span
+# shares the worktree-closeout-migrate merge lock with the done-session
+# sweep, so no manifest comes to cite a missing report in either race order.
+# --------------------------------------------------------------------------- #
+class ScopedInventoryMigrateTest(unittest.TestCase):
+    """Fixture style: the MigrateMergeLockTest pattern (a fixture repo with a
+    facts block and a repo-local done-lock copy, the hermetic lock env pinned
+    into this process for in-process runs and passed explicitly to every
+    subprocess, inherited GIT_ variables cleared for subprocess runs)."""
+
+    GIT_IDENTITY = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wcm-scoped-inv-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.primary = self.root / "proj"
+        self.primary.mkdir(parents=True)
+        env = os.environ.copy()
+        env.update(self.GIT_IDENTITY)
+        subprocess.run(["git", "-C", str(self.primary), "init", "-q"], capture_output=True, env=env, check=True)
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\ntmp_dir = \"docs/tmp/\"\nmetrics_dir = \".ai-playbook/metrics/\"\nreview_certs_dir = \".ai-playbook/review-certs/\"\n```\n",
+        )
+        (self.primary / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DONE_LOCK_SCRIPT_PATH, self.primary / "scripts" / "done-lock.sh")
+        subprocess.run(["git", "-C", str(self.primary), "add", "-A"], capture_output=True, env=env, check=True)
+        subprocess.run(["git", "-C", str(self.primary), "commit", "-q", "-m", "init: fixture repo"], capture_output=True, env=env, check=True)
+        self.merge_lock_root = self.root / "merge-locks"
+        # In-process runs (MODULE.main) resolve the lock env from this
+        # process's environment: pin it hermetically for the whole class.
+        pins = _hermetic_lock_env(self.root)
+        self._saved_lock_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        self.addCleanup(self._restore_lock_env)
+
+    def _restore_lock_env(self) -> None:
+        for key, value in self._saved_lock_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _write_skeleton(self, branch: str, source: str) -> Path:
+        """The zero/multi-plan producer's migrate-shape skeleton (the shape
+        ZeroPlanMigrateSkeletonProducerTest pins): a branch record plus an
+        empty migrated list, named for the run beside the skip record."""
+        manifest = self.root / "worktree-migrate-baseline-run-z3-manifest.json"
+        _write(
+            manifest,
+            json.dumps(
+                {"branch": [{"branch": branch, "source": source}], "migrated": []},
+                indent=2,
+            ).encode("utf-8")
+            + b"\n",
+        )
+        return manifest
+
+    def _write_inventory(self, rels: list[str]) -> Path:
+        inventory = self.root / "scoped-inventory.json"
+        _write(
+            inventory,
+            (json.dumps({"files": rels}, indent=2) + "\n").encode("utf-8"),
+        )
+        return inventory
+
+    def _run_scoped(
+        self, source: Path, inventory: Path, manifest: Path, **extra: str
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH), "migrate",
+                "--inventory", str(inventory),
+                "--source", str(source),
+                "--target", str(self.primary),
+                "--manifest", str(manifest),
+                "--suffix", "z3",
+            ],
+            capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root, **extra),
+        )
+
+    def _verified_destinations(self, manifest: Path) -> list[str]:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        return [
+            entry["destination"]
+            for section in ("migrated", "renamed")
+            for entry in data.get(section, [])
+            if isinstance(entry, dict) and entry.get("verified") and entry.get("destination")
+        ]
+
+    def test_scoped_inventory_migrates_selected_items_and_appends_verified_rows(self):
+        """[class: REPOSITORY_TEST] Given the scoped inventory of two sources,
+        expects the migrate invocation (no baseline, no dirs) to copy exactly
+        the selected items, to append one `verified: true` migrated row per
+        item with the plain {source, destination, verified} field set (no new
+        schema field), to leave an unselected source untransferred, and to
+        append the source-binding branch record."""
+        source = self.root / "source"
+        review_rel = ".ai-playbook/reviews/2026-10-30-scoped-r1.md"
+        report_rel = "docs/tmp/done-session/gate-reports/run-z3-docs-tmp-sweep-full.txt"
+        unselected_rel = "docs/tmp/scratch/unselected.txt"
+        _write(source / review_rel, b"review record\n")
+        _write(source / report_rel, b"gate report rows\n")
+        _write(source / unselected_rel, b"not selected\n")
+        primary = self.primary.resolve()
+        skeleton = self._write_skeleton("wt-scoped-a", str(source))
+        inventory = self._write_inventory([review_rel, report_rel])
+
+        proc = self._run_scoped(source, inventory, skeleton)
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue((primary / review_rel).is_file(), "selected review record copied")
+        self.assertTrue((primary / report_rel).is_file(), "selected gate report copied")
+        self.assertFalse(
+            (primary / unselected_rel).exists(),
+            "a source not selected into the inventory stays untransferred",
+        )
+        data = json.loads(skeleton.read_text(encoding="utf-8"))
+        migrated = data["migrated"]
+        self.assertEqual(len(migrated), 2, data)
+        by_source = {entry["source"]: entry for entry in migrated}
+        for rel in (review_rel, report_rel):
+            entry = by_source[rel]
+            self.assertEqual(entry["destination"], str(primary / rel))
+            self.assertTrue(entry["verified"])
+            # The plain migrated-row field set only: no new schema field.
+            self.assertEqual(sorted(entry), ["destination", "source", "verified"])
+        self.assertEqual(data.get("failed"), [])
+        self.assertEqual(data.get("renamed"), [])
+        self.assertEqual(data.get("skipped"), [])
+        # The transfer-time branch record appends beside the producer's.
+        self.assertEqual(data["branch"][-1]["source"], str(source.resolve()))
+
+    def test_scoped_inventory_empty_appends_nothing(self):
+        """[class: REPOSITORY_TEST] Given an empty scoped inventory, expects
+        the migration to succeed while appending no content rows at all: the
+        empty skeleton stays migrated-less (no protected destination), and no
+        source file is copied behind the inventory's back."""
+        source = self.root / "source"
+        unselected_rel = "docs/tmp/done-session/gate-reports/run-empty-docs-tmp-sweep-full.txt"
+        _write(source / unselected_rel, b"aged unselected\n")
+        skeleton = self._write_skeleton("wt-scoped-e", str(source))
+        inventory = self._write_inventory([])
+
+        proc = self._run_scoped(source, inventory, skeleton)
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        data = json.loads(skeleton.read_text(encoding="utf-8"))
+        self.assertEqual(data["migrated"], [], "the empty skeleton creates no protected destination")
+        for section in ("renamed", "replaced", "skipped", "failed"):
+            self.assertEqual(data.get(section, []), [], data)
+        self.assertFalse((self.primary.resolve() / unselected_rel).exists())
+
+    def test_scoped_inventory_operand_exclusivity_stays_usage_class(self):
+        """[class: REPOSITORY_TEST] Given both transfer operands, or neither,
+        expects the argparse usage-error class (exit 2, no traceback): the
+        scoped arm never silently coexists with, or substitutes for, a
+        fabricated baseline operand."""
+        source = self.root / "source"
+        _write(source / ".ai-playbook/reviews/r.md", b"r\n")
+        skeleton = self._write_skeleton("wt-scoped-x", str(source))
+        inventory = self._write_inventory([".ai-playbook/reviews/r.md"])
+        base = [
+            sys.executable, str(SCRIPT_PATH), "migrate",
+            "--source", str(source), "--target", str(self.primary),
+            "--manifest", str(skeleton),
+        ]
+        both = subprocess.run(
+            base + ["--baseline", str(self.root / "absent-baseline.json"), "--inventory", str(inventory)],
+            capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root),
+        )
+        self.assertEqual(both.returncode, 2, both.stdout + both.stderr)
+        self.assertIn("not allowed with argument", both.stderr)
+        self.assertNotIn("Traceback", both.stderr)
+        neither = subprocess.run(
+            base, capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root),
+        )
+        self.assertEqual(neither.returncode, 2, neither.stdout + neither.stderr)
+        self.assertIn("required", neither.stderr)
+        self.assertNotIn("Traceback", neither.stderr)
+
+    def test_scoped_inventory_missing_source_fails_without_verified_row(self):
+        """[class: REPOSITORY_TEST] Given an inventory naming one present and
+        one absent source, expects the transaction to fail (exit 1) with the
+        missing item recorded under `failed` (verified false, named on
+        stderr) and no verified row for it: no expected source is silently
+        omitted, while the present item still lands its verified row inside
+        the same transaction."""
+        source = self.root / "source"
+        present_rel = ".ai-playbook/reviews/2026-10-30-present.md"
+        missing_rel = "docs/tmp/done-session/gate-reports/run-miss-docs-tmp-sweep-full.txt"
+        _write(source / present_rel, b"present bytes\n")
+        primary = self.primary.resolve()
+        skeleton = self._write_skeleton("wt-scoped-m", str(source))
+        inventory = self._write_inventory([present_rel, missing_rel])
+
+        proc = self._run_scoped(source, inventory, skeleton)
+
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(missing_rel, proc.stderr)
+        self.assertTrue((primary / present_rel).is_file())
+        self.assertFalse((primary / missing_rel).exists())
+        data = json.loads(skeleton.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [entry["source"] for entry in data["migrated"]], [present_rel], data
+        )
+        self.assertEqual(len(data["failed"]), 1, data)
+        failed = data["failed"][0]
+        self.assertEqual(failed["source"], missing_rel)
+        self.assertFalse(failed["verified"])
+        self.assertEqual(failed["error"], "missing source")
+        self.assertEqual(self._verified_destinations(skeleton), [str(primary / present_rel)])
+
+    def test_scoped_inventory_digest_mismatch_fails_without_verified_row(self):
+        """[class: REPOSITORY_TEST] Given a copied item whose digest
+        verification fails (the suite's established _verify_copy tamper seam,
+        the checksum-mismatch-after-copy path), expects the transaction to
+        fail (exit 1) with the failed row carrying no verified mark and the
+        merge lock released."""
+        source = self.root / "source"
+        report_rel = "docs/tmp/done-session/gate-reports/run-dm-docs-tmp-sweep-full.txt"
+        _write(source / report_rel, b"gate report rows\n")
+        skeleton = self._write_skeleton("wt-scoped-d", str(source))
+        inventory = self._write_inventory([report_rel])
+        captured = io.StringIO()
+
+        def failing_verify(src: Path, dst: Path) -> bool:
+            return False
+
+        original_verify = MODULE._verify_copy
+        MODULE._verify_copy = failing_verify
+        try:
+            with contextlib.redirect_stderr(captured):
+                code = MODULE.main(
+                    [
+                        "migrate",
+                        "--inventory", str(inventory),
+                        "--source", str(source),
+                        "--target", str(self.primary),
+                        "--manifest", str(skeleton),
+                        "--suffix", "z3",
+                    ]
+                )
+        finally:
+            MODULE._verify_copy = original_verify
+        self.assertEqual(code, 1)
+        self.assertIn("checksum mismatch after copy", captured.getvalue())
+        data = json.loads(skeleton.read_text(encoding="utf-8"))
+        self.assertEqual(data["migrated"], [], "no verified row for the mismatched item")
+        self.assertEqual(data.get("renamed", []), [])
+        self.assertEqual(len(data["failed"]), 1, data)
+        self.assertEqual(data["failed"][0]["source"], report_rel)
+        self.assertFalse(data["failed"][0]["verified"])
+        self.assertEqual(list(self.merge_lock_root.iterdir()), [], "the merge lock was not released")
+
+    def test_scoped_publication_lands_inside_merge_lock_span(self):
+        """[class: REPOSITORY_TEST] The structural race-order guarantee: the
+        scoped arm's copy, digest check, and verified-row append all complete
+        before the migrate arm's merge-lock release, so a concurrent sweep
+        holding the same lock observes either no citation with no copy, or
+        the citation with the report already present - never a manifest row
+        citing a report the sweep just unlinked (the lock-span equivalent of
+        both subprocess race orders, per the sweep suite's structural
+        precedent)."""
+        source = self.root / "source"
+        report_rel = "docs/tmp/done-session/gate-reports/run-span-docs-tmp-sweep-full.txt"
+        _write(source / report_rel, b"gate report rows\n")
+        primary = self.primary.resolve()
+        report_dst = primary / report_rel
+        skeleton = self._write_skeleton("wt-scoped-s", str(source))
+        inventory = self._write_inventory([report_rel])
+        events: list[object] = []
+
+        def row_present() -> bool:
+            data = json.loads(skeleton.read_text(encoding="utf-8"))
+            return any(
+                entry.get("verified") and entry.get("destination") == str(report_dst)
+                for entry in data.get("migrated", [])
+            )
+
+        real_acquire = MODULE._merge_lock_wait_acquire
+        real_release = MODULE._migrate_merge_lock_release
+
+        def fake_acquire(target, label, max_wait):
+            events.append("acquire")
+            return real_acquire(target, label, max_wait)
+
+        def fake_release(target, exports, started):
+            # The span discriminator: the copied report and the verified
+            # manifest row must already exist while the lock is still held.
+            events.append(("release", report_dst.exists(), row_present()))
+            real_release(target, exports, started)
+
+        MODULE._merge_lock_wait_acquire = fake_acquire
+        MODULE._migrate_merge_lock_release = fake_release
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                code = MODULE.main(
+                    [
+                        "migrate",
+                        "--inventory", str(inventory),
+                        "--source", str(source),
+                        "--target", str(self.primary),
+                        "--manifest", str(skeleton),
+                        "--suffix", "z3",
+                    ]
+                )
+        finally:
+            MODULE._merge_lock_wait_acquire = real_acquire
+            MODULE._migrate_merge_lock_release = real_release
+        self.assertEqual(code, 0)
+        self.assertEqual(len(events), 2, events)
+        self.assertEqual(events[0], "acquire")
+        release_event = events[1]
+        assert isinstance(release_event, tuple)
+        self.assertEqual(
+            release_event,
+            ("release", True, True),
+            "copy and verified append must land before the merge-lock release",
+        )
+
+
+class ScopedPublicationSweepRaceTest(unittest.TestCase):
+    """Real two-process race fixtures for the scoped publisher versus the
+    done-session sweep (plan 2026-10-29-done-gate-report-retention Task 3):
+    a primary fixture repo with the five-key facts block, a registered linked
+    worktree as the scoped source, run-start markers anchoring the session
+    window, aged gate reports, and the done-session sweep gate driven
+    in-process through done_sweep_gates_lib with the runtime/user-facts pins
+    the sweep suite's sweep_env carries."""
+
+    GIT_IDENTITY = ScopedInventoryMigrateTest.GIT_IDENTITY
+
+    ANCHOR_OFFSET_S = 3600
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wcm-scoped-race-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.primary = self.root / "proj"
+        self.primary.mkdir(parents=True)
+        env = os.environ.copy()
+        env.update(self.GIT_IDENTITY)
+        subprocess.run(["git", "-C", str(self.primary), "init", "-q", "-b", "main"], capture_output=True, env=env, check=True)
+        _write(self.primary / ".gitignore", b"docs/\n")
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            (
+                "```toml\n"
+                'plans_dir = "docs/history/plans/"\n'
+                'plans_completed_dir = "docs/history/plans/completed/"\n'
+                'backlog_dir = "docs/history/backlog/"\n'
+                'reviews_dir = ".ai-playbook/reviews/"\n'
+                'tmp_dir = "docs/tmp/"\n'
+                'base_branch = "main"\n'
+                "```\n"
+            ).encode("utf-8"),
+        )
+        (self.primary / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DONE_LOCK_SCRIPT_PATH, self.primary / "scripts" / "done-lock.sh")
+        subprocess.run(["git", "-C", str(self.primary), "add", "-A"], capture_output=True, env=env, check=True)
+        subprocess.run(["git", "-C", str(self.primary), "commit", "-q", "-m", "init: fixture repo"], capture_output=True, env=env, check=True)
+        self.worktree = self.root / "wt-src"
+        added = subprocess.run(
+            ["git", "-C", str(self.primary), "worktree", "add", str(self.worktree), "-b", "wt-scoped-race"],
+            capture_output=True, env=env, check=True,
+        )
+        self.assertIsNotNone(added)
+        # Session window: the previous-run anchor and the current-run marker.
+        now = int(time.time())
+        self.anchor_epoch = now - self.ANCHOR_OFFSET_S
+        self._make_run_marker(now - self.ANCHOR_OFFSET_S)
+        self._make_run_marker(now)
+        # The aged gate report the scoped publisher will transfer, aged in the
+        # source worktree (copy2 preserves the mtime, so the published copy
+        # arrives aged), plus an equally aged unreferenced report at primary.
+        self.report_rel = "docs/tmp/done-session/gate-reports/run-race-docs-tmp-sweep-full.txt"
+        self._aged(self.worktree / self.report_rel)
+        self.loose = self._aged(self.primary / self.report_rel.replace("run-race", "run-loose"))
+        self.cited_dst = self.primary.resolve() / self.report_rel
+        # The zero/multi-plan producer's skeleton beside the skip record home.
+        self.manifest = (
+            self.primary
+            / "docs/tmp/done-session/worktree-migrate-baseline-run-race-manifest.json"
+        )
+        _write(
+            self.manifest,
+            (
+                json.dumps(
+                    {
+                        "branch": [{"branch": "wt-scoped-race", "source": str(self.worktree.resolve())}],
+                        "migrated": [],
+                    },
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
+        self.inventory = self.root / "scoped-inventory.json"
+        _write(
+            self.inventory,
+            (json.dumps({"files": [self.report_rel]}) + "\n").encode("utf-8"),
+        )
+        # Hermetic lock env for every in-process resolve and subprocess.
+        pins = _hermetic_lock_env(self.root)
+        self._saved_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        # The sweep-lib pins (the sweep_env inventory): runtime home, user
+        # facts, ambient Git selectors and repo-root overrides cleared.
+        for key, value in (
+            ("DONE_SWEEP_RUNTIME_HOME", str(self.root / "runtime-home")),
+            ("DONE_SWEEP_USER_FACTS", str(self.root / "user-facts.md")),
+            ("XDG_CONFIG_HOME", str(self.root / "xdg-config-home")),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ):
+            self._saved_env[key] = os.environ.get(key)
+            os.environ[key] = value
+        (self.root / "runtime-home").mkdir(exist_ok=True)
+        (self.root / "user-facts.md").write_text("# fixture user facts\n", encoding="utf-8")
+        (self.root / "xdg-config-home").mkdir(exist_ok=True)
+        for key in ("DONE_SWEEP_REPO_ROOT",):
+            self._saved_env[key] = os.environ.get(key)
+            os.environ.pop(key, None)
+        for key in tuple(os.environ):
+            if key.startswith("GIT_"):
+                self._saved_env.setdefault(key, os.environ[key])
+                del os.environ[key]
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self) -> None:
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _make_run_marker(self, epoch: int) -> Path:
+        marker = self.primary / "docs/tmp/done-session" / (
+            "run-start-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
+        )
+        _write(marker, f"{epoch} {self.primary.resolve()} {os.getpid()}\n".encode("utf-8"))
+        return marker
+
+    def _aged(self, path: Path) -> Path:
+        _write(path, b"gate report rows\n")
+        stale = self.anchor_epoch - 3600
+        os.utime(path, (stale, stale))
+        return path
+
+    def _run_scoped(self, **extra: str) -> subprocess.Popen:
+        env = _hermetic_lock_env(self.root, **extra)
+        return subprocess.Popen(
+            [
+                sys.executable, str(SCRIPT_PATH), "migrate",
+                "--inventory", str(self.inventory),
+                "--source", str(self.worktree),
+                "--target", str(self.primary),
+                "--manifest", str(self.manifest),
+                "--suffix", "race",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=str(self.root), env=env,
+        )
+
+    def _run_scoped_sync(self, **extra: str) -> subprocess.CompletedProcess:
+        proc = self._run_scoped(**extra)
+        out, err = proc.communicate(timeout=120)
+        return subprocess.CompletedProcess(proc.args, proc.returncode or 0, out, err)
+
+    def _run_sweep(self):
+        import done_sweep_gates_lib as sweep_lib
+
+        ctx = sweep_lib.GateContext.discover(self.primary)
+        return sweep_lib.run_gate("docs-tmp-sweep", ctx)
+
+    def _acquire_foreign_hold(self, label: str, holder_pid: int) -> dict[str, str]:
+        acquired = subprocess.run(
+            ["bash", str(self.primary / "scripts" / "done-lock.sh"), "merge-acquire", "--label", label],
+            capture_output=True, text=True, cwd=str(self.primary),
+            env=_hermetic_lock_env(self.root, MERGE_LOCK_HOLDER_PID=str(holder_pid)),
+        )
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        exports: dict[str, str] = {}
+        for line in acquired.stdout.splitlines():
+            for name in ("MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN"):
+                prefix = f"export {name}="
+                if line.startswith(prefix):
+                    exports[name] = line[len(prefix):]
+        self.assertIn("MERGE_LOCK_DIR", exports)
+        self.assertIn("MERGE_LOCK_TOKEN", exports)
+        return exports
+
+    def _release_hold(self, exports: dict[str, str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(self.primary / "scripts" / "done-lock.sh"), "merge-release"],
+            capture_output=True, text=True, cwd=str(self.primary),
+            env=_hermetic_lock_env(self.root, **exports),
+        )
+
+    def _release_gate_wrapper(self) -> tuple[Path, Path]:
+        """A fixture-owned DONE_LOCK_SCRIPT wrapper: every subcommand passes
+        through to the real done-lock copy, except merge-release, which waits
+        (bounded) for the sentinel file before delegating, so the publisher
+        subprocess deterministically holds the lock while the test runs the
+        concurrent sweep."""
+        sentinel = self.root / "release-gate"
+        wrapper = self.root / "release-gated-done-lock.sh"
+        real = DONE_LOCK_SCRIPT_PATH
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            f'REAL={shlex.quote(str(real))}\n'
+            'RELEASE_GATE=' + shlex.quote(str(sentinel)) + '\n'
+            'if [ "$1" = "merge-release" ]; then\n'
+            '  for _ in $(seq 1 600); do\n'
+            '    [ -e "$RELEASE_GATE" ] && break\n'
+            '    sleep 0.1\n'
+            '  done\n'
+            'fi\n'
+            'exec bash "$REAL" "$@"\n',
+            encoding="utf-8",
+        )
+        return wrapper, sentinel
+
+    def test_scoped_publisher_arriving_second_refuses_then_succeeds(self):
+        """[class: REPOSITORY_TEST] Race order one (the sweep's lock span goes
+        first): given the merge lock held by the concurrent sweep, expects
+        the scoped publisher's bounded wait to refuse with nothing copied and
+        no row appended, and the same invocation after release to publish the
+        verified row - the manifest never cites an absent report."""
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        exports = self._acquire_foreign_hold("docs-tmp-sweep", holder.pid)
+        try:
+            refused = self._run_scoped_sync(DOCS_SYNC_MERGE_MAX_WAIT="2")
+        finally:
+            released = self._release_hold(exports)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+        self.assertIn("timed out after 2s", refused.stderr)
+        self.assertFalse(self.cited_dst.exists(), "a copy ran while the sweep's lock span held")
+        self.assertEqual(
+            json.loads(self.manifest.read_text(encoding="utf-8"))["migrated"],
+            [],
+            "no row was appended while the sweep's lock span held",
+        )
+
+        after = self._run_scoped_sync()
+
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertTrue(self.cited_dst.exists())
+        data = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [entry["destination"] for entry in data["migrated"]],
+            [str(self.cited_dst)],
+            data,
+        )
+        self.assertTrue(data["migrated"][0]["verified"])
+
+    def test_scoped_publisher_holds_lock_while_sweep_arrives_then_sweep_retains(self):
+        """[class: REPOSITORY_TEST] Race order two (the publisher's lock span
+        goes first, through a real subprocess held open by a fixture-owned
+        release gate): given the publisher mid-transaction, expects the
+        concurrent sweep's lookup/unlink to refuse the lock and prune
+        nothing; after the publisher releases, a later sweep retains the
+        aged cited report (its verified row landed inside the transaction)
+        while the unreferenced aged report is pruned, so no manifest cites a
+        missing report."""
+        import done_sweep_gates_lib as sweep_lib  # noqa: local import keeps collection light
+
+        wrapper, sentinel = self._release_gate_wrapper()
+        proc = self._run_scoped(DONE_LOCK_SCRIPT=str(wrapper))
+        self.addCleanup(self._terminate_publisher, proc)
+        try:
+            deadline = time.time() + 30
+            while not self.cited_dst.exists() and time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(
+                self.cited_dst.exists(),
+                f"the publisher never reached its copy leg: {proc.poll()}",
+            )
+            self.assertTrue(proc.poll() is None, "the publisher released before the gate")
+
+            # The concurrent sweep arrives inside the publisher's lock span.
+            during = self._run_sweep()
+        finally:
+            sentinel.touch()
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        self.assertEqual(during.rc, 0, during.message)
+        self.assertTrue(
+            any("merge lock not acquired" in warning for warning in during.warnings),
+            during.warnings,
+        )
+        self.assertTrue(self.loose.exists(), "no pruning while the publisher's span held")
+        self.assertTrue(self.cited_dst.exists())
+
+        # After the transaction landed, the sweep retains the cited aged
+        # report and prunes the unreferenced one: no manifest cites a missing
+        # report.
+        after = self._run_sweep()
+
+        self.assertEqual(after.rc, 0, after.message)
+        self.assertFalse(
+            any("merge lock not acquired" in warning for warning in after.warnings),
+            after.warnings,
+        )
+        self.assertTrue(self.cited_dst.exists(), "the verified citation retains its report")
+        self.assertFalse(self.loose.exists(), "the unreferenced aged report still prunes")
+        data = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [entry["destination"] for entry in data["migrated"]],
+            [str(self.cited_dst)],
+            "the manifest's only verified citation names a report on disk",
+        )
+
+    def _terminate_publisher(self, proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=30)
+
+
+class ScopedArmDocContractTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] The skill-text side of Task 3: the
+    worktree-first standard's baseline-less scoped arm routes the transfer
+    through the closeout migration's scoped `--inventory` invocation, and the
+    manual copy-and-append procedure is gone."""
+
+    REPO_ROOT = SCRIPT_PATH.parent.parent
+
+    def _read(self) -> str:
+        return (self.REPO_ROOT / "agents/skills/execute-plan/worktree-first.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_scoped_arm_routes_through_migrate_inventory(self):
+        text = self._read()
+        self.assertIn("--inventory", text)
+        self.assertIn("scoped inventory", text)
+        self.assertIn("merge-lock transaction", text)
+        # The manual procedure's fingerprints are gone.
+        self.assertNotIn("copy each to primary, verify each digest", text)
+        self.assertNotIn("each verified transfer also appends its migrated entry", text)
+        # The zero/multi-plan route passes the producer skeleton as --manifest.
+        self.assertIn("worktree-migrate-baseline-<run id>-manifest.json", text)
 
 
 class HelpCatalogTest(unittest.TestCase):

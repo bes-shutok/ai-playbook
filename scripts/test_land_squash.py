@@ -31,7 +31,8 @@ removal passes with the PRUNE-OK line retained and exactly one audit call,
 the receipt names the pinned <merge-base>..<source-tip> range, a
 receipt-less removal refuses before any ref move with the single direct
 repair, a changed-then-reverted log and a log rename each run one audit
-call, both logs touched run one invocation, a deleted touched log anchors
+call, a bare-deleting receipt-line revert refuses before any ref move with
+the named remedy, both logs touched run one invocation, a deleted touched log anchors
 on the surviving sibling, and the checker's tool error and an unclassified
 exit (the test-only prune-audit-unclassified seam) preserve diagnostics and
 refs."""
@@ -1454,13 +1455,20 @@ class LandSquashHelperTest(unittest.TestCase):
         # landing green
         repo, wt, lock = self.worktree_repo_with_logs("wt-revert", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
-        original = (wt / PROMPT_LOG_PLAN_REL).read_text()
         (wt / PROMPT_LOG_PLAN_REL).write_text(
             prompt_log_ledger_text(
                 [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
         self.commit_log_change(wt, "prune wt-entry with its receipt")
-        (wt / PROMPT_LOG_PLAN_REL).write_text(original)
-        self.commit_log_change(wt, "revert the log edit")
+        # the revert restores the entry beside its receipt line: the
+        # receipt line is durable audit evidence, and a revert that
+        # bare-deletes it is the checker's flagged receipt-loss class
+        # (RECEIPT-LINE-REMOVED-WITHOUT-WITNESS), refused with the named
+        # remedy; this green shape keeps the receipt line instead
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [prompt_log_entry("wt-entry")],
+                ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "restore wt-entry beside its receipt")
         # a code file keeps the branch tip's tree distinct from the base
         # tip's (a pure revert would be the empty-diff landing refusal)
         commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
@@ -1473,6 +1481,45 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
         self.assertIn("PRUNE-OK: wt-entry", proc.stdout)
         self.assertNotEqual(rev(repo, "refs/heads/main"), base_tip)
+
+    def test_land_worktree_receipt_line_revert_refused_before_ref_move(self):
+        # the changed-then-reverted family's negative arm: the revert
+        # bare-deletes the receipt line instead of restoring the entry
+        # beside it, the audit's receipt-loss class fires (the removal
+        # commit carries no witness), the refusal names the single direct
+        # repair, and no ref moves
+        repo, wt, lock = self.worktree_repo_with_logs(
+            "wt-receipt-revert", ["wt-entry"], [])
+        base_tip = rev(repo, "refs/heads/main")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text(
+                [], ["PLAN-PROMPTS-PRUNE: wt-entry -> landing"]))
+        self.commit_log_change(wt, "prune wt-entry with its receipt")
+        (wt / PROMPT_LOG_PLAN_REL).write_text(
+            prompt_log_ledger_text([prompt_log_entry("wt-entry")], []))
+        self.commit_log_change(wt, "delete the receipt line")
+        short = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
+        # a code file keeps the branch tip's tree distinct from the base
+        # tip's (the landing must reach the prune audit, not the
+        # empty-diff refusal)
+        commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
+        source_tip = rev(wt, "HEAD")
+        before = primary_state(repo)
+
+        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+        self.assertIn("prune-audit:", proc.stdout)
+        self.assertIn("PRUNE-OK: wt-entry", proc.stdout)
+        self.assertIn(
+            "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: wt-entry (commit %s" % short,
+            proc.stdout)
+        self.assertIn(
+            "remedy: put the removed entry's receipt in its removal commit",
+            proc.stdout)
+        self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
+        self.assertEqual(rev(repo, "feature"), source_tip)
+        self.assertEqual(primary_state(repo), before)
 
     def test_land_worktree_log_rename_runs_audit_once(self):
         # a rename is a touch with rename detection disabled: the audit

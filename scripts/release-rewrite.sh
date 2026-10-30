@@ -15,7 +15,16 @@
 # re-assertions before the plain fast-forward publish. Nothing here ever
 # rewrites the remote; publishing happens only when the generated push script
 # is executed later, and forced updates of the remote are never used.
+#
+# The Release draft path arrives in RELEASE_DRAFT_PATH: the privacy-hit
+# diagnostics name it, a failed run retains it for the diagnostic replay
+# (scripts/release-diagnostic-replay.sh), and a successful rewrite removes it.
 set -euo pipefail
+
+# The privacy-gate locator helper ships next to this script; resolve its
+# directory absolutely BEFORE any cd, so the rewrite and its helper stay one
+# deployable pair regardless of the checkout the rewrite gates.
+rewrite_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || rewrite_dir=""
 
 top=""
 worktree_path=""
@@ -24,6 +33,7 @@ hygiene_root=""
 run_tmp=""
 wt_parent=""
 authoring_run_dir=""
+draft_path=""
 
 die() {
   printf 'release-rewrite: FATAL: %s\n' "$*" >&2
@@ -43,6 +53,10 @@ regroup() {
 }
 
 cleanup() {
+  # The triggering exit status, captured before any trap command resets $?;
+  # the draft is removed only after a successful run (rc 0) and retained on
+  # every failure path as the diagnostic replay's group-input source.
+  run_rc=$?
   cd "$top" 2>/dev/null || true
   if [ -n "$worktree_path" ]; then
     git worktree remove --force "$worktree_path" >/dev/null 2>&1 || true
@@ -63,6 +77,27 @@ cleanup() {
     tmpdir_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || tmpdir_root=""
     case "$authoring_run_dir" in
       "$tmpdir_root"/release-authoring-*) rm -rf "$authoring_run_dir" || true ;;
+    esac
+  fi
+  # Release draft lifecycle (plan
+  # docs/history/plans/2026-10-26-release-privacy-gate-diagnostics-and-replay.md,
+  # Task 2): removed only after a successful rewrite, never on a failure exit
+  # (the replay helper reconstructs the group input from the retained draft).
+  # The guard never removes an arbitrary caller-supplied path: only a REGULAR
+  # file named release-draft.* DIRECTLY under the canonicalized temp root; a
+  # draft parked anywhere else survives the run. The dirname string compare
+  # (the canonicalized dirname from step 3b against the canonical root) is
+  # what holds DIRECTLY: the case glob alone would also match a slash-bearing
+  # tail, i.e. a regular file nested inside a release-draft.* directory.
+  if [ -n "$draft_path" ] && [ "$run_rc" -eq 0 ]; then
+    tmpdir_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || tmpdir_root=""
+    case "$draft_path" in
+      "$tmpdir_root"/release-draft.*)
+        if [ -f "$draft_path" ] && [ ! -L "$draft_path" ] \
+            && [ "$(dirname "$draft_path")" = "$tmpdir_root" ]; then
+          rm -f -- "$draft_path" || true
+        fi
+        ;;
     esac
   fi
   return 0
@@ -159,11 +194,25 @@ else
   fi
 fi
 
+# 3b. Resolve the Release draft path (Task 2): the privacy-hit diagnostics
+#     name it, the replay helper reconstructs the group input from it, and the
+#     exit trap removes it only after a successful rewrite. Validated as an
+#     existing regular file and canonicalized so the trap's temp-root guard
+#     compares like spellings; never parsed here (the serialized group digest
+#     derives from the validated groups file, so a drifted draft refuses at
+#     replay time instead of changing the scanned bytes). Checked AFTER the
+#     recovery gate so a recovery refusal keeps its own sentinel.
+draft_path="${RELEASE_DRAFT_PATH:-}"
+[ -n "$draft_path" ] || die "RELEASE_DRAFT_PATH is not set; the rewrite needs the Release draft path to retain it on failure and to name it in the privacy-gate diagnostics"
+[ -f "$draft_path" ] || die "RELEASE_DRAFT_PATH is not a regular file: $draft_path"
+draft_path="$(cd "$(dirname "$draft_path")" 2>/dev/null && pwd)/$(basename "$draft_path")" \
+  || die "cannot canonicalize RELEASE_DRAFT_PATH: ${RELEASE_DRAFT_PATH}"
+
 # 4. Report-only inventory (backup refs are never cleanup candidates; the
 #    cleanup offer belongs to the skill prose, gated on user confirmation).
 printf 'release-rewrite: report-only inventory (nothing below is cleaned by this run):\n' >&2
 git for-each-ref --format='  backup ref: %(refname) %(objectname:short)' refs/release-backup/ >&2 || true
-for pat in release-push-* release-hygiene-* release-run-* release-wt-* release-authoring-*; do
+for pat in release-push-* release-hygiene-* release-run-* release-wt-* release-authoring-* release-draft.*; do
   for p in "${TMPDIR:-/tmp}"/$pat; do
     if [ -e "$p" ]; then
       printf '  leftover scratch artifact: %s\n' "$p" >&2
@@ -283,6 +332,27 @@ done
 [ "$total" -eq "$range_count" ] || die "groups tile $total of $range_count publish-delta commits; counts must sum to the range size"
 [ "${#commits[@]}" -eq "$range_count" ] || die "publish-delta enumeration disagrees with the range count"
 
+# The source tip is the commit at the start of this rewrite (the pre-rewrite
+# main tip): the diagnostic replay verifies HEAD against it before scanning.
+source_tip="$main_tip"
+# The serialized release-group input is the exact groups-file content the
+# privacy gate scans, rebuilt from the validated groups data: the base line
+# followed by alternating group/msg lines. The diagnostic replay
+# re-serializes the same bytes from the retained draft and refuses on a
+# digest mismatch, so a drifted draft can never reproduce a scan of different
+# content (plan Task 2).
+groups_digest="$(
+  {
+    printf 'base %s\n' "$base_tip"
+    gi=0
+    while [ "$gi" -lt "${#counts[@]}" ]; do
+      printf 'group %s\n' "${counts[$gi]}"
+      printf 'msg %s\n' "${msgs[$gi]}"
+      gi=$((gi + 1))
+    done
+  } | shasum -a 256 | cut -d' ' -f1
+)"
+
 # 7. Scratch roots: an ad-hoc rewrite worktree OUTSIDE the repo tree on a temp
 #    branch, plus the hygiene materialization root and the run dir. All are
 #    torn down by the EXIT trap on every path.
@@ -297,63 +367,140 @@ git worktree add -q -b "$temp_branch" "$worktree_path" "$base_tip" \
 
 # 8. Privacy gate setup: resolve the scanner ONCE from the PRIMARY checkout's
 #    repo-relative path (never the base-tip copy inside the rewrite worktree),
-#    copy its bytes plus the resolved patterns file into the run temp dir, and
-#    execute those immutable copies for every invocation.
+#    copy its bytes plus the EFFECTIVE patterns file (the operator override,
+#    else the scanner's default) into the run temp dir, and execute those
+#    immutable copies for every invocation.
 scanner_rel="${RELEASE_HYGIENE_SCANNER:-scripts/scan-public-hygiene.sh}"
 scanner_src="$top/$scanner_rel"
 [ -f "$scanner_src" ] || die "hygiene scanner not found in the primary checkout: $scanner_src"
 scanner_copy="$run_tmp/scan-public-hygiene.sh"
 cp "$scanner_src" "$scanner_copy"
-patterns_copy=""
+# Digests of the replay inputs (plan Task 2): the sources the diagnostic
+# replay verifies against before rescanning.
+scanner_digest="$(shasum -a 256 < "$scanner_src" | cut -d' ' -f1)"
+# The effective patterns file is copied into the trap-owned run dir and every
+# scan reads only that immutable copy, so the recorded digest describes the
+# exact bytes the scan used. Missing-pattern refusals keep their exit classes:
+# a set-but-missing override is the usage FATAL below; a missing default is
+# the scanner's own tool-error class (exit 3), which this copy-time refusal
+# reproduces instead of degrading to a usage FATAL.
 if [ -n "${PUBLIC_HYGIENE_PATTERNS_FILE:-}" ]; then
   # Fail closed: an override naming a missing file must abort the run, never
   # silently drop the override and scan with the defaults the operator
   # explicitly replaced.
   [ -f "$PUBLIC_HYGIENE_PATTERNS_FILE" ] \
     || die "PUBLIC_HYGIENE_PATTERNS_FILE is set but the file does not exist: ${PUBLIC_HYGIENE_PATTERNS_FILE}; refusing to run the privacy gate without the override"
-  cp "$PUBLIC_HYGIENE_PATTERNS_FILE" "$run_tmp/hygiene.patterns"
-  patterns_copy="$run_tmp/hygiene.patterns"
+  patterns_src="$PUBLIC_HYGIENE_PATTERNS_FILE"
+else
+  patterns_src="${HOME}/.ai-playbook/public-hygiene.patterns"
+  if [ ! -f "$patterns_src" ]; then
+    printf 'release-rewrite: PRIVACY GATE FAILED (scanner exit 3): missing %s (copy from docs/scan-public-hygiene.patterns.example in instructions repo); the effective patterns file is missing, so no scan verdict exists\n' \
+      "$patterns_src" >&2
+    exit 3
+  fi
+fi
+patterns_copy="$run_tmp/hygiene.patterns"
+cp "$patterns_src" "$patterns_copy"
+patterns_digest="$(shasum -a 256 < "$patterns_src" | cut -d' ' -f1)"
+if [ -n "${PUBLIC_HYGIENE_PATTERNS_FILE:-}" ]; then
   printf 'release-rewrite: PUBLIC_HYGIENE_PATTERNS_FILE override in effect: %s (scan copy: %s)\n' \
     "$PUBLIC_HYGIENE_PATTERNS_FILE" "$patterns_copy" >&2
+else
+  printf 'release-rewrite: privacy gate patterns: %s (scan copy: %s)\n' \
+    "$patterns_src" "$patterns_copy" >&2
 fi
+# The scanner runs THROUGH the locator helper (plan
+# docs/history/plans/2026-10-26-release-privacy-gate-diagnostics-and-replay.md,
+# Task 1): resolved next to this script, fail closed when absent, and needing
+# python3 to run.
+locator_helper="$rewrite_dir/release-privacy-locators.py"
+[ -f "$locator_helper" ] || die "locator helper not found next to the rewrite script: $locator_helper"
+command -v python3 >/dev/null 2>&1 \
+  || die "python3 was not found on PATH; the privacy gate needs it to run the locator helper"
+# The diagnostic replay helper ships next to this script (same plan, Task 2);
+# the privacy-hit diagnostics name it in the one-command replay invocation.
+replay_helper="$rewrite_dir/release-diagnostic-replay.sh"
 # The authored group messages become pushed commit subjects, so the groups
 # file is scanned too; the copy lands inside the materialization root.
 cp "$groups_file" "$hygiene_root/release-groups.txt"
 
-# invoke_scanner: run the immutable scanner copies in explicit-paths mode with
-# PUBLIC_HYGIENE_REPO_ROOT at the materialization root. Paths come from the
-# global scan_call_paths array (the script's own invocation argument list).
-# stdout is discarded (its FAIL blocks echo file content), stderr is captured
-# and only skip-note lines re-emitted; any non-zero exit aborts with a
-# sentinel line carrying the scanner exit code and the offending PATHS ONLY.
-# The caller discards scanner stdout, so the scanner's final `OUTCOME:` line
-# (scripts/OUTCOME_CONTRACT.md) is not consumed here; the branch keys on the
-# scanner's own-error class (tool error, exit 3) and the findings fall-through
-# keeps its mapping.
+# invoke_scanner: run the immutable scanner copies THROUGH the locator helper
+# ($locator_helper, resolved in step 8) in explicit-paths mode with
+# PUBLIC_HYGIENE_REPO_ROOT at the materialization root and the immutable
+# effective-patterns copy. Paths come from the global scan_call_paths array
+# (the script's own invocation argument list). The helper spawns the scanner,
+# streams its stdout in memory under a hard 65,536-byte parse bound, and
+# writes only deduplicated escaped path:line locators to the run-dir file:
+# the scanner's raw stdout, whose FAIL rows echo matched content, never
+# reaches disk or this transcript. stderr is captured and only skip-note
+# lines re-emitted. The helper exits with the scanner's own exit code. On any
+# non-zero result the failure line names LOCATORS ONLY (never matched
+# content, never the input path list): exit 1 lists the offending locators,
+# exits 2 and 3 are the scanner's own-error classes and abort the release on
+# the tool-error exit 3 (never as a REGROUP-class exit 2 of this script), and
+# any other exit is reported generically without locators. A hit (exit 1)
+# additionally prints the PRIVACY GATE DIAGNOSTICS block naming the replay
+# inputs (source tip, retained draft, scanner and effective-pattern sources
+# with digests, serialized release-group digest) and one shell-safe replay
+# command; it never persists raw scanner output. The caller discards scanner
+# stdout, so the scanner's final `OUTCOME:` line (scripts/OUTCOME_CONTRACT.md)
+# is not consumed here; the branch keys on the scanner's own-error class
+# (tool error, exit 3) and the findings fall-through keeps its mapping.
 invoke_scanner() {
   scan_rc=0
   scan_err="$run_tmp/scanner-stderr.txt"
-  if [ -n "$patterns_copy" ]; then
-    PUBLIC_HYGIENE_REPO_ROOT="$hygiene_root" PUBLIC_HYGIENE_PATTERNS_FILE="$patterns_copy" \
-      bash "$scanner_copy" --files "${scan_call_paths[@]}" >/dev/null 2>"$scan_err" || scan_rc=$?
-  else
-    PUBLIC_HYGIENE_REPO_ROOT="$hygiene_root" \
-      bash "$scanner_copy" --files "${scan_call_paths[@]}" >/dev/null 2>"$scan_err" || scan_rc=$?
-  fi
+  scan_locators="$run_tmp/scanner-locators.txt"
+  PUBLIC_HYGIENE_REPO_ROOT="$hygiene_root" PUBLIC_HYGIENE_PATTERNS_FILE="$patterns_copy" \
+    python3 "$locator_helper" --scanner "$scanner_copy" -- --files "${scan_call_paths[@]}" \
+    >"$scan_locators" 2>"$scan_err" || scan_rc=$?
   if [ -s "$scan_err" ]; then
     grep -F 'skipped excluded path' "$scan_err" >&2 || true
   fi
-  if [ "$scan_rc" -ne 0 ]; then
-    printf 'PRIVACY GATE FAILED (scanner exit %s): offending paths: %s\n' \
-      "$scan_rc" "${scan_call_paths[*]}" >&2
-    if [ "$scan_rc" -eq 2 ] || [ "$scan_rc" -eq 3 ]; then
-      # The scanner's own-error classes (environment error, exit 2, and tool
-      # error under the outcome contract, exit 3) abort the release on the
-      # tool-error exit 3, never as a REGROUP-class exit 2 of this script.
-      exit 3
-    fi
-    exit "$scan_rc"
+  if [ "$scan_rc" -eq 0 ]; then
+    return 0
   fi
+  if [ "$scan_rc" -eq 1 ]; then
+    if grep -qx 'LOCATOR-BOUND-EXCEEDED' "$scan_locators"; then
+      printf 'PRIVACY GATE FAILED (scanner exit 1): scanner output crossed the 65536-byte locator parse bound; no locators available\n' >&2
+    elif [ -s "$scan_locators" ]; then
+      printf 'PRIVACY GATE FAILED (scanner exit 1); offending locators (path:line):\n' >&2
+      sed 's/^/  /' "$scan_locators" >&2
+    else
+      printf 'PRIVACY GATE FAILED (scanner exit 1): no locators could be derived from the scanner output\n' >&2
+    fi
+    # Task 2 diagnostics: name the exact replay inputs and the one-command
+    # replay. No raw scanner output is persisted: the locators above are the
+    # only derived artifact, and the run dir holding them is trap-removed;
+    # raw output exists only when the operator later runs the replay command.
+    printf 'PRIVACY GATE DIAGNOSTICS (no raw scanner output was retained; the retained draft feeds the replay):\n' >&2
+    printf '  source tip: %s\n' "$source_tip" >&2
+    printf '  retained release draft: %s\n' "$draft_path" >&2
+    printf '  scanner source: %s\n' "$scanner_src" >&2
+    printf '  scanner source sha256: %s\n' "$scanner_digest" >&2
+    printf '  effective patterns source: %s\n' "$patterns_src" >&2
+    printf '  effective patterns source sha256: %s\n' "$patterns_digest" >&2
+    printf '  serialized release-group input sha256: %s\n' "$groups_digest" >&2
+    printf '  replay the exact failed scan (raw output lands only in mode-0600 files):\n' >&2
+    printf '    bash %q --source-tip %q --scanner %q --scanner-sha256 %q --patterns %q --patterns-sha256 %q --groups-sha256 %q --draft %q\n' \
+      "$replay_helper" "$source_tip" "$scanner_src" "$scanner_digest" \
+      "$patterns_src" "$patterns_digest" "$groups_digest" "$draft_path" >&2
+    exit 1
+  fi
+  if [ "$scan_rc" -eq 2 ] || [ "$scan_rc" -eq 3 ]; then
+    # The scanner's own-error classes (environment error, exit 2, and tool
+    # error under the outcome contract, exit 3) abort the release on the
+    # tool-error exit 3, never as a REGROUP-class exit 2 of this script.
+    if [ "$scan_rc" -eq 2 ]; then
+      scan_class="environment failure"
+    else
+      scan_class="tool error"
+    fi
+    printf 'PRIVACY GATE FAILED (scanner exit %s): scanner %s; no scan verdict exists\n' \
+      "$scan_rc" "$scan_class" >&2
+    exit 3
+  fi
+  printf 'PRIVACY GATE FAILED (scanner exit %s): unexpected scanner exit; no locators reported\n' "$scan_rc" >&2
+  exit "$scan_rc"
 }
 
 # scan_commit: removed 2026-09-27 (operator directive). The gate no longer

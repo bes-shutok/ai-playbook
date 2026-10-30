@@ -556,9 +556,19 @@ class WorktreeBootstrapTest(unittest.TestCase):
             "the pre-pass must route by reference to the plans Final Step handoff",
         )
         self.assertIn(
-            "that header match is the claim binding",
+            "Authoring claim: <claim basename> (session <session id>)",
             skill_text,
-            "the pre-pass worktree selection lost its claim-header binding",
+            "the pre-pass must bind selection to the claim basename and session",
+        )
+        self.assertIn(
+            "Also accept the legacy full-path marker when it resolves to the same claim record and session.",
+            skill_text,
+            "legacy authoring headers must resolve to the same claim and session",
+        )
+        self.assertIn(
+            "A verified header-to-claim match is the binding",
+            skill_text,
+            "the pre-pass worktree selection lost its verified header-to-claim binding",
         )
         self.assertNotIn(
             "execution payload only, the closeout-baseline capture",

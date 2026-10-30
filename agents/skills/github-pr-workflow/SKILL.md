@@ -20,7 +20,7 @@ Before running any command that reads or changes a remote (including `git fetch`
 - **Company project:** follow that project's ownership and authorization rules before remote access.
 - **Unknown scope:** do not infer that remote access is allowed. Continue locally if possible and ask for the missing scope information before a remote operation.
 
-For a personal or pet project, use the checked-out local base branch when a base is needed. Do not fetch or replace it with `origin/<base>`. The user-level `AGENTS.md` project-scope rule is authoritative; this gate applies to all consumers of this shared PR workflow, including `doing-code-review` and `receiving-review`.
+A stack executor may consume this gate after resolving the facts-defined project scope. Team reviewer configuration does not alter the gate or authorize access. For a personal or pet project, use the checked-out local base branch when a base is needed. Do not fetch or replace it with `origin/<base>`. The user-level `AGENTS.md` project-scope rule is authoritative; this gate applies to all consumers of this shared PR workflow, including `doing-code-review` and `receiving-review`.
 
 ## Routing Boundary
 
@@ -373,6 +373,11 @@ When the user asks to actually create the PR branches (not just plan them):
 - After creating PRs, verify `git diff <base>...<work> -- .` shows no remaining unaccounted files.
 
 ## Integration Points
+
+### With `execute-plan-stack`
+
+The stack executor owns serial task order, predecessor bases, evidence-to-head verification, and advancement. It delegates PR creation and verification mechanics here, after applying this skill's project-scope and authorization gate.
+
 
 ### With `update-stacked-branches`
 Owns refreshing an open stacked chain when trunk advances. During that restack it owns PR base retarget (`gh pr edit --base`). This skill keeps post-squash-merge `rebase --onto`, one-off `-squashed` branch creation, and other PR admin. See `../update-stacked-branches/SKILL.md`.

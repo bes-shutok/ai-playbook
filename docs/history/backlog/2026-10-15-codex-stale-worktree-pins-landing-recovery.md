@@ -10,6 +10,7 @@
 - **Cluster:** docs/history/backlog/2026-10-15-post-impl-pins-baseline-adjective.md
 - **Cluster:** docs/history/backlog/2026-10-07-witnessed-fail-arm-enumeration-stale.md (backlog-wide survey: maintenance pins baseline and expected-literal alignment)
 - **Cluster:** docs/history/plans/completed/2026-10-26-maintenance-pin-current-main-baseline-red.md (the same obsolete maintenance-pin literal now blocks work on current main)
+- **Cluster:** docs/history/backlog/2026-10-30-review-plan-attempt-state-pin-stale-at-baseline.md (same surface and expected-literal lag class; a new stale pin red at baseline needing its literal updated)
 - **Skill/step:** `agents/skills/maintenance/SKILL.md`, ad-hoc execution landing; `scripts/check_maintenance_pins.sh`
 - **Incident:** Codex ad-hoc branch `codex/adhoc-execute-plan-outcome-reporting`, initial base `c52d57def5d694e7017e4cb4fc4a0c2cf1d2c575`
 - **Catch frequency:** observed once; exact frequency of stale-base pin failures is unknown

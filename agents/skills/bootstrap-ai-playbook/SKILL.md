@@ -127,6 +127,7 @@ Optional keys (discover when present; omit when not found):
 | `friction_audit_dir` | Friction-audit watermark state and digests for the maintenance audit lane | Falls back to `.ai-playbook/friction-audit/` when absent (same resolution pattern as `tmp_dir`); under `.ai-playbook/`, gitignored by the existing `/.ai-playbook/` rule |
 | `worktree_policy` | Project worktree placement | Same vocabulary the placement ask presents: `worktrees` or `primary`; persist on confirm only; absence keeps the documented consumer defaults (ordinary work in the primary checkout, plan lanes in worktrees) |
 | `worktree_root` | Location rule for newly created worktrees when the policy declares `worktrees` | Persisted by the interview's `worktree_root` arm only when the confirmed placement is worktrees; an empty answer persists no key and the Worktree-first standard's fallback location rule applies |
+| `github_review_team` | Team reviewer slug used by `execute-plan-stack` for each draft PR | Operator-configured project value; no shared default; does not authorize remote access; see that skill's Configuration table for missing-value behavior |
 
 ## Path Discovery
 
@@ -239,6 +240,7 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes this skill only when Terms triggers fire |
 | `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts; on a repo with no `docs/` tree, the greenfield ask seeds the canonical history map when it is confirmed as the target layout |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
+| `execute-plan-stack` | Reads the operator-configured `github_review_team` repo fact; its presence does not authorize remote operations |
 | `receiving-review` | Backlog capture reads `{backlog_dir}` / `{backlog_completed_dir}`; the recovery rerun resolves or creates the backlog home when the keys are missing; Triage-class routing consumes the persisted `## Priority profile` block's `deferred_classes` |
 | `execute-plan`, `plans`, `done` | Consume the persisted worktree placement keys (`worktree_policy`, `worktree_root`) per the Worktree-first standard policy paragraph (agents/skills/execute-plan/SKILL.md); each consults the project worktree policy before any run-placement worktree decision |
 | `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |

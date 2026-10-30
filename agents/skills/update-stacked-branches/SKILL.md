@@ -252,6 +252,11 @@ Confirm ancestry for each link. Completion: every link verified; push status rep
 
 ## Integration Points
 
+### With `execute-plan-stack`
+
+When a completed parent changes open descendant bases, the stack executor hands off restacking here. This skill owns the actual restack methods and checks; the stack executor does not duplicate them.
+
+
 ### With `github-pr-workflow`
 
 PR admin, `-squashed` branch creation, and post-squash-merge `rebase --onto` stay there. During an open-stack restack, this skill owns `gh pr edit --base`. Use github-pr-workflow only if bases are still wrong afterward.

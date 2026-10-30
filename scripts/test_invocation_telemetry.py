@@ -75,8 +75,13 @@ PR_USAGE = {
     "args": ("--pre-round", "--selftest"),
     "exit": 3,
     "stdout": "",
+    # Usage block re-baselined to the current CLI (argparse gained
+    # --verification-head after base c2cfc02a9); exit code and OUTCOME
+    # line unchanged.
     "stderr": (
-        "usage: plan_readiness.py [-h] [--selftest] [--sweep] [--pre-round]\n"
+        "usage: plan_readiness.py [-h] [--selftest] [--sweep]\n"
+        "                         [--verification-head COMMIT]"
+        " [--pre-round]\n"
         "                         [--check-review-name ROUND_MD]\n"
         "                         [--print-artifact-slug]\n"
         "                         [plan_path]\n"
@@ -98,11 +103,16 @@ VRS_SUCCESS = {
 VRS_REFUSAL_LINES = [
     "WARN: missing ### Counts or Agents launched row",
     "WARN: missing ### Triage outcomes or Pending triage placeholder",
-    "ERROR: missing ## Metadata",
-    "ERROR: missing ## Review Statistics",
-    "ERROR: missing ### Panel under Review Statistics",
-    "ERROR: clear round still requires ## Review Statistics",
-    "ERROR: missing required stats sidecar: plan-review-fake-slug-r1.stats.json",
+    # Each ERROR line now names its provenance source (the review-staging
+    # SKILL.md rule it enforces); re-baselined to the current CLI.
+    "ERROR: missing ## Metadata (review-staging SKILL.md)",
+    "ERROR: missing ## Review Statistics (review-staging SKILL.md)",
+    "ERROR: missing ### Panel under Review Statistics"
+    " (review-staging SKILL.md, Output discipline)",
+    "ERROR: clear round still requires ## Review Statistics"
+    " (review-staging SKILL.md)",
+    "ERROR: missing required stats sidecar:"
+    " plan-review-fake-slug-r1.stats.json (review-staging SKILL.md)",
     "FAIL: {target}",
 ]
 VRS_REFUSAL = {
@@ -115,16 +125,21 @@ VRS_USAGE = {
     "args": (),
     "exit": 3,
     "stdout": "",
+    # Usage block re-baselined to the current CLI (argparse gained
+    # --scaffold and --verification-head after base c2cfc02a9); exit code
+    # and OUTCOME line unchanged.
     "stderr": (
         "usage: validate_review_staging.py [-h] [--hard] [--json]"
         " [--preflight]\n"
         "                                  [--newest-for-branch BRANCH]"
         " [--cwd CWD]\n"
-        "                                  [--selftest] [--source-plan PATH]\n"
-        "                                  [--source-rfc PATH]"
-        " [--source-doc PATH]\n"
+        "                                  [--selftest] [--scaffold]\n"
+        "                                  [--source-plan PATH]"
+        " [--source-rfc PATH]\n"
+        "                                  [--source-doc PATH]\n"
         "                                  [--source-code-repo ROOT]\n"
         "                                  [--source-code-plan SIDECAR-PATH]\n"
+        "                                  [--verification-head COMMIT]\n"
         "                                  [--ack-witness PATH]\n"
         "                                  [path]\n"
         "validate_review_staging.py: error: path or --newest-for-branch is"
@@ -620,13 +635,22 @@ DONE_LOCK_SCRIPT_FILE = SCRIPTS_DIR / "done-lock.sh"
 # The sweep-gates lib's sibling import closure: the safety witness copies the
 # script's full helper closure EXCEPT the telemetry library, so the
 # closeout-site telemetry import fails while every other step is hermetic.
+# Closure re-baseline: done_sweep_gates_lib hard-imports plan_readiness
+# (27433f204), whose own closure adds runtime_capabilities and
+# review_plan_identity, and review_record_selection hard-imports
+# code_delta_classifier; without them the Step 0 manifest writer refuses
+# instead of only the telemetry import failing.
 DONE_RUN_LIB_COPY_FILES = (
+    "code_delta_classifier.py",
     "corrections_record.py",
     "done_sweep_gates_lib.py",
     "facts_paths.py",
+    "plan_readiness.py",
     "plan_shape.py",
+    "review_plan_identity.py",
     "review_record_selection.py",
     "review_staging_calibration.py",
+    "runtime_capabilities.py",
     "validate_review_staging.py",
 )
 LANDING_COSTS_NAME = "landing-costs.jsonl"
@@ -665,6 +689,14 @@ _FINALIZE_FALLBACK_CREATE_STDERR = (
     " <TMP>/done-fixture-repo/docs/tmp/done-session/"
     "run-checkpoint-<RUN_ID>.json (manifest sha256 <HEX>, gates green: 1)\n"
 )
+# Stderr re-baseline (976aca51a): the deferred-squash honesty check skips
+# inside the fixture (unresolvable base branch), so every landing-summary
+# arm appends this stderr-only WARNING after the created line.
+_FINALIZE_DEFERRED_SQUASH_SKIP_STDERR = (
+    "done_run finalize: WARNING: the deferred-squash honesty check is"
+    " skipped (unresolvable base branch or unreadable ledger tip); the"
+    " summary is not landing-verified\n"
+)
 PINNED_NO_LEDGER_STDOUT = (
     _FINALIZE_RELEASE_STDOUT + _FINALIZE_NO_LEDGER_SUMMARY + _FINALIZE_SCAN_TAIL
 )
@@ -672,13 +704,17 @@ PINNED_NO_LEDGER_STDERR = _FINALIZE_FALLBACK_CREATE_STDERR
 PINNED_NO_LANDING_COST_STDOUT = (
     _FINALIZE_RELEASE_STDOUT + _FINALIZE_LANDING_SUMMARY + _FINALIZE_SCAN_TAIL
 )
-PINNED_NO_LANDING_COST_STDERR = _FINALIZE_FALLBACK_CREATE_STDERR
+PINNED_NO_LANDING_COST_STDERR = (
+    _FINALIZE_FALLBACK_CREATE_STDERR + _FINALIZE_DEFERRED_SQUASH_SKIP_STDERR
+)
 PINNED_LANDING_STDOUT = (
     PINNED_NO_LANDING_COST_STDOUT
     + "landing-cost telemetry appended:"
     " <TMP>/done-fixture-repo/.ai-playbook/metrics//landing-costs.jsonl\n"
 )
-PINNED_LANDING_STDERR = _FINALIZE_FALLBACK_CREATE_STDERR
+PINNED_LANDING_STDERR = (
+    _FINALIZE_FALLBACK_CREATE_STDERR + _FINALIZE_DEFERRED_SQUASH_SKIP_STDERR
+)
 PINNED_NO_MANIFEST_STDOUT = (
     "done_run finalize: no run manifest from setup; nothing to finalize or"
     " checkpoint; the release still runs\n"

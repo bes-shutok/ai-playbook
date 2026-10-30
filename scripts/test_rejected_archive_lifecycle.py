@@ -9,7 +9,8 @@ Covers the three ``RejectedArchiveLifecycleTest`` checkboxes of plan
 - ``test_done_sweep_prunes_rejected_plan_deliverables``: a plan archived
   under the plans ``rejected/`` directory is excluded from the done
   sweep's readiness candidates and only its OWN ``plan-deliverables.txt``
-  entries are pruned; a failing active plan's entry survives and a
+  entries are pruned; a failing active plan's failure is advisory
+  (``failed=1``, aggregate rc 0) with its deliverable line retired, and a
   completed-dir entry keeps its existing archived pruning.
 - ``test_rejected_plan_excluded_from_active_readiness``: a plan whose
   bytes sit under the plans ``rejected/`` directory is excluded from
@@ -187,8 +188,9 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
     def test_done_sweep_prunes_rejected_plan_deliverables(self) -> None:
         """[class: REPOSITORY_TEST] A rejected plan's own deliverable
         entries are pruned and the plan never reaches the readiness gate;
-        a failing active plan's entry survives and the completed-dir
-        control keeps its existing archived pruning."""
+        a failing active plan's failure is advisory with its line retired
+        and the completed-dir control keeps its existing archived
+        pruning."""
         now = time.time()
         self._marker(now - 3600)  # previous run anchors the window
         self._marker(now)  # current run
@@ -213,15 +215,21 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         self.assertIn(completed_rel, archived_rels)
 
         result = lib.gate_plan_readiness(ctx)
-        self.assertEqual(result.rc, 1, result.message)  # the bad plan failed
+        # Advisory contract (docs/history/plans/completed/
+        # 2026-10-07-done-readiness-closeout-boundary.md): a modeled fail is
+        # reported in the gate message with failed=1 and its first-failure
+        # evidence while the aggregate exit stays 0; the failed candidate
+        # retires beside the passed ones.
+        self.assertEqual(result.rc, 0, result.message)
         self.assertIn("failed=1", result.message)
+        self.assertIn(bad_rel, result.message)
+        self.assertIn("readiness FAILED: stub rejection", result.message)
         remaining = self._read_deliverables()
-        # ONLY the rejected plan's own entry was pruned (plus the completed
-        # control's, per the unchanged completed behavior); the failing
-        # active plan's entry survives for the next round.
-        self.assertNotIn(rejected_rel, remaining)
-        self.assertNotIn(completed_rel, remaining)
-        self.assertEqual(remaining, [bad_rel])
+        # The rejected, failed, and completed deliverable lines are all
+        # pruned: the two archived controls through the unchanged archive
+        # pruning, the failing active plan through the failed candidate's
+        # retirement.
+        self.assertEqual(remaining, [])
 
     # ------------------------------------------------------------------
     # RejectedArchiveLifecycleTest#test_rejected_plan_excluded_from_active_readiness

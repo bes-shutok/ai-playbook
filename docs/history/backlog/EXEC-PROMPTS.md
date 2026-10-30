@@ -1,33 +1,161 @@
 Ready ad-hoc entries, most urgent first, consumed by exec-mode sessions. Prompt-emission owner: `agents/skills/investigate/SKILL.md`, Stage 4.
 
-EXEC-PROMPTS-PRUNE: dispatch-plan-sha-recording-unverified -> landing in this commit (ad-hoc landing: the dispatch-recording bullet in agents/skills/maintenance/scheduling.md gained the echo-verify duty, dispatch_plan_sha recorded as the verbatim same-turn output of hashing the exact recorded plan path and quoted in decision_reason as the echo-verify witness, and the stand-down carve-out's plan-unchanged conjunct in agents/skills/maintenance/failure-cap.md gained the git-history adjudication of a mismatched sha (a recorded value matching no historical state of the path is a recording defect, named in the entry's additive note member) before failure credit is read, strict consumer bias unchanged; no schema change; pins suite pass with pre-existing advisory prune-range warns, em-dash added-lines gate and public hygiene scan pass; focused docs panel r1 two workers zero blocking with four Lows (two folded in-change, one follow-up row docs/history/backlog/2026-10-29-dispatch-sha-second-recording-site.md, one watchlist growth note) plus r2 confirm over the final delta; origin row deleted per the covered-row rule and this entry section removed in the same change) This log is the exec-mode sibling of `docs/history/backlog/PLAN-PROMPTS.md`: its entries follow that file's Entry template unchanged, and its standing rules apply here by their established labels, with only the deltas stated below.
+EXEC-PROMPTS-PRUNE: closeout-baseline-capture-placement-remedy -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py's migrate baseline-missing refusal gained the primary-checkout remedy clause - check the primary checkout's same-slug session dir for closeout-baseline.json and copy it in before recapturing, a recapture recorded as a late-baseline capture-failure deviation - and the capture success output now names the checkout it captured in so a wrong-checkout Phase 0 capture is visible; both message shapes pinned (focused migrate suite 288 passed + 17 subtests, wrapper suite 178 passed + 2 subtests), em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule with both Cluster pointers tidied and this entry section removed in the same change)
 
+## hygiene-scanner-frozen-arm-and-report-residuals
 
-EXEC-PROMPTS-PRUNE: done-finalize-release-refusal-observability -> landing in this commit (ad-hoc landing: scripts/done_run.sh finalize's step-4 done-lock release refusal gained the inputs-echo line naming what the failed release actually read - the from-holder arm's provenance, or empty/unset DONE_LOCK_DIR/DONE_LOCK_TOKEN with the meta.env re-derivation remedy, or the lock dir plus an 8-character token prefix - and the step-6 status-not-free FAILED line now distinguishes a completed run manifest (a release-only retry is safe) from an incomplete one by re-deriving the manifest record's complete field, four message shapes; report-only string edits, exit-code semantics byte-preserved, no lock-contract change; wrapper suite re-run at the landed head, router-dispatch suite 6 passed, sweep-gates-lib 381 passed + 3 subtests, em-dash added-lines gate and public hygiene scan pass; focused code+testing panel r1 (2 workers) ready=yes 0 blocking with two Lows folded on the watchlist and the local-declaration clarity finding folded in-change, r2 confirm over the fold delta; origin row deleted per the covered-row rule with the sibling from-holder row's Cluster pointer retargeted to this receipt and this entry section removed in the same change)
+Added: 2026-10-30, learn Step 1.9 investigate over the hygiene-scanner-default-scope-parity execution run's backlogged review findings
 
-EXEC-PROMPTS-PRUNE: done-finalize-missing-record-scan-primary-corpus-root -> 8a41c8bba (entry covered by the plan route before dispatch: the peer authoring landing 8a41c8bba landed docs/history/plans/2026-10-29-done-finalize-missing-record-scan-primary-corpus-root.md and flipped the origin row to Status: covered while this entry stood frozen for an ad-hoc run; the race re-check refuses an entry whose plans-root plan file exists, so the frozen mark is replaced by this removal and the work routes through the covering plan; no ad-hoc bytes were written)
-EXEC-PROMPTS-PRUNE: done-setup-closeout-baseline-capture-direct-invocation -> landing in this commit (ad-hoc landing: the plans Phase 0.1 closeout-evidence producer's slug rule now derives by the execute-plan canonical session-slug rule, date-prefixed plan files date-stripped for the baseline path, naming the done runner's plan_session_slug consumer, with the producer/consumer agreement pinned on the existing dated-plan wrapper fixture; direct-invocation arm dispositioned on disk evidence, no code change: setup's zero/multi-plan run-ID skip-record writer is the direct shape's pre-work producer and the migration refusal stays the one-owned-plan integrity guard; focused code+testing panel r1 two workers zero findings over the work delta plus r2 confirm over the full delta including riders; wrapper suite 175 passed + 2 subtests, em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule and this entry section removed in the same change; the peer-held zero-plan row's Cluster pointer to this row is left for that entry's own landing, named here per the pointer-tidy rule)
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): body-named single-surface fixes to one script - add `-e "$pattern"` plus an rc>1 fail-closed arm to the frozen full-tree/changed modes mirroring the existing files branch, consolidate the report scan's duplicated rg loops into one pass with repeated `-e` flags, correct the whole-scope degradation record so an rg failure after successful enumeration is not mislabeled `enumeration-unavailable`, trap-clean the production mktemp files, and record the accepted split-debris false negative - tracked script surface, no open design choice, no new dependency, no guard or state change; the landing constraint (keep the `PUBLIC_HYGIENE_REPORT:` record grammar, fixed-record set, and `--files`/`--changed-from` semantics) is already stated on the origin row.
 
-EXEC-PROMPTS-PRUNE: zero-plan-branch-only-migration-manifest -> landing in this commit (ad-hoc landing: done setup's zero/multi-plan producer additionally writes the migrate-shape manifest skeleton ({"branch": [{"branch": <run branch>, "source": <checkout root>}], "migrated": []}) beside the run-ID skip record, idempotent per run id, the session manifest staying field-frozen, and the Worktree-first standard's baseline-less scoped-copy arm gained the append clause adding one {"destination": ..., "verified": true, "sha256": ...} entry per verified transfer to the skeleton's migrated list so a later branch-only gate-removal pass consumes the emitted shape instead of a hand-built file (lesson 289); the branch-only adjudication coverage gained the skeleton and appended-entry zero-plan shapes reaching exact-tree-accounted and the extracted producer function is pinned (focused suite 257 passed + 17 subtests, wrapper suite 175 passed + 2 subtests); no gate, lock, ledger, or ceremony added; em-dash added-lines gate, public hygiene scan, and pins suite pass (advisory prune-range warns pre-existing); origin row deleted per the covered-row rule with the surviving sibling row's Cluster pointer retargeted to this receipt (the second sibling row was deleted by the covering done-setup landing in the same window, so no pointer remained to tidy) and this entry section removed in the same change)
-EXEC-PROMPTS-PRUNE: self-heal-tool-refusal-completion -> landing in this commit (ad-hoc landing: agents/skills/self-heal/SKILL.md Recovery steps 3-5 gained the explicit tool-refusal decision sequence - classify a refused method against missing authority or an unsafe target, re-derive the caller's target and authorization from the task's own direction, use another supported narrower method only when it remains permitted under that authorization, re-run the original gate and verify the caller's complete terminal conditions before continuing dependent work - folding the passing-gate sentence into the sequence and merging the ask-only clause into step 5 as the consolidation offset (net +576 bytes on the skill file, unpaid; the review-time pay-for-growth record under the skill text anti-growth rules); prose only, no machinery; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule and this entry section removed in the same change)
+Origins:
+- docs/history/backlog/2026-10-30-frozen-full-tree-rg-fail-closed-arm.md
+- docs/history/backlog/2026-10-30-report-scope-degradation-and-toctou-residuals.md
 
+Urgency: medium - the frozen modes' fail-open shape means an invalid regex or a dash-led patterns line silently unapplies the deny patterns to the blocking roots (a false pass on the gate that actually blocks), the highest-stakes residual in the set; the report-scope items are advisory-noise and hygiene-only.
 
-EXEC-PROMPTS-PRUNE: landing-gate-prune-audit-leg-closeout-parked -> docs/history/plans/completed/2026-10-28-landing-gate-prune-audit-leg.md (parked done closeout completed: peer licensed residue landed in f134e2b68, done commit/finalize passed, worktree removed with registration verified, branch exact-tree-accounted and deleted at expected OID 5d3e85afb, Phase 5 run directory removed; origin row deleted per the covered-row rule and this entry section removed in the same change)
+Scope arms: the fail-closed frozen-mode arm first (mirror the files branch's `-e` + rc check and selftest arm), then the report-scan consolidation, the degradation-record correction, and the trap cleanup as one script-scoped change; the TOCTOU windows and the split-debris filter stay recorded residuals (fail visible by design; closing them needs an atomic snapshot the scan sizes do not justify).
 
+Orientation: `scripts/scan-public-hygiene.sh` (frozen full-tree/changed modes, `run_report_scan`, selftest arms), `scripts/done_sweep_gates_lib.py` (the report-row forwarding contract the landing must keep), and the two origin rows' per-residual witnesses.
 
-EXEC-PROMPTS-PRUNE: strand-drained-run-closeout-remedies -> landing in this commit (ad-hoc landing: the Worktree-first standard's closeout region gained the drained-run closeout remedy-set clause beside the Terminal-closeout ownership clause - a peer strand-drain that lands the run's branch and removes its worktree leaves the returning session a verification-and-release set, never a redo: a path-scoped byte-identity diff of the run's changed files between the reviewed tip and the landing commit (a whole-tree diff includes every peer delta that landed between the bases and decides nothing), the affected test class re-run at the new base tip, the stale execution claim released through the claim gateway's --operand-source arm reading the deleted origin row from the landing commit's parent, and the panel record annotated with the landing witness so the reviewed digest and the landed commit stay linked; prose only, no machinery; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule and the sibling row's Cluster pointer retargeted to this entry in the same change)
+Rejected alternatives:
+- Remove the frozen full-tree/changed modes as fail-open by design: rejected on the remove-or-keep axis - the frozen modes serve the blocking roots today and removal would widen the change into a mode-retirement decision the review panel explicitly deferred to a freeze review; the missing-complement arm (add the files branch's fail-closed shape) fixes the defect without touching mode semantics (docs/history/backlog/2026-10-30-frozen-full-tree-rg-fail-closed-arm.md)
+- Close the TOCTOU windows with an atomic scope snapshot: rejected as machinery the scan sizes do not justify; both windows fail visible today, and the row records the acceptance explicitly (docs/history/backlog/2026-10-30-report-scope-degradation-and-toctou-residuals.md residual 2)
+- Code around the split-debris filter's false negative: rejected - the filter's two shapes are textually indistinguishable, so any workaround is a false-positive machine on every scan; the accepted residual stays recorded (docs/history/backlog/2026-10-30-report-scope-degradation-and-toctou-residuals.md, residual 4)
 
-EXEC-PROMPTS-PRUNE: takeover-landing-review-records-citation -> landing in this commit (ad-hoc landing: the execute-plan Task-boundary checkpoint duty's WIP-checkpoint text gained the records-before-pause sentence - before a pause stands, the round's staged review record pair goes to the primary reviews home, even mid-round (an r1 record naming the staged findings beats no record) - and the Worktree-first standard's Provisioned-worktree adoption paragraph gained the takeover-landing record citation clause - a takeover landing of an adopted branch verifies a citable record pair exists for the adopted delta in the primary reviews home, and when none does it runs a focused confirm round over the branch delta and cites that record in the landing message; prose only, no machinery; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule, this entry section removed in the same change)
-EXEC-PROMPTS-PRUNE: learn-router-dispatch-pin-step19-heading -> landing in this commit (ad-hoc landing: the dispatch-parity suite's EXPECTED_MODULE_HEADINGS pin for step-1-extract.md gained the Step 1.9 heading in module order (the pin was the stale side; the module and the router's Step 1 dispatch entry already carried it), fixture provenance comment admits post-split arrivals per the r1 fold, focused code+testing panel r1 two findings folded (prune receipt rides this removal commit; comment accuracy); focused dispatch-parity suite 8 passed at the tip; test-only fixture edit, no machinery; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule and the three sibling rows' Cluster pointers retargeted to this receipt in the same change)
+## mask-certification-seal-diagnostics-embedded-paths
 
-EXEC-PROMPTS-PRUNE: clocked-order-schedule-input-shape -> landing in this commit (ad-hoc landing: scripts/execute_plan_runtime.py's --input argument gained the help string naming the inline JSON object request form and, for clocked-order-schedule, its keys (requested_at_iso, payload_slug, payload_path or its payload_text alternative; a pickup re-record under a derived id also passes order_id), and the Clocked-order consult pickup arm's passing sentence in agents/skills/maintenance/survey-arms.md gained the shape clause - the three recorded values plus the derived pickup id as order_id compose one inline JSON object passed via --input, never a file path or separate flags; documentation only, no behavior change; --help verification, pins suite (advisory prune-range warns pre-existing at base), em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule, this entry section removed in the same change)
+Added: 2026-10-30, learn Step 1.9 investigate over the hygiene-scanner-default-scope-parity execution run's backlogged review findings
 
-EXEC-PROMPTS-PRUNE: plan-readiness-and-gate-ledger-test-hermeticity -> landing in this commit (ad-hoc landing: the ReadinessSingleFileUnchangedTest envelope refusal test in scripts/test_plan_readiness.py moved to the siblings' per-test temp-root fixture pattern - a minimal facts TOML block, the landed plan's bytes copy, its cited Files: paths materialized, and the subprocess pointed at that root with cwd pinned - so the pinned readiness PRE-ROUND FAILED refusal assertions bite the real gate surface in any checkout, the fail-closed facts-resolution contract in scripts/plan_readiness.py unchanged; and run_cli in scripts/test_gate_liveness_ledger.py gives the ledger CLI children a controlled minimal environment (PATH and HOME) with the hygiene-screen tests passing their deliberate pattern pins as explicit env extras; focused suite 173 passed + 58 subtests and 27 passed, em-dash added-lines gate and public hygiene scan pass; both origin rows deleted per the covered-row rule, this entry section removed in the same change)
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named single-document edit - mask the absolute home paths embedded in recorded validator stdout blocks in one landed diagnostics doc per the scanner's existing masking policy - no code surface, no design choice, no machinery; the landing constraint (never touch deny patterns or exclusions) is stated on the origin row.
 
-EXEC-PROMPTS-PRUNE: done-setup-facts-provisioning-fresh-worktree -> landing in this commit (ad-hoc landing: the _resolve_dir ValueError in scripts/done_sweep_gates_lib.py gained the fresh-checkout remedy clause - the facts file is machine-local by design and never rides the branch, so copy the primary checkout's facts block into this checkout (creating the .ai-playbook parent first) and re-run - appended after the complete-the-facts-block clause, the fail-closed resolution contract unchanged, and the gate-library suite gained the remedy-clause pin beside the prefix pins (focused suite 381 passed + 3 subtests); no behavior change, no machinery; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule, the sibling row's Cluster pointer retargeted to this receipt, and this entry section removed in the same change)
+Origins:
+- docs/history/backlog/2026-10-30-mask-certification-seal-diagnostics-embedded-paths.md
 
+Urgency: low - the doc fails the release hygiene gate and now surfaces on every default commit scan as a report-only record; masking removes the noise and restores the gate pass without weakening anything.
 
-EXEC-PROMPTS-PRUNE: rebind-subcommand-followup-family -> landing in this commit (ad-hoc landing executing the seven-arm re-bind follow-up family from the group entry this section carried: the chained second re-bind gained its selftest witness (row linkage chains from the previous row's after side, certified range stays the original window), merge-carried additive deltas now record parent-derived witness hunks (first parent wins, root keeps the empty-tree arm; octopus/graft shapes reviewer-exercised), the lock-open failure surfaces the named refusal beside the new shared corrections_record.corrections_advisory_lock context manager (busy tail byte-shared with the append writer), both locked writers write atomically via temp-plus-os.replace, the execute-plan Digest freshness duty names the re-bind subcommand route for the additive comment-only class, and the duplicated structure single-homed (sidecar round parser single-homed as corrections_record.sidecar_round with the staging validator delegating, the grading-owner prose tail one constant across the three rendered sites, witness minting and the locked nested write extracted as helpers with refusal texts byte-identical); focused suite 18 re-bind + 174 selection/corrections + 147 corrections-related passed; focused code+testing panel r1 verdict pass, five notes, two addressed in-change (dead imports dropped, lock-open arm pinned), record .ai-playbook/reviews/2026-10-28-rebind-family-followups-code-review-r1.md; em-dash added-lines gate and public hygiene scan pass; all seven origin rows deleted per the covered-row rule and this group entry section removed in the same change; no surviving row references the deleted slugs)
+Scope arms: mask the embedded absolute home paths in the diagnostics doc per the current scanner masking policy; re-run both the release hygiene gate and the default scan to verify both pass clean.
+
+Orientation: `docs/history/certification-seal-landing-diagnostics.md` (the embedded stdout blocks), `scripts/scan-public-hygiene.sh` (the masking policy being applied), and the origin row's witness.
+
+Rejected alternatives:
+- Exclude the doc from the scan: rejected - standing constraints forbid touching exclusions or deny patterns, and an exclusion would weaken the gate for any future path leak in the same file (docs/history/backlog/2026-10-30-mask-certification-seal-diagnostics-embedded-paths.md)
+- Delete the diagnostics doc: rejected - it is a landed landing-diagnostics record of a completed run; its evidentiary value survives, only the paths need masking (docs/history/certification-seal-landing-diagnostics.md)
+
+EXEC-PROMPTS-PRUNE: receipt-runner-summary-witness-and-dispatch-failed-pin -> landing in this commit (ad-hoc landing: scripts/test_quota_wall_doctrine.py gained the dispatch_failed tracking-list reader pin mirroring the launch-wave entry's shape - a _dispatch_failed_entry RED arm reading the Phase 3 tracking list bullet, a test-local dispatch_failed_fields parser whose shape vocabulary is asserted from the entry (typed line, closed reason-code set, the pre_restart pair, the bounded-retry budget pointer, the delegation clause; plus the timestamp-form gate and the other-code quoted-error-text gate, trailing tokens outside the other shape refused), and five witness tests (entry carries the contract; a fixture line parses; out-of-set reason code and missing pre-start refused; malformed timestamp refused; the other code's quoted provider error text parsed and an empty quote refused), so deleting the pinned entry line is a suite failure; and lesson 313's receipt-runner Rule now requires the passing-summary assertion to grep the FULL captured output, never just its tail (unittest's stderr OK block can flush before buffered stdout), with a per-row summary-witness recorded beside the rc so each green row is re-derivable from the receipt alone; focused suite scripts/test_quota_wall_doctrine.py re-run green at the landed head; em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule with the completed plan's citation retargeted to this receipt and this entry section removed in the same change)
+
+## remaining-run-era-tmp-dirs-drain
+
+Added: 2026-10-30, learn Step 1.9 investigate over the operator-directed docs/tmp drain session
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named bounded operational drain with existing tools applying the proven recipe (development_lessons.md #314), read-only classifier reads plus untracked-tree deletions, no open design choice (the recipe and its proof arms landed with the first drain pass), no guard-bearing path edit, no state schema, no machinery.
+
+Origins:
+- docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md
+
+Urgency: low - the named run-era dirs hold a few MB of October residue beside live staging corpora; the recipe is proven and the cost of waiting is growth at the run write rate, not risk.
+
+Scope arms: one bounded drain session over the named directories applying the recipe: per-file producing-run classification, terminal proof through the run-record families, the 48-hour recency gate, the fixed-string plus prefix-form reference veto over docs/history and scheduler-state, wholesale exclusion of the live staging corpora (review-staging, reviews home, authoring), a sha256-sealed deletion manifest into the record home, and leave-in-place reasons recorded on the origin row.
+
+Orientation: development_lessons.md #314 (the recipe and its witnessed gotchas); the landed drain receipt (EXEC-PROMPTS-PRUNE: docs-tmp-dead-residue-drains) as the proven precedent; the origin row. Disk re-derivation at the entry's write: the origin row exists in the working tree and at HEAD, and all eight named directories exist on disk (filesystem probe).
+
+Rejected alternatives:
+- Wholesale rmtree of the named directories: rejected because staging and cert-consuming corpora sit beside the residue and the covered safety plan prices exactly this unknown-ownership class (`docs/history/plans/2026-10-27-done-recursive-tmp-sweep-safety.md`)
+- Defer to the retention-redesign plan's policy arms: rejected because those arms decide the sweep's standing policy (sync precondition, marker attribution, proof family) and none of them iterates these directories; the drain needs no policy decision (`docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md`)
+- Widen the landing sweep gate to iterate these directories: rejected because that is the guard-bearing policy change the plan entry owns; this run drains manually without editing the gate (`scripts/done_sweep_gates_lib.py`)
+
+Prompt: Using the ad-hoc backlog arm, run the bounded drain over the named directories applying development_lessons.md #314's arms exactly; deletion only after the per-file terminal proof and both veto passes; never edit the sweep gate or any skill text; seal the manifest and record leave-in-place reasons; run the public hygiene scan; delete the origin row per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section in the same change.
+
+## telemetry-pin-provenance-headers
+
+Added: 2026-10-30, learn Step 1.9 investigate over the baseline-repair execution Task 1 intermediate review finding
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named comment-only edit to the provenance headers of one test file (`scripts/test_invocation_telemetry.py`) - no assertion bytes change, so no guard-bearing path; tracked script surface; no open design choice beyond wording the header admits.
+
+Origins:
+- docs/history/backlog/2026-10-29-telemetry-pin-provenance-headers.md
+
+Urgency: low - provenance headers currently over-claim the capture base for re-baselined pins, so a provenance audit from headers alone misreads original versus re-captured literals; the cost is an audit false trail, not a behavioral defect.
+
+Scope arms: amend the module-level and Task 3 closeout provenance headers to state which pins were re-captured at the 2026-10-29 re-baseline and which date from the historical bases, so provenance is derivable from the headers alone; keep the scattered inline re-capture comments or fold them into the headers, whichever nets fewer bytes.
+
+Orientation: `scripts/test_invocation_telemetry.py` header comments (fresh read), the origin row's base list, and the 2026-10-29 re-baseline landing for the re-captured literal set.
+
+Rejected alternatives:
+- Move provenance out to a sidecar manifest keyed by pin name: rejected as new surface with a single consumer (the occasional provenance audit); the headers are where the auditor already reads (origin row's Direction, docs/history/backlog/2026-10-29-telemetry-pin-provenance-headers.md)
+- Drop provenance headers entirely and rely on git blame: rejected because the headers record capture intent (which base certified the literal), which blame cannot distinguish from later formatting touches (origin row's Problem, docs/history/backlog/2026-10-29-telemetry-pin-provenance-headers.md)
+
+## inventory-count-reconciliation
+
+Added: 2026-10-30, learn Step 1.9 investigate over the baseline-repair execution Phase 3 round-2 backlogged findings
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): body-named docs-only text corrections across two backlog-row files - the record-range count in the sibling doctrine row and this row's own superseded-count concern - tracked docs surfaces, no guard path, no design choice.
+
+Origins:
+- docs/history/backlog/2026-10-30-inventory-count-reconciliation.md
+
+Urgency: low - two stale counts: the sibling quota-doctrine row says the witness covers "records D-1..D-12" while `docs/maintenance/operator-directives.md` carries D-1..D-16 and the witness loop covers all of them (a future sanction-list fix would under-anchor four records); concern 2's plan checkbox totals are superseded authoring-time numbers in a plan now archived to `docs/history/plans/completed/`, so the "refresh when next touched" arm is moot post-archive and lands only as the origin row's own disposition note.
+
+Scope arms: correct both D-1..D-12 mentions in `docs/history/backlog/2026-10-30-quota-doctrine-committed-rewrite-narrowing.md` to D-1..D-16 (re-derive the count fresh from operator-directives.md at landing); resolve concern 2 in the origin row as moot-by-archive with the disposition recorded at the row's covered-row deletion.
+
+Orientation: `docs/maintenance/operator-directives.md` record census (fresh count), the sibling row's Skill-step line, and the origin row; the plan's completed twin for the archive fact.
+
+Rejected alternatives:
+- Edit the archived plan's checkbox counts to current values: rejected because the archived copy is the historical record of what the authoring-time plan claimed; annotating is the plan-archive convention, not rewriting (docs/history/plans/completed/2026-10-29-phase2-baseline-repair.md)
+- Fold the D-1..D-16 correction into the quota-doctrine plan route only: rejected because the correction is a two-word docs edit admissible now; the plan route owns the witness semantics, not the row text (the sibling row docs/history/backlog/2026-10-30-quota-doctrine-committed-rewrite-narrowing.md carries the Cluster pairing)
+
+## execute-plan-dispatch-blocked-panel-fallback-arm
+
+Added: 2026-10-30, learn+investigate over the 2026-10-29/30 execution run (Phase 3 round whose every worker dispatch attempt was provider-refused; the round ran inline and the fallback was improvised)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a single-surface skill-text arm (one fallback paragraph plus one cross-reference in `agents/skills/execute-plan/SKILL.md` Phase 3), body-named, with no open design choice, no guard-bearing path, no state schema, and no machinery; the record-shaping contract it documents already exists and validated the witnessing round.
+
+Origins:
+- docs/history/backlog/2026-10-30-execute-plan-dispatch-blocked-panel-fallback-arm.md
+
+Urgency: medium - a provider-side dispatch block can strand a mid-run review round with no documented in-skill path, and the witnessing session's recovery (inline two-lens round, mutation evidence per guarded mechanism, sidecar reshaped from the producer template's full-panel default to an honest focused claim) had to be assembled by trial and error against the staging validator; the next blocked round repeats that cost without the arm.
+
+Scope arms:
+1. Fallback paragraph in Phase 3 (after the dispatch procedure): when every worker dispatch attempt is refused by the provider (distinct from a worker timeout or a quota park), run the planned lenses inline in the parent session, keep mutation evidence per guarded mechanism (neuter, watch a named test fail, restore, cite the pair), and record the round as a focused panel whose fields describe what actually ran: the dispatch block named in the selection reason, workers launched equal to the lenses executed, and the material lens set scoped to those lenses; never accept the producer template's full-panel default over what happened.
+2. Cross-reference: the fallback paragraph points at the review-record honesty grammar (panel mode, coverage vocabulary, lens-coverage and verdict coupling owned by `scripts/validate_review_staging.py`) instead of restating it.
+
+Orientation: `agents/skills/execute-plan/SKILL.md` Phase 3 fresh-review procedure (dispatch-era text; latest structural landing 6458f4f75); the witnessing round's record shaping witnessed as project lesson #306 in `docs/maintenance/development_lessons.md`; the origin row for the full observed-versus-expected statement. Disk re-derivation at the entry's write: the origin row exists in the working tree and at the tip commit (`git cat-file -e HEAD:<path>`), and the Phase 3 text carries the dispatch vocabulary (7 hits at HEAD).
+
+Prompt: Using the ad-hoc backlog arm, land both scope arms in one change to `agents/skills/execute-plan/SKILL.md`; skill text only, no machinery, so no admission wording is owed; keep the arm inside the skill text anti-growth rules (the cross-reference pays for the paragraph by naming the grammar's home instead of restating it); run the em-dash added-lines gate and the public hygiene scan; delete the origin row per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section in the same change.
+
+Rejected alternatives:
+- Validator-side fix rejecting full-panel records whose workers cannot be evidenced: rejected under the machinery admission protocol - the staging validator already enforces the honesty grammar (coverage vocabulary, lens coverage, verdict coupling) and the witnessed false claim was caught and reshaped by that validator's refusals, so a second gate adds surface with no witnessed incident of a false record passing (scripts/validate_review_staging.py, the witnessing round's validation trail)
+- Do nothing (leave the fallback improvised per session): rejected because the fallback is multi-step and record-shape-sensitive; an improvised arm risks a dishonest full-panel claim passing no gate at authoring time and costing a round when the validator refuses it (docs/history/backlog/2026-10-30-execute-plan-dispatch-blocked-panel-fallback-arm.md, observed-versus-expected)
+- Route the fallback through the quota-park/resume text instead: rejected because a dispatch block is not a quota wall - the session is alive and authorized, only the dispatch channel is refused; folding the arms would blur two distinct stop conditions with distinct resume recipes (agents/skills/execute-plan/SKILL.md pause records)
+
+## machinery-inventory-baseline-red-repair
+
+Added: 2026-10-30, learn+investigate over the 2026-10-28/29 exec-mandate closeout session (the two origin rows' shared red-baseline class re-witnessed during that run's validation legs)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the group classifies uniformly as a bounded data-alignment pass over `scripts/machinery_registry.json` and the witnesses it cites (register or disposition unregistered script/state-field regrowth rows, re-point stale witness refs, resolve one removals-guard row), single-surface, with no open design choice, no new dependency, no state-schema change, and no machinery added.
+
+Origins:
+- docs/history/backlog/2026-10-23-machinery-inventory-baseline-red-obscures-regrowth.md
+- docs/history/backlog/2026-10-25-machinery-inventory-check-preexisting-red.md
+
+Urgency: medium - the check exits 1 at every baseline (30 failures 2026-10-23; 25 at one base and 24 at the 2026-10-29 landing tip), so a landing cannot use it as a gate signal and genuinely new regrowth hides in the noise; the counts drift as peer landings touch the sets, so every session paying a validation leg re-adjudicates the same red.
+
+Scope arms:
+1. Register or explicitly exempt every unregistered script and state-field regrowth row the check names at dispatch time (the 2026-10-29 witness names the repository's own audit helper, runtime sync and deployment scripts, and one queued-execution state field among the set; re-derive the full set fresh rather than from this entry).
+2. Re-point the stale witness references to their surviving durable homes per the guidelines' completed-row citation precedence.
+3. Resolve the removals-guard row whose subject script still exists: either the row's removal prediction was wrong (flip the disposition to keep with the corrected witness) or the removal is scheduled in a reviewed change; never delete the live script to satisfy the row.
+4. Assert the check exits 0 as the new baseline and its real-tree test arm passes, so later Validation Commands can name the bare check and reach green.
+
+Orientation: read both origin rows whole, then the registry schema and the check's failure output at the current tip (`python3 scripts/machinery_inventory.py --check`), the inventory-upkeep plan that introduced the check (`docs/history/plans/completed/2026-10-02-machinery-inventory-upkeep.md`), and the guidelines' completed-row citation precedence for the witness re-pointing.
+
+Prompt: Using the ad-hoc backlog arm, land the four scope arms in one grouped change; no gate, validator, lock, ledger, or ceremony is added, so the admission line below is the rejection record; run the em-dash added-lines gate and the public hygiene scan; delete both origin rows per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section in the same change and retargeting the sibling Cluster pointers to the receipt.
+
+Rejected alternatives:
+- A scoped or ignore-list mode for the check: rejected under the machinery admission protocol - the drift is stale registry data, not a checker defect, and no witnessed incident shows a legitimate need to suppress rows ("no witnessed incident" of a scoped-mode consumer; both origin rows)
+- Skipping or permanently failing the check's real-tree test arm until the drift is repaired: rejected because that arm is the check's own regression signal; a permanent red hides exactly the regrowth the check exists to surface (scripts/test_machinery_inventory.py RealTreeCheck arm; the 2026-10-23 origin row's What is owed)
+- Deleting the still-present enforcement script to satisfy the removals row: rejected because the script is a live enforcement layer with passing suites; row truth yields to disk truth (scripts/check_maintenance_pins.sh in the working tree versus the registry's removals entry)
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arms are registry-data alignment and witness re-pointing; the gate-shaped alternative is rejected above with the missing-incident absence named.
 
 
 ## release-sibling-report-orphan-branch-guard
@@ -108,6 +236,7 @@ Rejected alternatives:
 - A pre-teardown validator hard-blocking any zero-result migrate: rejected under the machinery admission protocol as a first-landing blocker for a warning-priced signal - the incident's cost was a recovered manual carry, not a lost landing, and a hard block would false-positive every legitimately empty delta ("no witnessed incident" of a blocked-valid-closeout)
 
 Machinery admission: arm 1 is warning-only output with its four admission fields carried in the origin row (incident: this entry's witnessed strand; catch frequency: every closeout whose baseline postdates owned edits; false-positive cost: one report line on a legitimately empty delta; sunset: promotion to a hard report on the next true catch or review after three closeouts); the validator arm is rejected with the missing-incident absence named above.
+
 
 
 ## gate-removal-adhoc-invocation-shape
@@ -543,3 +672,103 @@ Rejected alternatives:
 - Rely on the net-diff view alone and drop the per-commit walk (remove): rejected - the per-commit walk is the promotion plan's own correctness layer (deletions detected per commit with one-for-one reconciliation), and the witnessed flag fired in its fail-closed direction, costing one recomposition rather than a lost receipt
 
 Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arms are a read-only reproduction and a recorded verdict; the widening and gate-shaped alternatives are rejected above with the missing-incident absence named, and a reproduced-flag follow-up carries the four admission fields in its own fixing change.
+
+## primary-rooted-orphan-done-manifest-drain
+
+Added: 2026-10-30, learn+investigate over the window-dispatch-hardening resume-carrier session (origin row below)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (agents/skills/maintenance/decisions.md), by the body-named single-surface-fix clause: the arm is a one-time bounded drain of runtime residue using only the existing remedy ladder (the classifier plus disposition-manifest, recover-manifest, finalize-manifest, and the boundary-side gate-removal), no open design choice (the adjudication recipe is canonical: development_lessons.md #45 root match plus the landed-work proof), no tracked-surface edit beyond the row deletion, no guard-bearing path, no new dependency, no machinery.
+
+Origins:
+- docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md
+
+Stage 1 roster: the singleton origin above. The Stage 0 sweep found no open row sharing the orphan-manifest defect class: the nearest rows own different objects (2026-10-09-done-recursive-tmp-sweep-safety owns recursive-deletion safety; the gate-report-retention family owns report retention intervals), and the landed manifest-state classification plan owns the classifier, not the pool.
+
+Urgency: low-medium - the witnessed cost is real but bounded: one primary done setup was blocked 2026-10-29 by the then-newest orphan and resolved through the printed remedy ladder within the same closeout; 43 orphan groups stand as of 2026-10-30 (10 primary-rooted, the class that surfaces to every future primary closeout whose marker chain reaches one).
+
+Scope arms:
+- Enumerate: re-derive the orphan set at run time with the classifier's group semantics (a run-id group is terminal when any of its files carries complete, adopted, or dispositioned); the 2026-10-30 count (43 groups, 10 primary-rooted) is orientation, not the worklist.
+- Adjudicate per group: root match per development_lessons.md #45, holder liveness, worktree presence, and the landed-work probe (the run's owned paths at its start commit against the base branch history); disposition-manifest only for provably dead roots, exactly per its dead-root-only gate.
+- Leave-in-place with a recorded reason for every live or unprovable group; a live holder's group is never touched.
+- Execution claims stay out of scope: that residue has its own stale-registration doctrine and lane.
+- No machinery change of any kind: the drain uses the tools as they stand; the origin-row deletion is the only tracked-surface edit.
+
+Orientation: read the origin row, then the classifier and remedy subcommands in scripts/done_sweep_gates_lib.py (classify_run_boundary, disposition-manifest, recover-manifest, finalize-manifest), the refusal-and-remedies site in scripts/done_run.sh setup, and development_lessons.md #45 for the live-root adjudication recipe. Disk re-derivation at entry write: the 2026-10-29 witness manifest carries its dispositioned record on disk (read back at write time) while git check-ignore confirms the whole manifest corpus is gitignored runtime state; the origin row exists in the working tree and at HEAD (3f66b26e1).
+
+Prompt: Using the ad-hoc backlog arm, run the bounded drain per the scope arms (enumerate, adjudicate, disposition the provably dead, record the leaves), then delete the origin row per the covered-row rule with the EXEC-PROMPTS-PRUNE receipt line removing this entry's section in the same change; the public hygiene scan and the em-dash added-lines gate run over the run's changed tracked surfaces.
+
+Rejected alternatives:
+- An automated GC arm inside done setup (keep-and-widen the setup path): rejected under the machinery admission protocol - one witnessed friction block is the whole incident record, and a destructive sweep at setup time is the exact hazard class the recursive-tmp-sweep-safety row fences ("no witnessed incident" of residue harm beyond adjudication friction); the bounded human-adjudicated drain is the smaller arm (docs/history/plans/completed/2026-10-27-done-recursive-tmp-sweep-safety.md)
+- Blanket-disposition every orphan past an age threshold (keep and narrow the pool by age): rejected - the dead-root-only gate exists for the witnessed live-root misadoption hazard, and age is not liveness (a hours-old group may hold a live session; development_lessons.md #45, the live-root classification)
+- Drain the execution claims lane in the same run (widen scope): rejected - claims carry their own stale-registration doctrine with its own provably-dead bar and a fleet-wide blocking failure mode; mixing lanes doubles the blast radius of one misjudgment (docs/maintenance/development_lessons.md #224, the takeover liveness proof; #110, the claim ownership chain)
+- Do nothing (keep): rejected - the witnessed block recurs at every primary closeout whose marker chain reaches an orphan, and the pool has grown monotonically since 2026-10-01 (the origin row's measurement)
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the drain is cleanup-shaped with existing tools, and the automation and age-threshold alternatives are rejected above with the missing-incident absence named.
+## plan-readiness-deleted-files-path-vocabulary
+
+Added: 2026-10-30, investigate pass over an origins-closure exec run (origin row below; fresh witness confirms the existence-check refusal)
+
+Work-type verdict: exec-type; the remedy is a bounded validator-and-template edit with no open design choice: a planned-deletion marker in the plans `Files:` grammar recognized by `scripts/plan_readiness.py`'s existence check (check (c)) and coverage-warning leg, mirroring the existing `*(new)*` exemption.
+
+Origins:
+- docs/history/backlog/2026-10-30-plan-readiness-deleted-files-path-vocabulary.md
+
+Urgency: medium - every future plan whose closure deletes a tracked file (origins closure, row removals) hits the same pre-round refusal after its task body lands and must improvise the same prose workaround; witnessed once 2026-10-30, cost one mid-run skill-gated plan repair.
+
+Scope arms: a `*(deleted)*` marker exempting the existence check; the marker checked against the diff so a stale deletion record still fails; coverage-warning alignment; template documentation in the plans skill.
+
+Orientation: read the existence check in scripts/plan_readiness.py (the Files-path loop and its `*(new)*` exemption), then the _plan_files_items grammar, then the witnessed run's repaired plan docs/history/plans/2026-10-25-review-plan-nonconvergence-disposition.md. The marker must stay a record of intent (the path must actually be deleted by the task's commit), never a silent escape from coverage.
+
+Prompt: Implement the planned-deletion marker: extend the plans `Files:` grammar and `scripts/plan_readiness.py` so a `*(deleted)*` annotated path passes the existence check while a deletion annotation on a path the task's commits do not actually delete still fails; align the FILES-COVERAGE warning leg; add the marker to the plans template; focused validator selftest coverage for pass and stale-record refusal shapes; em-dash and hygiene gates; delete the origin row per the covered-row rule in the same change.
+
+Rejected alternatives:
+- Prose-only workaround as doctrine (keep-and-document): rejected - it was the witnessed remedy and it hides deletion intent from the validator's coverage checks (witness: the repaired Task 1 Files list)
+- Exempt all Files paths from existence checking (remove): rejected - the check catches stale planned paths before implementation, demonstrated value across the plan corpus (witness: the existence check in scripts/plan_readiness.py)
+- A separate Deletions: section (new grammar): rejected - duplicates the Files grammar's path-token machinery for one marker's worth of value; the marker rides the existing list shape (witness: the _plan_files_items grammar in scripts/plan_readiness.py)
+
+Machinery admission: validator edit only, no new gate; the marker narrows a false-positive refusal class (one witnessed catch, the workaround as false-positive cost), sunset with the validator's own review cycle.
+
+## review-plan-fresh-review-route-stop
+
+Added: 2026-10-30, learn over the reauthorization-disposition execution (Task 1 disposition record landed on the run branch)
+
+Work-type verdict: ad-hoc-able by the single-surface-fix clause: the witnessed defect is a completed execution noncompliance whose owning clauses were verified to already close the route; the residual is a recorded incident, not a machinery gap.
+
+Origins:
+- docs/history/plans/completed/2026-10-26-authoring-resume-after-operator-reauthorization.md (Task 1 disposition record)
+
+Urgency: low - the clauses verified correct at the cited sites; a repeat would be a fresh noncompliance instance, already covered by Blocker recovery's record-and-continue duty.
+
+Scope arms: none beyond the landed record; no skill edit, no validator, no gate.
+
+Orientation: read the Task 1 disposition record in the completed plan, then the four owning clauses it cites (maintenance decisions.md Blocker recovery; review-reconciliation SKILL.md section 4; review-plan SKILL.md Step 5 and Step 2 launch precondition).
+
+Prompt: no dispatch; the record itself is the artifact. If a second stop-after-authorization instance is witnessed against these same clauses, reopen with the new witness.
+
+Rejected alternatives:
+- Add a clarification clause (edit): rejected by the plan's own Task 2 gate - no proven gap, and the three surfaces already direct the authorized route (witness: docs/history/plans/completed/2026-10-26-authoring-resume-after-operator-reauthorization.md)
+- File a standalone backlog row (duplicate): rejected - the disposition record in the completed plan is the durable home and the origin row is already closed covered (witness: docs/history/plans/completed/2026-10-26-authoring-resume-after-operator-reauthorization.md)
+
+Machinery admission: nothing added.
+
+## reauthorization-plan-annotation-precision-lows
+
+Added: 2026-10-30, investigate over the session that executed the authoring-resume-after-operator-reauthorization plan (Phase 3 r1 review deferred the three Lows into the origin row)
+
+Work-type verdict: ad-hoc-able by the single-surface-fix clause: the remedy edits annotation prose in one completed plan file and one backlog row, no code, skill, or validator surface.
+
+Origins:
+- docs/history/backlog/2026-10-30-reauthorization-plan-annotation-precision-lows.md
+
+Urgency: low - no behavior surface; the cost is a history reader mis-resolving the checkbox's literal `(<completed plan path>)` + `Covered by:` shape against the attested row-convention citation, and the closure-of-record ambiguity between a subject-only branch commit and the true closure commit.
+
+Scope arms: tighten Task 2's verify-annotations in the completed plan to cite the attested convention (living-path Status citation, no Covered-by line) explicitly beside the literal shape; name the PRUNE-receipt commit (893566f95) as the peer prune the "no other row or catalog edits" wording did not enumerate; annotate the subject-only closure-subject branch commit (daed83b02) as carrying no closure edit with the closure of record named.
+
+Orientation: read the origin row's three deferred Lows and its durable witness (.ai-playbook/reviews/2026-10-30-authoring-resume-after-operator-reauthorization-code-review-r1.md), then the Task 2 disposition record in docs/history/plans/completed/2026-10-26-authoring-resume-after-operator-reauthorization.md; the tighten lands only "when next touching the archived plan or the row" per the row's own remedy clause, so the dispatch may record a defer disposition instead of editing if no touch is due.
+
+Rejected alternatives:
+- Add a validator enforcing the literal checkbox shape across completed plans (machinery arm): rejected - one witnessed instance, no recurring catch, and the attested convention deliberately differs from the literal shape, so enforcement would codify the wrong target; admission test fails ("no witnessed incident" beyond the single review note)
+- Leave the annotations as written (remove/do-nothing): rejected - the reviewer-attested gap is exactly that a literal-shape reader cannot reach the attested basis; the tightening is the row's own suggested remedy and costs nothing (witness: docs/history/backlog/2026-10-30-reauthorization-plan-annotation-precision-lows.md)
+- Retroactive commit-subject rewrite to move the closure subject onto the true closure commit (history arm): rejected - rewrites landed history for a readability nit the annotation resolves at zero risk (witness: docs/history/backlog/2026-10-30-reauthorization-plan-annotation-precision-lows.md)
+
+Machinery admission: nothing added; the recommended arm removes ambiguity in existing prose.

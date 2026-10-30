@@ -1,8 +1,11 @@
 # Backlog: session-channel derivation returns empty on the ZCode runtime
 
 Filed: 2026-10-26
-Status: open
+Status: covered (docs/history/plans/2026-10-30-session-channel-zcode-runtime-derivation-empty.md)
 Priority: high
+Required agent type: zcode
+
+Witness-only affinity annotation (added 2026-10-30, the agent-type-affinity-before-plan-work plan): the Environment context below explicitly names the ZCode desktop runtime; this row is Status: covered, so the label witnesses the affinity contract's catch record (the 2026-10-27 Codex session that selected this origin) and carries no live selection effect.
 
 - **Class:** fix-class
 - **Origin class:** learn Step 1.8 skill-usage issue (witnessed 2026-10-26, learn run over an exec carrier session)

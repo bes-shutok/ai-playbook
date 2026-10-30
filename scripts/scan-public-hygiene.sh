@@ -15,6 +15,12 @@
 
 set -euo pipefail
 
+# rg reads $RIPGREP_CONFIG_PATH as an extra config file when set: a planted
+# config could silently weaken or redirect the scan (the same environment-
+# poisoning class the git_enumerate scrub defends against for git), so it
+# is cleared here before any rg invocation.
+unset RIPGREP_CONFIG_PATH
+
 ROOT="${PUBLIC_HYGIENE_REPO_ROOT:-.}"
 PATTERNS_FILE="${PUBLIC_HYGIENE_PATTERNS_FILE:-${HOME}/.ai-playbook/public-hygiene.patterns}"
 
@@ -26,6 +32,14 @@ emit_outcome() {
 }
 
 SCAN_STRICT=(agents/skills projects)
+# The deny patterns every scan mode runs over its own scope: the two built-in
+# patterns and the shared patterns file's active lines. One list, so the
+# blocking roots and the report-only tracked scope below can never drift
+# apart on pattern membership.
+BUILTIN_PATTERNS=(
+  '/Users/|/home/[a-zA-Z0-9._-]+/'
+  'Co-[Aa]uthored-[Bb]y:\s+.+<[^>]+@[^>]+>'
+)
 # Pattern-quoting sources (2026-09-27): detector implementations whose bytes
 # carry the deny patterns themselves, their detection fixtures, and archived
 # plans or backlog records that quote sweep commands or placeholder home
@@ -76,7 +90,18 @@ print_usage() {
 Usage: scan-public-hygiene.sh [--changed-from <ref>] [--files <path>...] [--selftest] [--help]
 
 Modes:
-  (no args)               Scan the full tracked tree (agents/skills, projects).
+  (no args)               Blocking scan of agents/skills and projects
+                          (working tree, untracked included); a hit fails
+                          the run. Beside it, tracked regular blobs outside
+                          those roots (symlinks and gitlinks excluded) are a
+                          report-only scope: a match emits a
+                          `PUBLIC_HYGIENE_REPORT: path=...` record and never
+                          fails the run; enumeration failure emits
+                          `PUBLIC_HYGIENE_REPORT: enumeration-unavailable`
+                          and skips only that scope. A missing or unreadable
+                          patterns file fails the scan (tool error); the
+                          report arm's patterns-unavailable record exists
+                          only for direct programmatic invocation.
   --changed-from <ref>    Scan only files changed relative to <ref> (git diff <ref>:
                           working tree vs ref, including uncommitted edits) plus untracked
                           files under the scan scope.
@@ -97,6 +122,21 @@ Environment:
   PUBLIC_HYGIENE_REPO_ROOT        Repo root to scan (default: current dir).
   PUBLIC_HYGIENE_PATTERNS_FILE    Local deny-patterns file (default: ~/.ai-playbook/public-hygiene.patterns).
 EOF
+}
+
+# The shared patterns file's active deny patterns, one per line (comments and
+# blank lines stripped). The one reader for that file: run_scan (blocking
+# modes) and run_report_scan (the report-only tracked scope) both consume it,
+# so pattern membership can never drift between them.
+_patterns_from_file() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    printf '%s\n' "$line"
+  done < "$PATTERNS_FILE"
 }
 
 # Run the deny-pattern scan over a given set of path arguments.
@@ -124,20 +164,23 @@ run_scan() {
     return 0
   fi
 
-  report_hits_for_paths "$mode" '/Users/|/home/[a-zA-Z0-9._-]+/' "${rg_paths[@]}"
-  report_hits_for_paths "$mode" 'Co-[Aa]uthored-[Bb]y:\s+.+<[^>]+@[^>]+>' "${rg_paths[@]}"
+  local pattern
+  for pattern in "${BUILTIN_PATTERNS[@]}"; do
+    report_hits_for_paths "$mode" "$pattern" "${rg_paths[@]}"
+  done
 
-  if [ -f "$PATTERNS_FILE" ]; then
+  # r3 F1: the read gate is -r, not just -f. The file patterns ride a
+  # process substitution, whose failure the parent cannot observe, so a
+  # file that exists but is unreadable must be refused here: otherwise the
+  # blocking scan silently degrades to builtin-only patterns and can exit 0
+  # on a patterns-file-only hit.
+  if [ -f "$PATTERNS_FILE" ] && [ -r "$PATTERNS_FILE" ]; then
     local line
-    while IFS= read -r line || [ -n "$line" ]; do
-      line="${line%%#*}"
-      line="${line#"${line%%[![:space:]]*}"}"
-      line="${line%"${line##*[![:space:]]}"}"
-      [ -z "$line" ] && continue
+    while IFS= read -r line; do
       report_hits_for_paths "$mode" "$line" "${rg_paths[@]}"
-    done < "$PATTERNS_FILE"
+    done < <(_patterns_from_file)
   else
-    echo "FATAL: missing $PATTERNS_FILE (copy from docs/scan-public-hygiene.patterns.example in instructions repo)" >&2
+    echo "FATAL: missing or unreadable $PATTERNS_FILE (copy from docs/scan-public-hygiene.patterns.example in instructions repo)" >&2
     emit_outcome tool_error
     exit 3
   fi
@@ -151,15 +194,19 @@ report_hits_for_paths() {
   local hits
   local rg_rc=0
   if [ "$label" = "files" ]; then
-    # r1 F3: the explicit-paths mode hardens the rg invocation. The
-    # allowlist globs stay option positions, then "--" closes option
-    # parsing before the named paths, so a crafted filename can never be
-    # parsed as an rg option; and an rg failure with exit > 1 (for example
-    # an invalid regex line in the shared patterns file) is fatal (a tool
-    # error, exit 3 under the outcome contract), never a silent pass. The
-    # frozen full-tree and changed modes keep their argv and swallow-to-pass
-    # behavior untouched.
-    hits="$(rg -n --hidden "$pattern" "${GLOB_EXCLUDES[@]}" -- "$@" 2>/dev/null)" || rg_rc=$?
+    # r1 F3: the explicit-paths mode hardens the rg invocation. The allowlist
+    # globs stay option positions, then "--" closes option parsing before
+    # the named paths, so a crafted filename can never be parsed as an rg
+    # option; the pattern rides -e so an active patterns line starting with
+    # "-" cannot be parsed as options either (r3 F4); and an rg failure with
+    # exit > 1 (for example an invalid regex line in the shared patterns
+    # file) is fatal (a tool error, exit 3 under the outcome contract),
+    # never a silent pass. The frozen full-tree and changed modes keep their
+    # argv and swallow-to-pass behavior untouched; named residual: a dash-led
+    # active patterns line is silently unapplied there and an rg exit > 1 is
+    # swallowed, an asymmetry observable against files mode on identical input
+    # (review r2 comment; follow-up backlog row owns the fail-closed arm).
+    hits="$(rg -n --hidden -e "$pattern" "${GLOB_EXCLUDES[@]}" -- "$@" 2>/dev/null)" || rg_rc=$?
     if [ "$rg_rc" -gt 1 ]; then
       echo "FATAL: rg failed (exit $rg_rc) in files mode; check the patterns file" >&2
       emit_outcome tool_error
@@ -294,7 +341,164 @@ cmd_full_tree() {
   _require_rg
   FAILS=0
   run_scan "full-tree" "SCAN_STRICT"
+  emit_report_scope
   emit_verdict
+}
+
+# --- report-only tracked scope (default mode) -------------------------------
+
+# Tracked-scope Git enumeration, hardened: the subshell pins the repo root
+# (PUBLIC_HYGIENE_REPO_ROOT) and clears inherited Git repository overrides,
+# so a decoy GIT_DIR or GIT_WORK_TREE in the caller's environment cannot
+# redirect the enumeration to another repository or index, and the global
+# and system config files cannot contribute a redirect either (r3 F5:
+# GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM join the scrub beside the
+# GIT_CONFIG_NOSYSTEM export). NUL-delimited output, so any filename byte
+# survives the stream.
+git_enumerate() {
+  (
+    cd "$ROOT" || exit 9
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_GRAFT_FILE \
+      GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+      GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+    GIT_CONFIG_NOSYSTEM=1
+    export GIT_CONFIG_NOSYSTEM
+    exec git ls-files -s -z 2>/dev/null
+  )
+}
+
+# Populate REPORT_SCOPE_PATHS with the report-only tracked scope: tracked
+# regular blobs (index modes 100644/100755) outside the blocking roots, as
+# existing working-tree regular files, under the shared exclusions
+# (GLOB_BODIES through the shared matcher). Tracked symlinks (120000) and
+# gitlinks (160000) carry no scannable blob content and never enter the set.
+# Returns 1 when Git enumeration fails; the caller then emits the fixed
+# enumeration-unavailable record and skips only this scope.
+collect_report_scope_paths() {
+  REPORT_SCOPE_PATHS=()
+  local tmp_enum rec meta mode path
+  tmp_enum="$(mktemp "${TMPDIR:-/tmp}/pubhyg-enum.XXXXXX")" || return 1
+  if ! git_enumerate >"$tmp_enum"; then
+    rm -f "$tmp_enum"
+    return 1
+  fi
+  while IFS= read -r -d '' rec; do
+    meta="${rec%%$'\t'*}"
+    mode="${meta%% *}"
+    case "$mode" in
+      100644|100755) ;;
+      *) continue ;;
+    esac
+    path="${rec#*$'\t'}"
+    case "$path" in
+      agents/skills|projects|agents/skills/*|projects/*) continue ;;
+    esac
+    [ -f "$path" ] || continue
+    [ -L "$path" ] && continue
+    _path_is_excluded "$path" && continue
+    REPORT_SCOPE_PATHS+=("$path")
+  done <"$tmp_enum"
+  rm -f "$tmp_enum"
+  return 0
+}
+
+# Byte-wise reversible ASCII-only JSON quoting of a filename: printable ASCII
+# bytes pass through (double quote and backslash escaped), and every other
+# byte, including undecodable ones, becomes a \u00XX escape. The result is
+# pure ASCII with no raw terminal controls and represents every filename
+# byte, so a report record can neither leak nor mangle a crafted name.
+json_quote_path() {
+  local hex out="" i=0 pair code ch
+  hex="$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n')"
+  while [ "$i" -lt "${#hex}" ]; do
+    pair="${hex:$i:2}"
+    code=$(( 16#${pair} ))
+    if [ "$code" -ge 32 ] && [ "$code" -le 126 ]; then
+      case "$pair" in
+        22) out+='\"' ;;
+        5c) out+='\\' ;;
+        *) printf -v ch '%b' "\\0$(printf '%03o' "$code")"; out+="$ch" ;;
+      esac
+    else
+      out+="\\u00${pair}"
+    fi
+    i=$(( i + 2 ))
+  done
+  printf '%s' "$out"
+}
+
+# Scan the report-only tracked scope with the same deny patterns as the
+# blocking scan (BUILTIN_PATTERNS plus the shared patterns file through the
+# one shared reader) and emit one `PUBLIC_HYGIENE_REPORT: path=...` record
+# per matching file, paths after `--` so option-shaped names stay paths.
+# Never touches FAILS or the exit code: an enumeration or scan failure emits
+# the fixed enumeration-unavailable record and a missing-or-unreadable
+# shared patterns file emits the fixed patterns-unavailable record
+# (r3 F1), each skipping only this scope, and matched file content never
+# reaches the output (plan 2026-10-26-hygiene-scanner-default-scope-parity).
+run_report_scan() {
+  local failed=0 rc=0 pattern p
+  # r3 F1: same read gate as the blocking consumer, for the same reason: a
+  # file that exists but is unreadable must never silently degrade this
+  # scope to builtin-only pattern membership. The fixed record keeps the
+  # PUBLIC_HYGIENE_REPORT: prefix grammar, so the done gate's forwarding is
+  # unchanged.
+  if [ ! -f "$PATTERNS_FILE" ] || [ ! -r "$PATTERNS_FILE" ]; then
+    echo "PUBLIC_HYGIENE_REPORT: patterns-unavailable"
+    return 0
+  fi
+  local tmp_matches
+  tmp_matches="$(mktemp "${TMPDIR:-/tmp}/pubhyg-report.XXXXXX")" || {
+    echo "PUBLIC_HYGIENE_REPORT: enumeration-unavailable"
+    return 0
+  }
+  for pattern in "${BUILTIN_PATTERNS[@]}"; do
+    rc=0
+    rg -l --null --hidden -e "$pattern" -- "${REPORT_SCOPE_PATHS[@]}" >>"$tmp_matches" 2>/dev/null || rc=$?
+    if [ "$rc" -gt 1 ]; then
+      failed=1
+      break
+    fi
+  done
+  if [ "$failed" -eq 0 ]; then
+    while IFS= read -r pattern; do
+      rc=0
+      rg -l --null --hidden -e "$pattern" -- "${REPORT_SCOPE_PATHS[@]}" >>"$tmp_matches" 2>/dev/null || rc=$?
+      if [ "$rc" -gt 1 ]; then
+        failed=1
+        break
+      fi
+    done < <(_patterns_from_file)
+  fi
+  if [ "$failed" -eq 1 ]; then
+    rm -f "$tmp_matches"
+    echo "PUBLIC_HYGIENE_REPORT: enumeration-unavailable"
+    return 0
+  fi
+  if [ -s "$tmp_matches" ]; then
+    while IFS= read -r -d '' p; do
+      printf 'PUBLIC_HYGIENE_REPORT: path=%s\n' "$(json_quote_path "$p")"
+    done < <(LC_ALL=C sort -u -z "$tmp_matches")
+  fi
+  rm -f "$tmp_matches"
+  return 0
+}
+
+# The default mode's non-blocking report-only arm: tracked regular blobs
+# outside the blocking roots, scanned under the same deny patterns, matches
+# reported (never failing), and any acquisition failure skipping only this
+# scope while the old roots' results stand (plan
+# 2026-10-26-hygiene-scanner-default-scope-parity).
+emit_report_scope() {
+  if ! collect_report_scope_paths; then
+    echo "PUBLIC_HYGIENE_REPORT: enumeration-unavailable"
+    return 0
+  fi
+  if [ "${#REPORT_SCOPE_PATHS[@]}" -eq 0 ]; then
+    return 0
+  fi
+  run_report_scan
 }
 
 cmd_changed_from() {
@@ -693,6 +897,18 @@ EOF
     --outcome tool_error --contains "no such file" -- \
     --files "agents/skills/clean/absent-outcome-probe.md"
 
+  # r3 F1: an existing-but-unreadable patterns file must fail closed, never
+  # silently degrade the blocking scan to builtin-only patterns. The named
+  # file carries a patterns-file-only hit (FORBIDDEN-TOKEN matches no
+  # builtin), so a silent degrade would exit 0 here; the pin demands the
+  # tool error (exit 3) instead.
+  printf 'token FORBIDDEN-TOKEN here\n' > "$repo/agents/skills/clean/notes.md"
+  chmod 000 "$patterns"
+  selftest_check_files "unreadable-patterns-file-fails-closed-files-mode" rc=3 \
+    --outcome tool_error --contains "unreadable" -- \
+    --files "agents/skills/clean/notes.md"
+  chmod 600 "$patterns"
+
   # r2 overflow (literal-path-exclusion-bypass): the exclusion test runs on
   # the NORMALIZED path. A ..-path that escapes an excluded prefix is
   # scanned (the literal spelling must not blind the scan)...
@@ -765,6 +981,376 @@ EOF
   selftest_mode_agree "docs/reviews/r.md"
   selftest_mode_agree "LICENSE.txt"
   selftest_mode_agree "agents/skills/clean/SKILL.md"
+
+  # --- default-mode report-only tracked scope pins (plan
+  # 2026-10-26-hygiene-scanner-default-scope-parity, Task 2): every arm below
+  # runs the scanner with NO arguments (the report-only arm exists only in
+  # the default mode) against the fixture repo through
+  # PUBLIC_HYGIENE_REPO_ROOT, and pins the report contract: old-root hits
+  # still exit 1, new-root tracked hits emit path records without content and
+  # never fail, exclusions hold, crafted path bytes stay escaped, and the
+  # enumeration is bound to the pinned root whatever the caller's
+  # environment carries.
+
+  # Absolute scanner path, so an arm may run from a foreign cwd.
+  local self_abs
+  self_abs="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # Report-arm harness: strict pass/fail verdict (rc plus verdict marker,
+  # so an own-error exit can never satisfy either) plus the report-record
+  # contract. Options before the trailing "--": expect=pass|fail,
+  # --cd <dir> (run the child from a foreign working directory),
+  # --env K=V (repeatable, injected into the child environment),
+  # --record <path-needle> (asserts the exact
+  # `PUBLIC_HYGIENE_REPORT: path=<needle>` row), --require <needle>
+  # (positive fixed-text pin, for the enumeration-unavailable row),
+  # --forbid <needle> (negative fixed-text pin; matched file content,
+  # raw byte shapes, and redirected-repo names are asserted here),
+  # --forbid-line <text> (negative whole-line fixed-text pin; a raw
+  # newline leaking into a record splits it into output lines, which a
+  # substring search cannot distinguish from the escaped record).
+  # Every arm additionally pins that no raw control byte reaches the
+  # output, so a report record can never carry a terminal control.
+  selftest_check_report() {
+    local name="$1"
+    shift
+    local expect="pass"
+    local cd_dir=""
+    local -a extra_env=()
+    local -a want_records=()
+    local -a require=()
+    local -a forbid=()
+    local -a forbid_lines=()
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        expect=*) expect="${1#expect=}"; shift ;;
+        --cd) cd_dir="$2"; shift 2 ;;
+        --env) extra_env+=("$2"); shift 2 ;;
+        --record) want_records+=("$2"); shift 2 ;;
+        --require) require+=("$2"); shift 2 ;;
+        --forbid) forbid+=("$2"); shift 2 ;;
+        --forbid-line) forbid_lines+=("$2"); shift 2 ;;
+        *) break ;;
+      esac
+    done
+    if [ "${1:-}" = "--" ]; then
+      shift
+    fi
+    local actual_out actual_rc ok=false
+    set +e
+    if [ "${#extra_env[@]}" -gt 0 ]; then
+      actual_out="$(cd "${cd_dir:-$PWD}" && env "${extra_env[@]}" \
+        PUBLIC_HYGIENE_REPO_ROOT="$repo" \
+        PUBLIC_HYGIENE_PATTERNS_FILE="$patterns" \
+        bash "$self_abs" 2>&1)"
+    else
+      actual_out="$(cd "${cd_dir:-$PWD}" && \
+        PUBLIC_HYGIENE_REPO_ROOT="$repo" \
+        PUBLIC_HYGIENE_PATTERNS_FILE="$patterns" \
+        bash "$self_abs" 2>&1)"
+    fi
+    actual_rc=$?
+    set -e
+    case "$expect" in
+      pass)
+        if [ "$actual_rc" -eq 0 ] && printf '%s\n' "$actual_out" | grep -q "PASS (public hygiene"; then
+          ok=true
+        fi
+        ;;
+      fail)
+        if [ "$actual_rc" -eq 1 ] && printf '%s\n' "$actual_out" | grep -q "FAIL:"; then
+          ok=true
+        fi
+        ;;
+    esac
+    if ! $ok; then
+      echo "selftest FAIL: $name (expected $expect, got rc=$actual_rc)" >&2
+      echo "$actual_out" >&2
+      SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+      return
+    fi
+    local needle
+    for needle in ${want_records[@]+"${want_records[@]}"}; do
+      if ! printf '%s\n' "$actual_out" | grep -qF "PUBLIC_HYGIENE_REPORT: path=$needle"; then
+        echo "selftest FAIL: $name (missing report record: $needle)" >&2
+        echo "$actual_out" >&2
+        SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+        return
+      fi
+    done
+    for needle in ${require[@]+"${require[@]}"}; do
+      if ! printf '%s\n' "$actual_out" | grep -qF -- "$needle"; then
+        echo "selftest FAIL: $name (missing required text: $needle)" >&2
+        echo "$actual_out" >&2
+        SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+        return
+      fi
+    done
+    for needle in ${forbid[@]+"${forbid[@]}"}; do
+      if printf '%s\n' "$actual_out" | grep -qF -- "$needle"; then
+        echo "selftest FAIL: $name (forbidden text present: $needle)" >&2
+        echo "$actual_out" >&2
+        SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+        return
+      fi
+    done
+    for needle in ${forbid_lines[@]+"${forbid_lines[@]}"}; do
+      if printf '%s\n' "$actual_out" | grep -qFx -- "$needle"; then
+        echo "selftest FAIL: $name (forbidden whole line present: $needle)" >&2
+        echo "$actual_out" >&2
+        SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+        return
+      fi
+    done
+    if printf '%s\n' "$actual_out" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+      echo "selftest FAIL: $name (raw control byte in output)" >&2
+      printf '%s\n' "$actual_out" | LC_ALL=C cat -v >&2
+      SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+      return
+    fi
+    echo "selftest OK: $name"
+  }
+
+  # Old-root tracked hit: the blocking roots keep their failing verdict, and
+  # the hit never surfaces as a report record. First give the other old-root
+  # fixtures clean content (the tracked clean root and the untracked notes
+  # file left dirty by the earlier arms) so the baseline-dirty file is the
+  # only hit.
+  printf '# clean report-section clean root\n' > "$repo/agents/skills/clean/SKILL.md"
+  printf '# clean report-section notes\n' > "$repo/agents/skills/clean/notes.md"
+  selftest_check_report "report-old-root-tracked-hit-still-fails" expect=fail \
+    --forbid 'PUBLIC_HYGIENE_REPORT:' --
+
+  # Old-root untracked hit: still exit 1, never a report record (untracked
+  # files are outside the enumerated tracked scope).
+  printf 'untracked: /Users/leaked/untracked-report\n' > "$repo/agents/skills/untracked-report.md"
+  selftest_check_report "report-old-root-untracked-hit-still-fails" expect=fail \
+    --forbid 'PUBLIC_HYGIENE_REPORT:' --
+  rm -f "$repo/agents/skills/untracked-report.md"
+
+  # Clean tracked file on a new root: run passes and emits no path record
+  # at all. Give the first old-root fixture clean content so the old roots
+  # stand clean from here on.
+  printf '# clean report-section pdf\n' > "$repo/agents/skills/pdf/SKILL.md"
+  printf '# clean new-root file\n' > "$repo/docs/report-newroot-clean.md"
+  git -C "$repo" add -- docs/report-newroot-clean.md
+  selftest_check_report "report-clean-new-root-tracked-emits-no-record" \
+    --forbid 'PUBLIC_HYGIENE_REPORT:' --
+
+  # Matching tracked file on a new root: one report record carrying the
+  # path only (matched content never reaches the output) and a passing run.
+  printf 'newroot leak: /Users/leaked/report-newroot\n' > "$repo/docs/report-newroot-hit.md"
+  git -C "$repo" add -- docs/report-newroot-hit.md
+  selftest_check_report "report-new-root-tracked-hit-records-without-content" \
+    --record 'docs/report-newroot-hit.md' \
+    --forbid '/Users/leaked/report-newroot' --
+
+  # Shared exclusions hold inside the report scope: a docs/tmp child and a
+  # root AGENTS.md carrying hits are excluded, never recorded.
+  printf 'tmp hit: /Users/leaked/report-scope-tmp\n' > "$repo/docs/tmp/report-scope-excluded.md"
+  printf 'agents hit: /Users/leaked/report-scope-agents-md\n' > "$repo/AGENTS.md"
+  git -C "$repo" add -- docs/tmp/report-scope-excluded.md AGENTS.md
+  selftest_check_report "report-shared-exclusions-hold-in-report-scope" \
+    --record 'docs/report-newroot-hit.md' \
+    --forbid 'path=docs/tmp/report-scope-excluded.md' \
+    --forbid 'path=AGENTS.md' \
+    --forbid '/Users/leaked/report-scope-tmp' \
+    --forbid '/Users/leaked/report-scope-agents-md' --
+
+  # Tracked symlink entry: excluded from the scannable set even though its
+  # target would match (mode 120000 carries no scannable blob content).
+  ln -s docs/report-newroot-hit.md "$repo/docs/report-newroot-link.md"
+  git -C "$repo" add -- docs/report-newroot-link.md
+  selftest_check_report "report-symlink-entry-excluded" \
+    --record 'docs/report-newroot-hit.md' \
+    --forbid 'report-newroot-link' --
+
+  # Tracked gitlink entry: excluded from the scannable set (mode 160000).
+  git -C "$repo" update-index --add --cacheinfo "160000,$head_sha,docs/report-gitlink-mod"
+  selftest_check_report "report-gitlink-entry-excluded" \
+    --record 'docs/report-newroot-hit.md' \
+    --forbid 'report-gitlink-mod' --
+
+  # Crafted path bytes survive as ASCII-only JSON escapes: a newline, a
+  # control byte, a DEL byte, an option-shaped name, and non-ASCII bytes
+  # each produce one single-line record with no raw control anywhere. (A
+  # truly undecodable byte is unrepresentable on this host's filesystem,
+  # which rejects invalid UTF-8 names outright; the non-ASCII bytes pin the
+  # same >=0x7f escape arm byte-wise.)
+  printf 'crafted: /Users/leaked/crafted-content\n' > "$repo/docs/report-line1"$'\n'"line2.md"
+  printf 'crafted: /Users/leaked/crafted-content\n' > "$repo/docs/report-ctrl"$'\001'"byte"$'\177'"end.md"
+  printf 'crafted: /Users/leaked/crafted-content\n' > "$repo/docs/--report-option-shaped.md"
+  printf 'crafted: /Users/leaked/crafted-content\n' > "$repo/docs/report-r"$'\303\251'"sum"$'\303\251'".md"
+  # A root-level option-shaped name reaches rg as a dash-leading path
+  # argument (the docs/ twin above only ever rides as a path component
+  # after "--"), so it is the arm that bites if the frozen "--" separator
+  # before the enumerated paths regresses.
+  printf 'crafted: /Users/leaked/crafted-content\n' > "$repo/--report-option-shaped.md"
+  git -C "$repo" add -- \
+    "docs/report-line1"$'\n'"line2.md" \
+    "docs/report-ctrl"$'\001'"byte"$'\177'"end.md" \
+    "docs/--report-option-shaped.md" \
+    "docs/report-r"$'\303\251'"sum"$'\303\251'".md" \
+    "--report-option-shaped.md"
+  selftest_check_report "report-crafted-path-bytes-escaped" \
+    --record 'docs/report-line1\u000aline2.md' \
+    --record 'docs/report-ctrl\u0001byte\u007fend.md' \
+    --record 'docs/--report-option-shaped.md' \
+    --record 'docs/report-r\u00c3\u00a9sum\u00c3\u00a9.md' \
+    --record '--report-option-shaped.md' \
+    --forbid-line 'line2.md' \
+    --forbid "$(printf 'report-ctrl\001byte')" \
+    --forbid '/Users/leaked/crafted-content' --
+
+  # Direct json_quote_path pin on a byte no filesystem fixture can carry on
+  # this host: a raw 0xFF byte (an invalid UTF-8 lead byte) must come back
+  # as its reversible ASCII-only escape, with the printable neighbors
+  # untouched.
+  local quoted_raw_byte
+  quoted_raw_byte="$(json_quote_path "$(printf 'a\377b')")"
+  if [ "$quoted_raw_byte" = 'a\u00ffb' ]; then
+    echo "selftest OK: json-quote-path-raw-byte-escape"
+  else
+    echo "selftest FAIL: json-quote-path-raw-byte-escape (got: $quoted_raw_byte)" >&2
+    SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+  fi
+
+  # PUBLIC_HYGIENE_REPO_ROOT pins the scanned root independent of the cwd:
+  # run from the neutral temp parent, the pinned repo's record still comes
+  # back (a cwd-defaulted scan would enumerate nothing and emit none).
+  selftest_check_report "report-repo-root-env-pins-scan-from-foreign-cwd" \
+    --cd "$tmp" \
+    --record 'docs/report-newroot-hit.md' --
+
+  # A decoy GIT_DIR/GIT_WORK_TREE pair in the caller environment cannot
+  # redirect the enumeration: the pinned repo's index is still what lists
+  # (the decoy repo carries its own matching tracked file whose name must
+  # never surface).
+  local decoy="$tmp/decoy-repo"
+  mkdir -p "$decoy"
+  git -C "$decoy" init -q
+  git -C "$decoy" config user.email "selftest@example.invalid"
+  git -C "$decoy" config user.name "selftest"
+  printf 'decoy: /Users/leaked/DECOY-REDIRECT\n' > "$decoy/DECOY-REDIRECT.md"
+  git -C "$decoy" add -A
+  git -C "$decoy" commit -q -m decoy
+  selftest_check_report "report-decoy-git-dir-cannot-redirect-enumeration" \
+    --cd "$tmp" \
+    --env "GIT_DIR=$decoy/.git" \
+    --env "GIT_WORK_TREE=$decoy" \
+    --record 'docs/report-newroot-hit.md' \
+    --forbid 'DECOY-REDIRECT' --
+
+  # r3 F1: run_report_scan carries the same readable gate as the blocking
+  # consumer, pinned directly (the default mode can only reach the report
+  # arm after the blocking arm accepted the patterns file, so the
+  # in-process direct call is the observable seam): an unreadable file
+  # emits the fixed patterns-unavailable record and never builtin-only
+  # partial results. The direct call reads the script-level PATTERNS_FILE,
+  # so the pin re-points it at the fixture file for the duration.
+  local saved_patterns_file="$PATTERNS_FILE"
+  PATTERNS_FILE="$patterns"
+  chmod 000 "$patterns"
+  REPORT_SCOPE_PATHS=("docs/report-newroot-hit.md")
+  local report_out
+  report_out="$(cd "$repo" && run_report_scan)"
+  chmod 600 "$patterns"
+  if [ "$report_out" = "PUBLIC_HYGIENE_REPORT: patterns-unavailable" ]; then
+    echo "selftest OK: report-unreadable-patterns-file-emits-patterns-unavailable"
+  else
+    echo "selftest FAIL: report-unreadable-patterns-file-emits-patterns-unavailable (got: $report_out)" >&2
+    SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+  fi
+  # Readable control: the same direct call emits the path record, so the pin
+  # above cannot pass via a broken run_report_scan.
+  report_out="$(cd "$repo" && run_report_scan)"
+  PATTERNS_FILE="$saved_patterns_file"
+  if [ "$report_out" = "PUBLIC_HYGIENE_REPORT: path=docs/report-newroot-hit.md" ]; then
+    echo "selftest OK: report-readable-patterns-file-emits-path-record"
+  else
+    echo "selftest FAIL: report-readable-patterns-file-emits-path-record (got: $report_out)" >&2
+    SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+  fi
+
+  # Explicit modes keep their prior semantics beside the widened default:
+  # --changed-from still selects only the old roots (staged new-root dirt
+  # stays invisible to it), while the same new-root hit named through
+  # --files still blocks.
+  selftest_check_files "changed-mode-keeps-prior-selection-report-scope-not-scanned" pass -- \
+    --changed-from "$head_sha"
+  selftest_check_files "files-mode-report-scope-hit-still-blocking" fail -- \
+    --files "docs/report-newroot-hit.md"
+
+  # Enumeration failure: the fixed record is emitted and only the report
+  # scope is skipped, while the old-root scan still runs and its hit still
+  # fails the run. A shimmed `git` fails the enumeration without touching
+  # the old-root rg scan, after recording its environment: the shim runs
+  # inside the enumeration subshell, so the record is exactly the
+  # environment the scrub produced.
+  local shim="$tmp/git-shim"
+  mkdir -p "$shim"
+  {
+    printf '#!/bin/sh\n'
+    printf 'env > "%s/enumerate-child-env.txt"\n' "$tmp"
+    printf 'exit 42\n'
+  } > "$shim/git"
+  chmod +x "$shim/git"
+  printf 'old-root oops: /Users/leaked/enum-fail\n' > "$repo/agents/skills/pdf/SKILL.md"
+  printf '[core]\n\tdecoyRedirect = 1\n' > "$tmp/decoy-gitconfig"
+  selftest_check_report "report-enumeration-unavailable-preserves-old-root-results" expect=fail \
+    --env "PATH=$shim:$PATH" \
+    --env "GIT_DIR=$decoy/.git" \
+    --env "GIT_WORK_TREE=$decoy" \
+    --env "GIT_INDEX_FILE=$decoy/.git/index" \
+    --env "GIT_OBJECT_DIRECTORY=$decoy/.git/objects" \
+    --env "GIT_COMMON_DIR=$decoy/.git" \
+    --env "GIT_ALTERNATE_OBJECT_DIRECTORIES=$decoy/.git/objects/alt" \
+    --env "GIT_GRAFT_FILE=$decoy/.git/info/grafts" \
+    --env "GIT_NAMESPACE=decoy-namespace" \
+    --env "GIT_CONFIG=$tmp/decoy-gitconfig" \
+    --env "GIT_CONFIG_PARAMETERS='core.decoyRedirect=1'" \
+    --env "GIT_CONFIG_COUNT=1" \
+    --env "GIT_CONFIG_GLOBAL=$tmp/decoy-gitconfig" \
+    --env "GIT_CONFIG_SYSTEM=$tmp/decoy-gitconfig" \
+    --env "RIPGREP_CONFIG_PATH=$tmp/decoy-rg-config" \
+    --require 'PUBLIC_HYGIENE_REPORT: enumeration-unavailable' \
+    --forbid 'path=docs/report-newroot-hit.md' --
+
+  # The recorded enumeration child environment pins the scrub itself: the
+  # pinned GIT_CONFIG_NOSYSTEM=1 export is present, and every var on the
+  # git_enumerate scrub list is absent, so each injected decoy (the repo
+  # redirect pair, the object/index/graft/namespace surfaces, and the
+  # config-file and config-parameter surfaces) is proven scrubbed.
+  local child_env="$tmp/enumerate-child-env.txt"
+  local scrub_ok=true scrub_var
+  if [ ! -f "$child_env" ] || ! grep -q '^GIT_CONFIG_NOSYSTEM=1$' "$child_env"; then
+    scrub_ok=false
+  elif grep -q '^RIPGREP_CONFIG_PATH=' "$child_env"; then
+    # the preamble rg-config unset rides the same poisoning class; pin it here
+    scrub_ok=false
+  else
+    for scrub_var in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE \
+        GIT_OBJECT_DIRECTORY GIT_COMMON_DIR \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_GRAFT_FILE GIT_NAMESPACE \
+        GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+        GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; do
+      if grep -q "^${scrub_var}=" "$child_env"; then
+        scrub_ok=false
+        break
+      fi
+    done
+  fi
+  if $scrub_ok; then
+    echo "selftest OK: report-enumeration-child-env-scrubbed"
+  else
+    echo "selftest FAIL: report-enumeration-child-env-scrubbed" >&2
+    if [ -f "$child_env" ]; then
+      cat "$child_env" >&2
+    else
+      echo "no recorded child environment at $child_env" >&2
+    fi
+    SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+  fi
 
   if [ "$SELFTEST_FAILS" -gt 0 ]; then
     echo "scan-public-hygiene: --selftest FAILED ($SELFTEST_FAILS)" >&2

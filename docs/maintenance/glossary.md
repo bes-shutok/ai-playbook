@@ -102,3 +102,15 @@ Defines review effort from scope and complexity signals in the plan and changed 
 **Stacked pull request**:
 A pull request whose branch is based on an unmerged predecessor pull request. The child branch includes the dependency chain, while its pull request diff shows only the changes added after its immediate parent.
 _Avoid_: separate pull requests that all target the base branch
+
+**Stack plan**:
+One implementation plan whose ordered tasks each define a pull request in a linear stack. It keeps file ownership disjoint and dependencies pointed only to earlier tasks.
+_Avoid_: several unrelated plans joined only by a shared feature name
+
+**PR slice**:
+The files, primary class or type anchors, and documentation owned by one task and its pull request.
+_Avoid_: overlapping task ownership
+
+**Independent task branch**:
+A branch containing its predecessor chain and current task, with later tasks absent, that passes task-specific validation and the repository-standard suite.
+_Avoid_: branch that needs a descendant task to build or pass validation

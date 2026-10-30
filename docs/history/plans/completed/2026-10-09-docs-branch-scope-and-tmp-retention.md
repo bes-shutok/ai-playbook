@@ -125,7 +125,7 @@ Decision points requiring a grill: none remain.
 **Out of scope; reject unless plan-related:**
 - `graphify-out/`, `.ai-playbook/`, `.claude/`, `.zcode/`, and `docs/` outside the allowed roots: leave those local checkout paths unchanged while pruning corresponding docs-branch paths from refs/heads/docs.
 - Review staging format and metrics generation: this plan changes their retention only.
-- Local tmp cleanup and `scripts/done_sweep_gates_lib.py`: unchanged here; local recursive cleanup is tracked separately in `docs/history/backlog/2026-10-09-done-recursive-tmp-sweep-safety.md`.
+- Local tmp cleanup and `scripts/done_sweep_gates_lib.py`: unchanged here; local recursive cleanup is tracked separately in `docs/history/plans/completed/2026-10-27-done-recursive-tmp-sweep-safety.md`.
 - `scripts/done-lock.sh`, worktree migration, session manifests, and closeout lock ordering: the existing behavior remains in force.
 
 ## Design Invariants (CR Guard)
@@ -184,7 +184,7 @@ Primary class anchors:
 
 | Backlog origin | Disposition |
 |---|---|
-| `docs/history/backlog/2026-10-07-docs-branch-temporal-sync-retention.md` | Covered: Task 1 excludes temporal roots, including `docs/tmp/`, from docs-branch sync and applies the requested two-calendar-month retention policy. Local tmp deletion remains separate and is tracked by `docs/history/backlog/2026-10-09-done-recursive-tmp-sweep-safety.md`. |
+| `docs/history/backlog/2026-10-07-docs-branch-temporal-sync-retention.md` | Covered: Task 1 excludes temporal roots, including `docs/tmp/`, from docs-branch sync and applies the requested two-calendar-month retention policy. Local tmp deletion remains separate and is tracked by `docs/history/plans/completed/2026-10-27-done-recursive-tmp-sweep-safety.md`. |
 | `docs/history/backlog/2026-10-08-docs-branch-overlapping-shadow-candidates.md` | Covered: Task 1 uses one deduplicated allowlist walk, removing duplicate nested candidate copies. |
 | `docs/history/backlog/2026-10-08-docs-branch-sync-persisted-copy.md` | Covered: the single canonical `scripts/docs_branch_sync.sh` runner replaces extracted and persisted sync copies. |
 | `docs/history/backlog/2026-10-09-done-docs-branch-sync-overhead.md` | Covered: sync work is narrowed to validated review and metrics roots, and the existing verified explicit-deferral path remains available for local commits. |
@@ -196,4 +196,4 @@ Primary class anchors:
 - `docs/history/backlog/2026-10-08-docs-branch-overlapping-shadow-candidates.md`: direct origin, addressed by Task 1's single deduplicated allowlist walk.
 - `docs/history/backlog/2026-10-09-authoring-plan-artifact-not-transferred-before-removal.md`: handoff-only; this recovery transfers the plan and its review series to the primary project before worktree removal, but does not broaden the docs-sync implementation scope.
 - `docs/history/backlog/2026-10-09-done-foreign-checkout-dirt-blocks-scoped-commit.md`: separate closeout change, deferred by the user's decision. The current recovery uses a scoped artifact transfer and exact-path commit; the permanent shared-gate behavior remains owned by its plan prompt.
-- `docs/history/backlog/2026-10-09-done-recursive-tmp-sweep-safety.md`: local tmp deletion is deliberately deferred to a separate `done` cleanup plan; this plan only excludes tmp from docs-branch sync.
+- `docs/history/plans/completed/2026-10-27-done-recursive-tmp-sweep-safety.md`: local tmp deletion is deliberately deferred to a separate `done` cleanup plan; this plan only excludes tmp from docs-branch sync.

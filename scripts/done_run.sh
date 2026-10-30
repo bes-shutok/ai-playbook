@@ -76,9 +76,11 @@
 # ID (an orphan-verdict mismatch, a classified terminal or already-adopted
 # boundary's own ID, or --from-manifest combined with ownership options or
 # --adopt each refuse before any new marker or manifest; a mismatched target
-# against a terminal-newest boundary is not refused here - the fresh boundary
-# carries it to the writer's own adoption validations, and a refused write
-# rolls the fresh marker back), and the writer carries the prior start
+# whose own boundary classifies already-adopted or dispositioned refuses the
+# same way before the fresh marker; any other mismatched target against a
+# terminal-newest boundary is not refused here - the fresh boundary carries
+# it to the writer's own adoption validations, and a refused write rolls the
+# fresh marker back), and the writer carries the prior start
 # commit and ownership claims into the new linked manifest. On success it
 # prints one status line on stdout followed by eval-able export lines for the
 # downstream consumers: DONE_LOCK_DIR, DONE_LOCK_TOKEN, DONE_RUN_MARKER,
@@ -394,6 +396,29 @@ classify_partial() { # from_manifest(empty allowed) adopt_target(empty allowed)
             exit 1
           fi
           if [ -n "$adopt_target" ]; then
+            # A mismatched target gets its own boundary read first (the same
+            # classify-run-boundary machinery the writer applies): an
+            # already-adopted or dispositioned target refuses here, before
+            # the fresh marker, instead of forwarding a closed boundary to
+            # the writer; any other read (orphan, finalized, unreadable, a
+            # missing target record, or a failed probe) forwards unchanged to
+            # the writer's own adoption validations.
+            local target_manifest target_out target_verdict
+            target_manifest="$session/run-manifest-$adopt_target.json"
+            if [ -f "$target_manifest" ]; then
+              target_out="$(python3 "$lib" classify-run-boundary --session-dir "$session" --manifest "$target_manifest" 2>/dev/null)" || target_out=""
+              target_verdict="$(printf '%s\n' "$target_out" | sed -n 's/^verdict: //p')"
+              case "$target_verdict" in
+                adopted)
+                  echo "done_run setup: --adopt $adopt_target names run_id=$adopt_target, whose own boundary is already adopted (closed; only an interrupted orphan boundary is adoptable); no new boundary written" >&2
+                  exit 1
+                  ;;
+                dispositioned)
+                  echo "done_run setup: --adopt $adopt_target names run_id=$adopt_target, whose own boundary is dispositioned (closed; only an interrupted orphan boundary is adoptable); no new boundary written" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
             echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); --adopt $adopt_target is not the classified boundary and is forwarded to the writer's own adoption validations behind the fresh marker (a refused write rolls that marker back)"
           else
             echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); continuing with a fresh marker and manifest"

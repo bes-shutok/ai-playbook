@@ -31,9 +31,12 @@ MAINTENANCE_SKILL = REPO_ROOT / "agents" / "skills" / "maintenance" / "SKILL.md"
 MAINTENANCE_GUARDS = REPO_ROOT / "agents/skills/maintenance/guards.md"
 MAINTENANCE_SURVEY_ARMS = REPO_ROOT / "agents/skills/maintenance/survey-arms.md"
 MAINTENANCE_TEMPLATE_AUTHORING = REPO_ROOT / "agents/skills/maintenance/template-authoring.md"
+WORKTREE_FIRST = REPO_ROOT / "agents/skills/execute-plan/worktree-first.md"
 # Re-aimed 2026-10-11 (the done target-state flip; the dissolved sweep-gates
 # modules' in-session duty texts live in the collapsed done SKILL.md).
 DONE_SKILL = REPO_ROOT / "agents" / "skills" / "done" / "SKILL.md"
+DONE_SWEEP_GATES = REPO_ROOT / "scripts" / "done_sweep_gates_lib.py"
+DONE_SWEEP_GATES = REPO_ROOT / "scripts" / "done_sweep_gates_lib.py"
 
 PLANS_DIR = "docs/history/plans"
 CLAIMS_DIR = "docs/tmp/authoring-claims"
@@ -307,7 +310,8 @@ class LivenessDeclarationTest(unittest.TestCase):
         # certification-time removal wording and any claim that the probe
         # reads the plan header (it matches fresh claim-file text instead).
         plans = self.read(PLANS_SKILL)
-        self.assert_span(self, "Authoring claim: <claim path> (session <session id>)", plans, "plans/SKILL.md")
+        self.assert_span(self, "Authoring claim: <claim basename> (session <session id>)", plans, "plans/SKILL.md")
+        self.assert_span(self, "Existing path-form markers remain readable as legacy provenance", plans, "plans/SKILL.md")
         self.assert_span(self, "permanent provenance once written", plans, "plans/SKILL.md")
         self.assert_span(self, "remains unchanged through certification, landing, and archival", plans, "plans/SKILL.md")
         self.assert_span(self, "never reads the plan header", plans, "plans/SKILL.md")
@@ -323,7 +327,13 @@ class LivenessDeclarationTest(unittest.TestCase):
         # CLAIM procedure; this span pins that home so the plans skill's
         # pointer cannot silently dangle.
         template = self.read(MAINTENANCE_TEMPLATE_AUTHORING)
-        self.assert_span(self, "remaining unchanged through certification, landing, and archival", template, "template-authoring.md")
+        self.assert_span(self, "Authoring claim: <claim basename> (session <session id>)", template, "template-authoring.md")
+        self.assert_span(self, "without a temporary-storage path", template, "template-authoring.md")
+        self.assert_span(self, "existing full-path marker lines remain readable", template, "template-authoring.md")
+        worktree = self.read(WORKTREE_FIRST)
+        self.assert_span(self, "Authoring claim: <claim basename> (session <session id>)", worktree, "worktree-first.md")
+        self.assert_span(self, "resolve that basename under the primary checkout’s facts-resolved `{tmp_dir}/authoring-claims/`", worktree, "worktree-first.md")
+        self.assert_span(self, "accept the legacy full-path marker", worktree, "worktree-first.md")
         # the spans re-keyed to their post-split modules (the
         # maintenance-skill-size-refactor split; the router no longer carries
         # the Step 1/Step 2 operative text)
@@ -484,12 +494,11 @@ class LivenessDeclarationTest(unittest.TestCase):
             self.read(MAINTENANCE_TEMPLATE_AUTHORING),
             "template-authoring.md",
         )
-        self.assert_span(
-            self,
-            "plans-archive-twin",
-            self.read(DONE_SKILL),
-            "done/SKILL.md",
-        )
+        # The landing-time gate is canonically implemented and registered in
+        # done_sweep_gates_lib.py; the collapsed done skill no longer repeats it.
+        gates = self.read(DONE_SWEEP_GATES)
+        self.assert_span(self, '"plans-archive-twin": gate_plans_archive_twin', gates, "done_sweep_gates_lib.py")
+        self.assert_span(self, 'def gate_plans_archive_twin(ctx: GateContext)', gates, "done_sweep_gates_lib.py")
         self.assert_span(
             self,
             "lands via its own merge-lock-serialized self-landing onto the default branch from its ad-hoc worktree",

@@ -109,6 +109,8 @@ collide with a later run's create.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import json
 import hashlib
 import hmac
@@ -146,6 +148,10 @@ SCRIPT_TIMEOUT_S = 300
 OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 OUTCOME_VOCABULARY = frozenset(OUTCOME_LABELS.values())
 OUTCOME_LINE_PREFIX = "OUTCOME:"
+# The hygiene scanner's non-blocking report-only scope row prefix (plan
+# 2026-10-26-hygiene-scanner-default-scope-parity): the sensitive-data gate
+# forwards only these child rows into its warnings, verbatim.
+PUBLIC_HYGIENE_REPORT_LINE_PREFIX = "PUBLIC_HYGIENE_REPORT:"
 
 # Registry: the landing phase, the closeout's one sweep run (the retained
 # roster from the done target-state classification, the plan's Outcome
@@ -353,6 +359,7 @@ class GateContext:
         args: list[str],
         cwd: Optional[Path] = None,
         input_text: Optional[str] = None,
+        env: Optional[dict] = None,
     ):
         return subprocess.run(
             args,
@@ -361,6 +368,7 @@ class GateContext:
             text=True,
             timeout=SCRIPT_TIMEOUT_S,
             input=input_text,
+            env=env,
         )
 
     def resolve_script(self, env_var: str, name: str) -> Optional[Path]:
@@ -517,17 +525,19 @@ def _repo_relative(path: str, repo_root: Path) -> str:
 
 
 def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
-    """Parse one run-start marker; content must record this repo's root.
-
-    Field order (done Step 0): first field epoch, last field PID, everything
-    between is the identity token. Current writers record a 64-hex SHA-256
-    digest of the trailing-slash-stripped resolved repo root; legacy markers
-    recorded the raw repo-root path (spaces unambiguous), still accepted.
-    """
+    """Parse one run-start marker; content must record this repo's root."""
     try:
-        content = path.read_text(encoding="utf-8").strip()
+        content = path.read_text(encoding="utf-8")
     except OSError:
         return None
+    return _parse_marker_content(path, content, repo_root)
+
+
+def _parse_marker_content(
+    path: Path, content: str, repo_root: Path
+) -> Optional[RunMarker]:
+    """Parse marker text read from a verified path or opened descriptor."""
+    content = content.strip()
     fields = content.split()
     if len(fields) < 3:
         return None
@@ -550,18 +560,62 @@ def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
     return RunMarker(path=path, epoch=epoch, pid=pid, repo_root=recorded_root)
 
 
-def derive_session_window(done_session_dir: Path, repo_root: Path) -> SessionWindow:
-    """Newest content-confirmed marker is the current run; the newest strictly
-    older one is the previous-run anchor; fewer than two confirmable markers
-    means unanchorable (conservative gating downstream), except that a
-    single-marker run whose manifest and owned-commits ledger both exist
-    anchors its own window from that witness pair (``anchor`` stays None, so
-    marker pruning keeps its conservative behavior)."""
+def _read_regular_text_at(directory_fd: int, name: str) -> Optional[str]:
+    """Read one regular file through a no-follow directory descriptor."""
+    fd: Optional[int] = None
+    try:
+        before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(before.st_mode):
+            return None
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_fd,
+        )
+        opened = os.fstat(fd)
+        if not stat_module.S_ISREG(opened.st_mode) or (
+            opened.st_dev, opened.st_ino, opened.st_mode
+        ) != (before.st_dev, before.st_ino, before.st_mode):
+            return None
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            fd = None
+            return stream.read()
+    except (OSError, UnicodeError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def derive_session_window(
+    done_session_dir: Path,
+    repo_root: Path,
+    directory_fd: Optional[int] = None,
+) -> SessionWindow:
+    """Derive the marker window, optionally reading every witness via one
+    already-opened ``done-session`` directory descriptor."""
     notes: list[str] = []
     markers: list[RunMarker] = []
     cross_repo = 0
     malformed = 0
-    if done_session_dir.is_dir():
+    if directory_fd is not None:
+        marker_names = sorted(
+            name for name in os.listdir(directory_fd) if name.startswith("run-start-")
+        )
+        for name in marker_names:
+            path = done_session_dir / name
+            content = _read_regular_text_at(directory_fd, name)
+            if content is None:
+                malformed += 1
+                continue
+            parsed = _parse_marker_content(path, content, repo_root)
+            if parsed is not None:
+                markers.append(parsed)
+            elif _marker_records_other_repo_content(content, repo_root):
+                cross_repo += 1
+            else:
+                malformed += 1
+    elif done_session_dir.is_dir():
         for path in sorted(done_session_dir.glob("run-start-*")):
             parsed = _parse_marker(path, repo_root)
             if parsed is not None:
@@ -582,7 +636,7 @@ def derive_session_window(done_session_dir: Path, repo_root: Path) -> SessionWin
         current = markers[-1] if markers else None
         if current is not None:
             witness = _single_marker_witness_window(
-                done_session_dir, repo_root, current, notes
+                done_session_dir, repo_root, current, notes, directory_fd
             )
             if witness is not None:
                 return witness
@@ -601,60 +655,87 @@ def _single_marker_witness_window(
     repo_root: Path,
     current: RunMarker,
     notes: list[str],
+    directory_fd: Optional[int] = None,
 ) -> Optional[SessionWindow]:
-    """The single-marker fallback anchor: this run's manifest plus its
-    owned-commits ledger (the witness pair) anchor the window at the
-    manifest's ``created_epoch``.
+    """Use the marker-bound manifest and ledger as a single-marker window.
 
-    The manifest resolves through the existing loader binding first (its
-    ``marker`` field equals the current marker's filename, root-matched,
-    newest ``created_epoch`` on ties; the loader works on an unanchored
-    window) or, failing that, the newest root-matched manifest in the
-    done-session dir. The ledger for the resolved manifest's run id must
-    exist on disk as a regular file (a dangling symlink or a directory
-    cannot witness ownership). ``anchor`` stays None deliberately: every
-    anchor-keying consumer (marker pruning) keeps its conservative
-    behavior. None when the witness pair is incomplete (no manifest, or a
-    manifest whose ledger is absent, which appends a witness-pair-incomplete
-    note); never raises.
+    When ``directory_fd`` is supplied, all manifest and ledger reads remain
+    relative to that same opened directory; inability to verify a witness
+    leaves the window unanchorable.
     """
-    if not done_session_dir.is_dir():
-        return None
-    manifest = load_run_manifest(
-        done_session_dir, repo_root, SessionWindow(False, None, current, None, [])
-    )
-    if manifest is None:
-        # Secondary arm, exactly-one-marker case only: the newest
-        # root-matched manifest in the dir, regardless of its marker field.
+    if directory_fd is None:
+        if not done_session_dir.is_dir():
+            return None
+        manifest = load_run_manifest(
+            done_session_dir, repo_root, SessionWindow(False, None, current, None, [])
+        )
+        if manifest is None:
+            best: Optional[RunManifest] = None
+            for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                candidate = RunManifest.from_dict(payload)
+                if candidate is None or not _manifest_root_matches(candidate.repo_root, repo_root):
+                    continue
+                if best is None or candidate.created_epoch > best.created_epoch:
+                    best = candidate
+            manifest = best
+        if manifest is None:
+            return None
+        ledger_name = _owned_commits_ledger_path(done_session_dir, manifest.run_id).name
+        if not (done_session_dir / ledger_name).is_file():
+            notes.append(
+                "witness pair incomplete: run manifest "
+                f"{_manifest_path(done_session_dir, manifest.run_id).name} present "
+                f"but owned-commits ledger {ledger_name} absent; window stays unanchorable"
+            )
+            return None
+    else:
+        manifest: Optional[RunManifest] = None
         best: Optional[RunManifest] = None
-        for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+        for name in sorted(os.listdir(directory_fd)):
+            if not (name.startswith("run-manifest-") and name.endswith(".json")):
+                continue
+            text = _read_regular_text_at(directory_fd, name)
+            if text is None:
+                continue
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+                payload = json.loads(text)
+            except ValueError:
                 continue
             candidate = RunManifest.from_dict(payload)
-            if candidate is None:
+            if candidate is None or not _manifest_root_matches(candidate.repo_root, repo_root):
                 continue
-            if not _manifest_root_matches(candidate.repo_root, repo_root):
-                continue
+            if candidate.marker == current.path.name and (
+                manifest is None or candidate.created_epoch > manifest.created_epoch
+            ):
+                manifest = candidate
             if best is None or candidate.created_epoch > best.created_epoch:
                 best = candidate
-        manifest = best
-    if manifest is None:
-        return None
-    ledger = _owned_commits_ledger_path(done_session_dir, manifest.run_id)
-    if not ledger.is_file():
-        notes.append(
-            "witness pair incomplete: run manifest "
-            f"{_manifest_path(done_session_dir, manifest.run_id).name} present "
-            f"but owned-commits ledger {ledger.name} absent; window stays "
-            "unanchorable"
-        )
-        return None
+        if manifest is None:
+            manifest = best
+        if manifest is None:
+            return None
+        ledger_name = _owned_commits_ledger_path(done_session_dir, manifest.run_id).name
+        try:
+            ledger_stat = os.stat(
+                ledger_name, dir_fd=directory_fd, follow_symlinks=False
+            )
+        except OSError:
+            ledger_stat = None
+        if ledger_stat is None or not stat_module.S_ISREG(ledger_stat.st_mode):
+            notes.append(
+                "witness pair incomplete: run manifest "
+                f"{_manifest_path(done_session_dir, manifest.run_id).name} present "
+                f"but owned-commits ledger {ledger_name} absent; window stays unanchorable"
+            )
+            return None
     notes.append(
         "single-marker window anchored from the witness pair: run manifest "
         f"{_manifest_path(done_session_dir, manifest.run_id).name} plus "
-        f"owned-commits ledger {ledger.name} (anchor unset; marker pruning "
+        f"owned-commits ledger {ledger_name} (anchor unset; marker pruning "
         "keeps its conservative behavior)"
     )
     return SessionWindow(True, None, current, manifest.created_epoch, notes)
@@ -662,16 +743,18 @@ def _single_marker_witness_window(
 
 def _marker_records_other_repo(path: Path, repo_root: Path) -> bool:
     try:
-        content = path.read_text(encoding="utf-8").strip()
+        content = path.read_text(encoding="utf-8")
     except OSError:
         return False
-    fields = content.split()
+    return _marker_records_other_repo_content(content, repo_root)
+
+
+def _marker_records_other_repo_content(content: str, repo_root: Path) -> bool:
+    fields = content.strip().split()
     if len(fields) < 3:
         return False
     recorded_root = " ".join(fields[1:-1])
     if len(fields) == 3 and re.fullmatch(r"[0-9a-f]{64}", recorded_root):
-        # Same short-circuit as _parse_marker: a hex token classifies by
-        # digest comparison only, never through the legacy realpath arm.
         return not _marker_digest_matches(recorded_root, repo_root)
     try:
         return os.path.realpath(recorded_root) != os.path.realpath(str(repo_root))
@@ -2765,6 +2848,315 @@ PROTECTED_SCRATCH_PREFIXES = ("review-loop",)
 PROTECTED_SCRATCH_DIRS = ("code-review", "handoff")
 
 
+@dataclass(frozen=True)
+class PinnedTmpRoot:
+    path: Path
+    fd: int
+    identity: tuple[tuple[str, int, int, int], ...]
+
+
+@dataclass
+class QuarantinedCandidate:
+    directory_name: str
+    directory_fd: int
+    expected_identity: tuple[int, int, int]
+    entry_name: str = "candidate"
+
+
+def _candidate_identity(info: os.stat_result) -> tuple[int, int, int]:
+    return info.st_dev, info.st_ino, stat_module.S_IFMT(info.st_mode)
+
+
+def _rename_noreplace_at(
+    source_fd: int, source_name: str, target_fd: int, target_name: str
+) -> None:
+    """Rename one entry without ever replacing an existing destination."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source_name)
+    target_bytes = os.fsencode(target_name)
+    if hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        result = rename(source_fd, source_bytes, target_fd, target_bytes, 1)  # RENAME_NOREPLACE
+    elif hasattr(libc, "renameatx_np"):
+        rename = libc.renameatx_np
+        rename.argtypes = [
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        result = rename(source_fd, source_bytes, target_fd, target_bytes, 4)  # RENAME_EXCL
+    else:
+        raise OSError(errno.ENOTSUP, "atomic no-replace rename is unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), target_name)
+
+
+def _quarantine_candidate(
+    root_fd: int,
+    source_fd: int,
+    name: str,
+    expected: os.stat_result,
+) -> tuple[Optional[QuarantinedCandidate], Optional[str]]:
+    """Atomically move a candidate beneath a private directory under root_fd.
+
+    The caller supplies the identity observed during initial classification.
+    A different object moved into quarantine is restored without replacing a
+    concurrent source entry and is never deleted.
+    """
+    directory_name = ".tmp-sweep-quarantine-" + uuid.uuid4().hex
+    directory_fd: Optional[int] = None
+    moved = False
+    try:
+        os.mkdir(directory_name, 0o700, dir_fd=root_fd)
+        directory_fd = os.open(
+            directory_name,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        opened_dir = os.fstat(directory_fd)
+        if not stat_module.S_ISDIR(opened_dir.st_mode) or opened_dir.st_mode & 0o077:
+            os.close(directory_fd)
+            os.rmdir(directory_name, dir_fd=root_fd)
+            return None, "quarantine directory is not private"
+        _rename_noreplace_at(source_fd, name, directory_fd, "candidate")
+        moved = True
+        quarantined = os.stat(
+            "candidate", dir_fd=directory_fd, follow_symlinks=False
+        )
+        if _candidate_identity(quarantined) != _candidate_identity(expected):
+            reason = "candidate identity changed; replacement preserved"
+            try:
+                os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    _rename_noreplace_at(
+                        directory_fd,
+                        "candidate",
+                        source_fd,
+                        name,
+                    )
+                except OSError:
+                    return QuarantinedCandidate(
+                        directory_name, directory_fd, _candidate_identity(expected)
+                    ), reason
+                try:
+                    os.rmdir(directory_name, dir_fd=root_fd)
+                except OSError:
+                    pass
+                os.close(directory_fd)
+                return None, reason
+            return QuarantinedCandidate(
+                directory_name, directory_fd, _candidate_identity(expected)
+            ), reason
+        return QuarantinedCandidate(
+            directory_name, directory_fd, _candidate_identity(expected)
+        ), None
+    except OSError as exc:
+        if moved and directory_fd is not None:
+            quarantined = QuarantinedCandidate(
+                directory_name, directory_fd, _candidate_identity(expected)
+            )
+            try:
+                os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    _rename_noreplace_at(
+                        directory_fd,
+                        "candidate",
+                        source_fd,
+                        name,
+                    )
+                    try:
+                        os.rmdir(directory_name, dir_fd=root_fd)
+                    except OSError:
+                        pass
+                    os.close(directory_fd)
+                    return None, f"candidate quarantine check failed; restored ({exc})"
+                except OSError:
+                    pass
+            return quarantined, f"candidate quarantine check failed; retained at {directory_name}/candidate ({exc})"
+        try:
+            if directory_fd is not None:
+                os.close(directory_fd)
+        except OSError:
+            pass
+        try:
+            os.rmdir(directory_name, dir_fd=root_fd)
+        except OSError:
+            pass
+        if isinstance(exc, FileExistsError):
+            return (
+                None,
+                "quarantine destination occupied; source preserved; "
+                f"collision retained at {directory_name}/candidate",
+            )
+        return None, f"candidate quarantine failed; preserved ({exc})"
+
+
+def _restore_quarantined_candidate(
+    root_fd: int,
+    source_fd: int,
+    source_name: str,
+    quarantined: QuarantinedCandidate,
+) -> Optional[str]:
+    """Restore a quarantined candidate or return its retained quarantine path."""
+    try:
+        _rename_noreplace_at(
+            quarantined.directory_fd,
+            quarantined.entry_name,
+            source_fd,
+            source_name,
+        )
+        try:
+            os.rmdir(quarantined.directory_name, dir_fd=root_fd)
+        except OSError:
+            pass
+        os.close(quarantined.directory_fd)
+        return None
+    except OSError:
+        pass
+    location = quarantined.directory_name + "/" + quarantined.entry_name
+    os.close(quarantined.directory_fd)
+    return location
+
+
+def _discard_quarantined_candidate(
+    root_fd: int,
+    quarantined: QuarantinedCandidate,
+    revalidate: Optional[Callable[[], bool]] = None,
+) -> None:
+    """Remove only the identity-checked candidate that still passes policy."""
+    info = os.stat(
+        quarantined.entry_name,
+        dir_fd=quarantined.directory_fd,
+        follow_symlinks=False,
+    )
+    if _candidate_identity(info) != quarantined.expected_identity:
+        raise OSError(errno.ESTALE, "candidate identity changed before discard")
+    if revalidate is not None and not revalidate():
+        raise OSError(errno.ESTALE, "candidate eligibility changed before discard")
+    if stat_module.S_ISDIR(info.st_mode):
+        _remove_tree_at(quarantined.directory_fd, quarantined.entry_name)
+    else:
+        os.unlink(quarantined.entry_name, dir_fd=quarantined.directory_fd)
+    try:
+        os.rmdir(quarantined.directory_name, dir_fd=root_fd)
+    except OSError:
+        # The candidate is already removed; an empty private container may be
+        # retried by a later sweep without misreporting candidate survival.
+        pass
+    finally:
+        os.close(quarantined.directory_fd)
+
+
+def _quarantine_location(quarantined: QuarantinedCandidate) -> str:
+    os.close(quarantined.directory_fd)
+    return quarantined.directory_name + "/" + quarantined.entry_name
+
+
+def _open_pinned_tmp_root(
+    ctx: GateContext,
+) -> tuple[Optional[PinnedTmpRoot], Optional[str]]:
+    """Open the facts-configured tmp root from the repository descriptor.
+
+    The raw facts value defines the lexical walk. Require the resolved
+    ``GateContext`` path to name that same path, then open every component
+    without following symlinks and compare each opened directory with its
+    no-follow stat before carrying the final descriptor forward.
+    """
+    raw = facts_paths.resolve_toml_key_raw(ctx.repo_root, "tmp_dir")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, "tmp_dir is missing or unreadable in repo facts"
+    raw_path = Path(os.path.expanduser(raw.strip()))
+    if ".." in raw_path.parts:
+        return None, "raw tmp_dir contains a parent traversal"
+    root = ctx.repo_root.resolve()
+    candidate = raw_path if raw_path.is_absolute() else root / raw_path
+    candidate = Path(os.path.abspath(os.path.normpath(str(candidate))))
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return None, "raw tmp_dir resolves outside the repository"
+    if not relative.parts or relative.parts[-1] not in {"tmp", ".tmp"}:
+        return None, "tmp_dir must be a dedicated repository tmp or .tmp root"
+    if Path(ctx.tmp_dir) != candidate:
+        return None, "raw tmp_dir and facts-resolved tmp_dir disagree"
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        return None, "platform does not support no-follow directory opens"
+    repo_fd: Optional[int] = None
+    current_fd: Optional[int] = None
+    try:
+        repo_fd = os.open(root, directory_flags | nofollow)
+        repo_stat = os.fstat(repo_fd)
+        if not stat_module.S_ISDIR(repo_stat.st_mode):
+            return None, "repository anchor is not a directory"
+        identity: list[tuple[str, int, int, int]] = [
+            (".", repo_stat.st_dev, repo_stat.st_ino, stat_module.S_IFMT(repo_stat.st_mode))
+        ]
+        current_fd = repo_fd
+        for component in relative.parts:
+            before = os.stat(
+                component, dir_fd=current_fd, follow_symlinks=False
+            )
+            if not stat_module.S_ISDIR(before.st_mode):
+                return None, f"tmp_dir component {component!r} is not a directory"
+            child_fd = os.open(
+                component, directory_flags | nofollow, dir_fd=current_fd
+            )
+            after = os.fstat(child_fd)
+            if (
+                not stat_module.S_ISDIR(after.st_mode)
+                or (before.st_dev, before.st_ino, before.st_mode)
+                != (after.st_dev, after.st_ino, after.st_mode)
+            ):
+                os.close(child_fd)
+                return None, f"tmp_dir component {component!r} changed while opening"
+            identity.append(
+                (
+                    component,
+                    after.st_dev,
+                    after.st_ino,
+                    stat_module.S_IFMT(after.st_mode),
+                )
+            )
+            if current_fd != repo_fd:
+                os.close(current_fd)
+            current_fd = child_fd
+        if current_fd == repo_fd:
+            return None, "tmp_dir cannot be the repository root"
+        os.close(repo_fd)
+        repo_fd = None
+        pinned_fd = current_fd
+        current_fd = None
+        return PinnedTmpRoot(candidate, pinned_fd, tuple(identity)), None
+    except OSError as exc:
+        return None, f"tmp_dir cannot be pinned without following links ({exc})"
+    finally:
+        if current_fd is not None and current_fd != repo_fd:
+            os.close(current_fd)
+        if repo_fd is not None:
+            os.close(repo_fd)
+
+
+def _pinned_tmp_root_is_current(
+    ctx: GateContext, pinned: PinnedTmpRoot
+) -> bool:
+    current, _reason = _open_pinned_tmp_root(ctx)
+    if current is None:
+        return False
+    try:
+        return current.identity == pinned.identity
+    finally:
+        os.close(current.fd)
+
+
 def _docs_sync_state(ctx: GateContext, rel: str) -> str:
     """synced | never-synced | uncertain, via the docs orphan branch."""
     proc = ctx.git("ls-tree", "-r", "--name-only", "refs/heads/docs", "--", rel)
@@ -2775,46 +3167,243 @@ def _docs_sync_state(ctx: GateContext, rel: str) -> str:
 
 def gate_docs_tmp_sweep(ctx: GateContext) -> GateResult:
     gate = "docs-tmp-sweep"
-    tmp_dir = ctx.tmp_dir
-    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    pinned, root_error = _open_pinned_tmp_root(ctx)
+    if pinned is None:
+        return GateResult(
+            gate,
+            0,
+            "docs/tmp sweep: removed=0, skipped=1, kept=0; skipped: "
+            f"unsafe tmp root ({root_error}); cleanup skipped",
+            warnings=[],
+        )
+    try:
+        return _gate_docs_tmp_sweep_pinned(ctx, pinned)
+    finally:
+        os.close(pinned.fd)
+
+
+def _gate_docs_tmp_sweep_pinned(
+    ctx: GateContext, pinned: PinnedTmpRoot
+) -> GateResult:
+    done_session_fd: Optional[int] = None
+    try:
+        try:
+            info = os.stat("done-session", dir_fd=pinned.fd, follow_symlinks=False)
+            if stat_module.S_ISDIR(info.st_mode):
+                done_session_fd = os.open(
+                    "done-session",
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                    dir_fd=pinned.fd,
+                )
+                opened = os.fstat(done_session_fd)
+                if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                    info.st_dev, info.st_ino, info.st_mode
+                ):
+                    os.close(done_session_fd)
+                    done_session_fd = None
+        except OSError:
+            done_session_fd = None
+        if done_session_fd is None:
+            window = SessionWindow(False, None, None, None, [
+                "done-session directory unavailable through pinned tmp root"
+            ])
+        else:
+            window = derive_session_window(
+                ctx.done_session_dir, ctx.repo_root, directory_fd=done_session_fd
+            )
+        return _gate_docs_tmp_sweep_with_window(
+            ctx, pinned, done_session_fd, window
+        )
+    finally:
+        if done_session_fd is not None:
+            os.close(done_session_fd)
+
+
+def _gate_docs_tmp_sweep_with_window(
+    ctx: GateContext,
+    pinned: PinnedTmpRoot,
+    done_session_fd: Optional[int],
+    window: SessionWindow,
+) -> GateResult:
+    gate = "docs-tmp-sweep"
+    # Keep the lexical path for reports and read-only classification. Every
+    # destructive operation below is relative to the pinned descriptor.
+    tmp_dir = pinned.path
     removed: list[str] = []
     skipped: list[str] = []
     kept: list[str] = []
+    prune_warnings: list[str] = []
 
     def rel_of(path: Path) -> str:
         try:
-            return str(path.resolve().relative_to(ctx.repo_root.resolve()))
+            return str(path.relative_to(ctx.repo_root))
         except ValueError:
             return str(path)
 
-    if tmp_dir.is_dir():
-        for entry in sorted(tmp_dir.iterdir()):
+    if stat_module.S_ISDIR(os.fstat(pinned.fd).st_mode):
+        for entry in sorted(tmp_dir / name for name in os.listdir(pinned.fd)):
             name = entry.name
-            if name == "done-session":
-                _prune_done_session_markers(
-                    ctx, entry, window, removed, kept
+            if not _pinned_tmp_root_is_current(ctx, pinned):
+                skipped.append(
+                    f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
                 )
+                break
+            if name == "done-session":
+                if not _pinned_tmp_root_is_current(ctx, pinned):
+                    skipped.append(
+                        f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                    )
+                    break
+                try:
+                    if done_session_fd is None:
+                        kept.append(str(entry) + " (directory unavailable; preserved)")
+                        continue
+                    done_info = os.stat(
+                        name, dir_fd=pinned.fd, follow_symlinks=False
+                    )
+                    opened_done = os.fstat(done_session_fd)
+                    if not stat_module.S_ISDIR(done_info.st_mode) or (
+                        opened_done.st_dev, opened_done.st_ino, opened_done.st_mode
+                    ) != (done_info.st_dev, done_info.st_ino, done_info.st_mode):
+                        skipped.append(
+                            f"{tmp_dir}/{name} (directory identity changed; cleanup skipped)"
+                        )
+                        break
+                except OSError:
+                    skipped.append(
+                        f"{tmp_dir}/{name} (changed while opening; cleanup skipped)"
+                    )
+                    break
+                _prune_done_session_markers(
+                    ctx, entry, window, removed, kept, prune_warnings,
+                    directory_fd=done_session_fd,
+                    root_fd=pinned.fd,
+                    root_is_current=lambda: _pinned_tmp_root_is_current(ctx, pinned),
+                )
+                if not _pinned_tmp_root_is_current(ctx, pinned):
+                    skipped.append(
+                        f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                    )
+                    break
                 continue
-            if entry.is_dir() and name == "execute-plan":
-                _sweep_execute_plan_sessions(ctx, entry, removed, kept)
+            try:
+                entry_stat = os.stat(name, dir_fd=pinned.fd, follow_symlinks=False)
+            except OSError:
+                skipped.append(f"{tmp_dir}/{name} (identity unreadable; preserved)")
                 continue
-            if entry.is_file() and name.startswith("plan-requirements-") and name.endswith(".md"):
+            if stat_module.S_ISDIR(entry_stat.st_mode) and name == "execute-plan":
+                if not _pinned_tmp_root_is_current(ctx, pinned):
+                    skipped.append(
+                        f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                    )
+                    break
+                execute_fd = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                    dir_fd=pinned.fd,
+                )
+                try:
+                    opened = os.fstat(execute_fd)
+                    if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                        entry_stat.st_dev,
+                        entry_stat.st_ino,
+                        entry_stat.st_mode,
+                    ):
+                        skipped.append(
+                            f"{tmp_dir}/{name} (directory changed while opening; cleanup skipped)"
+                        )
+                        break
+                    _sweep_execute_plan_sessions(
+                        ctx, execute_fd, entry, removed, kept,
+                        pinned_fd=pinned.fd,
+                        root_is_current=lambda: _pinned_tmp_root_is_current(ctx, pinned),
+                    )
+                finally:
+                    os.close(execute_fd)
+                if not _pinned_tmp_root_is_current(ctx, pinned):
+                    skipped.append(
+                        f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                    )
+                    break
+                continue
+            if stat_module.S_ISREG(entry_stat.st_mode) and name.startswith("plan-requirements-") and name.endswith(".md"):
                 slug = name[len("plan-requirements-") : -len(".md")]
                 if (ctx.plans_completed_dir / (slug + ".md")).is_file():
+                    if not _pinned_tmp_root_is_current(ctx, pinned):
+                        skipped.append(
+                            f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                        )
+                        break
+                    quarantined, reason = _quarantine_candidate(
+                        pinned.fd, pinned.fd, name, entry_stat
+                    )
+                    if quarantined is None:
+                        skipped.append(f"{rel_of(entry)} ({reason})")
+                        continue
+                    if reason is not None:
+                        location = _quarantine_location(quarantined)
+                        skipped.append(f"{rel_of(entry)} ({reason}; retained at {location})")
+                        continue
                     try:
-                        entry.unlink()
-                        removed.append(rel_of(entry))
+                        current = os.stat(
+                            quarantined.entry_name,
+                            dir_fd=quarantined.directory_fd,
+                            follow_symlinks=False,
+                        )
+                        current_pending = _pending_plan_session_names(
+                            ctx.plans_dir, ctx.plans_completed_dir
+                        )
+                        archived = (
+                            slug not in current_pending
+                            and (ctx.plans_completed_dir / (slug + ".md")).is_file()
+                        )
+                        if _candidate_identity(current) != _candidate_identity(entry_stat):
+                            location = _quarantine_location(quarantined)
+                            skipped.append(
+                                f"{rel_of(entry)} (identity changed; retained at {location})"
+                            )
+                        elif not archived:
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            kept.append(
+                                f"{rel_of(entry)} (owning plan still pending)"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                        elif not _pinned_tmp_root_is_current(ctx, pinned):
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            skipped.append(
+                                f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                            break
+                        else:
+                            _discard_quarantined_candidate(pinned.fd, quarantined)
+                            removed.append(rel_of(entry))
                     except OSError:
-                        kept.append(rel_of(entry))
+                        location = _restore_quarantined_candidate(
+                            pinned.fd, pinned.fd, name, quarantined
+                        )
+                        kept.append(
+                            f"{rel_of(entry)} (removal failed; preserved)"
+                            + (f" at {location}" if location else "")
+                        )
+                    if not _pinned_tmp_root_is_current(ctx, pinned):
+                        skipped.append(
+                            f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                        )
+                        break
                 else:
                     kept.append(rel_of(entry) + " (owning plan still pending)")
                 continue
-            if entry.is_dir() and (
+            if stat_module.S_ISDIR(entry_stat.st_mode) and (
                 name.startswith(PROTECTED_SCRATCH_PREFIXES) or name in PROTECTED_SCRATCH_DIRS
             ):
                 kept.append(rel_of(entry) + " (protected scratch; owning skill cleans up)")
                 continue
-            if entry.is_file() and (
+            if stat_module.S_ISREG(entry_stat.st_mode) and (
                 name.endswith(".py")
                 or name.endswith(".log.md")
                 or (name.endswith(".md") and DATED_ONE_OFF_RE.match(name))
@@ -2831,7 +3420,7 @@ def gate_docs_tmp_sweep(ctx: GateContext) -> GateResult:
                         )
                         continue
                     try:
-                        mtime = entry.stat().st_mtime
+                        mtime = os.stat(name, dir_fd=pinned.fd, follow_symlinks=False).st_mtime
                     except OSError:
                         skipped.append(
                             f"{rel_of(entry)} (synced, but mtime unreadable; "
@@ -2845,11 +3434,87 @@ def gate_docs_tmp_sweep(ctx: GateContext) -> GateResult:
                             "session)"
                         )
                         continue
+                    if not _pinned_tmp_root_is_current(ctx, pinned):
+                        skipped.append(
+                            f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                        )
+                        break
+                    quarantined, reason = _quarantine_candidate(
+                        pinned.fd, pinned.fd, name, entry_stat
+                    )
+                    if quarantined is None:
+                        skipped.append(f"{rel_of(entry)} ({reason})")
+                        continue
+                    if reason is not None:
+                        location = _quarantine_location(quarantined)
+                        skipped.append(f"{rel_of(entry)} ({reason}; retained at {location})")
+                        continue
                     try:
-                        entry.unlink()
-                        removed.append(rel_of(entry))
+                        current = os.stat(
+                            quarantined.entry_name,
+                            dir_fd=quarantined.directory_fd,
+                            follow_symlinks=False,
+                        )
+                        final_sync_state = _docs_sync_state(ctx, rel_of(entry))
+                        if _candidate_identity(current) != _candidate_identity(entry_stat):
+                            location = _quarantine_location(quarantined)
+                            skipped.append(
+                                f"{rel_of(entry)} (identity changed; retained at {location})"
+                            )
+                        elif final_sync_state != "synced":
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            reason = (
+                                "docs branch presence uncertain; never guessing"
+                                if final_sync_state == "uncertain"
+                                else "never synced to the docs branch; removal would be permanent"
+                            )
+                            skipped.append(
+                                f"{rel_of(entry)} ({reason})"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                        elif not window.anchored or window.start_epoch is None:
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            skipped.append(
+                                f"{rel_of(entry)} (session window became unanchorable; preserved)"
+                                + (f" at {location}" if location else "")
+                            )
+                        elif current.st_mtime >= window.start_epoch:
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            skipped.append(
+                                f"{rel_of(entry)} (same-inode update inside the session window; preserved)"
+                                + (f" at {location}" if location else "")
+                            )
+                        elif not _pinned_tmp_root_is_current(ctx, pinned):
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            skipped.append(
+                                f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                            break
+                        else:
+                            _discard_quarantined_candidate(pinned.fd, quarantined)
+                            removed.append(rel_of(entry))
                     except OSError:
-                        kept.append(rel_of(entry))
+                        location = _restore_quarantined_candidate(
+                            pinned.fd, pinned.fd, name, quarantined
+                        )
+                        kept.append(
+                            f"{rel_of(entry)} (removal failed; preserved)"
+                            + (f" at {location}" if location else "")
+                        )
+                    if not _pinned_tmp_root_is_current(ctx, pinned):
+                        skipped.append(
+                            f"{tmp_dir} (pinned root identity changed; cleanup skipped)"
+                        )
+                        break
                 else:
                     reason = (
                         "never synced to the docs branch; removal would be "
@@ -2881,7 +3546,184 @@ def gate_docs_tmp_sweep(ctx: GateContext) -> GateResult:
         # line. Kept rows stay informational: never a verdict input.
         kept_fragment, kept_warnings = bounded_inline_listing(ctx, gate, kept)
         message += "; kept: " + kept_fragment
-    return GateResult(gate, 0, message, warnings=kept_warnings)
+    return GateResult(gate, 0, message, warnings=kept_warnings + prune_warnings)
+
+
+def _closeout_reference_hold(
+    ctx: GateContext,
+    consume: Optional[Callable[[Optional[set[str]]], None]] = None,
+) -> tuple[Optional[set[str]], list[str]]:
+    """The merge-locked closeout-reference hold behind the gate-report prune
+    arm (plan 2026-10-29-done-gate-report-retention Task 2).
+
+    ``consume``, when given, runs exactly once with the final ``referenced``
+    value on every return path: inside this merge-lock span on the verified
+    path, so the gate-report prune arm's unlink loop shares the lock with the
+    aged set's lookup (one atomic span: a publisher that acquires the lock
+    next can never have a freshly written citation deleted by a sweep that
+    scanned before the publisher's manifest landed), and outside the span on
+    each unverifiable path, where ``consume`` receives ``None`` and the
+    caller's arm prunes nothing. An exception out of ``consume`` on the
+    verified path still releases the lock (the release stays in
+    ``finally``).
+
+    Returns ``(referenced, warnings)``. ``referenced`` is None exactly when
+    the hold could not be verified; the sibling helpers are unavailable
+    (this lib deployed beside an older driver copy), the
+    ``worktree-closeout-migrate`` merge lock could not be acquired (launch
+    failure, refusal, or missing MERGE_LOCK ownership exports), the primary
+    checkout could not be resolved, or the worktree registration could not be
+    read; the caller must then prune nothing (never prune without a
+    verified hold). Otherwise ``referenced`` is the possibly-empty set of
+    resolved filesystem paths that a live registered-worktree closeout
+    manifest still cites as a verified ``migrated``/``renamed`` destination.
+
+    The manifest set is the supported one (plan Terms): migration-shaped JSON
+    under both the run-owner (this checkout's facts-resolved) and the
+    resolved primary checkout temporary roots, in their ``execute-plan/`` and
+    ``done-session/`` subtrees; canonical and legacy plan-session files,
+    run-ID ``worktree-migrate-baseline-<id>-manifest.json`` skeletons, and
+    explicitly placed operands under those roots (the subtree scan covers
+    every JSON there; ``_closeout_manifest_candidate``'s per-plan canonical-
+    then-legacy selection needs a plan operand this cross-session sweep does
+    not have, so the enumeration is by location and the per-file rules stay
+    single-homed in the resolver). Resolution reuses Task 1's
+    ``_resolve_closeout_reference_state``: any read/shape/destinations error
+    is reference-less with one warning and stays age-prunable (no
+    normalization, no new refusal class), and a manifest without a usable
+    branch record is the consumer's named legacy skip shape, silently
+    reference-less. A manifest is live for registered-worktree closeout
+    exactly while a registered worktree of the repository is bound to its
+    latest recorded branch (the consumer's identity rule, independent of the
+    manifest's ``source`` field), so an ``unknown-ref`` recovery keeps its
+    report (the registration persists while the ref is being resolved) and
+    after successful worktree removal no entry matches and the report is
+    age-prunable again. Branch-only ``unknown-ref`` retention is explicitly
+    deferred to the linked backlog item."""
+    warnings: list[str] = []
+
+    def finish(
+        referenced: Optional[set[str]],
+    ) -> tuple[Optional[set[str]], list[str]]:
+        """Hand ``consume`` the final ``referenced`` value exactly once, on
+        every return path: inside the merge-lock span on the verified path
+        (the return expression evaluates before ``finally`` releases the
+        lock), and outside it (pruning nothing) on each unverifiable one."""
+        if consume is not None:
+            consume(referenced)
+        return referenced, warnings
+
+    try:
+        from worktree_closeout_migrate import (  # stale deployed siblings degrade to skip, never to a blind prune
+            _MIGRATE_MERGE_LABEL,
+            _facts_tmp_root,
+            _merge_lock_acquire,
+            _merge_lock_release,
+            _parse_worktree_entries,
+            _resolve_closeout_reference_state,
+        )
+    except Exception as exc:
+        warnings.append(
+            "docs-tmp-sweep: worktree_closeout_migrate helpers unavailable; "
+            f"aged gate-report pruning skipped this run ({exc})"
+        )
+        return finish(None)
+    exports, refused = _merge_lock_acquire(ctx.repo_root, _MIGRATE_MERGE_LABEL)
+    if exports is None:
+        evidence = (
+            "; ".join(line.strip() for line in refused if line.strip())[:200]
+            or "merge-acquire refused"
+        )
+        warnings.append(
+            "docs-tmp-sweep: worktree-closeout-migrate merge lock not "
+            "acquired; aged gate-report pruning skipped this run "
+            f"({evidence})"
+        )
+        return finish(None)
+    try:
+        primary, primary_err = _resolve_primary_checkout(ctx)
+        if primary is None:
+            warnings.append(
+                "docs-tmp-sweep: primary checkout unresolved; aged "
+                "gate-report pruning skipped this run "
+                f"({(primary_err or '').strip()[:200]})"
+            )
+            return finish(None)
+        try:
+            entries = _parse_worktree_entries(primary)
+        except Exception as exc:
+            warnings.append(
+                "docs-tmp-sweep: worktree registration unreadable; aged "
+                f"gate-report pruning skipped this run ({exc})"
+            )
+            return finish(None)
+        roots: list[Path] = []
+        seen_roots: set[Path] = set()
+        for root in (ctx.tmp_dir, _facts_tmp_root(primary)):
+            resolved = Path(root)
+            try:
+                resolved = resolved.resolve()
+            except OSError:
+                pass
+            if resolved not in seen_roots:
+                seen_roots.add(resolved)
+                roots.append(resolved)
+        referenced: set[str] = set()
+        for root in roots:
+            for pattern in (
+                "execute-plan/*/*.json",
+                "execute-plan/*.json",
+                "done-session/*.json",
+            ):
+                for manifest_path in sorted(root.glob(pattern)):
+                    if not manifest_path.is_file():
+                        continue
+                    state = _resolve_closeout_reference_state(manifest_path)
+                    if state["read_error"] is not None:
+                        warnings.append(
+                            "docs-tmp-sweep: closeout manifest unreadable; "
+                            "its verified destinations stay age-prunable: "
+                            f"{manifest_path} ({state['read_error']})"
+                        )
+                        continue
+                    if (
+                        state["shape_error"] is not None
+                        or state["destinations_error"] is not None
+                    ):
+                        exc = state["shape_error"] or state["destinations_error"]
+                        warnings.append(
+                            "docs-tmp-sweep: closeout manifest shape "
+                            "unsupported; its verified destinations stay "
+                            f"age-prunable: {manifest_path} ({exc})"
+                        )
+                        continue
+                    recorded = state["recorded"]
+                    if not recorded:
+                        # The consumer's legacy skip shape: no branch record,
+                        # nothing live to retain for.
+                        continue
+                    if not any(
+                        entry.get("branch") == recorded for entry in entries
+                    ):
+                        # No registered worktree is bound to the recorded
+                        # branch: the worktree closeout has completed (or the
+                        # record was branch-only, whose retention is
+                        # deferred); age-prunable again.
+                        continue
+                    for destination in state["verified_destinations"]:
+                        try:
+                            referenced.add(
+                                str((primary / destination).resolve())
+                            )
+                        except (TypeError, ValueError, OSError) as exc:
+                            warnings.append(
+                                "docs-tmp-sweep: closeout manifest carries an "
+                                "unresolvable verified destination; it stays "
+                                f"age-prunable: {manifest_path} ({exc})"
+                            )
+        return finish(referenced)
+    finally:
+        _merge_lock_release(ctx.repo_root, exports)
 
 
 def _prune_done_session_markers(
@@ -2890,6 +3732,10 @@ def _prune_done_session_markers(
     window: SessionWindow,
     removed: list[str],
     kept: list[str],
+    warnings: list[str],
+    directory_fd: int,
+    root_fd: int,
+    root_is_current: Callable[[], bool],
 ) -> None:
     """Remove run-start-* markers strictly older than the previous-run anchor;
     the anchor and the current-run marker are immune; an unanchorable window
@@ -2897,46 +3743,238 @@ def _prune_done_session_markers(
     window rule governs the bounded reports' gate-reports home: a file whose
     mtime sits strictly older than the anchor (outside the current session
     window) is removed, a file inside the window stays, and an unreadable
-    mtime keeps the file (never guessing)."""
-    if not done_session.is_dir():
-        return
+    mtime keeps the file (never guessing). An aged report still cited as a
+    verified migrated/renamed destination by a live registered-worktree
+    closeout manifest is retained for the closeout consumer (plan
+    2026-10-29-done-gate-report-retention Task 2): the aged set's lookup and
+    unlink share the ``worktree-closeout-migrate`` merge lock, and when the
+    hold cannot be verified (lock unavailable, primary unresolved, helpers
+    missing) the sweep warns and prunes nothing; never without a verified
+    hold. Retention ends with the closeout: after successful worktree removal
+    no registration is bound to the recorded branch and the report is
+    age-prunable again."""
     if not window.anchored or window.anchor is None:
         kept.append(str(done_session) + " (window unanchorable; markers immune)")
         return
     anchor_epoch = window.anchor.epoch
-    for marker in sorted(done_session.glob("run-start-*")):
-        parsed = _parse_marker(marker, ctx.repo_root)
+    marker_names = sorted(
+        name for name in os.listdir(directory_fd) if name.startswith("run-start-")
+    )
+    for marker_name in marker_names:
+        marker = done_session / marker_name
+        if not root_is_current():
+            kept.append(str(done_session) + " (pinned root identity changed; cleanup skipped)")
+            return
+        marker_identity: Optional[os.stat_result] = None
+        marker_fd: Optional[int] = None
+        try:
+            marker_fd = os.open(
+                marker_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            marker_info = os.fstat(marker_fd)
+            if not stat_module.S_ISREG(marker_info.st_mode):
+                raise OSError("marker changed type")
+            marker_identity = marker_info
+            with os.fdopen(marker_fd, "r", encoding="utf-8") as stream:
+                marker_fd = None
+                content = stream.read()
+            parsed = _parse_marker_content(marker, content, ctx.repo_root)
+        except (OSError, UnicodeError):
+            parsed = None
+        finally:
+            if marker_fd is not None:
+                os.close(marker_fd)
         if parsed is None:
             # A cross-repo or unparseable marker is never pruned by recency.
             kept.append(str(marker) + " (content not confirmable as this repo)")
             continue
         if parsed.epoch < anchor_epoch:
+            if not root_is_current():
+                kept.append(str(done_session) + " (pinned root identity changed; cleanup skipped)")
+                return
+            if marker_identity is None:
+                kept.append(str(marker) + " (quarantine unavailable; preserved)")
+                continue
+            quarantined, quarantine_error = _quarantine_candidate(
+                root_fd, directory_fd, marker_name, marker_identity
+            )
+            if quarantined is None:
+                kept.append(str(marker) + f" ({quarantine_error})")
+                continue
+            if quarantine_error is not None:
+                location = _quarantine_location(quarantined)
+                kept.append(str(marker) + f" ({quarantine_error}; retained at {location})")
+                continue
             try:
-                marker.unlink()
-                removed.append(str(marker))
+                marker_fd = os.open(
+                    quarantined.entry_name,
+                    os.O_RDONLY | os.O_NOFOLLOW,
+                    dir_fd=quarantined.directory_fd,
+                )
+                try:
+                    current_info = os.fstat(marker_fd)
+                    with os.fdopen(marker_fd, "r", encoding="utf-8") as stream:
+                        marker_fd = -1
+                        current_content = stream.read()
+                finally:
+                    if marker_fd >= 0:
+                        os.close(marker_fd)
+                current_marker = _parse_marker_content(
+                    marker, current_content, ctx.repo_root
+                )
+                if (
+                    _candidate_identity(current_info) != _candidate_identity(marker_identity)
+                    or current_marker is None
+                    or current_marker.epoch >= anchor_epoch
+                ):
+                    location = _restore_quarantined_candidate(
+                        root_fd, directory_fd, marker_name, quarantined
+                    )
+                    kept.append(
+                        str(marker) + " (marker changed or entered the protected window)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                elif not root_is_current():
+                    location = _restore_quarantined_candidate(
+                        root_fd, directory_fd, marker_name, quarantined
+                    )
+                    kept.append(
+                        str(marker) + " (pinned root identity changed; cleanup skipped)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                else:
+                    _discard_quarantined_candidate(root_fd, quarantined)
+                    removed.append(str(marker))
             except OSError:
-                kept.append(str(marker))
+                location = _restore_quarantined_candidate(
+                    root_fd, directory_fd, marker_name, quarantined
+                )
+                kept.append(
+                    str(marker) + " (marker removal failed; preserved)"
+                    + (f" at {location}" if location else "")
+                )
         else:
             kept.append(str(marker) + " (anchor or current run; immune)")
     gate_reports = done_session / GATE_REPORTS_DIRNAME
-    if not gate_reports.is_dir():
+    try:
+        reports_fd = os.open(
+            GATE_REPORTS_DIRNAME,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    except OSError:
         return
-    for report_file in sorted(gate_reports.iterdir()):
-        if not report_file.is_file():
-            continue
+    report_names = sorted(os.listdir(reports_fd))
+    aged: list[tuple[str, Path, os.stat_result]] = []
+    for report_name in report_names:
+        report_file = gate_reports / report_name
         try:
-            mtime = report_file.stat().st_mtime
+            info = os.stat(report_name, dir_fd=reports_fd, follow_symlinks=False)
+            if not stat_module.S_ISREG(info.st_mode):
+                continue
+            mtime = info.st_mtime
         except OSError:
             kept.append(str(report_file) + " (mtime unreadable; never guessing)")
             continue
         if mtime < anchor_epoch:
-            try:
-                report_file.unlink()
-                removed.append(str(report_file))
-            except OSError:
-                kept.append(str(report_file))
+            aged.append((report_name, report_file, info))
         else:
             kept.append(str(report_file) + " (inside the session window; immune)")
+    if not aged:
+        os.close(reports_fd)
+        return
+
+    def prune_within_hold(referenced: Optional[set[str]]) -> None:
+        """The unlink arm, invoked by ``_closeout_reference_hold`` with the
+        final ``referenced`` value: on the verified path it runs inside the
+        merge-lock span, so the aged set's classification and its unlinks are
+        one atomic span under the lock and a publisher's manifest cannot land
+        between the scan and the unlink (plan
+        2026-10-29-done-gate-report-retention Task 2); on an unverifiable
+        hold it prunes nothing (the skip lines below)."""
+        if referenced is None:
+            # The hold could not be verified: never prune without one.
+            for _report_name, report_file, _info in aged:
+                kept.append(
+                    str(report_file)
+                    + " (aged; prune skipped: closeout reference hold unverified)"
+                )
+            return
+        for report_name, report_file, report_identity in aged:
+            if not root_is_current():
+                kept.append(str(done_session) + " (pinned root identity changed; cleanup skipped)")
+                return
+            try:
+                resolved_report = os.path.abspath(report_file)
+            except OSError:
+                kept.append(
+                    str(report_file) + " (path unresolvable; never guessing)"
+                )
+                continue
+            if not root_is_current():
+                kept.append(str(done_session) + " (pinned root identity changed; cleanup skipped)")
+                return
+            if resolved_report in referenced:
+                kept.append(
+                    str(report_file)
+                    + " (retained: cited by a live registered-worktree closeout "
+                    "manifest)"
+                )
+                continue
+            quarantined, quarantine_error = _quarantine_candidate(
+                root_fd, reports_fd, report_name, report_identity
+            )
+            if quarantined is None:
+                kept.append(str(report_file) + f" ({quarantine_error})")
+                continue
+            if quarantine_error is not None:
+                location = _quarantine_location(quarantined)
+                kept.append(
+                    str(report_file) + f" ({quarantine_error}; retained at {location})"
+                )
+                continue
+            try:
+                current = os.stat(
+                    quarantined.entry_name,
+                    dir_fd=quarantined.directory_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    _candidate_identity(current) != _candidate_identity(report_identity)
+                    or current.st_mtime >= anchor_epoch
+                ):
+                    location = _restore_quarantined_candidate(
+                        root_fd, reports_fd, report_name, quarantined
+                    )
+                    kept.append(
+                        str(report_file) + " (report changed or entered the session window)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                elif root_is_current is not None and not root_is_current():
+                    location = _restore_quarantined_candidate(
+                        root_fd, reports_fd, report_name, quarantined
+                    )
+                    kept.append(
+                        str(report_file) + " (pinned root identity changed; cleanup skipped)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                else:
+                    _discard_quarantined_candidate(root_fd, quarantined)
+                    removed.append(str(report_file))
+            except OSError:
+                location = _restore_quarantined_candidate(
+                    root_fd, reports_fd, report_name, quarantined
+                )
+                kept.append(
+                    str(report_file) + " (report removal failed; preserved)"
+                    + (f" at {location}" if location else "")
+                )
+
+    try:
+        _, hold_warnings = _closeout_reference_hold(ctx, prune_within_hold)
+        warnings.extend(hold_warnings)
+    finally:
+        os.close(reports_fd)
 
 
 def _pending_plan_session_names(
@@ -2958,56 +3996,243 @@ def _pending_plan_session_names(
     return names
 
 
+def _remove_tree_at(parent_fd: int, name: str) -> None:
+    """Remove one entry using only descriptor-relative no-follow operations."""
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat_module.S_ISDIR(before.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    child_fd = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    try:
+        opened = os.fstat(child_fd)
+        if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+        ):
+            raise OSError("directory changed while opening")
+        for child in os.listdir(child_fd):
+            _remove_tree_at(child_fd, child)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino, current.st_mode) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+        ):
+            raise OSError("directory identity changed before removal")
+        os.rmdir(name, dir_fd=parent_fd)
+    finally:
+        os.close(child_fd)
+
+
 def _sweep_execute_plan_sessions(
     ctx: GateContext,
-    execute_dir: Path,
+    execute_fd: int,
+    display_path: Path,
     removed: list[str],
     kept: list[str],
+    pinned_fd: Optional[int] = None,
+    root_is_current: Optional[Callable[[], bool]] = None,
 ) -> None:
-    """Remove execute-plan/<slug>/ sessions whose plan archived to
-    plans_completed_dir; never remove an active session (manifest present and
-    plan still under plans_dir). A live plan may sit anywhere under
-    plans_dir (e.g. ``docs/history/plans/deferred/<slug>.md``), so the pending
-    check is recursive over plans_dir, mirroring how the readiness
-    candidate derivation accepts nested plan paths. The plan-slug proof
-    family (``PLAN_SLUG_PROOF_FILES``: the Phase 0 ``closeout-baseline.json``,
-    its ``closeout-baseline-skip.json`` capture-failure sibling, and the
-    ``closeout-migration.json`` branch record a later plan closeout's
-    gate-removal reads through its explicit operand) is retained
-    cross-session by design: a session holding any family member is kept
-    with a retained-and-reported line (mirroring the done-session marker
-    handling) and never removed here, so a retry after a failed attempt
-    re-reads the same proof state the predecessor had. Retention supersedes
-    the former age-bounded stale-baseline removal: a baseline-bearing
-    directory is closeout evidence, not a crashed run's scratch, and every
-    sweep pass re-reports the retained rows so the growth stays visible."""
-    if not execute_dir.is_dir():
-        return
+    """Descriptor-relative counterpart used by the pinned-root sweep."""
     pending_stems = _pending_plan_session_names(
         ctx.plans_dir, ctx.plans_completed_dir
     )
-    for session in sorted(execute_dir.iterdir()):
-        if not session.is_dir():
-            continue
-        if session.name in pending_stems:
-            kept.append(str(session) + " (active: plan still pending)")
-            continue
-        proof_present = [
-            name for name in PLAN_SLUG_PROOF_FILES if (session / name).is_file()
-        ]
-        if proof_present:
-            kept.append(
-                str(session)
-                + " (retained: closeout proof family: "
-                + ", ".join(proof_present)
-                + ")"
+    for session_name in sorted(os.listdir(execute_fd)):
+        session_path = display_path / session_name
+        try:
+            session_stat = os.stat(
+                session_name, dir_fd=execute_fd, follow_symlinks=False
             )
+        except OSError:
+            kept.append(str(session_path) + " (identity unreadable; preserved)")
+            continue
+        if not stat_module.S_ISDIR(session_stat.st_mode):
+            kept.append(str(session_path) + " (not a directory; preserved)")
+            continue
+        if session_name in pending_stems:
+            kept.append(str(session_path) + " (active: plan still pending)")
             continue
         try:
-            shutil.rmtree(session)
-            removed.append(str(session) + " (plan archived)")
+            session_fd = os.open(
+                session_name,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                dir_fd=execute_fd,
+            )
         except OSError:
-            kept.append(str(session) + " (removal failed)")
+            kept.append(str(session_path) + " (changed while opening; preserved)")
+            continue
+        try:
+            opened = os.fstat(session_fd)
+            if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                session_stat.st_dev,
+                session_stat.st_ino,
+                session_stat.st_mode,
+            ):
+                kept.append(str(session_path) + " (changed while opening; preserved)")
+                continue
+            proof_present = [
+                proof for proof in PLAN_SLUG_PROOF_FILES
+                if _is_regular_file_at(session_fd, proof)
+            ]
+            if proof_present:
+                kept.append(
+                    str(session_path) + " (retained: closeout proof family: "
+                    + ", ".join(proof_present) + ")"
+                )
+                continue
+            current = os.stat(
+                session_name, dir_fd=execute_fd, follow_symlinks=False
+            )
+            if (current.st_dev, current.st_ino, current.st_mode) != (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+            ):
+                kept.append(str(session_path) + " (identity changed; preserved)")
+                continue
+            if pinned_fd is None:
+                kept.append(str(session_path) + " (quarantine root unavailable; preserved)")
+                continue
+            quarantined, quarantine_error = _quarantine_candidate(
+                pinned_fd, execute_fd, session_name, opened
+            )
+            if quarantined is None:
+                kept.append(
+                    str(session_path)
+                    + f" (removal failed) ({quarantine_error})"
+                )
+                continue
+            if quarantine_error is not None:
+                location = _quarantine_location(quarantined)
+                kept.append(
+                    str(session_path)
+                    + f" ({quarantine_error}; retained at {location})"
+                )
+                continue
+            try:
+                quarantined_stat = os.stat(
+                    quarantined.entry_name,
+                    dir_fd=quarantined.directory_fd,
+                    follow_symlinks=False,
+                )
+                if _candidate_identity(quarantined_stat) != _candidate_identity(opened):
+                    location = _quarantine_location(quarantined)
+                    kept.append(
+                        str(session_path)
+                        + f" (identity changed; retained at {location})"
+                    )
+                    continue
+                current_pending = _pending_plan_session_names(
+                    ctx.plans_dir, ctx.plans_completed_dir
+                )
+                quarantined_session_fd = os.open(
+                    quarantined.entry_name,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                    dir_fd=quarantined.directory_fd,
+                )
+                try:
+                    latest_info = os.fstat(quarantined_session_fd)
+                    if _candidate_identity(latest_info) != _candidate_identity(opened):
+                        location = _quarantine_location(quarantined)
+                        kept.append(
+                            str(session_path)
+                            + f" (identity changed; retained at {location})"
+                        )
+                        continue
+                    latest_proof = [
+                        proof for proof in PLAN_SLUG_PROOF_FILES
+                        if _is_regular_file_at(quarantined_session_fd, proof)
+                    ]
+                finally:
+                    os.close(quarantined_session_fd)
+                if session_name in current_pending:
+                    location = _restore_quarantined_candidate(
+                        pinned_fd, execute_fd, session_name, quarantined
+                    )
+                    kept.append(
+                        str(session_path) + " (active: plan still pending)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                    continue
+                if latest_proof:
+                    location = _restore_quarantined_candidate(
+                        pinned_fd, execute_fd, session_name, quarantined
+                    )
+                    kept.append(
+                        str(session_path)
+                        + " (retained: closeout proof family: "
+                        + ", ".join(latest_proof) + ")"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                    continue
+                if root_is_current is not None and not root_is_current():
+                    location = _restore_quarantined_candidate(
+                        pinned_fd, execute_fd, session_name, quarantined
+                    )
+                    kept.append(
+                        str(session_path) + " (pinned root identity changed; cleanup skipped)"
+                        + (f"; retained at {location}" if location else "")
+                    )
+                    continue
+
+                def session_remains_discardable() -> bool:
+                    if session_name in _pending_plan_session_names(
+                        ctx.plans_dir, ctx.plans_completed_dir
+                    ):
+                        return False
+                    try:
+                        final_session_fd = os.open(
+                            quarantined.entry_name,
+                            os.O_RDONLY
+                            | getattr(os, "O_DIRECTORY", 0)
+                            | os.O_NOFOLLOW,
+                            dir_fd=quarantined.directory_fd,
+                        )
+                    except OSError:
+                        return False
+                    try:
+                        opened_final = os.fstat(final_session_fd)
+                        if _candidate_identity(opened_final) != quarantined.expected_identity:
+                            return False
+                        if any(
+                            _is_regular_file_at(final_session_fd, proof)
+                            for proof in PLAN_SLUG_PROOF_FILES
+                        ):
+                            return False
+                    finally:
+                        os.close(final_session_fd)
+                    return root_is_current is None or root_is_current()
+
+                _discard_quarantined_candidate(
+                    pinned_fd, quarantined, revalidate=session_remains_discardable
+                )
+                removed.append(str(session_path) + " (plan archived)")
+            except OSError as exc:
+                location = _restore_quarantined_candidate(
+                    pinned_fd, execute_fd, session_name, quarantined
+                )
+                kept.append(
+                    str(session_path) + " (removal failed; preserved)"
+                    + (f" at {location}" if location else "")
+                    + f"; {exc}"
+                )
+        except OSError:
+            kept.append(str(session_path) + " (removal failed)")
+        finally:
+            os.close(session_fd)
+
+
+def _is_regular_file_at(directory_fd: int, name: str) -> bool:
+    try:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat_module.S_ISREG(info.st_mode)
 
 
 # --------------------------------------------------------------------------- #
@@ -3156,7 +4381,44 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
                     "path; skills-repo hygiene arm skipped"
                 )
             else:
-                proc = ctx.run(["bash", str(scan)], cwd=ctx.repo_root)
+                # r3 F3: pin the scanned root in the child's environment. The
+                # child would otherwise inherit the caller's
+                # PUBLIC_HYGIENE_REPO_ROOT and scan a foreign repository
+                # while this gate records its result against ctx.repo_root.
+                # The PUBLIC_HYGIENE_PATTERNS_FILE inheritance is left
+                # untouched (choice recorded here): this call site resolves
+                # no patterns file of its own, so the child keeps the
+                # scanner contract's own resolution (env override, else the
+                # default home path).
+                proc = ctx.run(
+                    ["bash", str(scan)],
+                    cwd=ctx.repo_root,
+                    env={
+                        **os.environ,
+                        "PUBLIC_HYGIENE_REPO_ROOT": str(ctx.repo_root),
+                    },
+                )
+                # Report-only tracked scope (plan 2026-10-26-hygiene-
+                # scanner-default-scope-parity): the default-mode child's
+                # PUBLIC_HYGIENE_REPORT rows ride the warnings channel
+                # verbatim whatever the child's verdict is; every other
+                # successful-output row stays uninterpreted evidence, and
+                # the FAIL tail handling and child result codes below are
+                # untouched.
+                warnings.extend(
+                    row.rstrip("\r\n")
+                    for row in (proc.stdout or "").splitlines()
+                    if row.strip().startswith(PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+                    # Phase 3 r2 F1: a tracked filename containing a newline
+                    # under a blocking root splits its rg -n FAIL row, and the
+                    # second physical line can start with the report prefix.
+                    # Any `:\d+:` row is treated as split debris and dropped;
+                    # accepted collision: a genuine path containing
+                    # `:<digits>:` (unescaped by json_quote_path) is textually
+                    # indistinguishable from debris and is dropped too, a rare
+                    # false negative on an advisory channel (review r3 F1).
+                    and not re.search(r":\d+:", row)
+                )
                 evidence_rows = [
                     row.strip()
                     for row in (proc.stdout or "").splitlines()
@@ -3180,11 +4442,19 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
                         warnings=warnings,
                     )
                 if label == "fail" and proc.returncode == 1:
+                    # r3 F2: report rows already ride the warnings channel
+                    # verbatim above, so filtering them out of the tail keeps
+                    # a report-row flood (report records print after FAIL
+                    # blocks) from evicting the real FAIL rows from the
+                    # finding message at the last-10 cut.
                     tail_rows = [
                         row
                         for row in (proc.stdout or "").strip().splitlines()
                         if row.strip()
                         and not row.strip().startswith(OUTCOME_LINE_PREFIX)
+                        and not row.strip().startswith(
+                            PUBLIC_HYGIENE_REPORT_LINE_PREFIX
+                        )
                     ][-10:]
                     findings.append(
                         "public-hygiene scan failed: " + " | ".join(tail_rows)
@@ -6370,7 +7640,11 @@ def _usage() -> str:
         "write-manifest writes the done Step 0 run manifest record "
         "(run-manifest-<run_id>.json under the done-session directory), "
         "reporting interrupted runs (complete=false, never finalized; "
-        "continued only via an explicit --adopt boundary copy; a worktree "
+        "continued only via an explicit --adopt boundary copy; an adopt "
+        "refuses unless DONE_LOCK_DIR/DONE_LOCK_TOKEN prove the caller "
+        "holds this checkout's current done lock and the target classifies "
+        "as an interrupted orphan, and a path claimed both owned and "
+        "foreign in the adopted composition refuses; a worktree "
         "copy of a run's boundary reports as a shadow-of <run_id> line "
         "bound to its run, never a second boundary); "
         "--run-marker <path> binds the manifest to that named run-start "
@@ -6506,6 +7780,65 @@ def _run_marker_binding_refusal(
     return None
 
 
+def _caller_done_lock_refusal(repo_root: Path) -> Optional[str]:
+    """The named reason the caller environment fails to prove done-lock
+    ownership of this repository, else None (the exported lock is the
+    current hold for this checkout, unlocked by the caller's token).
+
+    The evidence contract behind ``write-manifest --adopt``: DONE_LOCK_DIR
+    names a lock directory whose ``meta.env`` records this repository's
+    root (both arms of the shared ``_repo_root_matches_value``) and whose
+    recorded ``lock_token`` equals DONE_LOCK_TOKEN (the caller holds it).
+    Absent, malformed, or mismatched evidence refuses: a meta-less or
+    unreadable hold is unknown state, never guessed, and a recorded token
+    naming another holder refuses the same way, the target run's owning
+    run possibly still live under it. The meta parse keeps the lock
+    script's anchored first-match reading (the
+    ``_done_lock_meta_holder_pid`` rule)."""
+    lock_dir_text = os.environ.get("DONE_LOCK_DIR", "")
+    token_text = os.environ.get("DONE_LOCK_TOKEN", "")
+    if not lock_dir_text or not token_text:
+        return (
+            "DONE_LOCK_DIR and DONE_LOCK_TOKEN must name the current lock "
+            "for this repository and carry its token"
+        )
+    lock_dir = Path(lock_dir_text)
+    if not lock_dir.is_dir():
+        return f"{lock_dir_text} is not a lock directory (the exported DONE_LOCK_DIR path is absent or not a directory)"
+    try:
+        text = (lock_dir / _DONE_LOCK_META_FILE).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return (
+            f"no readable {_DONE_LOCK_META_FILE} under {lock_dir_text} "
+            "(unknown holder state; adoption never guesses a hold)"
+        )
+    recorded_token = ""
+    recorded_root = ""
+    for line in text.splitlines():
+        if line.startswith("lock_token=") and not recorded_token:
+            recorded_token = line[len("lock_token="):].strip()
+        elif line.startswith("repo_root=") and not recorded_root:
+            recorded_root = line[len("repo_root="):].strip()
+    if not recorded_token or not recorded_root:
+        return (
+            f"{_DONE_LOCK_META_FILE} under {lock_dir_text} records no "
+            "lock_token or no repo_root (unknown holder state; adoption "
+            "never guesses a hold)"
+        )
+    if not hmac.compare_digest(recorded_token.encode(), token_text.encode()):
+        return (
+            "the recorded lock_token does not match DONE_LOCK_TOKEN (the "
+            "hold is another holder's, the target run's owning run "
+            "possibly still live under it)"
+        )
+    if not _repo_root_matches_value(recorded_root, repo_root):
+        return (
+            "the recorded repo_root is not this repository (the exported "
+            "lock is another checkout's current lock)"
+        )
+    return None
+
+
 def _cmd_write_manifest(argv: list[str]) -> int:
     """Write the done Step 0 run manifest record.
 
@@ -6551,6 +7884,23 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     misread as a dead root - so an interrupted boundary is still classified
     in the output before any new manifest (the emit-only arm included),
     never refused.
+
+    Adoption guard (plan 2026-10-26-done-writer-adoption-guards): an
+    ``--adopt`` invocation must prove done-lock ownership of this repository
+    before the boundary is touched, and the target boundary must still be an
+    open interrupted orphan. The proof is the caller's own held lock:
+    DONE_LOCK_DIR and DONE_LOCK_TOKEN name and unlock the current lock whose
+    recorded repo_root is this checkout; absent, malformed, or mismatched
+    evidence refuses before writing (a meta-less or unreadable hold is
+    unknown state, never guessed, and a recorded token naming another holder
+    refuses the same way, the target run's owning run possibly still live
+    under it). The target then classifies through ``classify_run_boundary``:
+    only the ``orphan`` verdict adopts, so a terminal record on any file of
+    the run (a shadow copy included) or an unreadable record refuses with no
+    new manifest. The adopted composition also keeps ownership separation: a
+    review path the caller claims owned while the adopted record marks it
+    foreign refuses before any manifest is written (either declaration alone
+    can be intentional; their intersection is contradictory input).
 
     First-finalize bulk load: ``--emit-foreign-candidates <file>`` runs the
     same staging-candidate enumeration as the claim-or-foreign gate,
@@ -6681,11 +8031,18 @@ def _cmd_write_manifest(argv: list[str]) -> int:
             + (head.stderr.strip() or "git rev-parse failed")
         )
 
-    # Explicit adoption: the target must be a readable, root-matched,
-    # not-yet-finalized manifest; its boundary (start_commit and owned paths,
+    # Explicit adoption: the caller must prove done-lock ownership of this
+    # repository first, and the target must be a readable, root-matched,
+    # orphan-classified manifest; its boundary (start_commit and owned paths,
     # plus its foreign markings) is carried verbatim into the new record.
     adopted: Optional[RunManifest] = None
     if args.adopt:
+        lock_refusal = _caller_done_lock_refusal(ctx.repo_root)
+        if lock_refusal is not None:
+            return _cli_fail(
+                f"write-manifest: cannot adopt {args.adopt}: no proven "
+                f"done-lock ownership for this repository: {lock_refusal}"
+            )
         candidate = _read_manifest_by_run_id(ctx.done_session_dir, args.adopt)
         if candidate is None or not _manifest_root_matches(
             candidate.repo_root, ctx.repo_root
@@ -6700,6 +8057,16 @@ def _cmd_write_manifest(argv: list[str]) -> int:
                 f"write-manifest: cannot adopt {args.adopt}: that run already "
                 "finalized (complete=true); only an interrupted (complete="
                 "false) run can be adopted"
+            )
+        boundary_verdict, _classified_run_id = classify_run_boundary(
+            ctx.done_session_dir, _manifest_path(ctx.done_session_dir, args.adopt)
+        )
+        if boundary_verdict != "orphan":
+            return _cli_fail(
+                f"write-manifest: cannot adopt {args.adopt}: the run boundary "
+                f"is {boundary_verdict}, not an interrupted orphan (only an "
+                "orphan-classified boundary can be adopted; closure on any "
+                "same-run record, shadow copies included, refuses the same)"
             )
         verify = ctx.git(
             "rev-parse", "-q", "--verify", candidate.start_commit + "^{commit}"
@@ -6881,6 +8248,24 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         foreign_review_paths = _dedup_preserving_order(
             [_repo_relative(p, ctx.repo_root) for p in args.foreign_review]
         )
+
+    # Ownership separation (plan 2026-10-26-done-writer-adoption-guards):
+    # either declaration alone can be intentional, but their intersection is
+    # contradictory input - a path claimed owned while the adopted record
+    # marks it foreign must not pass as owned - so the adopted composition
+    # refuses the overlap before any manifest is written.
+    if adopted is not None:
+        owned_foreign = sorted(set(owned_review_paths) & set(foreign_review_paths))
+        if owned_foreign:
+            return _cli_fail(
+                "write-manifest: ownership-conflict: review path(s) claimed "
+                "both owned and foreign in the adopted composition: "
+                + ", ".join(owned_foreign)
+                + " (the intersection refuses before any manifest is "
+                "written; whichever declaration is wrong, the composition "
+                f"must not carry the conflict; adopted record {adopted.run_id})"
+
+            )
 
     start_porcelain = _porcelain_lines(ctx, ".")
 

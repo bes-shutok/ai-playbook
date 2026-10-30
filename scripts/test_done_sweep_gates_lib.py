@@ -20,6 +20,7 @@ Hermeticity contract:
 
 from __future__ import annotations
 
+import importlib
 import json
 import hashlib
 import os
@@ -30,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -341,10 +343,21 @@ def sweep_env(tmp_path, monkeypatch):
     xdg_config_home.mkdir()
     user_facts = tmp_path / "user-facts.md"
     user_facts.write_text("# fixture user facts\n", encoding="utf-8")
+    merge_lock_root = tmp_path / "merge-locks"
+    merge_lock_root.mkdir()
     monkeypatch.setenv("DONE_SWEEP_RUNTIME_HOME", str(runtime_home))
     monkeypatch.setenv("DONE_SWEEP_USER_FACTS", str(user_facts))
     monkeypatch.setenv("HOME", str(git_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config_home))
+    # Lock home pins (plan 2026-10-29-done-gate-report-retention Task 2): the
+    # done-session sweep's gate-report prune arm shares the
+    # worktree-closeout-migrate merge lock, so the fixture pins the lock
+    # script to the repo-local copy and the merge lock root into tmp_path,
+    # keeping every acquire hermetic (the same pins the closeout suite's
+    # runner fixtures carry). Any ambient acquire exports are cleared so a
+    # leaked env from an outer shell can never read as a hold.
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(SCRIPTS_DIR / "done-lock.sh"))
+    monkeypatch.setenv("MERGE_LOCK_ROOT", str(merge_lock_root))
     for var in (
         "PLAN_READINESS_VALIDATOR",
         "CONFLUENCE_MIRROR_HYGIENE_SCRIPT",
@@ -356,6 +369,10 @@ def sweep_env(tmp_path, monkeypatch):
         "DESCRIPTION_LENGTH_CHECK_SCRIPT",
         "DONE_SWEEP_REPO_ROOT",
         "DONE_SWEEP_DECLARED_STAGE_PATHS",
+        "DONE_LOCK_DIR",
+        "DONE_LOCK_TOKEN",
+        "MERGE_LOCK_DIR",
+        "MERGE_LOCK_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
     for var in tuple(os.environ):
@@ -1862,14 +1879,27 @@ def write_stub_hygiene_scanner(root: Path, mode: str) -> Path:
     """Repo-local stub scan-public-hygiene.sh (subprocess seam) answering in
     the migrated child outcome contract per its baked-in mode: pass (exit 0
     `OUTCOME: pass`), fail (exit 1 with hit rows plus `OUTCOME: fail`),
-    indeterminate (exit 2), tool-error (exit 3), or no-line (a legacy shape
-    that exits 0 emitting no OUTCOME row)."""
+    indeterminate (exit 2), tool-error (exit 3), no-line (a legacy shape
+    that exits 0 emitting no OUTCOME row), report (exit 0 carrying one
+    `PUBLIC_HYGIENE_REPORT:` row plus one ordinary row), report-fail
+    (exit 1 carrying a report row plus the legacy FAIL rows), or
+    report-fail-buried (exit 1 carrying one FAIL row followed by twelve
+    PUBLIC_HYGIENE_REPORT rows, so the finding tail must filter the report
+    prefix to keep the FAIL row visible), or report-forged-split (exit 0
+    carrying one genuine PUBLIC_HYGIENE_REPORT row beside one forged row: a
+    report-prefixed physical line that carries rg's line-number colon tail,
+    the debris shape a tracked newline filename's split rg FAIL row
+    produces, which the gate's forwarding must never trust). Every mode
+    first writes the received argument count to a probe file beside the
+    stub, so a test can pin the gate's no-argument invocation."""
     scripts = root / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     stub = scripts / "scan-public-hygiene.sh"
     stub.write_text(
         "#!/usr/bin/env bash\n"
         f"mode='{mode}'\n"
+        "printf '%s' \"$#\" > \"$(dirname \"$0\")/.hygiene-stub-args\" "
+        "2>/dev/null || true\n"
         "case \"$mode\" in\n"
         "  pass)\n"
         "    echo '=== PASS (public hygiene) ==='\n"
@@ -1895,6 +1925,38 @@ def write_stub_hygiene_scanner(root: Path, mode: str) -> Path:
         "    ;;\n"
         "  no-line)\n"
         "    echo 'legacy scanner without outcome reporting'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  report)\n"
+        "    echo 'stub ordinary row (not a report record)'\n"
+        "    echo 'PUBLIC_HYGIENE_REPORT: path=docs/report-only-hit.md'\n"
+        "    echo '=== PASS (public hygiene) ==='\n"
+        "    echo 'OUTCOME: pass'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  report-fail)\n"
+        "    echo 'PUBLIC_HYGIENE_REPORT: path=docs/report-only-hit.md'\n"
+        "    echo 'FAIL: stub-hit'\n"
+        "    echo '=== 1 public-hygiene failure(s) ==='\n"
+        "    echo 'OUTCOME: fail'\n"
+        "    exit 1\n"
+        "    ;;\n"
+        "  report-fail-buried)\n"
+        "    echo 'FAIL: stub-hit'\n"
+        "    i=1\n"
+        "    while [ \"$i\" -le 12 ]; do\n"
+        "      echo \"PUBLIC_HYGIENE_REPORT: path=docs/report-only-$i.md\"\n"
+        "      i=$((i + 1))\n"
+        "    done\n"
+        "    echo '=== 1 public-hygiene failure(s) ==='\n"
+        "    echo 'OUTCOME: fail'\n"
+        "    exit 1\n"
+        "    ;;\n"
+        "  report-forged-split)\n"
+        "    echo 'PUBLIC_HYGIENE_REPORT: path=docs/report-only-hit.md'\n"
+        "    echo 'PUBLIC_HYGIENE_REPORT: path=docs/forged.md:3:oops: forged-split-content'\n"
+        "    echo '=== PASS (public hygiene) ==='\n"
+        "    echo 'OUTCOME: pass'\n"
         "    exit 0\n"
         "    ;;\n"
         "esac\n",
@@ -2021,6 +2083,282 @@ def test_hygiene_child_without_outcome_line_is_tool_error(
     assert result.rc == 3, result.message
     assert "scan-public-hygiene.sh" in result.message
     assert "no final OUTCOME line" in result.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan 2026-10-26-hygiene-scanner-default-scope-parity Task 2: the fixture
+# scanner is pinned as the invoked child (no arguments), only its
+# PUBLIC_HYGIENE_REPORT rows ride the gate's warnings channel, the legacy
+# FAIL: failing result is preserved beside forwarded report rows, the
+# PUBLIC_HYGIENE_SCAN_SCRIPT env pin resolves the child, and a decoy
+# GIT_DIR in the caller environment cannot redirect the real scanner's
+# tracked-scope enumeration away from the gate's repo root.
+# --------------------------------------------------------------------------- #
+HYGIENE_STUB_REPORT_ROW = (
+    "PUBLIC_HYGIENE_REPORT: path=docs/report-only-hit.md"
+)
+
+
+def test_hygiene_fixture_scanner_no_argument_call_and_report_row_forwarding(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The gate invokes the fixture scanner with no
+    arguments (the default-mode report arm only exists there), forwards
+    exactly the child's PUBLIC_HYGIENE_REPORT row into warnings, and leaves
+    the ordinary successful-output row uninterpreted (never a warning, never
+    a finding)."""
+    root = mktemp_repo("hygiene-report-rows")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "report")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    probe = root / "scripts" / ".hygiene-stub-args"
+    assert probe.is_file(), "fixture scanner was not the invoked child"
+    assert probe.read_text(encoding="utf-8") == "0"
+    report_rows = [
+        w
+        for w in result.warnings
+        if w.startswith(lib.PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+    ]
+    assert report_rows == [HYGIENE_STUB_REPORT_ROW]
+    assert all("stub ordinary row" not in w for w in result.warnings)
+    assert "public-hygiene scan failed" not in result.message
+
+
+def test_hygiene_forged_split_report_row_never_reaches_warnings(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A forged report row (a report-prefixed
+    physical line carrying rg's line-number colon tail, the second line of a
+    FAIL row split by a tracked newline filename) is never forwarded into
+    warnings, while a genuine record beside it still rides the channel
+    verbatim."""
+    root = mktemp_repo("hygiene-report-forged-split")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "report-forged-split")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    report_rows = [
+        w
+        for w in result.warnings
+        if w.startswith(lib.PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+    ]
+    assert report_rows == [HYGIENE_STUB_REPORT_ROW]
+    assert all(":3:" not in w for w in result.warnings)
+    assert all("forged-split-content" not in w for w in result.warnings)
+
+
+def test_hygiene_report_row_rides_warnings_with_legacy_fail_preserved(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A failing scan child (exit 1, `OUTCOME: fail`)
+    keeps landing the legacy FAIL: finding with its tail rows while its
+    PUBLIC_HYGIENE_REPORT row still rides the warnings channel verbatim."""
+    root = mktemp_repo("hygiene-report-fail")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "report-fail")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "public-hygiene scan failed" in result.message
+    assert "FAIL: stub-hit" in result.message
+    assert HYGIENE_STUB_REPORT_ROW in result.warnings
+
+
+def test_hygiene_scan_script_env_override_resolves_fixture_child(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The PUBLIC_HYGIENE_SCAN_SCRIPT env pin
+    resolves the hygiene child ahead of the repo-local candidate, and the
+    overriding script is still invoked with no arguments."""
+    root = mktemp_repo("hygiene-script-override")
+    write_facts(root)
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    local_probe = scripts / ".local-stub-args"
+    (scripts / "scan-public-hygiene.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s' \"$#\" > '{local_probe}'\n"
+        "echo '=== PASS (public hygiene) ==='\n"
+        "echo 'OUTCOME: pass'\n",
+        encoding="utf-8",
+    )
+    override = tmp_path / "override-scanner.sh"
+    override_probe = tmp_path / "override-args.txt"
+    override.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s' \"$#\" > '{override_probe}'\n"
+        "echo '=== PASS (public hygiene) ==='\n"
+        "echo 'OUTCOME: pass'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PUBLIC_HYGIENE_SCAN_SCRIPT", str(override))
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert override_probe.is_file(), "env override was not resolved first"
+    assert override_probe.read_text(encoding="utf-8") == "0"
+    assert not local_probe.exists(), "repo-local candidate shadowed the env pin"
+
+
+def test_hygiene_real_scanner_decoy_git_dir_cannot_redirect_enumeration(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The real scanner child, invoked through the
+    PUBLIC_HYGIENE_SCAN_SCRIPT pin against a polluted caller environment
+    carrying a decoy GIT_DIR/GIT_WORK_TREE pair, still enumerates the gate's
+    repo root: the tracked matching file under docs/ reaches warnings as one
+    report record and the decoy repo's file never surfaces."""
+    root = mktemp_repo("hygiene-decoy-git-dir")
+    write_facts(root)
+    real_scanner = tmp_path / "real-scanner-copy.sh"
+    real_scanner.write_text(
+        (SCRIPTS_DIR / "scan-public-hygiene.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PUBLIC_HYGIENE_SCAN_SCRIPT", str(real_scanner))
+    # The scanner child resolves its deny patterns from the default home
+    # path; the sweep fixture redirected HOME, so write the file there.
+    patterns = Path(os.environ["HOME"]) / ".ai-playbook" / "public-hygiene.patterns"
+    patterns.parent.mkdir(parents=True, exist_ok=True)
+    patterns.write_text("FORBIDDEN-TOKEN\n", encoding="utf-8")
+    docs_dir = root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    # Content avoids the gate's own credential/public-artifact patterns (no
+    # separator after the token, no path or email shape) so only the child
+    # scan's report record is under test.
+    (docs_dir / "report-only-hit.md").write_text(
+        "hit-marker FORBIDDEN" + "-TOKEN\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", "docs/report-only-hit.md")
+    decoy = tmp_path / "decoy-repo"
+    decoy.mkdir()
+    git(decoy, "init", "-q")
+    git(decoy, "config", "user.email", "fixture@example.invalid")
+    git(decoy, "config", "user.name", "fixture")
+    (decoy / "DECOY-REDIRECT.md").write_text(
+        "decoy hit FORBIDDEN-TOKEN\n", encoding="utf-8"
+    )
+    git(decoy, "add", "DECOY-REDIRECT.md")
+    git(decoy, "commit", "-q", "-m", "decoy")
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+    # The shared sweep fixture pre-sets GIT_CONFIG_NOSYSTEM=1 in the caller
+    # environment; remove it so the scanner child's own scrub export is the
+    # only source and the pin cannot pass on fixture leakage (the selftest's
+    # recorded enumeration child environment is the direct observation).
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    report_rows = [
+        w
+        for w in result.warnings
+        if w.startswith(lib.PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+    ]
+    assert report_rows == [HYGIENE_STUB_REPORT_ROW]
+    assert not any("DECOY" in w for w in result.warnings)
+
+
+def test_hygiene_fail_finding_survives_report_row_flood(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Twelve PUBLIC_HYGIENE_REPORT rows following
+    the FAIL block cannot evict the real FAIL row from the finding message
+    (r3 F2): the tail filter drops report-prefix rows before the last-10
+    cut, while the report rows themselves still ride the warnings channel
+    verbatim and never leak into the finding text."""
+    root = mktemp_repo("hygiene-fail-buried")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "report-fail-buried")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "public-hygiene scan failed" in result.message
+    assert "FAIL: stub-hit" in result.message
+    assert "PUBLIC_HYGIENE_REPORT" not in result.message
+    report_rows = [
+        w
+        for w in result.warnings
+        if w.startswith(lib.PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+    ]
+    assert len(report_rows) == 12
+
+
+def test_hygiene_real_scanner_decoy_repo_root_env_cannot_redirect_scan(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] The gate pins PUBLIC_HYGIENE_REPO_ROOT to its
+    own repo root in the scan child's environment (r3 F3): a decoy value in
+    the caller environment cannot point the real scanner at a foreign
+    repository. The decoy repo carries both an old-root hit (which would
+    fail the gate if the scan were redirected) and a report-scope hit whose
+    record must never surface; the fixture repo's tracked report-scope hit
+    is the record that does."""
+    root = mktemp_repo("hygiene-decoy-repo-root")
+    write_facts(root)
+    real_scanner = tmp_path / "real-scanner-copy.sh"
+    real_scanner.write_text(
+        (SCRIPTS_DIR / "scan-public-hygiene.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PUBLIC_HYGIENE_SCAN_SCRIPT", str(real_scanner))
+    # The scanner child resolves its deny patterns from the default home
+    # path; the sweep fixture redirected HOME, so write the file there.
+    patterns = Path(os.environ["HOME"]) / ".ai-playbook" / "public-hygiene.patterns"
+    patterns.parent.mkdir(parents=True, exist_ok=True)
+    patterns.write_text("FORBIDDEN-TOKEN\n", encoding="utf-8")
+    docs_dir = root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    # Content avoids the gate's own credential/public-artifact patterns so
+    # only the child scan's report record is under test.
+    (docs_dir / "report-only-hit.md").write_text(
+        "hit-marker FORBIDDEN" + "-TOKEN\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", "docs/report-only-hit.md")
+    decoy = tmp_path / "decoy-root-repo"
+    decoy.mkdir()
+    git(decoy, "init", "-q")
+    git(decoy, "config", "user.email", "fixture@example.invalid")
+    git(decoy, "config", "user.name", "fixture")
+    (decoy / "agents" / "skills" / "decoy").mkdir(parents=True)
+    (decoy / "agents" / "skills" / "decoy" / "SKILL.md").write_text(
+        "decoy old-root hit /Users/leaked/DECOY-ROOT\n", encoding="utf-8"
+    )
+    (decoy / "docs").mkdir()
+    (decoy / "docs" / "DECOY-ROOT-HIT.md").write_text(
+        "decoy report hit FORBIDDEN" + "-TOKEN\n", encoding="utf-8"
+    )
+    git(decoy, "add", "-A")
+    git(decoy, "commit", "-q", "-m", "decoy")
+    monkeypatch.setenv("PUBLIC_HYGIENE_REPO_ROOT", str(decoy))
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    report_rows = [
+        w
+        for w in result.warnings
+        if w.startswith(lib.PUBLIC_HYGIENE_REPORT_LINE_PREFIX)
+    ]
+    assert report_rows == [HYGIENE_STUB_REPORT_ROW]
+    assert not any("DECOY-ROOT" in w for w in result.warnings)
+    assert "DECOY-ROOT" not in result.message
 
 
 # --------------------------------------------------------------------------- #
@@ -2192,11 +2530,14 @@ def test_docs_tmp_sweep_live_session_no_date_slug_kept(tmp_path, sweep_env):
     manifest = write_manifest(
         root, "plan-declared-missing-input-fallback", fresh_iso()
     )
+    worker_log = manifest.parent / "task-1-implement.log.md"
+    worker_log.write_text("active worker evidence\n", encoding="utf-8")
 
     result = _sweep_sweep(root)
 
     assert result.rc == 0
     assert manifest.parent.exists(), "no-date live session must be kept"
+    assert worker_log.read_text(encoding="utf-8") == "active worker evidence\n"
     assert "active: plan still pending" in result.message
 
 
@@ -2264,6 +2605,274 @@ def test_docs_tmp_sweep_proof_family_dir_retained_unchanged(tmp_path, sweep_env)
     assert result.rc == 0
     assert session.parent.exists()
     assert "retained: closeout proof family" in result.message
+
+
+def test_docs_tmp_sweep_archived_proof_sibling_retained_per_directory(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] An archived dated plan's proof-free canonical
+    log directory is removable while a separate dated sibling containing an
+    old closeout baseline remains retained; proof retention is per-directory
+    and independent of age."""
+    root = make_repo(tmp_path, "proof-sibling-per-directory", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    completed = root / "docs" / "history" / "plans" / "completed"
+    completed.mkdir(parents=True)
+    dated_slug = "2026-10-18-archived-proof-sibling"
+    (completed / f"{dated_slug}.md").write_text("archived\n", encoding="utf-8")
+
+    execute_dir = root / "docs" / "tmp" / "execute-plan"
+    canonical = execute_dir / "archived-proof-sibling"
+    canonical.mkdir(parents=True)
+    canonical_log = canonical / "task-1-implement.log.md"
+    canonical_log.write_text("archived worker evidence\n", encoding="utf-8")
+
+    dated_sibling = execute_dir / dated_slug
+    dated_sibling.mkdir(parents=True)
+    baseline = dated_sibling / "closeout-baseline.json"
+    baseline.write_text("{}\n", encoding="utf-8")
+    old_epoch = now - 72 * 3600
+    os.utime(baseline, (old_epoch, old_epoch))
+
+    result = _sweep_sweep(root)
+
+    assert result.rc == 0
+    assert not canonical.exists(), "proof-free canonical directory is archived"
+    assert not canonical_log.exists()
+    assert dated_sibling.exists(), "proof-bearing dated sibling is retained"
+    assert baseline.read_text(encoding="utf-8") == "{}\n"
+    assert "plan archived" in result.message
+    assert "retained: closeout proof family: closeout-baseline.json" in result.message
+
+
+@pytest.mark.parametrize("unsafe_root", ["docs", "..", "/"])
+def test_docs_tmp_sweep_rejects_broad_tmp_root_without_mutation(
+    tmp_path, sweep_env, unsafe_root
+):
+    root = make_repo(tmp_path, "unsafe-tmp-root", gitignore_docs=True)
+    facts = write_facts(root)
+    facts.write_text(
+        facts.read_text(encoding="utf-8").replace(
+            'tmp_dir = "docs/tmp/"', f'tmp_dir = "{unsafe_root}"'
+        ),
+        encoding="utf-8",
+    )
+    victim = root / "docs" / "execute-plan" / "archived"
+    victim.mkdir(parents=True)
+    sentinel = victim / "worker.log"
+    sentinel.write_text("keep me\n", encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert sentinel.read_text(encoding="utf-8") == "keep me\n"
+    assert "unsafe tmp root" in result.message
+    assert "cleanup skipped" in result.message
+
+
+def test_docs_tmp_sweep_rejects_external_tmp_root_without_mutation(
+    tmp_path, sweep_env
+):
+    root = make_repo(tmp_path, "external-tmp-root", gitignore_docs=True)
+    external = tmp_path / "external-root" / "tmp"
+    victim = external / "execute-plan" / "archived"
+    victim.mkdir(parents=True)
+    sentinel = victim / "worker.log"
+    sentinel.write_text("external bytes\n", encoding="utf-8")
+    facts = write_facts(root)
+    facts.write_text(
+        facts.read_text(encoding="utf-8").replace(
+            'tmp_dir = "docs/tmp/"', f'tmp_dir = "{external}/"'
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert sentinel.read_text(encoding="utf-8") == "external bytes\n"
+    assert "unsafe tmp root" in result.message
+
+
+def test_docs_tmp_sweep_rejects_symlinked_tmp_root_without_mutation(
+    tmp_path, sweep_env
+):
+    root = make_repo(tmp_path, "symlinked-tmp-root", gitignore_docs=True)
+    external = tmp_path / "symlink-target" / "tmp"
+    victim = external / "execute-plan" / "archived"
+    victim.mkdir(parents=True)
+    sentinel = victim / "worker.log"
+    sentinel.write_text("symlink target bytes\n", encoding="utf-8")
+    link = root / "docs" / "tmp-link"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external.parent, target_is_directory=True)
+    facts = write_facts(root)
+    facts.write_text(
+        facts.read_text(encoding="utf-8").replace(
+            'tmp_dir = "docs/tmp/"', 'tmp_dir = "docs/tmp-link/tmp/"'
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert sentinel.read_text(encoding="utf-8") == "symlink target bytes\n"
+    assert "unsafe tmp root" in result.message
+
+
+@pytest.mark.parametrize("replace_intermediate", [True, False])
+def test_docs_tmp_sweep_stops_when_pinned_tmp_root_is_replaced(
+    tmp_path, sweep_env, monkeypatch, replace_intermediate
+):
+    root = make_repo(tmp_path, "replaced-tmp-root", gitignore_docs=True)
+    write_facts(root)
+    old_root = root / "docs" / "tmp"
+    victim = old_root / "execute-plan" / "archived"
+    victim.mkdir(parents=True)
+    sentinel = victim / "worker.log"
+    sentinel.write_text("original bytes\n", encoding="utf-8")
+    ctx = ctx_for(root)
+    real_open = lib._open_pinned_tmp_root
+    opened = False
+    moved_root = root / "docs" / "tmp-original"
+    moved_docs = root / "docs-original"
+
+    def replace_after_open(context):
+        nonlocal opened
+        pinned, reason = real_open(context)
+        if pinned is not None and not opened:
+            opened = True
+            if replace_intermediate:
+                (root / "docs").rename(moved_docs)
+                (root / "docs").symlink_to(moved_docs, target_is_directory=True)
+            else:
+                old_root.rename(moved_root)
+                old_root.mkdir()
+                replacement = old_root / "execute-plan" / "replacement"
+                replacement.mkdir(parents=True)
+                (replacement / "worker.log").write_text(
+                    "replacement bytes\n", encoding="utf-8"
+                )
+        return pinned, reason
+
+    monkeypatch.setattr(lib, "_open_pinned_tmp_root", replace_after_open)
+
+    result = run_gate("docs-tmp-sweep", ctx)
+
+    assert result.rc == 0
+    assert "cleanup skipped" in result.message
+    original_location = moved_docs / "tmp" if replace_intermediate else moved_root
+    assert (original_location / "execute-plan" / "archived" / "worker.log").read_text(
+        encoding="utf-8"
+    ) == "original bytes\n"
+    if not replace_intermediate:
+        replacement_sentinel = old_root / "execute-plan" / "replacement" / "worker.log"
+        assert replacement_sentinel.read_text(encoding="utf-8") == "replacement bytes\n"
+
+
+def test_docs_tmp_sweep_helpers_stay_rooted_to_pinned_fd_after_replacement(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "pinned-tmp-helper-race", gitignore_docs=True)
+    write_facts(root)
+    old_root = root / "docs" / "tmp"
+    archived = old_root / "execute-plan" / "archived"
+    archived.mkdir(parents=True)
+    (archived / "worker.log").write_text("original bytes\n", encoding="utf-8")
+    moved_root = root / "docs" / "tmp-original"
+    replacement_sentinel = old_root / "execute-plan" / "replacement" / "worker.log"
+    ctx = ctx_for(root)
+    real_check = lib._pinned_tmp_root_is_current
+    checks = 0
+
+    def replace_after_execute_root_check(context, pinned):
+        nonlocal checks
+        current = real_check(context, pinned)
+        checks += 1
+        # The first check is before dispatch; replace immediately after the
+        # execute-plan helper's own pre-call check has returned true.
+        if checks == 2 and current:
+            old_root.rename(moved_root)
+            old_root.mkdir()
+            replacement_sentinel.parent.mkdir(parents=True)
+            replacement_sentinel.write_text("replacement bytes\n", encoding="utf-8")
+        return current
+
+    monkeypatch.setattr(
+        lib, "_pinned_tmp_root_is_current", replace_after_execute_root_check
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx)
+
+    assert result.rc == 0
+    assert "pinned root identity changed; cleanup skipped" in result.message
+    assert replacement_sentinel.read_text(encoding="utf-8") == "replacement bytes\n"
+
+
+def test_docs_tmp_sweep_reads_marker_from_pinned_directory_after_root_swap(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "pinned-marker-read", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    stale_marker = make_marker(root, now - 7200, os.getpid())
+    stale_content = stale_marker.read_text(encoding="utf-8")
+    tmp_root = root / "docs" / "tmp"
+    moved_root = root / "docs" / "tmp-original"
+    replacement_marker = (
+        tmp_root / "done-session" / "run-start-replacement"
+    )
+    real_parse = lib._parse_marker_content
+    swapped = False
+
+    def swap_after_content_read(path, content, repo_root):
+        nonlocal swapped
+        parsed = real_parse(path, content, repo_root)
+        if path.name == stale_marker.name and not swapped:
+            swapped = True
+            tmp_root.rename(moved_root)
+            tmp_root.mkdir()
+            replacement_marker.parent.mkdir(parents=True)
+            replacement_marker.write_text("foreign replacement bytes\n", encoding="utf-8")
+        return parsed
+
+    monkeypatch.setattr(lib, "_parse_marker_content", swap_after_content_read)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert swapped
+    assert "pinned root identity changed; cleanup skipped" in result.message
+    assert (moved_root / "done-session" / stale_marker.name).read_text(
+        encoding="utf-8"
+    ) == stale_content
+    assert replacement_marker.read_text(encoding="utf-8") == "foreign replacement bytes\n"
+
+
+def test_docs_tmp_sweep_closes_pinned_root_fd_when_helper_raises(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "pinned-tmp-fd-close", gitignore_docs=True)
+    write_facts(root)
+    (root / "docs" / "tmp").mkdir(parents=True)
+    captured = []
+
+    def raise_after_pin(ctx, pinned):
+        captured.append(pinned.fd)
+        raise RuntimeError("injected helper failure")
+
+    monkeypatch.setattr(lib, "_gate_docs_tmp_sweep_pinned", raise_after_pin)
+    with pytest.raises(RuntimeError, match="injected helper failure"):
+        run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert len(captured) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
 
 
 def test_docs_tmp_sweep_slug_collision_keep_is_conservative(tmp_path, sweep_env):
@@ -2384,6 +2993,383 @@ def test_docs_tmp_sweep_synced_one_off_session_window_guard(tmp_path, sweep_env)
     )
     assert "fresh-synced-2026-09-19.py" in result.message
     assert "session window" in result.message
+
+
+def test_docs_tmp_sweep_preserves_candidate_replaced_before_quarantine(
+    tmp_path, sweep_env, monkeypatch
+):
+    """A replacement made after stale eligibility is checked survives the
+    quarantine identity check, either at its source name or in quarantine."""
+    root = make_repo(tmp_path, "candidate-replaced", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    rel = "docs/tmp/stale-synced-2026-09-19.py"
+    _add_docs_branch_files(root, {rel: "original bytes\n"})
+    stale = root / rel
+    stale.write_text("original bytes\n", encoding="utf-8")
+    old_epoch = now - 7200
+    os.utime(stale, (old_epoch, old_epoch))
+
+    original_move = lib._rename_noreplace_at
+    original_displace = os.rename
+    displaced = tmp_path / "displaced-original.py"
+    replaced = False
+
+    def replace_at_quarantine_move(source_fd, source_name, target_fd, target_name):
+        nonlocal replaced
+        if source_name == stale.name and target_name == "candidate" and not replaced:
+            replaced = True
+            original_displace(stale, displaced)
+            stale.write_text("replacement bytes\n", encoding="utf-8")
+        return original_move(source_fd, source_name, target_fd, target_name)
+
+    monkeypatch.setattr(lib, "_rename_noreplace_at", replace_at_quarantine_move)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert replaced
+    assert stale.exists() or "quarantine" in result.message.lower()
+    if stale.exists():
+        assert stale.read_text(encoding="utf-8") == "replacement bytes\n"
+    else:
+        assert "replacement bytes" in " ".join(
+            p.read_text(encoding="utf-8") for p in tmp_path.rglob("candidate")
+        )
+    assert "identity changed" in result.message or "replacement" in result.message
+
+
+def test_docs_tmp_sweep_preserves_candidate_replaced_before_discard(
+    tmp_path, sweep_env, monkeypatch
+):
+    """The final discard check is bound to the identity moved into quarantine."""
+    root = make_repo(tmp_path, "candidate-replaced-before-discard", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    rel = "docs/tmp/stale-synced-2026-09-19.py"
+    _add_docs_branch_files(root, {rel: "original bytes\n"})
+    stale = root / rel
+    stale.write_text("original bytes\n", encoding="utf-8")
+    old_epoch = now - 7200
+    os.utime(stale, (old_epoch, old_epoch))
+
+    real_discard = lib._discard_quarantined_candidate
+    replaced = False
+
+    def replace_after_revalidation(root_fd, quarantined):
+        nonlocal replaced
+        if not replaced:
+            try:
+                fd = os.open("candidate", os.O_RDONLY, dir_fd=quarantined.directory_fd)
+                try:
+                    candidate_text = os.read(fd, 4096).decode("utf-8")
+                finally:
+                    os.close(fd)
+            except OSError:
+                candidate_text = ""
+            if candidate_text == "original bytes\n":
+                replaced = True
+                os.unlink("candidate", dir_fd=quarantined.directory_fd)
+                fd = os.open(
+                    "candidate",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=quarantined.directory_fd,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write("replacement bytes\n")
+        return real_discard(root_fd, quarantined)
+
+    monkeypatch.setattr(
+        lib, "_discard_quarantined_candidate", replace_after_revalidation
+    )
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert replaced
+    if stale.exists():
+        assert stale.read_text(encoding="utf-8") == "replacement bytes\n"
+    else:
+        quarantined = list(root.glob("docs/tmp/.tmp-sweep-quarantine-*/candidate"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text(encoding="utf-8") == "replacement bytes\n"
+    assert "removal failed; preserved" in result.message or "quarantine-" in result.message
+
+
+def test_docs_tmp_sweep_preserves_quarantine_destination_collision(
+    tmp_path, sweep_env, monkeypatch
+):
+    """A pre-existing quarantine entry is never overwritten by the move."""
+    root = make_repo(tmp_path, "quarantine-collision", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    rel = "docs/tmp/stale-synced-2026-09-19.py"
+    _add_docs_branch_files(root, {rel: "eligible source bytes\n"})
+    stale = root / rel
+    stale.write_text("eligible source bytes\n", encoding="utf-8")
+    old_epoch = now - 7200
+    os.utime(stale, (old_epoch, old_epoch))
+
+    real_rename = lib._rename_noreplace_at
+    injected = False
+
+    def occupy_quarantine_destination(source_fd, source_name, target_fd, target_name):
+        nonlocal injected
+        if source_name == stale.name and target_name == "candidate" and not injected:
+            injected = True
+            fd = os.open(
+                target_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=target_fd,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write("pre-existing quarantine bytes\n")
+        return real_rename(source_fd, source_name, target_fd, target_name)
+
+    monkeypatch.setattr(lib, "_rename_noreplace_at", occupy_quarantine_destination)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert injected
+    assert stale.read_text(encoding="utf-8") == "eligible source bytes\n"
+    assert "quarantine destination occupied" in result.message
+    collision = list(root.glob("docs/tmp/.tmp-sweep-quarantine-*/candidate"))
+    assert len(collision) == 1
+    assert collision[0].read_text(encoding="utf-8") == "pre-existing quarantine bytes\n"
+
+
+def test_docs_tmp_sweep_rechecks_same_inode_mtime_after_quarantine(
+    tmp_path, sweep_env, monkeypatch
+):
+    """A same-inode write before the post-quarantine snapshot retains content."""
+    root = make_repo(tmp_path, "candidate-updated", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    rel = "docs/tmp/stale-synced-2026-09-19.py"
+    _add_docs_branch_files(root, {rel: "old bytes\n"})
+    stale = root / rel
+    stale.write_text("old bytes\n", encoding="utf-8")
+    os.utime(stale, (now - 7200, now - 7200))
+
+    real_quarantine = lib._quarantine_candidate
+    updated = False
+
+    def update_after_quarantine(root_fd, source_fd, name, expected):
+        nonlocal updated
+        candidate, reason = real_quarantine(root_fd, source_fd, name, expected)
+        if candidate is not None and reason is None and name == stale.name and not updated:
+            updated = True
+            fd = os.open("candidate", os.O_WRONLY | os.O_TRUNC, dir_fd=candidate.directory_fd)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write("updated same inode\n")
+            os.utime(
+                "candidate", (now, now), dir_fd=candidate.directory_fd,
+                follow_symlinks=False,
+            )
+        return candidate, reason
+
+    monkeypatch.setattr(lib, "_quarantine_candidate", update_after_quarantine)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert updated
+    assert stale.read_text(encoding="utf-8") == "updated same inode\n"
+    assert "same-inode update inside the session window" in result.message
+
+
+def test_docs_tmp_sweep_preserves_marker_replaced_after_window_check(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "marker-replaced", gitignore_docs=True)
+    write_facts(root)
+    now = 1_800_000_000
+    monkeypatch.setattr(lib.time, "time", lambda: now)
+    _sweep_markers(root)
+    stale = make_marker(root, now - 7200, os.getpid())
+    protected_content = f"{int(now)} {root} {os.getpid()}\n"
+    displaced = tmp_path / "displaced-marker"
+    original_quarantine = lib._quarantine_candidate
+    replaced = False
+
+    def replace_before_marker_quarantine(root_fd, source_fd, name, expected):
+        nonlocal replaced
+        if name == stale.name and not replaced:
+            replaced = True
+            original = os.rename
+            original(stale, displaced)
+            stale.write_text(protected_content, encoding="utf-8")
+        return original_quarantine(root_fd, source_fd, name, expected)
+
+    monkeypatch.setattr(lib, "_quarantine_candidate", replace_before_marker_quarantine)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert replaced
+    assert stale.read_text(encoding="utf-8") == protected_content
+    assert "candidate identity changed" in result.message or "marker changed" in result.message
+
+
+def test_docs_tmp_sweep_rechecks_pending_owner_after_session_quarantine(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "pending-owner-after-quarantine", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    completed = root / "docs/history/plans/completed"
+    completed.mkdir(parents=True)
+    plan_name = "2026-09-20-pending-race.md"
+    (completed / plan_name).write_text("archived\n", encoding="utf-8")
+    session = root / "docs/tmp/execute-plan/2026-09-20-pending-race"
+    session.mkdir(parents=True)
+    log = session / "task-1-implement.log.md"
+    log.write_text("worker evidence\n", encoding="utf-8")
+
+    real_quarantine = lib._quarantine_candidate
+    plan_created = False
+
+    def create_pending_plan_after_move(root_fd, source_fd, name, expected):
+        nonlocal plan_created
+        candidate, reason = real_quarantine(root_fd, source_fd, name, expected)
+        if candidate is not None and reason is None and name == session.name and not plan_created:
+            plan_created = True
+            pending = root / "docs/history/plans" / plan_name
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            pending.write_text("pending\n", encoding="utf-8")
+        return candidate, reason
+
+    monkeypatch.setattr(lib, "_quarantine_candidate", create_pending_plan_after_move)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert plan_created
+    assert log.read_text(encoding="utf-8") == "worker evidence\n"
+    assert "active: plan still pending" in result.message
+
+
+def test_docs_tmp_sweep_rechecks_closeout_proof_after_session_quarantine(
+    tmp_path, sweep_env, monkeypatch
+):
+    root = make_repo(tmp_path, "proof-after-quarantine", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    completed = root / "docs/history/plans/completed"
+    completed.mkdir(parents=True)
+    plan_name = "2026-09-20-proof-race.md"
+    (completed / plan_name).write_text("archived\n", encoding="utf-8")
+    session = root / "docs/tmp/execute-plan/2026-09-20-proof-race"
+    session.mkdir(parents=True)
+    (session / "task-1-implement.log.md").write_text("worker evidence\n", encoding="utf-8")
+
+    real_discard = lib._discard_quarantined_candidate
+    proof_created = False
+
+    def create_proof_before_discard(root_fd, quarantined, **kwargs):
+        nonlocal proof_created
+        if not proof_created:
+            try:
+                candidate_fd = os.open(
+                    "candidate", os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=quarantined.directory_fd,
+                )
+            except OSError:
+                candidate_fd = None
+            if candidate_fd is not None:
+                try:
+                    has_log = lib._is_regular_file_at(
+                        candidate_fd, "task-1-implement.log.md"
+                    )
+                finally:
+                    os.close(candidate_fd)
+            else:
+                has_log = False
+            if has_log:
+                proof_created = True
+                proof_fd = os.open(
+                    "candidate", os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=quarantined.directory_fd,
+                )
+                try:
+                    proof = os.open(
+                        "closeout-baseline.json",
+                        os.O_CREAT | os.O_WRONLY,
+                        0o600,
+                        dir_fd=proof_fd,
+                    )
+                    os.write(proof, b"{}\n")
+                    os.close(proof)
+                finally:
+                    os.close(proof_fd)
+        return real_discard(root_fd, quarantined, **kwargs)
+
+    monkeypatch.setattr(lib, "_discard_quarantined_candidate", create_proof_before_discard)
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert proof_created
+    assert (session / "closeout-baseline.json").read_text(encoding="utf-8") == "{}\n"
+    assert "candidate eligibility changed before discard" in result.message
+
+
+def test_docs_tmp_sweep_keeps_unknown_candidate_types_and_symlinks(
+    tmp_path, sweep_env
+):
+    root = make_repo(tmp_path, "unknown-candidates", gitignore_docs=True)
+    write_facts(root)
+    tmp_dir = root / "docs/tmp"
+    tmp_dir.mkdir(parents=True)
+    unknown = tmp_dir / "mystery.bin"
+    unknown.write_bytes(b"unknown candidate bytes\n")
+    external = tmp_path / "external-sentinel"
+    external.write_bytes(b"outside bytes\n")
+    link = tmp_dir / "notes-2026-09-20.py"
+    link.symlink_to(external)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    assert unknown.read_bytes() == b"unknown candidate bytes\n"
+    assert link.is_symlink()
+    assert external.read_bytes() == b"outside bytes\n"
+    assert "unclear ownership or active work" in result.message
+
+
+def test_docs_tmp_sweep_preserves_protected_scratch_trees(
+    tmp_path, sweep_env
+):
+    root = make_repo(tmp_path, "protected-scratch-trees", gitignore_docs=True)
+    write_facts(root)
+    _sweep_markers(root)
+    tmp_dir = root / "docs/tmp"
+    protected = {
+        "review-loop-r1": "review-loop evidence\n",
+        "code-review": "code-review evidence\n",
+        "handoff": "handoff evidence\n",
+    }
+    for name, content in protected.items():
+        tree = tmp_dir / name
+        tree.mkdir(parents=True)
+        (tree / "stale-synced-2026-09-19.py").write_text(
+            content, encoding="utf-8"
+        )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0
+    for name, content in protected.items():
+        sentinel = tmp_dir / name / "stale-synced-2026-09-19.py"
+        assert sentinel.read_text(encoding="utf-8") == content
+        assert (
+            f"docs/tmp/{name} (protected scratch; owning skill cleans up)"
+            in result.message
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -2565,6 +3551,48 @@ def _seed_run_manifest(
     return lib.write_run_manifest(
         manifest, root / "docs" / "tmp" / "done-session"
     )
+
+
+def _hold_done_lock(
+    monkeypatch,
+    tmp_path: Path,
+    root: Path,
+    *,
+    token: str = "fixture-done-lock-token",
+    recorded_token: str | None = None,
+    recorded_root: str | None = None,
+    meta_absent: bool = False,
+) -> Path:
+    """Hold a fixture done lock for ``root`` the way a wrapper-acquired hold
+    presents to the writer: a lock directory whose ``meta.env`` records the
+    lock token and the repo root (scripts/done-lock.sh's write shape),
+    exported through DONE_LOCK_DIR/DONE_LOCK_TOKEN. ``recorded_token`` /
+    ``recorded_root`` corrupt one recorded field (the mismatch refusals);
+    ``meta_absent`` leaves the directory meta-less (the unknown-holder
+    state). The directory sits beside the repo under tmp_path, never inside
+    it, so the writer's porcelain snapshot stays clean."""
+    lock_dir = tmp_path / "done-lock-hold"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    meta = lock_dir / "meta.env"
+    if meta_absent:
+        # Arms share the directory; the meta-less arm must not inherit an
+        # earlier arm's meta.env.
+        meta.unlink(missing_ok=True)
+    else:
+        meta.write_text(
+            "lock_token="
+            + (token if recorded_token is None else recorded_token)
+            + "\n"
+            "repo_root="
+            + (str(root.resolve()) if recorded_root is None else recorded_root)
+            + "\n"
+            "label=fixture\n"
+            f"holder_pid={os.getpid()}\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("DONE_LOCK_DIR", str(lock_dir))
+    monkeypatch.setenv("DONE_LOCK_TOKEN", token)
+    return lock_dir
 
 
 def test_write_manifest_creates_atomic_v1_record(
@@ -4334,6 +5362,691 @@ def test_docs_tmp_sweep_prunes_gate_reports_outside_session_window(
     assert current.exists(), "current-run file immune"
 
 
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-29-done-gate-report-retention.md, Task 2.
+# The done-session sweep retains a gate report while a live registered-
+# worktree closeout manifest still cites it as a verified migrated/renamed
+# destination (lookup and unlink under the shared worktree-closeout-migrate
+# merge lock); unreferenced aged reports keep the existing
+# strictly-before-anchor pruning; unreadable/unsupported manifests warn and
+# stay age-prunable.
+# --------------------------------------------------------------------------- #
+RETENTION_ANCHOR_OFFSET_S = 3600
+
+
+def _retention_markers(root: Path) -> tuple[int, int]:
+    """Seed the previous-run anchor and current-run markers; returns
+    (now, anchor_epoch) as whole seconds so mtime boundaries are exact."""
+    now = int(time.time())
+    make_marker(root, now - RETENTION_ANCHOR_OFFSET_S, os.getpid())
+    make_marker(root, now, os.getpid())
+    return now, now - RETENTION_ANCHOR_OFFSET_S
+
+
+def _aged_gate_report(reports_dir: Path, name: str, anchor_epoch: int) -> Path:
+    """Write a gate report aged a full hour before the anchor."""
+    path = reports_dir / name
+    path.write_text("rows\n", encoding="utf-8")
+    stale = anchor_epoch - 3600
+    os.utime(path, (stale, stale))
+    return path
+
+
+def _add_linked_worktree(root: Path, path: Path, branch: str) -> Path:
+    proc = git(root, "worktree", "add", str(path), "-b", branch)
+    assert proc.returncode == 0, proc.stderr
+    return path
+
+
+def _write_migration_manifest(
+    path: Path,
+    branch: str,
+    source: str,
+    destinations: list[str],
+    section: str = "migrated",
+) -> Path:
+    """Write a migration-shaped closeout manifest citing ``destinations`` as
+    verified rows in ``section`` (``migrated`` or ``renamed``), with a branch
+    record whose ``source`` is operator-chosen (the consumer never compares it
+    to the worktree path)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "branch": [{"branch": branch, "source": source}],
+        section: [
+            {
+                "source": "docs/tmp/done-session/gate-reports/report.txt",
+                "destination": destination,
+                "verified": True,
+                "sha256": "0" * 64,
+            }
+            for destination in destinations
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def test_docs_tmp_sweep_retains_report_cited_by_plan_session_manifest_under_primary_root(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a live verified ``migrated`` destination
+    in a plan-session manifest under the primary root, expects the cited aged
+    report retained while an equally aged unreferenced sibling is still
+    pruned, with no warnings (plan Task 2: retention is selective, never a
+    blanket hold)."""
+    root = mktemp_repo("retain-plan-session")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-cited-review-staging-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    loose = _aged_gate_report(
+        reports_dir, "run-loose-docs-tmp-sweep-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    _add_linked_worktree(root, tmp_path / "retain-plan-session-wt", "wt-retain")
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-alpha"
+        / "closeout-migration.json",
+        branch="wt-retain",
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+    assert manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "cited verified destination retained"
+    assert not loose.exists(), "unreferenced aged report still pruned"
+    assert (
+        f"{cited.resolve()} (retained: cited by a live registered-worktree "
+        "closeout manifest)" in result.message
+    ), result.message
+    assert result.warnings == [], result.warnings
+
+
+def test_docs_tmp_sweep_retains_report_cited_by_run_id_manifest_under_run_owner_done_session(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a live verified ``renamed`` destination
+    in the run-ID ``worktree-migrate-baseline-<id>-manifest.json`` under the
+    run-owner ``done-session``, expects the cited aged report retained (plan
+    Task 2: the zero/multi-plan producer's skeleton contributes references)."""
+    root = mktemp_repo("retain-run-id")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-cited-renamed-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    _add_linked_worktree(root, tmp_path / "retain-run-id-wt", "wt-run-id")
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "done-session"
+        / "worktree-migrate-baseline-20261029T000000Z-fixture-manifest.json",
+        branch="wt-run-id",
+        source=str(root / "run-owner-source"),
+        destinations=[str(cited.resolve())],
+        section="renamed",
+    )
+    assert manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "renamed verified destination retained"
+    assert result.warnings == [], result.warnings
+
+
+def test_docs_tmp_sweep_linked_worktree_discovers_primary_root_manifests(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a sweep running in a linked worktree,
+    expects discovery of plan-session manifests under the resolved primary
+    temporary root: the linked sweep retains the linked checkout's aged report
+    the primary-root manifest cites (plan Task 2: the two temporary roots
+    differ in a linked worktree and both contribute)."""
+    root = mktemp_repo("retain-primary-root")
+    _retention_markers(root)
+    linked = _add_linked_worktree(root, tmp_path / "retain-linked-wt", "wt-linked")
+    write_facts(linked)
+    _retention_markers(linked)
+    linked_reports = linked / "docs" / "tmp" / "done-session" / "gate-reports"
+    linked_reports.mkdir(parents=True)
+    cited = _aged_gate_report(
+        linked_reports,
+        "run-linked-cited-full.txt",
+        int(time.time()) - RETENTION_ANCHOR_OFFSET_S,
+    )
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-linked"
+        / "closeout-migration.json",
+        branch="wt-linked",
+        source=str(root / "primary-side-source"),
+        destinations=[str(cited.resolve())],
+    )
+    assert manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(linked))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "primary-root manifest retains the linked report"
+    assert result.warnings == [], result.warnings
+
+
+def test_docs_tmp_sweep_considers_explicit_migration_json_under_supported_roots(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given explicit migration-shaped JSON under
+    either supported temporary root (an operator-named file under
+    ``done-session/`` and one under an ``execute-plan/<slug>/`` session
+    directory), expects their verified destinations considered: both cited
+    aged reports retained. A non-migration-shaped JSON beside them contributes
+    no references (the unrelated aged report is pruned)."""
+    root = mktemp_repo("retain-explicit")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited_a = _aged_gate_report(
+        reports_dir, "run-explicit-a-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    cited_b = _aged_gate_report(
+        reports_dir, "run-explicit-b-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    unrelated = _aged_gate_report(
+        reports_dir, "run-unrelated-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    _add_linked_worktree(root, tmp_path / "retain-explicit-wt", "wt-explicit")
+    assert _write_migration_manifest(
+        root / "docs" / "tmp" / "done-session" / "hand-built-migration-shape.json",
+        branch="wt-explicit",
+        source=str(root / "explicit-source-a"),
+        destinations=[str(cited_a.resolve())],
+    ).is_file()
+    assert _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-beta"
+        / "custom-explicit-manifest.json",
+        branch="wt-explicit",
+        source=str(root / "explicit-source-b"),
+        destinations=[str(cited_b.resolve())],
+    ).is_file()
+    # A supported-root JSON that is NOT migration-shaped (the baseline proof
+    # family's shape): reference-less, no warning, no retention.
+    baseline = root / "docs" / "tmp" / "execute-plan" / "2026-10-29-beta" / "closeout-baseline.json"
+    baseline.parent.mkdir(parents=True, exist_ok=True)
+    baseline.write_text(json.dumps({"files": {"a.md": "digest"}}) + "\n", encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited_a.exists(), "explicit done-session JSON destination retained"
+    assert cited_b.exists(), "explicit execute-plan JSON destination retained"
+    assert not unrelated.exists(), "baseline-shape JSON contributes no references"
+
+
+def test_docs_tmp_sweep_retention_ends_after_worktree_removal(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a verified destination retained while a
+    matching registered worktree is bound to the recorded branch (its path
+    differing from the manifest ``source``), expects a later sweep to prune
+    the report after the worktree removal succeeds (plan Task 2: retention
+    outlasts the window only until worktree closeout succeeds)."""
+    root = mktemp_repo("retain-until-removal")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-until-removal-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    worktree = _add_linked_worktree(root, tmp_path / "retain-until-removal-wt", "wt-ends")
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-ends"
+        / "closeout-migration.json",
+        branch="wt-ends",
+        source=str(root / "not-the-worktree-path"),
+        destinations=[str(cited.resolve())],
+    )
+    assert manifest.is_file()
+
+    first = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert first.rc == 0, first.message
+    assert cited.exists(), "retained while the registered worktree is bound"
+
+    removal = git(root, "worktree", "remove", "--force", str(worktree))
+    assert removal.returncode == 0, removal.stderr
+
+    second = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert second.rc == 0, second.message
+    assert not cited.exists(), "age-prunable again after successful removal"
+    assert str(cited.resolve()) in second.message, second.message
+
+
+def test_docs_tmp_sweep_unreadable_or_unsupported_manifest_warns_and_prunes(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given unreadable JSON, an array-root manifest,
+    and a non-iterable ``migrated`` section, expects one warning per manifest
+    and normal age pruning of their destinations (reference-less: no
+    normalization, no new refusal class, never indefinite retention); a
+    legacy no-branch-record manifest contributes no references silently (the
+    consumer's named skip shape)."""
+    root = mktemp_repo("retain-shapes")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    names = {
+        "unreadable": "run-shape-unreadable-full.txt",
+        "array": "run-shape-array-full.txt",
+        "dest-error": "run-shape-dest-error-full.txt",
+        "legacy": "run-shape-legacy-full.txt",
+    }
+    aged = {
+        key: _aged_gate_report(
+            reports_dir, name, int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+        )
+        for key, name in names.items()
+    }
+    _add_linked_worktree(root, tmp_path / "retain-shapes-wt", "wt-shapes")
+    sessions = root / "docs" / "tmp" / "execute-plan"
+    unreadable = sessions / "2026-10-29-unreadable" / "closeout-migration.json"
+    unreadable.parent.mkdir(parents=True, exist_ok=True)
+    unreadable.write_text("{not json", encoding="utf-8")
+    array_root = sessions / "2026-10-29-array" / "closeout-migration.json"
+    array_root.parent.mkdir(parents=True, exist_ok=True)
+    array_root.write_text("[]\n", encoding="utf-8")
+    dest_error = sessions / "2026-10-29-dest-error" / "closeout-migration.json"
+    dest_error.parent.mkdir(parents=True, exist_ok=True)
+    dest_error.write_text(
+        json.dumps(
+            {
+                "branch": [{"branch": "wt-shapes", "source": "s"}],
+                "migrated": 5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    legacy = sessions / "2026-10-29-legacy" / "closeout-migration.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "migrated": [
+                    {
+                        "source": "s",
+                        "destination": str(aged["legacy"].resolve()),
+                        "verified": True,
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    for key, path in aged.items():
+        assert not path.exists(), f"{key} manifest is reference-less; aged report pruned"
+    warnings_text = "\n".join(result.warnings)
+    assert "unreadable" in warnings_text and str(unreadable) in warnings_text
+    assert "unsupported" in warnings_text and str(array_root) in warnings_text
+    assert "unsupported" in warnings_text and str(dest_error) in warnings_text
+    assert str(legacy) not in warnings_text, "legacy skip shape is not an error"
+
+
+def _release_merge_lock(lock_dir: str, token: str) -> None:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["MERGE_LOCK_DIR"] = lock_dir
+    env["MERGE_LOCK_TOKEN"] = token
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "done-lock.sh"), "merge-release"],
+        capture_output=True, text=True, env=env, timeout=120, check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_docs_tmp_sweep_lock_refusal_warns_and_skips_report_pruning(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given the worktree-closeout-migrate merge lock
+    held elsewhere, expects the sweep to warn and skip aged report pruning
+    entirely (the pass never prunes without a verified hold) while the gate
+    verdict stays green; once the lock is released, a later sweep prunes the
+    unreferenced aged report while the cited one stays retained through the
+    now-verifiable reference hold."""
+    root = mktemp_repo("retain-lock-refusal")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-lock-refusal-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    loose = _aged_gate_report(
+        reports_dir, "run-lock-loose-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    _add_linked_worktree(root, tmp_path / "retain-lock-refusal-wt", "wt-lock")
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-lock"
+        / "closeout-migration.json",
+        branch="wt-lock",
+        source=str(root / "lock-source"),
+        destinations=[str(cited.resolve())],
+    )
+    assert manifest.is_file()
+    lock_dir, token = acquire_merge_lock_for_gate(
+        root, Path(os.environ["MERGE_LOCK_ROOT"])
+    )
+    try:
+        held = run_gate("docs-tmp-sweep", ctx_for(root))
+
+        assert held.rc == 0, held.message
+        assert cited.exists(), "no pruning while the merge lock is held elsewhere"
+        assert loose.exists(), "no pruning while the merge lock is held elsewhere"
+        assert any("merge lock not acquired" in w for w in held.warnings), held.warnings
+        assert (
+            f"{cited.resolve()} (aged; prune skipped: closeout reference hold "
+            "unverified)" in held.message
+        ), held.message
+        assert (
+            f"{loose.resolve()} (aged; prune skipped: closeout reference hold "
+            "unverified)" in held.message
+        ), held.message
+    finally:
+        _release_merge_lock(lock_dir, token)
+
+    released = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert released.rc == 0, released.message
+    assert not any("merge lock not acquired" in w for w in released.warnings), (
+        released.warnings
+    )
+    assert not loose.exists(), "pruning resumes once the lock is free"
+    assert cited.exists(), "the live reference retains its report once verifiable"
+
+
+def test_docs_tmp_sweep_lock_launch_failure_warns_and_skips_pruning(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a done-lock script override that cannot
+    launch (the pinned path does not exist), expects a warning and no aged
+    report pruning: an unsuccessful launch is never a verified hold."""
+    root = mktemp_repo("retain-lock-launch")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-lock-launch-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(tmp_path / "absent-done-lock.sh"))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "launch failure never prunes"
+    assert any("merge lock not acquired" in w for w in result.warnings), result.warnings
+
+
+def test_docs_tmp_sweep_lock_missing_exports_warns_and_skips_pruning(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a done-lock script that exits 0 without
+    printing MERGE_LOCK ownership exports, expects a warning and no aged
+    report pruning: missing ownership exports are never a verified hold."""
+    root = mktemp_repo("retain-lock-exports")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-lock-exports-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    stub = tmp_path / "export-less-done-lock.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n" "echo 'merge-acquire: ok but no exports'\n" "exit 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(stub))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "missing ownership exports never prune"
+    assert any("merge lock not acquired" in w for w in result.warnings), result.warnings
+
+
+def test_docs_tmp_sweep_missing_closeout_helpers_warn_and_skip_pruning(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given the closeout helper module unavailable
+    (an older deployed driver copy beside this lib), expects a warning and no
+    aged report pruning: reference resolution degrades to skip, never to a
+    blind prune."""
+    root = mktemp_repo("retain-helpers")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-helpers-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    monkeypatch.setitem(sys.modules, "worktree_closeout_migrate", None)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "unresolvable reference rules never prune"
+    assert any("helpers unavailable" in w for w in result.warnings), result.warnings
+
+
+def test_docs_tmp_sweep_report_prune_is_strictly_before_anchor(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given aged-candidate reports with mtimes
+    before, at, and after the anchor, expects pruning only strictly before the
+    anchor (the existing window semantics are unchanged by retention)."""
+    root = mktemp_repo("retain-strict-anchor")
+    _retention_markers(root)
+    anchor_epoch = int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    before = reports_dir / "run-before-anchor-full.txt"
+    before.write_text("rows\n", encoding="utf-8")
+    os.utime(before, (anchor_epoch - 1, anchor_epoch - 1))
+    at = reports_dir / "run-at-anchor-full.txt"
+    at.write_text("rows\n", encoding="utf-8")
+    os.utime(at, (anchor_epoch, anchor_epoch))
+    after = reports_dir / "run-after-anchor-full.txt"
+    after.write_text("rows\n", encoding="utf-8")
+    os.utime(after, (anchor_epoch + 1, anchor_epoch + 1))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not before.exists(), "strictly before the anchor prunes"
+    assert at.exists(), "exactly at the anchor is immune"
+    assert after.exists(), "after the anchor is immune"
+    assert str(before.resolve()) in result.message, result.message
+
+
+def test_docs_tmp_sweep_report_unlink_lands_inside_merge_lock_span(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given an aged unreferenced report, expects its
+    unlink to land inside the merge-lock span: at the observable merge-lock
+    release the file is already gone (plan Task 2: the aged set's lookup and
+    unlink share the lock, so a publisher cannot have a fresh citation
+    deleted by a sweep that scanned before the publisher's manifest landed
+    and unlinked after the release)."""
+    root = mktemp_repo("retain-lock-span")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    aged = _aged_gate_report(
+        reports_dir,
+        "run-lock-span-full.txt",
+        int(time.time()) - RETENTION_ANCHOR_OFFSET_S,
+    )
+
+    events: list[str] = []
+
+    def fake_acquire(repo_root, label):
+        events.append("acquire")
+        return {"span-test": "token"}, []
+
+    def fake_release(repo_root, exports):
+        # The span discriminator: an unlink still pending at release means
+        # the unlinks ran outside the locked region.
+        events.append(f"release aged_still_exists={aged.exists()}")
+
+    real = importlib.import_module("worktree_closeout_migrate")
+    stub = types.ModuleType("worktree_closeout_migrate")
+    for name in (
+        "_MIGRATE_MERGE_LABEL",
+        "_facts_tmp_root",
+        "_parse_worktree_entries",
+        "_resolve_closeout_reference_state",
+    ):
+        setattr(stub, name, getattr(real, name))
+    stub._merge_lock_acquire = fake_acquire
+    stub._merge_lock_release = fake_release
+    monkeypatch.setitem(sys.modules, "worktree_closeout_migrate", stub)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not aged.exists(), "unreferenced aged report pruned"
+    assert events == ["acquire", "release aged_still_exists=False"], events
+
+
+def test_done_session_retention_unknown_ref_recovery_and_post_removal_prune(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] The worktree-mode retention loop over real CLI
+    invocations: while the registered worktree stays bound to the recorded
+    branch, a recorded ref that no longer resolves keeps the verified report
+    (gate-removal returns ``unknown-ref``); after ref restoration the retry
+    consumes the retained report (with the report deleted the same retry
+    refuses missing-destination); a sweep prunes the report only after
+    successful worktree removal."""
+    root = mktemp_repo("retain-unknown-ref")
+    _retention_markers(root)
+    anchor_epoch = int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    review_rel = ".ai-playbook/reviews/2026-10-29-keep-r1.md"
+    (root / review_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / review_rel).write_text("r1\n", encoding="utf-8")
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(reports_dir, "run-unknown-ref-full.txt", anchor_epoch)
+    plan_rel = "docs/history/plans/2026-10-29-keep.md"
+    plan = root / plan_rel
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(
+        "# Plan\n\nPlan review record: " + review_rel + "\n", encoding="utf-8"
+    )
+    worktree = _add_linked_worktree(
+        root, tmp_path / "retain-unknown-ref-wt", "wt-unknown-ref"
+    )
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-10-29-keep"
+        / "closeout-migration.json",
+        branch="wt-unknown-ref",
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+
+    def gate_removal() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "worktree_closeout_migrate.py"),
+                "gate-removal",
+                "--plan",
+                str(plan),
+                "--target",
+                str(root),
+                "--worktree",
+                str(worktree),
+                "--migration-manifest",
+                str(manifest),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(root),
+            timeout=120,
+            check=False,
+        )
+
+    # Retention while the registration is live.
+    first = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert first.rc == 0, first.message
+    assert cited.exists(), "registered worktree retains the cited report"
+
+    # The recorded ref stops resolving: unknown-ref recovery retains.
+    dropped = git(root, "update-ref", "-d", "refs/heads/wt-unknown-ref")
+    assert dropped.returncode == 0, dropped.stderr
+    unknown = gate_removal()
+    assert unknown.returncode == 1, unknown.stdout + unknown.stderr
+    assert "OUTCOME: fail" in unknown.stdout, unknown.stdout
+    assert "branch ref unreadable" in unknown.stdout, unknown.stdout
+    sweep_two = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert sweep_two.rc == 0, sweep_two.message
+    assert cited.exists(), "unknown-ref recovery retains the verified report"
+
+    # Retry consumption requires the retained report: with it deleted, the
+    # restored-ref retry refuses the missing verified destination.
+    saved_oid = git(root, "rev-parse", "HEAD").stdout.strip()
+    restored = git(root, "update-ref", "refs/heads/wt-unknown-ref", saved_oid)
+    assert restored.returncode == 0, restored.stderr
+    cited.unlink()
+    blocked = gate_removal()
+    assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+    assert "OUTCOME: fail" in blocked.stdout, blocked.stdout
+    assert "migrated artifact" in blocked.stdout, blocked.stdout
+    cited.write_text("rows\n", encoding="utf-8")
+    os.utime(cited, (anchor_epoch - 3600, anchor_epoch - 3600))
+    retry = gate_removal()
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert "OUTCOME: pass" in retry.stdout, retry.stdout
+    assert "removal: git worktree remove" in retry.stdout, retry.stdout
+
+    # Only after successful worktree removal does the sweep prune again.
+    removal = git(root, "worktree", "remove", "--force", str(worktree))
+    assert removal.returncode == 0, removal.stderr
+    final = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert final.rc == 0, final.message
+    assert not cited.exists(), "post-removal the report is age-prunable again"
+
+
 def test_session_ignored_paths_stay_window_anchored_under_manifest(
     tmp_path, sweep_env, mktemp_repo
 ):
@@ -4505,6 +6218,7 @@ def test_adopt_copies_prior_boundary(
     )
     make_marker(root, time.time(), os.getpid())
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    _hold_done_lock(monkeypatch, tmp_path, root)
 
     # No --owned-review/--foreign-review flags: the adoption itself must cover
     # the orphan's on-disk claimed review through the inherited owned set.
@@ -4584,6 +6298,7 @@ def test_adopt_preserves_ownership_and_adds_post_setup_review(
     git(root, "commit", "-qm", "post-boundary work")
     new_head = git(root, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    _hold_done_lock(monkeypatch, tmp_path, root)
 
     rc = lib.main(["write-manifest", "--adopt", orphan_id, "--owned-review", new_rel])
 
@@ -4608,6 +6323,7 @@ def test_write_manifest_adopt_validations_refuse_missing_and_complete_targets(
     root = mktemp_repo("adopt-refusals")
     make_marker(root, time.time(), os.getpid())
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    _hold_done_lock(monkeypatch, tmp_path, root)
 
     rc = lib.main(["write-manifest", "--adopt", "run-never-existed"])
 
@@ -4634,6 +6350,255 @@ def test_write_manifest_adopt_validations_refuse_missing_and_complete_targets(
     assert [p.name for p in done_session.glob("run-manifest-*.json")] == [
         f"run-manifest-{complete_id}.json"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-26-done-writer-adoption-guards-and-wrapper-test-residuals.md
+# Task 1: guard direct writer adoption (proven caller done lock, orphan-only
+# boundary, owned/foreign separation).
+# --------------------------------------------------------------------------- #
+def test_adopt_requires_matching_caller_done_lock(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] ``write-manifest --adopt`` adopts only under
+    the caller's own held done lock for this repository: given an orphan and
+    DONE_LOCK_DIR/DONE_LOCK_TOKEN naming a lock whose meta.env records this
+    root and the caller's token, the adoption composes (adopted_from set,
+    the inherited owned claim preserved); with the caller-lock evidence
+    absent, the same adoption refuses with the named no-proven-ownership
+    error and writes no manifest."""
+    root = mktemp_repo("adopt-lock-green")
+    start = git(root, "rev-parse", "HEAD").stdout.strip()
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    orphan_id = "run-orphan-lock-green"
+    review_rel = ".ai-playbook/reviews/2026-10-26-lock-green-review-r1.md"
+    (root / review_rel).parent.mkdir(parents=True)
+    (root / review_rel).write_text("orphan's staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root,
+        orphan_id,
+        prev.name,
+        str(root),
+        time.time() - 10,
+        start_commit=start,
+        owned_review_paths=[review_rel],
+    )
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    # Valid matching caller lock: the adoption composes.
+    _hold_done_lock(monkeypatch, tmp_path, root)
+    rc = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc == 0, capsys.readouterr().err
+    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
+    assert payload["adopted_from"] == orphan_id
+    assert payload["start_commit"] == start
+    assert payload["owned_review_paths"] == [review_rel]
+
+    # Absent caller-lock evidence: the same adoption refuses, no new manifest.
+    monkeypatch.delenv("DONE_LOCK_DIR", raising=False)
+    monkeypatch.delenv("DONE_LOCK_TOKEN", raising=False)
+    capsys.readouterr()
+    rc2 = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc2 != 0
+    err2 = capsys.readouterr().err
+    assert f"cannot adopt {orphan_id}" in err2
+    assert "no proven done-lock ownership" in err2
+    assert len(list(done_session.glob("run-manifest-*.json"))) == 2
+
+
+def test_adopt_refuses_mismatched_or_unknown_caller_lock(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Mismatched or unknown caller-lock evidence
+    refuses the adoption before any manifest: a lock whose recorded token
+    names another holder (the target run may still be live under it), a lock
+    whose recorded repo_root is another checkout's, and a meta-less lock
+    directory (unknown holder state) each draw the named refusal, and no
+    arm writes a manifest; the writer never guesses a hold."""
+    root = mktemp_repo("adopt-lock-mismatch")
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    orphan_id = "run-orphan-lock-mismatch"
+    _seed_run_manifest(root, orphan_id, prev.name, str(root), time.time() - 10)
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    foreign_root = mktemp_repo("other-checkout")
+
+    # Held by another owner: the recorded token is not the caller's.
+    _hold_done_lock(
+        monkeypatch, tmp_path, root, recorded_token="another-holders-token"
+    )
+    rc = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert f"cannot adopt {orphan_id}" in err
+    assert "lock_token does not match DONE_LOCK_TOKEN" in err
+
+    # Another checkout's current lock: the recorded root is not this repo.
+    _hold_done_lock(
+        monkeypatch, tmp_path, root, recorded_root=str(foreign_root.resolve())
+    )
+    rc2 = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc2 != 0
+    err2 = capsys.readouterr().err
+    assert "repo_root is not this repository" in err2
+
+    # Unknown holder state: the lock directory carries no meta.env.
+    _hold_done_lock(monkeypatch, tmp_path, root, meta_absent=True)
+    rc3 = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc3 != 0
+    err3 = capsys.readouterr().err
+    assert "unknown holder state" in err3
+    assert len(list(done_session.glob("run-manifest-*.json"))) == 1
+
+
+def test_adopt_accepts_only_orphan_classified_boundary(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] With the caller lock proven, the adoption
+    target must still classify as an interrupted orphan through
+    ``classify_run_boundary``: a run already adopted by another record, a
+    dispositioned run, a boundary closed by a terminal record on a same-run
+    shadow copy, and an unreadable target record each refuse with the named
+    boundary error and no arm writes a manifest."""
+    root = mktemp_repo("adopt-boundary-verdicts")
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    done_session = root / "docs" / "tmp" / "done-session"
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    _hold_done_lock(monkeypatch, tmp_path, root)
+
+    # Adopted elsewhere: another record's adopted_from names the target.
+    target_id = "run-adopt-elsewhere"
+    _seed_run_manifest(root, target_id, prev.name, str(root), time.time() - 10)
+    _seed_run_manifest(
+        root,
+        "run-first-adopter",
+        prev.name,
+        str(root),
+        time.time() - 5,
+        adopted_from=target_id,
+    )
+    rc = lib.main(["write-manifest", "--adopt", target_id])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert f"cannot adopt {target_id}" in err
+    assert "not an interrupted orphan" in err
+    assert "adopted" in err
+
+    # Dispositioned target: the one-time closure record refuses adoption.
+    disposed_id = "run-adopt-dispositioned"
+    _seed_run_manifest(
+        root,
+        disposed_id,
+        prev.name,
+        str(root),
+        time.time() - 10,
+        dispositioned={
+            "reason": "work-verified-landed",
+            "date": "2026-10-26",
+            "note": "closed",
+        },
+    )
+    rc2 = lib.main(["write-manifest", "--adopt", disposed_id])
+    assert rc2 != 0
+    err2 = capsys.readouterr().err
+    assert f"cannot adopt {disposed_id}" in err2
+    assert "not an interrupted orphan" in err2
+
+    # Shadow-closed: the canonical record stays open but a same-run shadow
+    # copy carries the terminal complete flag.
+    shadowed_id = "run-adopt-shadowed-terminal"
+    canonical = _seed_run_manifest(
+        root, shadowed_id, prev.name, str(root), time.time() - 10
+    )
+    _write_shadow_copy(
+        done_session, canonical, ".worktree",
+        mutate=lambda payload: payload.update(complete=True),
+    )
+    rc3 = lib.main(["write-manifest", "--adopt", shadowed_id])
+    assert rc3 != 0
+    err3 = capsys.readouterr().err
+    assert f"cannot adopt {shadowed_id}" in err3
+    assert "finalized" in err3
+
+    # Unreadable target record: fail-closed, the boundary is never guessed.
+    unreadable_id = "run-adopt-unreadable"
+    _seed_run_manifest(root, unreadable_id, prev.name, str(root), time.time() - 10)
+    (done_session / f"run-manifest-{unreadable_id}.json").write_text(
+        "{ not json\n", encoding="utf-8"
+    )
+    rc4 = lib.main(["write-manifest", "--adopt", unreadable_id])
+    assert rc4 != 0
+    assert f"cannot adopt {unreadable_id}" in capsys.readouterr().err
+
+    # No arm wrote a manifest: the directory holds only the seeded records.
+    seeded = {
+        "run-manifest-run-adopt-elsewhere.json",
+        "run-manifest-run-first-adopter.json",
+        "run-manifest-run-adopt-dispositioned.json",
+        "run-manifest-run-adopt-shadowed-terminal.json",
+        "run-manifest-run-adopt-shadowed-terminal.worktree.json",
+        "run-manifest-run-adopt-unreadable.json",
+    }
+    assert {p.name for p in done_session.glob("run-manifest-*.json")} == seeded
+
+
+def test_adopt_refuses_owned_foreign_intersection_and_composes_disjoint(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Ownership separation in the adopted
+    composition: a review path the caller claims owned while the adopted
+    record marks it foreign refuses with the named ownership-conflict error
+    and no adopted manifest; with disjoint claims over the same valid orphan
+    the composition succeeds (the caller's claim joins the inherited owned
+    set and the adopted foreign marking carries verbatim)."""
+    root = mktemp_repo("adopt-ownership-split")
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    orphan_id = "run-orphan-ownership"
+    owned_rel = ".ai-playbook/reviews/2026-10-26-split-own-review-r1.md"
+    foreign_rel = ".ai-playbook/reviews/2026-10-26-split-peer-review-r1.md"
+    (root / ".ai-playbook/reviews").mkdir(parents=True)
+    (root / owned_rel).write_text("orphan-owned staging review\n", encoding="utf-8")
+    (root / foreign_rel).write_text("peer staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root,
+        orphan_id,
+        prev.name,
+        str(root),
+        time.time() - 10,
+        owned_review_paths=[owned_rel],
+        foreign_review_paths=[foreign_rel],
+    )
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    _hold_done_lock(monkeypatch, tmp_path, root)
+
+    # The caller claims the adopted record's foreign path as its own work.
+    rc = lib.main(
+        ["write-manifest", "--adopt", orphan_id, "--owned-review", foreign_rel]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "ownership-conflict" in err
+    assert foreign_rel in err
+    assert len(list(done_session.glob("run-manifest-*.json"))) == 1
+
+    # Disjoint claims over the same valid orphan compose successfully.
+    new_rel = ".ai-playbook/reviews/2026-10-26-split-late-review-r2.md"
+    (root / new_rel).write_text(
+        "review created after the interrupted setup\n", encoding="utf-8"
+    )
+    rc2 = lib.main(
+        ["write-manifest", "--adopt", orphan_id, "--owned-review", new_rel]
+    )
+    assert rc2 == 0, capsys.readouterr().err
+    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
+    assert payload["adopted_from"] == orphan_id
+    assert payload["owned_review_paths"] == [new_rel, owned_rel]
+    assert payload["foreign_review_paths"] == [foreign_rel]
 
 
 def test_adoption_is_explicit_only(
@@ -5096,6 +7061,7 @@ def test_write_manifest_claim_none_conflicts_with_adopted_owner(
         owned_review_paths=[owned],
     )
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    _hold_done_lock(monkeypatch, tmp_path, root)
 
     rc = lib.main(["write-manifest", "--claim-none", "--adopt", "run-adopter"])
     assert rc != 0
@@ -5382,6 +7348,7 @@ def test_write_manifest_relativizes_inherited_paths_on_adopt(
     make_marker(root, now, os.getpid())
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
     done_session = root / "docs" / "tmp" / "done-session"
+    _hold_done_lock(monkeypatch, tmp_path, root)
 
     assert lib.main(
         ["write-manifest", "--adopt", old_run_id, "--foreign-review", foreign_rel]
@@ -8121,6 +10088,7 @@ def test_write_manifest_warns_on_undisposed_interrupted_boundary(
     assert len(list(done_session.glob("run-manifest-*.json"))) == 2
     # the write continues past the warning: the orphan plus the new manifest
 
+    _hold_done_lock(monkeypatch, tmp_path, root)
     rc2 = lib.main(["write-manifest", "--adopt", orphan_id])
     assert rc2 == 0, capsys.readouterr().err
     payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
@@ -8472,6 +10440,7 @@ def test_foreign_staging_writer_adopt_composes_owned_paths(tmp_path, sweep_env, 
     )[0]
     assert first_id in out
     marker2 = make_marker(root, time.time() + 1, os.getpid())
+    _hold_done_lock(monkeypatch, tmp_path, root)
     assert lib.main([
         "write-manifest", "--adopt", first_id,
         "--owned-path", "dirt-b.md",

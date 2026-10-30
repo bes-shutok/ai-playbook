@@ -85,6 +85,10 @@ Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). I
 
 ---
 
+## Stack-task execution (parent routing)
+
+When invoked with `--stack-task <plan-path> --task <N>`, the parent first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task Inclusion Hard Gate. Adopt the caller's registered worktree, exact task branch, and run context; never reset to base or create a conflicting claim. For an existing stack run, require the caller's verified `stack_branch_transition:` row and matching claim and manifest branch fields before treating the branch as adopted. Run the worker and required intermediate review for only task N. Resolve and record task-specific checks, scope-intersecting plan commands, and the complete repository-standard command set from authoritative guidance and inventory. Record both validation sets before commit; after the parent-owned light boundary, bind the evidence to its commit SHA and branch head in the return. Any failure, unavailable command, or incomplete inventory blocks; after repair rerun both sets. This mode exits after one boundary under the explicit-mode exception to full-plan continuation and terminal gates. No later task, full-plan phase, archive, or PR action. `execute-plan-stack` may consume the interface but is not required.
+
 ## Implement Task
 
 ```

@@ -204,6 +204,35 @@ class FixtureMixin:
     def done_session(self) -> Path:
         return self.fixture / "docs" / "tmp" / "done-session"
 
+    # ---- run-manifest fixture helpers ----------------------------------- #
+    # The one shared implementation of the three run-manifest fixture
+    # helpers, consumed by the setup-state, adoption, and
+    # authorized-restoration test classes (no class keeps its own copy).
+
+    def rewrite_manifest(self, manifest: Path | dict, **changes: object) -> None:
+        """Rewrite one run manifest record in place with the given field
+        changes; accepts the manifest path or the setup exports dict carrying
+        DONE_RUN_MANIFEST (both prior class-local copies serialized
+        identically, so one shared implementation serves both callers)."""
+        if isinstance(manifest, dict):
+            manifest = Path(manifest["DONE_RUN_MANIFEST"])
+        record = json.loads(manifest.read_text())
+        record.update(changes)
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+
+    def craft_manifest_file(
+        self, template: Path, run_id: str, **changes: object
+    ) -> Path:
+        record = json.loads(template.read_text())
+        record["run_id"] = run_id
+        record.update(changes)
+        path = self.done_session() / f"run-manifest-{run_id}.json"
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        return path
+
+    def session_names(self) -> list[str]:
+        return sorted(p.name for p in self.done_session().iterdir())
+
     # ---- commit-subcommand helpers -------------------------------------- #
 
     def commit_env(self) -> dict:
@@ -349,21 +378,6 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
     classify_run_boundary (read at run identity), the orphan and marker
     refusals stay byte-identical, and a corrupt newest record fails closed
     naming the record."""
-
-    def rewrite_manifest(self, manifest: Path, **changes: object) -> None:
-        record = json.loads(manifest.read_text())
-        record.update(changes)
-        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-
-    def craft_manifest_file(
-        self, template: Path, run_id: str, **changes: object
-    ) -> Path:
-        record = json.loads(template.read_text())
-        record["run_id"] = run_id
-        record.update(changes)
-        path = self.done_session() / f"run-manifest-{run_id}.json"
-        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-        return path
 
     def seed_run(self, label: str) -> dict:
         self.init_fixture_repo()
@@ -729,9 +743,6 @@ class DoneRunSetupAdoptionTest(FixtureMixin, unittest.TestCase):
         )
         return rel
 
-    def session_names(self) -> list[str]:
-        return sorted(p.name for p in self.done_session().iterdir())
-
     def test_adopt_routes_classified_orphan_through_writer(self) -> None:
         exports = self.seed_interrupted_run()
         prior_path = Path(exports["DONE_RUN_MANIFEST"])
@@ -862,6 +873,149 @@ class DoneRunSetupAdoptionTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(newest.read_bytes(), before_newest)
         self.assertEqual(adopter.read_bytes(), before_adopter)
         self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_already_adopted_target_refuses_at_forward_arm(self) -> None:
+        """Given a terminal newest boundary and --adopt naming an older run
+        whose own boundary is already adopted (a same-session adopter links
+        it), the forward arm refuses separately before any fresh marker: no
+        new marker or manifest, no forwarding note, no writer run, and every
+        prior record stays byte-identical."""
+        exports = self.seed_interrupted_run()
+        session = self.done_session()
+        seeded = Path(exports["DONE_RUN_MANIFEST"])
+        marker_field = json.loads(seeded.read_text())["marker"]
+        newest_id = "20991231T235959Z-newest00001"
+        self.craft_manifest_file(
+            seeded, newest_id, marker=marker_field, complete=True
+        )
+        target_id = "20260101T000000Z-target00001"
+        self.craft_manifest_file(seeded, target_id, marker=marker_field)
+        adopter_id = "20260101T000001Z-adopter0001"
+        self.craft_manifest_file(
+            seeded, adopter_id, marker=marker_field, adopted_from=target_id
+        )
+        seeded.unlink()  # the crafted finalized record is the newest manifest
+        target = session / f"run-manifest-{target_id}.json"
+        newest = session / f"run-manifest-{newest_id}.json"
+        adopter = session / f"run-manifest-{adopter_id}.json"
+        before = {path: path.read_bytes() for path in (newest, target, adopter)}
+        before_names = self.session_names()
+        proc = self.run_setup("--adopt", target_id)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            f"--adopt {target_id} names run_id={target_id}, whose own "
+            "boundary is already adopted",
+            proc.stderr,
+        )
+        self.assertIn("no new boundary written", proc.stderr)
+        # refused at the forward arm: the fresh boundary never starts, so no
+        # forwarding note prints and the writer never runs
+        self.assertNotIn(
+            "is not the classified boundary and is forwarded", proc.stdout
+        )
+        self.assertNotIn("the writer refused", proc.stderr)
+        for path, payload in before.items():
+            self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_dispositioned_target_refuses_at_forward_arm(self) -> None:
+        """Given a terminal newest boundary and --adopt naming an older run
+        carrying a dispositioned record, the forward arm refuses separately
+        (distinct from the already-adopted refusal) before any fresh marker;
+        no new marker or manifest and the dispositioned record stays
+        byte-identical."""
+        exports = self.seed_interrupted_run()
+        session = self.done_session()
+        seeded = Path(exports["DONE_RUN_MANIFEST"])
+        marker_field = json.loads(seeded.read_text())["marker"]
+        newest_id = "20991231T235959Z-newest00002"
+        self.craft_manifest_file(
+            seeded, newest_id, marker=marker_field, complete=True
+        )
+        target_id = "20260101T000000Z-dispos00001"
+        self.craft_manifest_file(
+            seeded,
+            target_id,
+            marker=marker_field,
+            dispositioned={
+                "reason": "work-verified-landed",
+                "date": "2026-10-30",
+                "note": "fixture disposition close",
+            },
+        )
+        seeded.unlink()  # the crafted finalized record is the newest manifest
+        target = session / f"run-manifest-{target_id}.json"
+        newest = session / f"run-manifest-{newest_id}.json"
+        before = {path: path.read_bytes() for path in (newest, target)}
+        before_names = self.session_names()
+        proc = self.run_setup("--adopt", target_id)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            f"--adopt {target_id} names run_id={target_id}, whose own "
+            "boundary is dispositioned",
+            proc.stderr,
+        )
+        self.assertIn("no new boundary written", proc.stderr)
+        self.assertNotIn(
+            "is not the classified boundary and is forwarded", proc.stdout
+        )
+        self.assertNotIn("the writer refused", proc.stderr)
+        for path, payload in before.items():
+            self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(self.session_names(), before_names)
+
+    def test_adopt_orphan_target_behind_terminal_newest_continues_adoption(
+        self,
+    ) -> None:
+        """The forward arm preserves the writer's boundary contract: behind a
+        terminal newest boundary, --adopt naming an older still-orphan run
+        keeps forwarding, and the adoption continues with the target's
+        existing ownership and start-commit composition carried verbatim
+        into the new linked manifest."""
+        exports = self.seed_interrupted_run()
+        session = self.done_session()
+        seeded = Path(exports["DONE_RUN_MANIFEST"])
+        marker_field = json.loads(seeded.read_text())["marker"]
+        newest_id = "20991231T235959Z-newest00003"
+        self.craft_manifest_file(
+            seeded, newest_id, marker=marker_field, complete=True
+        )
+        target_id = "20260101T000000Z-orphan00001"
+        self.craft_manifest_file(seeded, target_id, marker=marker_field)
+        seeded.unlink()  # the crafted finalized record is the newest manifest
+        target_path = session / f"run-manifest-{target_id}.json"
+        target = json.loads(target_path.read_text())
+        target_bytes = target_path.read_bytes()
+        newest_path = session / f"run-manifest-{newest_id}.json"
+        newest_bytes = newest_path.read_bytes()
+        new_rel = self.create_post_setup_review()
+        proc = self.run_setup(
+            "--adopt", target_id, "--owned-review", new_rel,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # the forward arm routed the orphan target to the writer, which
+        # adopted it: the terminal newest record is named and untouched
+        self.assertIn(
+            "is not the classified boundary and is forwarded", proc.stdout
+        )
+        self.assertEqual(newest_path.read_bytes(), newest_bytes)
+        self.assertEqual(target_path.read_bytes(), target_bytes)
+        reexports = self.eval_exports(proc.stdout)
+        adopted = json.loads(Path(reexports["DONE_RUN_MANIFEST"]).read_text())
+        self.assertEqual(adopted["adopted_from"], target_id)
+        self.assertEqual(adopted["start_commit"], target["start_commit"])
+        self.assertEqual(adopted["owned_paths"], target["owned_paths"])
+        self.assertEqual(
+            adopted["owned_plan_paths"], target["owned_plan_paths"]
+        )
+        self.assertEqual(
+            adopted["owned_review_paths"],
+            [new_rel] + target["owned_review_paths"],
+        )
+        self.assertEqual(
+            adopted["foreign_review_paths"], target["foreign_review_paths"]
+        )
+        self.assertIn(f"export DONE_RUN_ID={adopted['run_id']}", proc.stdout)
 
     def test_adopt_corrupt_boundary_fails_closed(self) -> None:
         exports = self.seed_interrupted_run()
@@ -2289,12 +2443,6 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         env.update(exports)
         env.update(overrides)
         return env
-
-    def rewrite_manifest(self, exports: dict, **changes: object) -> None:
-        manifest = Path(exports["DONE_RUN_MANIFEST"])
-        record = json.loads(manifest.read_text())
-        record.update(changes)
-        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
     def assert_landed(
         self, proc: subprocess.CompletedProcess, exports: dict,

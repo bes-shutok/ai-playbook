@@ -883,6 +883,18 @@
           "note": "the amend repair: the refused free-form landing was repaired by a message-only amend into the plans: land <slug> (...) grammar (tree-identical), surfacing as one permanent backward-move row in the base reflog audit; the compose-time notice exists so this repair class never fires again; origin docs/history/backlog/completed/2026-10-13-reverse-squash-execute-plan-landing-prefix-gap.md"
         }
       ]
+    },
+    "agent-type-affinity-check": {
+      "notes": "agent-type affinity comparison at the four workflow entry surfaces (maintenance D1/D2 selection, plans authoring entry, execute-plan entry and Phase 0), promoted from warning-only to a blocking hold on 2026-10-30 after the catch row below (machinery registry row protocol:agent-type-affinity-check); contract home projects/.ai-playbook/agent-runtime-layout.md (Agent-type affinity contract); witnessed origin docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md labeled Required agent type: zcode; promotion executed by docs/history/plans/completed/2026-10-27-agent-type-affinity-before-plan-work.md Task 2",
+      "rows": [
+        {
+          "kind": "catch",
+          "date": "2026-10-30",
+          "evidence": "docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md",
+          "time_lost_minutes": null,
+          "note": "warning-only check reported the witnessed codex-vs-zcode mismatch before setup"
+        }
+      ]
     }
   }
 }

@@ -1667,7 +1667,7 @@
       "disposition": "keep",
       "id": "protocol:primary-log-ref-precondition",
       "kind": "protocol",
-      "note": "Primary rolling-log writes carry the caller-selected symbolic ref and starting OID through scripts/done_run.sh's captured-tree transaction (--expected-ref/--expected-oid); a mismatch refuses before staging or commit, and the caller recovers and reselects. Pre-registered demotion commitment (plan docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md Gate delta): review by 2027-01-25; if no additional true catch occurs by then, that reviewed change demotes the mismatch refusal to warning-only and removes this row. Promotion basis: the existing true catch, the 2026-10-25 wrong-branch commit (witness below). Expected catch frequency: rare shared-checkout branch switches during a primary log write; false-positive cost: one recovery/reselection with the log bytes and refs unchanged. The same landing retires the primary log writer's repo-wide merge-lock acquisition refusal, balancing one added refusal with one retired refusal.",
+      "note": "Primary rolling-log writes carry the caller-selected symbolic ref and starting OID through scripts/done_run.sh's captured-tree transaction (--expected-ref/--expected-oid); a mismatch refuses before staging or commit, and the caller recovers and reselects. Pre-registered demotion commitment (plan docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md Gate delta): review by 2027-01-25; if no additional true catch occurs by then, that reviewed change demotes the mismatch refusal to warning-only and removes this row. Promotion basis: the existing true catch, the 2026-10-25 wrong-branch commit (witness below). Expected catch frequency: rare shared-checkout branch switches during a primary log write; false-positive cost: one recovery/reselection with the log bytes and refs unchanged. The same landing retires the primary log writer's repo-wide merge-lock acquisition refusal, balancing one added refusal with one retired refusal. Ref re-pointed 2026-10-29 (plan 2026-10-29-phase2-baseline-repair @ commit fe04f7a7b) from the fold-deleted origin backlog row to this archived completed plan (the claim-if-concurrent re-point convention).",
       "paths": [
         "scripts/done_run.sh"
       ],
@@ -1676,7 +1676,375 @@
       ],
       "witness": {
         "class": "incident",
-        "ref": "docs/history/backlog/2026-10-25-primary-log-branch-drift-at-commit.md"
+        "ref": "docs/history/plans/completed/2026-10-25-primary-log-branch-drift-at-commit.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:base_reflog_audit.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/base_reflog_audit.py"
+      ],
+      "tests": [
+        "scripts/test_base_reflog_audit.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_base_reflog_audit.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_authoring_gist_sample.py",
+      "kind": "script",
+      "note": "registering the authoring gist sample checker delivered by the plan-scope-gist-surface plan; validation-channel checker over the plan gist report (five report channels, first-review ordering, undeclared-budget fallback); no dedicated test suite, the delivering plan's own validation steps are the standing check",
+      "paths": [
+        "scripts/check_authoring_gist_sample.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-10-plan-scope-gist-surface.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_authoring_plans_liveness.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_authoring_plans_liveness.py"
+      ],
+      "tests": [
+        "scripts/test_authoring_plans_liveness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_authoring_plans_liveness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_run_continuity.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_run_continuity.py"
+      ],
+      "tests": [
+        "scripts/test_check_run_continuity.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_run_continuity.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:code_delta_classifier.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/code_delta_classifier.py"
+      ],
+      "tests": [
+        "scripts/test_code_delta_classifier.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_code_delta_classifier.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:corrections_record.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/corrections_record.py"
+      ],
+      "tests": [
+        "scripts/test_corrections_record.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_corrections_record.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:deploy_runtime_helpers.sh",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; the manifest-driven deployment enforcement owner per the sibling-closure admission",
+      "paths": [
+        "scripts/deploy_runtime_helpers.sh"
+      ],
+      "tests": [
+        "scripts/test_deploy_runtime_helpers.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_deploy_runtime_helpers.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execution_claim.sh",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; the write-enforcement claim gateway including the dead-run conversion arm",
+      "paths": [
+        "scripts/execution_claim.sh"
+      ],
+      "tests": [
+        "scripts/test_execution_claim.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execution_claim.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:fix_plan_em_dashes.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/fix_plan_em_dashes.py"
+      ],
+      "tests": [
+        "scripts/test_fix_plan_em_dashes.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_fix_plan_em_dashes.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:gate_liveness_ledger.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/gate_liveness_ledger.py"
+      ],
+      "tests": [
+        "scripts/test_gate_liveness_ledger.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_gate_liveness_ledger.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan_delta_classifier.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/plan_delta_classifier.py"
+      ],
+      "tests": [
+        "scripts/test_plan_delta_classifier.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_delta_classifier.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan_task_span.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/plan_task_span.py"
+      ],
+      "tests": [
+        "scripts/test_plan_task_span.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_task_span.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:produce_exec_review_record.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/produce_exec_review_record.py"
+      ],
+      "tests": [
+        "scripts/test_produce_exec_review_record.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_produce_exec_review_record.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:read_freshness_probe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; read-only probe with descriptive exits, exempt from the script outcome contract per the machinery-script census",
+      "paths": [
+        "scripts/read_freshness_probe.py"
+      ],
+      "tests": [
+        "scripts/test_read_freshness_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_read_freshness_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:regenerate_review_sidecar.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/review-staging/SKILL.md repair routing: a sidecar-less record whose Markdown carries the repairable metadata set routes to this repair tool)",
+      "paths": [
+        "scripts/regenerate_review_sidecar.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-staging/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_plan_identity.py",
+      "kind": "script",
+      "note": "resolved to the plan_readiness suite: scripts/plan_readiness.py imports this identity module and its suite exercises identity_token and markdown_identity directly (the protocol:review-staging-governance precedent)",
+      "paths": [
+        "scripts/review_plan_identity.py"
+      ],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_staging_calibration.py",
+      "kind": "script",
+      "note": "standing written instruction names this script the enum authority (agents/skills/review-staging/SKILL.md: this calibration module and scripts/validate_review_staging.py declare the enum values, refreshed from them, never from memory)",
+      "paths": [
+        "scripts/review_staging_calibration.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-staging/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:run_plan_gates.sh",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/run_plan_gates.sh"
+      ],
+      "tests": [
+        "scripts/test_run_plan_gates.sh"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_run_plan_gates.sh"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:session_status.py",
+      "kind": "script",
+      "note": "registering the session status query delivered by the dead-run-resume-claim-conversion plan; consumed by scripts/execution_claim.sh's dead-run conversion arm (that row's suite covers the gateway)",
+      "paths": [
+        "scripts/session_status.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-10-21-dead-run-resume-claim-conversion.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:staged_scope_guard.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/staged_scope_guard.py"
+      ],
+      "tests": [
+        "scripts/test_staged_scope_guard.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_staged_scope_guard.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:sync_runtime_scripts.sh",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; idempotent manifest-driven symlink deployment that defers to the deploy_runtime_helpers.sh enforcement owner per the sibling-closure admission",
+      "paths": [
+        "scripts/sync_runtime_scripts.sh"
+      ],
+      "tests": [
+        "scripts/test_sync_runtime_scripts.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_sync_runtime_scripts.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:verify_runtime_deployment.py",
+      "kind": "script",
+      "note": "covered by the deployment helpers suite's verifier fixtures (the post-walk deployment verification delivered by the sibling-module deployment plan)",
+      "paths": [
+        "scripts/verify_runtime_deployment.py"
+      ],
+      "tests": [
+        "scripts/test_deploy_runtime_helpers.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_deploy_runtime_helpers.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:queued_execution",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section (the schema home since the maintenance-skill-size-refactor split)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/state-file.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:agent-type-affinity-check",
+      "kind": "protocol",
+      "note": "Agent-type affinity mismatch hold at the four workflow entry surfaces (maintenance D1/D2 selection in agents/skills/maintenance/decisions.md, the plans authoring entry in agents/skills/plans/SKILL.md, the execute-plan entry and Phase 0 in agents/skills/execute-plan/SKILL.md); the rule's one home is the Agent-type affinity contract in projects/.ai-playbook/agent-runtime-layout.md, the surfaces named here only per the claim-if-concurrent precedent (paths empty). Promotion evidence: the warning-only comparison's first true catch, the 2026-10-27 Codex session selecting the origin docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md (labeled Required agent type: zcode) before setup, recorded 2026-10-30 in scripts/gate_liveness_ledger.json (guard agent-type-affinity-check, one catch row); the promotion is plan docs/history/plans/completed/2026-10-27-agent-type-affinity-before-plan-work.md Task 2, this row. Admission record: concrete incident = that witnessed mismatch, one known catch with future catch frequency unknown; false-positive cost = a correctly targeted origin misclassified and held until its runtime metadata or the invoking identity is corrected; net growth = operator-approved after the true catch, no existing blocker retired; review by 2027-01-27. Pre-registered removal commitment: when the mismatch hold is retired (the requirement metadata removed or the check demoted), a reviewed change moves this row to removals; runtime-neutral work (no Required agent type line) and compatible-target work never trip the hold. Witness ref re-point duty: at this plan's landing, re-point to the completed twin docs/history/plans/completed/2026-10-27-agent-type-affinity-before-plan-work.md.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-10-27-agent-type-affinity-before-plan-work.md"
       }
     }
   ],
@@ -1833,15 +2201,13 @@
       "id": "guard:maintenance-pins-recorded-red-consult",
       "kind": "guard",
       "disposition": "delete",
-      "paths": [
-        "scripts/check_maintenance_pins.sh"
-      ],
+      "paths": [],
       "tests": [],
       "witness": {
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-13-red-on-main-baseline-repair-and-auto-demote.md"
       },
-      "note": "Pre-registered removal of the pins suite's recorded-red consult. Misfire class: a recorded red masking a distinct new failure on the same pin name. Admission record: incident, the red-on-main baseline (the pins suite exited non-zero on main with a 21-failure set every lane silently inherited while machinery landings continued over it) plus the dormant tail (docs/history/backlog/2026-10-13-maintenance-pins-dormant-tail-baseline.md (deleted at its covering landing; durable carrier: commit b4fe56682); a negative-arm run with a deliberately broken span produced a failure set byte-identical to the unbroken run, so a red baseline also hid new pins behind the first firing checkpoint); expected catch, every lane run while any standing red exists; false-positive cost, a recorded red masking a same-name new failure, bounded by the review-by expiry and the loud per-run summary. Review no later than 2026-11-13 (recording date 2026-10-14 plus 30 days). Promotion criteria: a true catch (an expired review-by re-blocking a drifted pin) keeps the consult standing and retires this removals row; a confirmed misfire of the masking class deletes the consult in the same change that retires this row."
+      "note": "Pre-registered removal of the pins suite's recorded-red consult. Misfire class: a recorded red masking a distinct new failure on the same pin name. Admission record: incident, the red-on-main baseline (the pins suite exited non-zero on main with a 21-failure set every lane silently inherited while machinery landings continued over it) plus the dormant tail (docs/history/backlog/2026-10-13-maintenance-pins-dormant-tail-baseline.md (deleted at its covering landing; durable carrier: commit b4fe56682); a negative-arm run with a deliberately broken span produced a failure set byte-identical to the unbroken run, so a red baseline also hid new pins behind the first firing checkpoint); expected catch, every lane run while any standing red exists; false-positive cost, a recorded red masking a same-name new failure, bounded by the review-by expiry and the loud per-run summary. Review no later than 2026-11-13 (recording date 2026-10-14 plus 30 days). Promotion criteria: a true catch (an expired review-by re-blocking a drifted pin) keeps the consult standing and retires this removals row; a confirmed misfire of the masking class deletes the consult in the same change that retires this row. Paths reconciled to empty 2026-10-29 (plan docs/history/plans/2026-10-29-phase2-baseline-repair.md Task 3): the consult mechanism is still live in scripts/check_maintenance_pins.sh (its recorded-red consult block) and the gate liveness ledger holds no check_maintenance_pins guard key (zero recorded reds stand, no true catch has fired), while a removals row naming a live path fails --check, so the row keeps the registry's pre-registered-removal shape (empty paths, commitment in this note, the skill-text-duplication-report two-mode precedent) until the consult's own removal or retirement lands."
     },
     {
       "disposition": "delete",

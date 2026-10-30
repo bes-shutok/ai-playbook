@@ -30,9 +30,18 @@ Harness-pinned seams (Task 2 implements against these):
   ``scripts/scan-public-hygiene.sh``: ``real`` (this repo's scanner, probed in
   BOTH directions before use: exit 0 plus the PASS marker on clean content,
   exit 1 plus FAIL naming the path on a hit), ``noop`` (exit 0), ``exit2``
-  (exit 2), ``lognoop`` (exit 0 plus an argv witness log, used by the
-  tree-materialization-failure case to prove no materialized file reaches the
-  scanner).
+  (exit 2), ``exit3`` (exit 3), ``lognoop`` (exit 0 plus an argv witness log,
+  used by the tree-materialization-failure case to prove no materialized file
+  reaches the scanner), and ``envlog`` (exit 0 plus an environment and argv
+  witness log, used to pin the release remote and the helper-script
+  environment settings at the scanner invocation).
+- The rewrite runs its scanner through the locator helper
+  ``scripts/release-privacy-locators.py``; the helper-level contract cases
+  (row acceptance, the 65,536-byte bound, escaping, exit passthrough) drive
+  the helper directly against a fixture scanner stub that replays fixed
+  stdout bytes and a chosen exit code (plan
+  docs/history/plans/2026-10-26-release-privacy-gate-diagnostics-and-replay.md,
+  Task 1).
 - Fixture layout per case: temp dir holding a bare ``origin``, a clone whose
   ``main`` carries 6 commits in 3 contiguous feature groups (distinct author
   names and dates per source commit, one group deleting a file, one
@@ -54,11 +63,13 @@ Harness-pinned seams (Task 2 implements against these):
 from __future__ import annotations
 
 import datetime
+import hashlib
 import os
 import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +77,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORING_SCRIPT = ROOT / "scripts" / "release-authoring.sh"
 REWRITE_SCRIPT = ROOT / "scripts" / "release-rewrite.sh"
+LOCATOR_HELPER = ROOT / "scripts" / "release-privacy-locators.py"
 REAL_SCANNER = ROOT / "scripts" / "scan-public-hygiene.sh"
 REAL_EM_DASH_CHECK = ROOT / "scripts" / "check-no-em-dash.sh"
 
@@ -197,6 +209,15 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.cas_record = self.base / "cas-main.txt"
         self.patterns = self.base / "hygiene.patterns"
         self.patterns.write_text(PATTERNS_TEXT, encoding="utf-8")
+        # Pinned HOME carrying the scanner's default patterns file, so the
+        # default-patterns branch of the privacy gate is hermetic (it never
+        # reads the host's own ~/.ai-playbook file).
+        self.home = self.base / "home"
+        (self.home / ".ai-playbook").mkdir(parents=True)
+        self.default_patterns = self.home / ".ai-playbook" / "public-hygiene.patterns"
+        self.default_patterns.write_text(PATTERNS_TEXT, encoding="utf-8")
+        self.empty_home = self.base / "empty-home"
+        self.empty_home.mkdir()
         self.git_global = self.base / "git-config-global"
         self.git_global.write_text(GIT_CONFIG_GLOBAL_TEXT, encoding="utf-8")
         self.section_path = self.base / "drafted-section.md"
@@ -235,11 +256,12 @@ class ReleaseSkillSelftest(unittest.TestCase):
     def _run_env(self, lock_exports=None, env_extra=None) -> dict:
         """Environment for invoking the real scripts: pinned TMPDIR, lock stub,
         fixture patterns file, hermetic git config, and the per-case shim dir
-        prepended to PATH. TZ is pinned to UTC and ambient git-context and
-        author/committer variables are stripped, so a midnight rollover in the
-        local zone or a leaked GIT_DIR/GIT_CONFIG_COUNT/GIT_*_DATE from the
-        calling session cannot flip date-dependent or identity-dependent
-        behavior under test."""
+        prepended to PATH. TZ is pinned to UTC, RELEASE_REMOTE is pinned to
+        origin, and ambient git-context and author/committer variables are
+        stripped, so a midnight rollover in the local zone, a leaked
+        GIT_DIR/GIT_CONFIG_COUNT/GIT_*_DATE, or an ambient remote name from
+        the calling session cannot flip date-dependent, identity-dependent,
+        or remote-dependent behavior under test."""
         env = dict(os.environ)
         env.update(self._git_env_overrides())
         env["TMPDIR"] = str(self.tmpdir)
@@ -247,6 +269,7 @@ class ReleaseSkillSelftest(unittest.TestCase):
         env["SELFTEST_LOCK_LOG"] = str(self.lock_log)
         env["SELFTEST_SCANNER_LOG"] = str(self.scanner_log)
         env["PUBLIC_HYGIENE_PATTERNS_FILE"] = str(self.patterns)
+        env["RELEASE_REMOTE"] = "origin"
         env["TZ"] = "UTC"
         for leak in (
             "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
@@ -505,6 +528,61 @@ class ReleaseSkillSelftest(unittest.TestCase):
                 "exit 2\n",
                 encoding="utf-8",
             )
+        elif mode == "exit3":
+            target.write_text(
+                "#!/usr/bin/env bash\n"
+                "# selftest scanner stub: tool error under the outcome contract\n"
+                'echo "selftest scanner stub: tool error" >&2\n'
+                "exit 3\n",
+                encoding="utf-8",
+            )
+        elif mode == "envlog":
+            target.write_text(
+                "#!/usr/bin/env bash\n"
+                "# selftest env-logging scanner stub: witness the invocation\n"
+                "# environment, argv, and the effective patterns bytes, then pass.\n"
+                'log="${SELFTEST_SCANNER_LOG:?}"\n'
+                "{\n"
+                '  printf \'RELEASE_REMOTE=%s\\n\' "${RELEASE_REMOTE-}"\n'
+                '  printf \'PUBLIC_HYGIENE_REPO_ROOT=%s\\n\' "${PUBLIC_HYGIENE_REPO_ROOT-}"\n'
+                '  printf \'PUBLIC_HYGIENE_PATTERNS_FILE=%s\\n\' "${PUBLIC_HYGIENE_PATTERNS_FILE-}"\n'
+                '  printf \'SELF=%s\\n\' "$0"\n'
+                '  printf \'PATTERNS-BYTES>\\n\'\n'
+                '  cat "${PUBLIC_HYGIENE_PATTERNS_FILE-}" 2>/dev/null\n'
+                '  printf \'END-PATTERNS-BYTES\\n\'\n'
+                "  printf 'ARGV'\n"
+                '  for arg in "$@"; do printf \' %s\' "$arg"; done\n'
+                "  printf '\\n'\n"
+                '} >> "$log"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+        elif mode == "hitlog":
+            target.write_text(
+                "#!/usr/bin/env bash\n"
+                "# selftest hit-logging scanner stub: witness the invocation and\n"
+                "# the scanned groups bytes, then emit one fixed FAIL row carrying\n"
+                "# the deny token and exit 1 (a privacy hit).\n"
+                'log="${SELFTEST_SCANNER_LOG:?}"\n'
+                "{\n"
+                '  printf \'RELEASE_REMOTE=%s\\n\' "${RELEASE_REMOTE-}"\n'
+                '  printf \'PUBLIC_HYGIENE_REPO_ROOT=%s\\n\' "${PUBLIC_HYGIENE_REPO_ROOT-}"\n'
+                '  printf \'PUBLIC_HYGIENE_PATTERNS_FILE=%s\\n\' "${PUBLIC_HYGIENE_PATTERNS_FILE-}"\n'
+                '  printf \'GROUPS-BYTES>\\n\'\n'
+                '  cat "${PUBLIC_HYGIENE_REPO_ROOT:-}/release-groups.txt" 2>/dev/null\n'
+                '  printf \'END-GROUPS-BYTES\\n\'\n'
+                "  printf 'ARGV'\n"
+                '  for arg in "$@"; do printf \' %s\' "$arg"; done\n'
+                "  printf '\\n'\n"
+                '} >> "$log"\n'
+                "printf 'FAIL: files\\n'\n"
+                'printf \'docs/manual.md:2:%s\\n\' "' + DENY_TOKEN + '"\n'
+                "printf '\\n'\n"
+                "printf '=== 1 public-hygiene failure(s) ===\\n'\n"
+                "printf 'OUTCOME: fail\\n'\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
         elif mode == "lognoop":
             target.write_text(
                 "#!/usr/bin/env bash\n"
@@ -609,7 +687,8 @@ class ReleaseSkillSelftest(unittest.TestCase):
         return exports, groups_path
 
     def _rewrite_step(self, groups_path, exports, shim: str = "pass",
-                      recovery_base: str = None, expect_remote_oid: str = None):
+                      recovery_base: str = None, expect_remote_oid: str = None,
+                      draft=None, extra_env: dict = None):
         self._write_shim(shim)
         args = ["bash", str(REWRITE_SCRIPT), str(groups_path)]
         if recovery_base is not None or expect_remote_oid is not None:
@@ -618,9 +697,22 @@ class ReleaseSkillSelftest(unittest.TestCase):
                 "recovery flags are paired or absent",
             )
             args += ["--recovery-base", recovery_base, "--expect-remote-oid", expect_remote_oid]
+        if draft is None:
+            # The rewrite requires a regular file at RELEASE_DRAFT_PATH; cases
+            # that hand-write the groups file without a drafted section get a
+            # placeholder draft (never parsed by the rewrite itself).
+            if self.section_path.exists():
+                draft = self.section_path
+            else:
+                draft = self.base / "recovery-draft.txt"
+                if not draft.exists():
+                    draft.write_text("release-groups:\n", encoding="utf-8")
+        env_extra = {"RELEASE_DRAFT_PATH": str(draft)}
+        if extra_env:
+            env_extra.update(extra_env)
         return subprocess.run(
             args,
-            cwd=str(self.clone), env=self._run_env(lock_exports=exports),
+            cwd=str(self.clone), env=self._run_env(lock_exports=exports, env_extra=env_extra),
             capture_output=True, text=True,
         )
 
@@ -884,7 +976,7 @@ class ReleaseSkillSelftest(unittest.TestCase):
 
     def _run_release(self, variant: str = "clean", scanner: str = "noop",
                      counts=None, msgs=None, marker: str = "selftest section marker",
-                     rewrite_shim: str = "pass"):
+                     rewrite_shim: str = "pass", draft=None, extra_env: dict = None):
         """Authoring plus rewrite plus the lock release, returning the rewrite
         result, the exports, the groups file path, and the pre-rewrite tip."""
         self._build_fixture(variant)
@@ -893,7 +985,8 @@ class ReleaseSkillSelftest(unittest.TestCase):
         authoring = self._authoring_step()
         exports, groups_path = self._require_authoring_contract(authoring)
         pre_tip = self._rev_parse("main")
-        rewrite = self._rewrite_step(groups_path, exports, shim=rewrite_shim)
+        rewrite = self._rewrite_step(groups_path, exports, shim=rewrite_shim,
+                                     draft=draft, extra_env=extra_env)
         self._release_lock(exports)
         self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
         return rewrite, exports, groups_path, pre_tip
@@ -1021,6 +1114,53 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.assertTrue(
             any(("restore" in line.lower() or "reset" in line.lower()) for line in named_lines),
             "the recovery steps must pair the backup ref name with restore/reset:\n%s" % combined,
+        )
+
+    # ------------------------------------------------------------------
+    # Task 2 witnesses (plan 2026-10-26-release-privacy-gate-diagnostics-
+    # and-replay): pattern copies, draft lifecycle, diagnostic replay
+    # ------------------------------------------------------------------
+
+    def _sha256_of(self, path) -> str:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    def _scanner_log_blocks(self) -> list:
+        """Split the scanner witness log into per-invocation blocks; each
+        invocation opens with a RELEASE_REMOTE= line."""
+        text = self.scanner_log.read_text(encoding="utf-8")
+        blocks = []
+        current = None
+        for line in text.splitlines(keepends=True):
+            if line.startswith("RELEASE_REMOTE="):
+                current = []
+                blocks.append(current)
+            if current is not None:
+                current.append(line)
+        return ["".join(block) for block in blocks]
+
+    def _log_payload(self, block: str, name: str) -> str:
+        """Bytes between a ``NAME>`` marker and its ``END-NAME`` sentinel in
+        one witness-log block."""
+        marker = name + ">\n"
+        start = block.index(marker) + len(marker)
+        end = block.index("END-%s\n" % name, start)
+        return block[start:end]
+
+    def _replay_command(self, combined: str) -> str:
+        lines = [
+            line.strip() for line in combined.splitlines()
+            if line.strip().startswith("bash ") and "release-diagnostic-replay.sh" in line
+        ]
+        self.assertEqual(
+            len(lines), 1,
+            "exactly one shell-safe replay command line expected:\n%s" % combined,
+        )
+        return lines[0]
+
+    def _run_replay(self, command: str):
+        return subprocess.run(
+            ["bash", "-c", command],
+            cwd=str(self.clone), env=self._run_env(), capture_output=True, text=True,
         )
 
     # ------------------------------------------------------------------
@@ -1280,6 +1420,98 @@ class ReleaseSkillSelftest(unittest.TestCase):
         )
         self._assert_torn_down()
 
+    def test_privacy_hit_reports_locators_only(self):
+        # The refusal message carries only safe path:line locators derived
+        # from the scanner's FAIL rows: no matched content, no scanned-path
+        # list.
+        rewrite, _, _, pre_tip = self._run_release(variant="outside_scope", scanner="real")
+        combined = rewrite.stdout + rewrite.stderr
+        self._assert_abort_shape(rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="scripts/tool.sh:2")
+        self.assertEqual(
+            rewrite.returncode, 1,
+            "a privacy hit must keep the scanner's exit 1, got rc=%s\nstderr:\n%s"
+            % (rewrite.returncode, rewrite.stderr),
+        )
+        self.assertIn("PRIVACY GATE FAILED (scanner exit 1)", combined)
+        self.assertIn("offending locators (path:line):", combined)
+        # No full path list: clean scanned paths must stay out of the refusal.
+        self.assertNotIn("feature-alpha/one.txt", combined, "clean scanned paths must not be listed")
+        self.assertNotIn("docs/manual.md", combined, "clean scanned paths must not be listed")
+        self.assertNotIn("release-groups.txt", combined, "clean scanned paths must not be listed")
+
+    def test_scanner_exit_three_maps_to_rewrite_exit_three(self):
+        rewrite, _, _, pre_tip = self._run_release(scanner="exit3")
+        combined = rewrite.stdout + rewrite.stderr
+        self._assert_abort_shape(rewrite, pre_tip)
+        self.assertEqual(
+            rewrite.returncode, 3,
+            "a scanner tool error must exit 3, got rc=%s\nstderr:\n%s"
+            % (rewrite.returncode, rewrite.stderr),
+        )
+        self.assertIn("PRIVACY GATE FAILED (scanner exit 3)", combined)
+        self.assertNotIn("feature-alpha/one.txt", combined, "a tool error must not list scanned paths")
+        self._assert_torn_down()
+
+    def test_clean_scan_prints_no_failure_message(self):
+        rewrite, _, _, _ = self._run_release(scanner="real")
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertNotIn("PRIVACY GATE FAILED", combined, "a passing gate must print no failure message")
+        self.assertNotIn("offending locators", combined)
+
+    def test_scanner_invocation_env_pinned(self):
+        # The privacy gate must run the fixture scanner under the release
+        # run's pinned settings: the pinned release remote, the
+        # materialization root, the patterns copy, the immutable scanner
+        # copy, and the explicit-paths argv including the groups file.
+        self._build_fixture()
+        self._install_scanner("envlog")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "env pin marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        rewrite = self._rewrite_step(groups_path, exports)
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        log = self.scanner_log.read_text(encoding="utf-8")
+
+        def field(name: str) -> str:
+            prefix = name + "="
+            for line in log.splitlines():
+                if line.startswith(prefix):
+                    return line[len(prefix):]
+            return ""
+
+        self.assertEqual(log.count("RELEASE_REMOTE="), 1, "exactly one gate invocation:\n%s" % log)
+        self.assertEqual(
+            field("RELEASE_REMOTE"), "origin",
+            "the scanner must run under the pinned release remote:\n%s" % log,
+        )
+        self.assertTrue(
+            field("PUBLIC_HYGIENE_REPO_ROOT").startswith(str(self.tmpdir)),
+            "the gate must set PUBLIC_HYGIENE_REPO_ROOT under the pinned TMPDIR:\n%s" % log,
+        )
+        patterns = field("PUBLIC_HYGIENE_PATTERNS_FILE")
+        self.assertTrue(
+            patterns.startswith(str(self.tmpdir)) and patterns.endswith("hygiene.patterns"),
+            "the gate must scan with the run-dir patterns copy:\n%s" % log,
+        )
+        self.assertTrue(
+            field("SELF").startswith(str(self.tmpdir)),
+            "the scanner must run from the immutable run-dir copy, not the checkout:\n%s" % log,
+        )
+        argv_line = next((line for line in log.splitlines() if line.startswith("ARGV")), "")
+        self.assertTrue(
+            argv_line.startswith("ARGV --files ") and " release-groups.txt" in argv_line,
+            "the scanner must be invoked in explicit-paths mode including the groups file:\n%s" % log,
+        )
+
     def test_tree_materialization_failure_is_fatal(self):
         rewrite, _, _, pre_tip = self._run_release(scanner="lognoop", rewrite_shim="archive-fail")
         self._assert_abort_shape(rewrite, pre_tip)
@@ -1477,6 +1709,336 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.assertEqual(refs.get("refs/release-backup/pre-release-%s" % yesterday), pre_tip,
                          "yesterday's candidate must stay unchanged")
         self._assert_tree_identical_to("refs/release-backup/pre-release-%s-2" % today)
+
+    # ------------------------------------------------------------------
+    # Task 2: effective-pattern copies, draft lifecycle, diagnostic replay
+    # (plan 2026-10-26-release-privacy-gate-diagnostics-and-replay)
+    # ------------------------------------------------------------------
+
+    def test_patterns_default_copy_scanned(self):
+        # With no PUBLIC_HYGIENE_PATTERNS_FILE override the gate still scans
+        # an immutable run-dir copy of the EFFECTIVE default patterns file,
+        # resolved from the pinned HOME (never the host's own default file).
+        self._build_fixture()
+        self._install_scanner("envlog")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "default patterns marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        rewrite = self._rewrite_step(groups_path, exports, extra_env={
+            "HOME": str(self.home),
+            "PUBLIC_HYGIENE_PATTERNS_FILE": "",
+        })
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertIn(
+            "privacy gate patterns: %s" % self.default_patterns, combined,
+            "the default patterns resolution is printed alongside its scan copy",
+        )
+        blocks = self._scanner_log_blocks()
+        self.assertEqual(len(blocks), 1, "exactly one gate invocation:\n%s" % self.scanner_log.read_text())
+        patterns_env = ""
+        for line in blocks[0].splitlines():
+            if line.startswith("PUBLIC_HYGIENE_PATTERNS_FILE="):
+                patterns_env = line[len("PUBLIC_HYGIENE_PATTERNS_FILE="):]
+        self.assertTrue(
+            patterns_env.startswith(str(self.tmpdir)) and patterns_env.endswith("hygiene.patterns"),
+            "the gate must scan the run-dir patterns copy of the default file:\n%s" % blocks[0],
+        )
+        self.assertEqual(
+            self._log_payload(blocks[0], "PATTERNS-BYTES"), PATTERNS_TEXT,
+            "the scanned copy must carry the effective default patterns bytes",
+        )
+
+    def test_patterns_default_missing_maps_to_tool_error(self):
+        # A missing effective default patterns file keeps the scanner's own
+        # tool-error class: the copy-time refusal exits 3 (never a usage
+        # exit 1), matching the scanner's missing-patterns exit mapping.
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "missing default marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        pre_tip = self._rev_parse("main")
+        rewrite = self._rewrite_step(groups_path, exports, extra_env={
+            "HOME": str(self.empty_home),
+            "PUBLIC_HYGIENE_PATTERNS_FILE": "",
+        })
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(
+            rewrite.returncode, 3,
+            "a missing default patterns file must keep the tool-error exit 3, "
+            "got rc=%s\n%s" % (rewrite.returncode, combined),
+        )
+        self.assertIn("PRIVACY GATE FAILED (scanner exit 3)", combined)
+        self.assertIn(
+            str(self.empty_home / ".ai-playbook" / "public-hygiene.patterns"), combined,
+            "the refusal names the missing effective default path",
+        )
+        self.assertEqual(self._rev_parse("main"), pre_tip, "main must be unchanged")
+
+    def test_patterns_override_missing_refused(self):
+        # A set-but-missing override keeps the existing fail-closed FATAL.
+        missing = self.base / "no-such.patterns"
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "missing override marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        pre_tip = self._rev_parse("main")
+        rewrite = self._rewrite_step(groups_path, exports, extra_env={
+            "PUBLIC_HYGIENE_PATTERNS_FILE": str(missing),
+        })
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(rewrite.returncode, 1, combined)
+        self.assertIn("FATAL", combined)
+        self.assertIn(str(missing), combined, "the refusal names the missing override")
+        self.assertEqual(self._rev_parse("main"), pre_tip, "main must be unchanged")
+
+    def test_draft_removed_after_successful_rewrite(self):
+        # A regular release-draft.* file parked directly under the
+        # canonicalized temp root is removed by the exit trap on success.
+        draft = self.tmpdir / "release-draft.case"
+        draft.write_text("release draft scratch\n", encoding="utf-8")
+        rewrite, _, _, _ = self._run_release(draft=draft)
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertFalse(draft.exists(), "a successful rewrite removes the temp-root draft")
+
+    def test_draft_outside_temp_root_survives_cleanup(self):
+        # The removal guard only ever deletes a release-draft.* file DIRECTLY
+        # under the canonicalized temp root: a regular-file draft parked
+        # outside the temp root survives a successful rewrite.
+        draft = self.base / "release-draft.outside"
+        draft.write_text("keep me\n", encoding="utf-8")
+        rewrite, _, _, _ = self._run_release(draft=draft)
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\n%s" % (rewrite.returncode, rewrite.stdout + rewrite.stderr),
+        )
+        self.assertTrue(draft.exists(), "a draft outside the temp root must survive the cleanup guard")
+
+    def test_draft_nonmatching_name_survives_cleanup(self):
+        # A regular-file draft under the temp root whose name does not match
+        # release-draft.* survives a successful rewrite.
+        draft = self.tmpdir / "scratch-draft.txt"
+        draft.write_text("keep me\n", encoding="utf-8")
+        rewrite, _, _, _ = self._run_release(draft=draft)
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\n%s" % (rewrite.returncode, rewrite.stdout + rewrite.stderr),
+        )
+        self.assertTrue(draft.exists(), "a nonmatching draft name must survive the cleanup guard")
+
+    def test_draft_symlink_survives_cleanup(self):
+        # A matching name under the temp root that is a symlink, not a regular
+        # file, must survive together with its target.
+        target = self.tmpdir / "draft-target.txt"
+        target.write_text("target\n", encoding="utf-8")
+        link = self.tmpdir / "release-draft.link"
+        os.symlink(target, link)
+        rewrite, _, _, _ = self._run_release(draft=link)
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\n%s" % (rewrite.returncode, rewrite.stdout + rewrite.stderr),
+        )
+        self.assertTrue(link.is_symlink(), "the symlink draft must survive the cleanup guard")
+        self.assertTrue(target.exists(), "the symlink target must survive the cleanup guard")
+
+    def test_draft_nested_in_release_draft_dir_survives_cleanup(self):
+        # A regular file nested inside a release-draft.* directory under the
+        # temp root is NOT directly under it: the case glob's slash-bearing
+        # tail must not satisfy the removal guard, so the nested file and its
+        # directory survive a successful rewrite.
+        nested_dir = self.tmpdir / "release-draft.dir"
+        nested_dir.mkdir()
+        draft = nested_dir / "inner.txt"
+        draft.write_text("keep me\n", encoding="utf-8")
+        rewrite, _, _, _ = self._run_release(draft=draft)
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\n%s" % (rewrite.returncode, rewrite.stdout + rewrite.stderr),
+        )
+        self.assertTrue(
+            draft.exists(),
+            "a draft nested inside a release-draft.* directory must survive the cleanup guard",
+        )
+        self.assertTrue(
+            nested_dir.exists(),
+            "the release-draft.* directory itself must survive the cleanup guard",
+        )
+
+    def test_privacy_hit_retains_draft_and_prints_replay_diagnostics(self):
+        # A privacy hit retains the draft, persists no raw output, and names
+        # every replay input plus one shell-safe replay command.
+        rewrite, _, _, pre_tip = self._run_release(variant="outside_scope", scanner="real")
+        combined = rewrite.stdout + rewrite.stderr
+        self._assert_abort_shape(rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="scripts/tool.sh:2")
+        self.assertEqual(rewrite.returncode, 1, combined)
+        self.assertTrue(self.section_path.exists(), "a failed rewrite retains the Release draft")
+        self.assertIn("PRIVACY GATE DIAGNOSTICS", combined)
+        self.assertIn("source tip: %s" % pre_tip, combined)
+        self.assertIn(
+            "retained release draft: %s" % self.section_path, combined,
+            "the diagnostics name the retained draft path",
+        )
+        self.assertIn("scanner source sha256: %s" % self._sha256_of(REAL_SCANNER), combined)
+        self.assertIn("effective patterns source: %s" % self.patterns, combined)
+        self.assertIn("effective patterns source sha256: %s" % self._sha256_of(self.patterns), combined)
+        expected_groups = "base %s\n" % pre_tip + "".join(
+            "group %d\nmsg %s\n" % (count, msg) for count, msg in zip(DEFAULT_COUNTS, DEFAULT_MSGS)
+        )
+        self.assertIn(
+            "serialized release-group input sha256: %s" % hashlib.sha256(expected_groups.encode()).hexdigest(),
+            combined,
+        )
+        command = self._replay_command(combined)
+        for flag in ("--source-tip", "--scanner", "--scanner-sha256", "--patterns",
+                     "--patterns-sha256", "--groups-sha256", "--draft"):
+            self.assertIn(flag, command)
+        self.assertEqual(
+            list(self.tmpdir.glob("release-replay-*")), [],
+            "a privacy hit must persist no raw-output file",
+        )
+
+    def test_diagnostic_replay_reproduces_scan_and_refuses_drift(self):
+        # The one-command replay reproduces the failed scan exactly: same
+        # tracked blobs, byte-identical reconstructed groups file, raw stdout
+        # in a 0600 file, transcript carrying only paths and the outcome. Any
+        # drifted input refuses (exit 2) BEFORE scanning.
+        self._build_fixture()
+        self._install_scanner("hitlog")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "replay marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        groups_bytes = Path(groups_path).read_bytes()
+        pre_tip = self._rev_parse("main")
+        rewrite = self._rewrite_step(groups_path, exports)
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        combined = rewrite.stdout + rewrite.stderr
+        self.assertEqual(rewrite.returncode, 1, "the stub hit must fail the gate:\n%s" % combined)
+        self.assertNotIn(DENY_TOKEN, combined, "the rewrite transcript must not carry matched content")
+        self.assertEqual(self._rev_parse("main"), pre_tip, "main must be unchanged")
+        self.assertTrue(self.section_path.exists(), "the failed run retains the draft")
+        command = self._replay_command(combined)
+
+        def assert_refused(label: str, proc, groups_absent: bool = True) -> None:
+            out = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, "%s must refuse with exit 2:\n%s" % (label, out))
+            self.assertIn("REPLAY REFUSED:", out, label)
+            self.assertEqual(
+                sorted(p.name for p in self.tmpdir.glob("release-replay-*")), raw_snapshot,
+                "%s: the refusal must persist no new artifact" % label,
+            )
+            if groups_absent:
+                self.assertFalse(
+                    (self.clone / "release-groups.txt").exists(),
+                    "%s: no reconstructed groups file may survive" % label,
+                )
+
+        # Valid replay: reproduces the hit with the verified sources.
+        replay = self._run_replay(command)
+        replay_out = replay.stdout + replay.stderr
+        self.assertEqual(replay.returncode, 1, "the replay must reproduce the privacy hit:\n%s" % replay_out)
+        self.assertNotIn(DENY_TOKEN, replay_out, "matched content must stay out of the replay transcript")
+        out_prefix = "release-diagnostic-replay: raw scanner stdout: "
+        out_lines = [ln for ln in replay.stdout.splitlines() if ln.startswith(out_prefix)]
+        self.assertEqual(len(out_lines), 1, replay.stdout)
+        raw_path = Path(out_lines[0][len(out_prefix):].rsplit(" (mode", 1)[0])
+        raw_text = raw_path.read_text(encoding="utf-8")
+        self.assertIn(DENY_TOKEN, raw_text, "the raw file carries the scanner's own output")
+        self.assertIn("docs/manual.md:2", raw_text, "the raw output reproduces the failed scan")
+        self.assertEqual(stat.S_IMODE(raw_path.stat().st_mode) & 0o777, 0o600, "raw stdout is 0600")
+        err_prefix = "release-diagnostic-replay: scanner stderr copy: "
+        err_lines = [ln for ln in replay.stdout.splitlines() if ln.startswith(err_prefix)]
+        self.assertEqual(len(err_lines), 1, replay.stdout)
+        err_path = Path(err_lines[0][len(err_prefix):].rsplit(" (mode", 1)[0])
+        self.assertEqual(stat.S_IMODE(err_path.stat().st_mode) & 0o777, 0o600, "the stderr copy is 0600")
+        self.assertIn("scanner outcome: fail (exit 1)", replay.stdout)
+        self.assertFalse(
+            (self.clone / "release-groups.txt").exists(),
+            "the replay removes the reconstructed groups file after the scan",
+        )
+        # Group reconstruction witness: the replay-time invocation read a
+        # groups file byte-identical to the one the failed scan consumed.
+        clone_real = os.path.realpath(str(self.clone))
+        replay_blocks = [
+            block for block in self._scanner_log_blocks()
+            if ("PUBLIC_HYGIENE_REPO_ROOT=%s\n" % clone_real) in block
+        ]
+        self.assertEqual(
+            len(replay_blocks), 1,
+            "exactly one replay-time invocation expected:\n%s" % self.scanner_log.read_text(),
+        )
+        self.assertEqual(
+            self._log_payload(replay_blocks[0], "GROUPS-BYTES").encode(), groups_bytes,
+            "the replay reconstructs the groups file byte-identically",
+        )
+        # The valid replay persists exactly its two raw-output files; every
+        # later refusal must add none.
+        raw_snapshot = sorted(p.name for p in self.tmpdir.glob("release-replay-*"))
+        self.assertEqual(len(raw_snapshot), 2, "the valid replay persists exactly two raw files")
+        # Drift refusals, each BEFORE any scan.
+        # (a) HEAD moved off the recorded source tip.
+        self._gitx("commit", "-q", "--allow-empty", "-m", "post-failure drift commit")
+        assert_refused("moved tip", self._run_replay(command))
+        self._gitx("reset", "-q", "--hard", pre_tip)
+        # (b) dirty tracked worktree.
+        readme = self.clone / "README.md"
+        saved_readme = readme.read_bytes()
+        readme.write_bytes(saved_readme + b"local dirt\n")
+        assert_refused("dirty tree", self._run_replay(command))
+        readme.write_bytes(saved_readme)
+        # (c) corrupted scanner digest argument.
+        scanner_digest = re.search(r"--scanner-sha256 ([0-9a-f]{64})", command).group(1)
+        corrupted = command.replace(
+            scanner_digest, ("0" if scanner_digest[0] != "0" else "1") + scanner_digest[1:], 1,
+        )
+        assert_refused("scanner digest argument", self._run_replay(corrupted))
+        # (d) drifted scanner source (an untracked helper copy in the clone).
+        scanner_copy = self.clone / "scripts" / "scan-public-hygiene.sh"
+        saved_scanner = scanner_copy.read_bytes()
+        scanner_copy.write_bytes(saved_scanner + b"# drifted\n")
+        assert_refused("scanner source drift", self._run_replay(command))
+        scanner_copy.write_bytes(saved_scanner)
+        # (e) corrupted patterns digest argument.
+        patterns_digest = re.search(r"--patterns-sha256 ([0-9a-f]{64})", command).group(1)
+        corrupted = command.replace(
+            patterns_digest, ("0" if patterns_digest[0] != "0" else "1") + patterns_digest[1:], 1,
+        )
+        assert_refused("patterns digest argument", self._run_replay(corrupted))
+        # (f) drifted effective-pattern source.
+        saved_patterns = self.patterns.read_bytes()
+        self.patterns.write_bytes(saved_patterns + b"extra-deny-line\n")
+        assert_refused("patterns source drift", self._run_replay(command))
+        self.patterns.write_bytes(saved_patterns)
+        # (g) drifted draft: the serialized group input no longer matches.
+        draft_text = self.section_path.read_text(encoding="utf-8")
+        self.section_path.write_text(
+            draft_text.replace("msg %s" % MSG_G1, "msg edited drift subject"), encoding="utf-8",
+        )
+        assert_refused("draft drift", self._run_replay(command))
+        self.section_path.write_text(draft_text, encoding="utf-8")
+        # (h) occupied reconstruction path: the replay never overwrites.
+        occupied = self.clone / "release-groups.txt"
+        occupied.write_text("occupied\n", encoding="utf-8")
+        assert_refused("occupied groups path", self._run_replay(command), groups_absent=False)
+        self.assertEqual(
+            occupied.read_text(encoding="utf-8"), "occupied\n",
+            "the replay must never overwrite an occupied reconstruction path",
+        )
+        occupied.unlink()
 
     # ------------------------------------------------------------------
     # Authoring cases
@@ -1772,6 +2334,156 @@ class ReleaseSkillSelftest(unittest.TestCase):
             list(self.tmpdir.glob("release-authoring-*")), [],
             "the abort also witnesses the authoring failure-exit run-dir removal",
         )
+
+
+class ReleasePrivacyLocatorsHelperTest(unittest.TestCase):
+    """Direct locator-helper contract cases (plan Task 1): row acceptance,
+    the 65,536-byte bound, control-byte escaping, dedup, and exit
+    passthrough, each against a fixture scanner stub replaying fixed stdout
+    bytes and a chosen exit code."""
+
+    def setUp(self) -> None:
+        self.base = Path(tempfile.mkdtemp(prefix="release-locators-"))
+        self.addCleanup(shutil.rmtree, self.base, True)
+
+    def _write_row_stub(self, payload: bytes, rc: int) -> Path:
+        fixture = self.base / "scanner-stdout.bin"
+        fixture.write_bytes(payload)
+        stub = self.base / "fixture-scanner.sh"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            "# selftest locator fixture scanner: replay the fixture bytes, exit rc.\n"
+            'cat "%s"\n'
+            "exit %d\n" % (fixture, rc),
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        return stub
+
+    def _run_helper(self, stub: Path, paths):
+        return subprocess.run(
+            [sys.executable, str(LOCATOR_HELPER), "--scanner", str(stub), "--", "--files", *paths],
+            capture_output=True,
+        )
+
+    def test_multiple_hits_and_dedup(self):
+        payload = (
+            b"FAIL: files\n"
+            b"docs/x.md:3:SECRETCONTENT\n"
+            b"docs/x.md:3:SECRETCONTENT\n"
+            b"release-groups.txt:5:OTHERSECRET\n"
+            b"\n"
+            b"FAIL: files\n"
+            b"docs/x.md:7:MORESECRET\n"
+            b"\n"
+            b"=== 2 public-hygiene failure(s) ===\n"
+            b"OUTCOME: fail\n"
+        )
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md", "release-groups.txt"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(
+            proc.stdout,
+            b"docs/x.md:3\nrelease-groups.txt:5\ndocs/x.md:7\n",
+            "each distinct locator once, first-seen order",
+        )
+        self.assertNotIn(b"SECRETCONTENT", proc.stdout, "matched content must never be emitted")
+
+    def test_malformed_and_absent_rows_rejected(self):
+        payload = (
+            b"FAIL: files\n"
+            b"no-colon-at-all\n"
+            b"docs/x.md:notdigits:hit\n"
+            b":5:empty-path\n"
+            b"docs/x.md\n"
+            b"\n"
+            b"OUTCOME: fail\n"
+        )
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md", "release-groups.txt"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"", "malformed and rowless paths yield no locator")
+
+    def test_unrequested_path_yields_no_locator(self):
+        payload = b"FAIL: files\nsecret.md:5:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"", "an unrequested path yields no locator")
+        self.assertNotIn(b"secret.md", proc.stdout)
+        self.assertNotIn(b"SECRETCONTENT", proc.stdout)
+
+    def test_single_file_line_content_hit(self):
+        # One scanned path: ripgrep's line:content form assigns the sole path.
+        payload = b"FAIL: files\n12:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["only.md"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"only.md:12\n")
+
+    def test_multi_path_line_only_row_rejected(self):
+        # Several scanned paths: a pathless row names no requested path.
+        payload = b"FAIL: files\n12:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["only.md", "two.md"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"")
+
+    def test_overlapping_colon_paths_resolve(self):
+        payload = b"FAIL: files\na:b.txt:4:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["a", "a:b.txt"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"a:b.txt:4\n", "the exact requested prefix wins")
+
+    def test_ambiguous_prefix_yields_no_locator(self):
+        payload = b"FAIL: files\none:2:3:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["one", "one:2"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"", "an ambiguous prefix yields no locator")
+
+    def test_digit_prefixed_content_keeps_first_split(self):
+        payload = b"FAIL: files\ndocs/x.md:3:12:SECRETCONTENT\n\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"docs/x.md:3\n", "digits-and-colon content must not remap the locator")
+
+    def test_exact_bound_parses(self):
+        row = b"docs/x.md:9:SECRETCONTENT\n"
+        payload = b"z" * (65536 - len(row) - 4) + b"pad\n" + row
+        self.assertEqual(len(payload), 65536, "the fixture must sit exactly at the parse bound")
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"docs/x.md:9\n", "exactly 65,536 bytes still parse")
+
+    def test_bound_exceeded_discards_and_reports(self):
+        row = b"docs/x.md:9:SECRETCONTENT\n"
+        payload = b"z" * (65536 - len(row) - 4) + b"pad\n" + row + b"q"
+        self.assertEqual(len(payload), 65537, "the fixture must cross the parse bound by one byte")
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["docs/x.md"])
+        self.assertEqual(proc.returncode, 1, "the bound fallback must not change the scanner exit class")
+        self.assertEqual(proc.stdout, b"LOCATOR-BOUND-EXCEEDED\n", "the bounded-output fallback is reported")
+        self.assertNotIn(b"docs/x.md", proc.stdout, "an over-bound run emits no locators")
+        self.assertNotIn(b"SECRETCONTENT", proc.stdout)
+
+    def test_control_bytes_escaped(self):
+        payload = b"dirty\x07:1:SECRETCONTENT\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["dirty\x07"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"dirty\\x07:1\n", "the control byte must be escaped")
+        self.assertNotIn(b"\x07", proc.stdout, "no raw control byte may reach the output")
+        self.assertNotIn(b"SECRETCONTENT", proc.stdout)
+
+    def test_undecodable_path_bytes_escaped(self):
+        payload = b"caf\xff:2:SECRETCONTENT\n"
+        proc = self._run_helper(self._write_row_stub(payload, 1), ["caf\udcff"])
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, b"caf\\xff:2\n", "an undecodable byte must be escaped")
+        self.assertNotIn(b"\xff", proc.stdout)
+        self.assertNotIn(b"SECRETCONTENT", proc.stdout)
+
+    def test_clean_output_and_exit_passthrough(self):
+        payload = b"=== PASS (public hygiene) ===\nOUTCOME: pass\n"
+        clean = self._run_helper(self._write_row_stub(payload, 0), ["a.md"])
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(clean.stdout, b"", "a no-hit run emits no locators")
+        tool_error = self._run_helper(self._write_row_stub(b"", 3), ["a.md"])
+        self.assertEqual(tool_error.returncode, 3, "the scanner exit class must pass through")
+        self.assertEqual(tool_error.stdout, b"")
 
 
 if __name__ == "__main__":

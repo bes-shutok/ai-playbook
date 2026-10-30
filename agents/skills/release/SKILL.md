@@ -182,16 +182,22 @@ fi
 # values from this output for the release step.
 printf 'export DONE_LOCK_DIR=%q\n' "$DONE_LOCK_DIR"
 printf 'export DONE_LOCK_TOKEN=%q\n' "$DONE_LOCK_TOKEN"
-rm -f -- "<draft-path-from-step-1>"
 PUSH_SCRIPT=""
 rewrite_rc=0
-PUSH_SCRIPT="$(bash scripts/release-rewrite.sh "$RELEASE_GROUPS_FILE")" || rewrite_rc=$?
+# RELEASE_DRAFT_PATH hands the Step 1 draft to the rewrite: on any failure the
+# draft is retained (the privacy-gate diagnostics name it and the replay
+# helper reconstructs the group input from it); the rewrite removes it only
+# after a successful swap.
+PUSH_SCRIPT="$(RELEASE_DRAFT_PATH="<draft-path-from-step-1>" bash scripts/release-rewrite.sh "$RELEASE_GROUPS_FILE")" || rewrite_rc=$?
 if [ "$rewrite_rc" -ne 0 ]; then
   DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
     "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release-repo || true
-  echo "release: rewrite aborted (exit $rewrite_rc); the lock is released; fix the reported cause and re-run from Step 1" >&2
+  echo "release: rewrite aborted (exit $rewrite_rc); the lock is released; the Step 1 draft is retained as named in the failure output; fix the reported cause and re-run from Step 1" >&2
   exit "$rewrite_rc"
 fi
+# Success: the rewrite already removed a draft parked directly under the temp
+# root; this removal is the backstop for a draft parked anywhere else.
+rm -f -- "<draft-path-from-step-1>"
 printf 'push script: %s\n' "$PUSH_SCRIPT"
 ```
 
@@ -206,22 +212,41 @@ Notes on this call:
 - Rewrite-step exit codes: exit 2 is always `REGROUP REQUIRED` (the groups no longer
   tile the current range, usually because a concurrent commit landed on `main`): re-run
   from Step 1 and redraft from the new tip; a backup ref created before the abort stays
-  in place. Exit 3 is a privacy-gate environment failure (the scanner itself exited 2):
-  no scan verdict exists, so fix the scanner setup and re-run from Step 1. Exit 1 covers
-  a privacy hit (the `PRIVACY GATE FAILED` sentinel naming the offending paths) or any
-  other abort.
+  in place. Exit 3 is a privacy-gate tool failure (the scanner itself exited 2 or 3,
+  or the effective patterns file is missing): no scan verdict exists, so fix the
+  scanner setup and re-run from Step 1. Exit 1 covers a privacy hit or any other abort:
+  on a privacy hit the `PRIVACY GATE FAILED` sentinel lists only safe locators
+  (deduplicated `path:line` pairs with control bytes escaped, derived from the
+  scanner's FAIL rows), never the matched content and never the full scanned-path list;
+  when the scanner output crossed the 64 KiB locator parse bound, the message reports
+  that and names no locators.
+- On a privacy hit the failure output also carries a `PRIVACY GATE DIAGNOSTICS` block:
+  the source tip, the retained Release draft path, the scanner and effective-pattern
+  sources with their sha256 digests, the serialized release-group input digest, and one
+  shell-safe replay command. Keep the draft in place and run that command as-is to
+  reproduce the exact failed scan: it refuses (its own exit 2, `REPLAY REFUSED`) before
+  scanning when HEAD moved off the recorded source tip, the tracked worktree is dirty,
+  either source no longer matches its recorded digest, or the draft's group input no
+  longer matches the recorded digest; on valid inputs it saves the scanner's raw stdout
+  to a mode-0600 file (stderr to a second 0600 file) and prints only the raw-output
+  paths and the scanner outcome. Never paste the raw file's contents into the chat
+  context; summarize locators instead. Remove the draft only after the replay (or after
+  a successful re-run, which removes it itself).
 - The rewrite step also prints a report-only inventory of leftover scratch artifacts
-  (stale push scripts, materialization roots, temp branches, rewrite worktrees, and the
-  authoring run dir while the run is in flight). It never cleans them: the authoring
-  step removes its run dir on its own failure exits, and the rewrite step's exit trap
-  removes it at the rewrite's exit, so the only authoring run dir a later inventory can
-  still name is one left by a successful authoring step whose rewrite never ran. Offer
-  cleanup to the user, gated on their confirmation
+  (stale push scripts, materialization roots, temp branches, rewrite worktrees, the
+  authoring run dir while the run is in flight, and `release-draft.*` files under the
+  temp root, including this run's Step 1 draft while the run is in flight). It never
+  cleans them: the authoring step removes its run dir on its own failure exits, and the
+  rewrite step's exit trap removes it at the rewrite's exit, so the only authoring run
+  dir a later inventory can still name is one left by a successful authoring step whose
+  rewrite never ran. A failed run retains its Step 1 draft (the replay reads it); a
+  successful run removes it. Offer cleanup to the user, gated on their confirmation
   that no other release run is active, and never treat anything under
   `refs/release-backup/` as a cleanup candidate.
 - Keep the printed backup ref line and the privacy-gate output (the excluded-path skip
-  notes, and the patterns-override line when `PUBLIC_HYGIENE_PATTERNS_FILE` is set) for
-  the final summary.
+  notes, the locator list on a privacy refusal, the `PRIVACY GATE DIAGNOSTICS` block
+  with its replay command, and the patterns-override line when
+  `PUBLIC_HYGIENE_PATTERNS_FILE` is set) for the final summary.
 
 ## Step 3: Publish, release the lock, and report (a separate shell call)
 

@@ -1037,7 +1037,10 @@ def cmd_capture(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(f"Captured {len(files)} file(s) under {len(dirs)} dir(s) into {out}.")
+    print(
+        f"Captured {len(files)} file(s) under {len(dirs)} dir(s) into {out} "
+        f"(checkout: {root})."
+    )
     return 0
 
 
@@ -1052,28 +1055,66 @@ def cmd_migrate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-    baseline_path = Path(args.baseline)
-    if not baseline_path.is_file():
-        print(
-            f"ERROR: baseline file not found: {baseline_path}",
-            file=sys.stderr,
-        )
-        print(
-            "Refusing to continue with an implicit empty baseline; "
-            "run capture first, otherwise pre-existing artifacts would be silently skipped.",
-            file=sys.stderr,
-        )
-        return 2
-    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-    dirs = baseline.get("dirs")
-    if not dirs:
-        print(
-            "ERROR: baseline lacks dirs; re-capture with a facts-resolved "
-            "capture (or an explicit --dirs) instead of migrating against "
-            "a guessed dir set",
-            file=sys.stderr,
-        )
-        return 2
+    # The baseline-less scoped arm (plan 2026-10-29-done-gate-report-retention
+    # Task 3): the explicitly captured scoped inventory replaces the baseline
+    # operand. The inventory is validated before the lock span (nothing is
+    # copied on an invalid operand, the same posture as the baseline
+    # refusals), and no baseline is read or fabricated.
+    scoped_files: list[str] | None = None
+    baseline: dict = {}
+    if args.inventory is not None:
+        inventory_path = Path(args.inventory)
+        try:
+            inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(
+                f"ERROR: scoped inventory unreadable: {inventory_path} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        raw_files = inventory.get("files") if isinstance(inventory, dict) else None
+        if not isinstance(raw_files, list) or not all(
+            _recoverable_mirror_path(item) for item in raw_files
+        ):
+            print(
+                "ERROR: scoped inventory must be a JSON object whose 'files' "
+                "is a list of worktree-relative paths without '..' escapes: "
+                f"{inventory_path}",
+                file=sys.stderr,
+            )
+            return 2
+        scoped_files = list(raw_files)
+    else:
+        baseline_path = Path(args.baseline)
+        if not baseline_path.is_file():
+            print(
+                f"ERROR: baseline file not found: {baseline_path}",
+                file=sys.stderr,
+            )
+            print(
+                "Refusing to continue with an implicit empty baseline; "
+                "run capture first, otherwise pre-existing artifacts would be silently skipped.",
+                file=sys.stderr,
+            )
+            print(
+                "remedy: check the primary checkout's session dir of the same "
+                "slug for closeout-baseline.json (a Phase 0 capture can land "
+                "there after a shell cwd reset) and copy it in before "
+                "recapturing; a recapture here is a late baseline and is "
+                "recorded as a capture-failure deviation",
+                file=sys.stderr,
+            )
+            return 2
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        dirs = baseline.get("dirs")
+        if not dirs:
+            print(
+                "ERROR: baseline lacks dirs; re-capture with a facts-resolved "
+                "capture (or an explicit --dirs) instead of migrating against "
+                "a guessed dir set",
+                file=sys.stderr,
+            )
+            return 2
     source = Path(args.source).resolve()
     target = Path(args.target).resolve()
     # The runner-owned merge-lock span (plan 2026-10-10-done-closeout-lock-span
@@ -1108,13 +1149,19 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     try:
-        return _cmd_migrate_transfer(args, source, target, baseline)
+        return _cmd_migrate_transfer(args, source, target, baseline, scoped_files)
     finally:
         if merge_exports is not None:
             _migrate_merge_lock_release(target, merge_exports, merge_started)
 
 
-def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, baseline: dict) -> int:
+def _cmd_migrate_transfer(
+    args: argparse.Namespace,
+    source: Path,
+    target: Path,
+    baseline: dict,
+    scoped_files: list[str] | None = None,
+) -> int:
     manifest_path = Path(args.manifest)
     if source == target:
         print(
@@ -1127,8 +1174,12 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
         )
         return 0
 
-    dirs = baseline.get("dirs")
-    baseline_files: dict[str, str] = baseline.get("files", {})
+    # The scoped arm (plan 2026-10-29-done-gate-report-retention Task 3)
+    # carries no baseline: no dirs enumeration, no baseline-skip comparison,
+    # and no mirror receipts (no baseline sibling exists, so a collision
+    # takes the plain foreign-rename disposition).
+    dirs = None if scoped_files is not None else baseline.get("dirs")
+    baseline_files: dict[str, str] = {} if scoped_files is not None else baseline.get("files", {})
     # Exact-branch binding (plan done-closeout-ceremony-friction Task 3):
     # the manifest records the source worktree's branch at transfer time, so
     # the removal gate can verify the identity at removal time (the
@@ -1159,7 +1210,11 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
     # 2026-10-24-closeout-migration-same-run-mirror-replace): loaded inside
     # the lock span, consulted only at a different-byte collision, and
     # rechecked immediately before the atomic install.
-    receipts, run_session_id = _load_mirror_receipts(Path(args.baseline), source)
+    if scoped_files is not None:
+        receipts: dict[str, dict] = {}
+        run_session_id = None
+    else:
+        receipts, run_session_id = _load_mirror_receipts(Path(args.baseline), source)
     # Manifest durability: the five sections accumulate in memory and the
     # manifest is written in a finally block, so a mid-loop abort still
     # records every entry earned so far, plus an "interrupted": true marker
@@ -1168,9 +1223,32 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
     aborted: BaseException | None = None
     persist_failure: BaseException | None = None
     try:
-        for src in _iter_configured_files(source, dirs):
-            rel = src.relative_to(source).as_posix()
-            if _is_dangling_symlink(src):
+        if scoped_files is not None:
+            # One-for-one expectation: every inventory item names exactly one
+            # expected transfer, in the captured order.
+            candidates: list[tuple[Path, str]] = [
+                (source / rel, rel) for rel in scoped_files
+            ]
+        else:
+            candidates = [
+                (src, src.relative_to(source).as_posix())
+                for src in _iter_configured_files(source, dirs)
+            ]
+        for src, rel in candidates:
+            if scoped_files is not None:
+                # A missing expected source fails the item (and the
+                # transaction): never a silent omission, never a verified row.
+                if not src.is_file():
+                    failed.append(
+                        {
+                            "source": rel,
+                            "destination": (target / rel).as_posix(),
+                            "verified": False,
+                            "error": "missing source",
+                        }
+                    )
+                    continue
+            elif _is_dangling_symlink(src):
                 print(f"WARN: skipping dangling symlink: {src}", file=sys.stderr)
                 skipped.append(
                     {
@@ -1185,6 +1263,20 @@ def _cmd_migrate_transfer(args: argparse.Namespace, source: Path, target: Path, 
             collision_dst_digest = None
             if dst.exists() or dst.is_symlink():
                 if _same_content(dst, src):
+                    if scoped_files is not None:
+                        # The expected transfer already stands at the target
+                        # with identical bytes: record the verified migrated
+                        # destination (the skipped disposition would leave the
+                        # gate's presence check and the sweep's retention with
+                        # no reference) without rewriting identical bytes.
+                        migrated.append(
+                            {
+                                "source": rel,
+                                "destination": dst.as_posix(),
+                                "verified": True,
+                            }
+                        )
+                        continue
                     skipped.append(
                         {
                             "source": rel,
@@ -2530,6 +2622,113 @@ def _branch_disposition_line(disposition: dict) -> str:
     return line
 
 
+def _closeout_manifest_candidate(
+    target: Path,
+    plan_path: Path,
+    explicit_manifest: str | None,
+) -> tuple[Path | None, bool]:
+    """The closeout migration manifest a consumer resolves for one plan,
+    refactored out of the gate's inline lookup (plan
+    2026-10-29-done-gate-report-retention Task 1) so the done-session sweep
+    can resolve the same reference. The explicit ``--migration-manifest``
+    operand is authoritative: an absent explicit file returns ``(None,
+    True)`` so the caller reports its own explicit-path skip and never
+    falls back to the derived slug directory behind its back (plan
+    2026-10-19-gate-removal-closeout-accounting Task 1). Otherwise the
+    canonical Phase 5 ``closeout-migration.json`` name is probed first and
+    the legacy ``migration-manifest.json`` twin second under the
+    facts-resolved ``execute-plan/<PLAN_SLUG>/`` session directory;
+    ``(None, False)`` when neither exists."""
+    if explicit_manifest:
+        path = Path(explicit_manifest)
+        return (path if path.is_file() else None), True
+    manifest_dir = (
+        _facts_tmp_root(target) / "execute-plan" / _plan_session_slug(plan_path)
+    )
+    for name in ("closeout-migration.json", "migration-manifest.json"):
+        candidate = manifest_dir / name
+        if candidate.is_file():
+            return candidate, False
+    return None, False
+
+
+def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
+    """The consumer-usable closeout reference state behind the gate's
+    exact-branch adjudication, refactored out of the gate's inline logic
+    (plan 2026-10-29-done-gate-report-retention Task 1) so the done-session
+    sweep can consume the same resolution. Reads one migration manifest and
+    returns a state dict; the resolver NEVER raises, and every unreadable
+    or unsupported shape resolves to no references:
+
+    - ``read_error``: the OSError/ValueError when the file is absent or
+      unreadable, else None; the remaining fields are then unresolved.
+    - ``shape_error``: the AttributeError a parsed non-dictionary root (an
+      array root, a JSON scalar) raises at branch-record extraction, else
+      None. The gate re-raises it at the same point the inline manifest
+      access always raised, so the caught ``OUTCOME: tool_error`` shape is
+      preserved byte-identically; the sweep treats the shape as
+      reference-less.
+    - ``records``: the raw ``branch`` value, ``[]`` when absent or falsy
+      (the inline ``manifest.get("branch") or []`` product, unnormalized).
+    - ``record``: the latest branch record - repeated migrate runs extend
+      the branch list, so the last element is the authoritative binding,
+      and it is taken only when it is a dictionary, else ``{}``.
+    - ``recorded``: ``record.get("branch")`` verbatim, else None.
+    - ``verified_destinations``: every truthy ``destination`` of a
+      dictionary row carrying a truthy ``verified`` mark, across
+      ``migrated`` then ``renamed`` in manifest order, duplicates
+      preserved; non-dictionary rows are ignored and ``skipped`` rows are
+      never references.
+    - ``destinations_error``: the TypeError a non-iterable section raises
+      at destination extraction, else None, discarding any partial
+      collection; the gate re-raises it at the guard-check point (after
+      identity binding), preserving the inline ordering, and the sweep
+      treats the shape as reference-less.
+
+    No shape is normalized and no refusal class is added: malformed parsed
+    shapes resolve to no references while the gate's shape-specific skip,
+    refusal, and tool-error outcomes stay byte-identical."""
+    state: dict = {
+        "path": manifest_path,
+        "read_error": None,
+        "shape_error": None,
+        "records": [],
+        "record": {},
+        "recorded": None,
+        "verified_destinations": [],
+        "destinations_error": None,
+    }
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        state["read_error"] = exc
+        return state
+    try:
+        records = manifest.get("branch") or []
+    except AttributeError as exc:
+        state["shape_error"] = exc
+        return state
+    state["records"] = records
+    if isinstance(records, list) and records:
+        last = records[-1]
+        if isinstance(last, dict):
+            state["record"] = last
+    state["recorded"] = state["record"].get("branch")
+    try:
+        for section in ("migrated", "renamed"):
+            for entry in manifest.get(section, []):
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("verified")
+                    and entry.get("destination")
+                ):
+                    state["verified_destinations"].append(entry["destination"])
+    except TypeError as exc:
+        state["destinations_error"] = exc
+        state["verified_destinations"] = []
+    return state
+
+
 def _gate_branch_closeout(
     target: Path,
     worktree_resolved: Path | None,
@@ -2567,42 +2766,27 @@ def _gate_branch_closeout(
     ``reasons``. Legacy shapes (no manifest, no branch record, a non-git
     target) skip with one named line: the sweep arm owns them."""
     basename = plan_basename or plan_path.name
-    if explicit_manifest:
-        # The explicit operand is authoritative: when it names an absent
-        # file the gate reports the distinct explicit-path skip and never
-        # falls back to the derived slug directory behind the caller's
-        # back (plan 2026-10-19-gate-removal-closeout-accounting Task 1).
-        manifest_path = Path(explicit_manifest)
-        if not manifest_path.is_file():
+    manifest_path, explicit_named = _closeout_manifest_candidate(
+        target, plan_path, explicit_manifest
+    )
+    if manifest_path is None:
+        if explicit_named:
+            # The explicit operand is authoritative: when it names an absent
+            # file the gate reports the distinct explicit-path skip and never
+            # falls back to the derived slug directory behind the caller's
+            # back (plan 2026-10-19-gate-removal-closeout-accounting Task 1).
             return None, [
                 "branch-closeout: skipped (no migration manifest at the "
                 f"explicit --migration-manifest path {explicit_manifest}; "
                 "no fallback to the derived plan-slug directory)"
             ], None
-    else:
-        # The canonical Phase 5 manifest name is closeout-migration.json
-        # (the execute-plan transfer-out invocation's --manifest value);
-        # migration-manifest.json is the legacy twin probed second so an
-        # older closeout's record still binds. The session directory is
-        # keyed by the canonical <PLAN_SLUG> (the execute-plan bootstrap
-        # rule): a dated plan file's leading date and extension are
-        # stripped, and a dated plan directory's PLAN.md charter operand
-        # resolves to the date-stripped directory name, so a dated plan's
-        # real manifest is found without an explicit override.
-        manifest_dir = (
-            _facts_tmp_root(target) / "execute-plan" / _plan_session_slug(plan_path)
-        )
-        manifest_path = manifest_dir / "closeout-migration.json"
-        if not manifest_path.is_file():
-            manifest_path = manifest_dir / "migration-manifest.json"
-    if not manifest_path.is_file():
         return None, [
             "branch-closeout: skipped (no migration manifest found; the "
             "sweep arm owns legacy shapes)"
         ], None
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    state = _resolve_closeout_reference_state(manifest_path)
+    if state["read_error"] is not None:
+        exc = state["read_error"]
         return (
             "the migration manifest exists but is unreadable, so the "
             f"exact-branch binding cannot be verified ({exc}); remedy: "
@@ -2611,16 +2795,23 @@ def _gate_branch_closeout(
             [],
             None,
         )
-    records = manifest.get("branch") or []
+    if state["shape_error"] is not None:
+        # A parsed non-dictionary manifest root (an array root, a JSON
+        # scalar) reaches the caught tool-error class at the same point the
+        # inline manifest access always raised: no normalization, no new
+        # refusal class (plan 2026-10-29-done-gate-report-retention Task 1).
+        raise state["shape_error"]
+    records = state["records"]
     if not records or not isinstance(records, list):
         return None, [
             "branch-closeout: skipped (migration manifest carries no branch "
             "record; legacy shape)"
         ], None
     # Append semantics: repeated migrate runs extend the branch list, so the
-    # LATEST transfer record is the authoritative binding.
-    record = records[-1] if isinstance(records[-1], dict) else {}
-    recorded = record.get("branch")
+    # LATEST transfer record is the authoritative binding (resolved by
+    # _resolve_closeout_reference_state).
+    record = state["record"]
+    recorded = state["recorded"]
     if not recorded:
         return None, [
             "branch-closeout: skipped (recorded branch unresolved at "
@@ -2706,14 +2897,16 @@ def _gate_branch_closeout(
             f"branch shared with {len(linked)} live worktree(s): "
             + ", ".join(linked)
         )
+    if state["destinations_error"] is not None:
+        # A non-iterable migrated/renamed section reaches the caught
+        # tool-error class at the guard-check point, exactly where the
+        # inline destination comprehension raised (after identity
+        # binding): no normalization, no new refusal class.
+        raise state["destinations_error"]
     missing_dest = [
-        entry.get("destination")
-        for section in ("migrated", "renamed")
-        for entry in manifest.get(section, [])
-        if isinstance(entry, dict)
-        and entry.get("verified")
-        and entry.get("destination")
-        and not (target / entry["destination"]).exists()
+        destination
+        for destination in state["verified_destinations"]
+        if not (target / destination).exists()
     ]
     if missing_dest:
         guard_failed = True
@@ -3903,7 +4096,25 @@ def build_parser() -> argparse.ArgumentParser:
     migrate = subparsers.add_parser(
         "migrate", help="Copy new and modified files into the target worktree."
     )
-    migrate.add_argument("--baseline", required=True, help="Baseline JSON from capture.")
+    # Transfer operands (plan 2026-10-29-done-gate-report-retention Task 3):
+    # exactly one of the canonical baseline arm and the baseline-less scoped
+    # inventory arm; the scoped arm supplies the explicitly captured transfer
+    # set without fabricating a baseline or requiring non-empty dirs.
+    transfer_operands = migrate.add_mutually_exclusive_group(required=True)
+    transfer_operands.add_argument(
+        "--baseline", default=None, help="Baseline JSON from capture."
+    )
+    transfer_operands.add_argument(
+        "--inventory",
+        default=None,
+        help=(
+            'Scoped-transfer inventory JSON ({"files": [worktree-relative '
+            "paths]}): every listed path is an expected transfer, copied, "
+            "digest-verified, and appended as a verified migrated row inside "
+            "the merge-lock transaction; a missing source or digest mismatch "
+            "fails the transaction with no verified row for the item."
+        ),
+    )
     migrate.add_argument("--source", required=True, help="Source worktree root.")
     migrate.add_argument("--target", required=True, help="Target worktree root.")
     migrate.add_argument("--manifest", required=True, help="Manifest JSON to append to.")

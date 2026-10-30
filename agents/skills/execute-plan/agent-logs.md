@@ -43,7 +43,7 @@ Each log path is **stable for the round/task** (one file per row in the path tab
 (repeat Summary, Commands run, Key decisions, Errors and retries, Artifacts, Full return payload for this pass only)
 ```
 
-The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; increment on each relaunch of the **same** path (same task implement retry, same review round address retry, etc.). Pass the current value in every worker prompt.
+The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; increment on each relaunch of the **same** path (same task implement retry, same review round address retry, etc.). Pass the current value in every worker prompt. The launch ledger line (`launch-wave:`) rides this same per-path pass numbering, so a reader reconstructs every wave's outcome from the manifest alone.
 
 **Verify after write:** if the file existed before this pass, its prior content must still be present at the top; the new `## Pass N` block must be at the end.
 
@@ -126,6 +126,8 @@ Workers that own a log path **update it before returning** (create or append per
 ```
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
+
+For a stack-task worker pass, record separate **Task-specific validation** and **Repository-standard suite** command/result lists, the authoritative guidance and inventory, and fresh output identities before the boundary. Missing commands, incomplete inventory, unavailable commands, or failures block; after repair rerun both sets. The parent owns the light-boundary commit and appends its SHA and branch-head binding to the post-boundary return; workers do not claim a future commit.
 
 A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy; for the implement pass, the coverage must be complete across the task's acceptance criteria the implement step owns AND across every scope-intersecting plan validation command for the implement pass (a `## Validation Commands` entry whose subject paths intersect the task's declared file scope; every intersecting boundary accounts for the command per the Bound task rule, which decides only the green-run versus witnessed-deferral arm), with each such command's identity and exit status recorded in `Commands run`; an implement-owned criterion without a coverage mapping routes the return to blocked exactly as today, a scope-intersecting command with no recorded run routes the same way, and a scope-intersecting command recorded with a non-zero exit routes the same way unless a later re-run of the same command inside the task is recorded in `Commands run` with exit zero; a non-zero exit at a boundary whose later task's Files list intersects the command's subject paths is recorded as deferred with the owning task named in `Commands run` (the earliest such later task owns the green run), and the witnessed deferral is not a blocked route; review-iteration passes are unchanged by this clause. The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
 

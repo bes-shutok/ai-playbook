@@ -5,6 +5,7 @@
 - Status: open
 - Source: execution review r1 of the plan `docs/history/plans/2026-10-19-review-staging-schema-scaffold-and-validation-reuse.md` (overflow findings 7, 9, 10 of `.ai-playbook/reviews/2026-10-22-review-staging-schema-scaffold-and-validation-reuse-code-review-r1.md`)
 - Files: `scripts/validate_review_staging.py`
+- Cluster: docs/history/backlog/2026-10-30-doing-code-review-staging-doc-scaffold-pointer.md
 
 ## Observed
 
