@@ -6,7 +6,8 @@
 - **Priority:** medium
 - **Cluster:** the done closeout ceremony surface (`scripts/done_run.sh`); the rolling-log write path (the log `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md`) whose sanctioned transaction is the runner's ref-bound captured-tree commit
 - **Cluster:** docs/history/backlog/2026-10-20-done-run-authorized-restoration-hardening-candidates.md (same scripts/done_run.sh commit/authorized-landing binding surface; its open candidates 4-11 carry the F4 newest-marker revalidation window beside this row's selection-binding defect)
-- **Skill/step:** `scripts/done_run.sh` commit (run-manifest selection and the authorization binding check); the primary-checkout log write path
+- - **Cluster:** docs/history/backlog/2026-10-31-done-finalize-manifest-leg-refuses-after-worktree-removal.md (same done finalize manifest/teardown ordering surface; the open origin of the family's diagnosability entry)
+**Skill/step:** `scripts/done_run.sh` commit (run-manifest selection and the authorization binding check); the primary-checkout log write path
 - **Class:** fix-class
 - **Origin class:** session witness (interactive exec run closeout, 2026-10-29)
 

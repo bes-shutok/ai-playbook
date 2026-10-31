@@ -63,7 +63,7 @@ blocked ref is <blocked_on>, the bare ref name from the entry's blocked_on field
    and their per-leg refusal routing including the inverse compare-and-swap rollback with its
    do-not-retry disposition, and the compare-and-swap ref update that
    delivers the final squash commit to the default branch) runs per the Worktree arm of the
-   execution blueprint's final-merge paragraph in `agents/skills/maintenance/prompt-templates.md`
+   execution blueprint's final-merge paragraph in `agents/skills/maintenance/template-execution.md`
    - that arm is the only landing arm, and a squash commit made in the checkout holding the
    default branch is prohibited. The default-branch ref's value is captured immediately before
    the squash commit inside the run worktree (the arm consumes it in its pre-swap parentage-gate
@@ -107,9 +107,7 @@ discharge the parked intents in this same session before ending, guard-bound, th
 the discharged field in one targeted state edit; on primitive absence, leave the park
 standing and end.
 
-FINAL STEP, after the report: end this run after the report; the next scheduled payload
-starts in a fresh, compacted context, because the dispatch boundary is the compaction boundary
-and compaction itself is operator-only.
+FINAL STEP, after the report: apply directive D-17 (docs/maintenance/operator-directives.md): continue eligible work without a user turn while a target remains and the normal guards pass; a context-management stop does not hold the cycle gate, while an explicit user-paced directive does. Preserve the primary quota pause, empty-queue stop, and explicit current stop request. Use the runtime continuation strategy (fresh session per ZCode pick; same Codex session with compaction at safe boundaries); never ask the user to manage context.
 </prompt>
 
 {REPO_ROOT}: <repository root>

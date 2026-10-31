@@ -9,7 +9,7 @@
 - **Driving force:** reliability
 - **Surface:** `docs/tmp/done-session/run-manifest-*.json` lifecycle; the remedy ladder in `scripts/done_run.sh` setup and `scripts/done_sweep_gates_lib.py` (`classify_run_boundary`, `disposition-manifest`)
 - **Environment context:** this repository's done closeout flow; witnessed 2026-10-29 in a primary-checkout done setup, pool measured 2026-10-30
-- **Cluster:** docs/history/backlog/2026-10-30-done-session-cross-repo-marker-immortality.md; docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md
+- **Cluster:** docs/history/backlog/2026-10-30-done-session-cross-repo-marker-immortality.md; docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md; docs/history/backlog/2026-10-31-done-interrupted-run-remedy-names-script.md
 - **Dedup probe:** searched open backlog rows and both rolling logs for orphan-manifest drain, run-manifest pool, and dead-boundary residue; the landed manifest-state classification plan (`docs/history/plans/completed/2026-10-12-done-interrupted-manifest-state-classification.md`, ff6e81c05) owns the classifier and was probe-verified against this shape (its PRUNE receipt says the orphan refusal stayed byte-identical), the tmp-sweep-safety row owns recursive-deletion safety, and the gate-report-retention plan owns report retention intervals; none owns draining the orphan pool itself.
 
 ## Problem

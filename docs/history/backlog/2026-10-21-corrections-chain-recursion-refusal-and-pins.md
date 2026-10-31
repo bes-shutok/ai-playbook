@@ -1,7 +1,7 @@
 # Backlog: corrections chain refusal tuples and index pins
 
 - **Filed:** 2026-10-21, from Phase 3 code review r1 of `corrections-chain-operator-ack-end-to-end`
-- **Status:** open
+- **Status:** covered (docs/history/plans/completed/2026-10-29-corrections-chain-recursion-refusal-and-pins.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** fail-closed consistency

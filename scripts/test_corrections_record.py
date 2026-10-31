@@ -1255,6 +1255,12 @@ def refuse_all(old_bytes, new_bytes):
     return ["hunk 0 unclassified"]
 
 
+# Scheduler-state text nested deeply enough for json.loads to raise
+# RecursionError on the test venv's interpreter (100k depth parses
+# clean; 1M crosses the parser's recursion guard in milliseconds).
+DEEP_STATE_TEXT = "[" * 1000000 + "]" * 1000000
+
+
 class RowDigestTest(unittest.TestCase):
     """The correction row identity (plan Terms): the lowercase SHA-256 of
     the canonical JSON encoding (sorted keys, compact separators) of the
@@ -1750,6 +1756,71 @@ class StateAuthorizationTest(unittest.TestCase):
             head=b2, primary_checkout=str(self.primary))
         self.assertTrue(ok, msg)
 
+    def test_deep_nested_state_refuses_without_granting_authorization(self):
+        # State nested deeply enough for json.loads to raise
+        # RecursionError refuses through the shared loader's existing
+        # not-decodable receipt refusal: no traceback escapes, no
+        # authorization is granted, and no state byte is written.
+        self.write_raw_state(DEEP_STATE_TEXT)
+        ok, msg = self.verify()
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt", "unresolvable witness",
+                       "not decodable JSON")
+        self.assertEqual(
+            (self.primary / cr.SCHEDULER_STATE_RELPATH).read_text(),
+            DEEP_STATE_TEXT)
+
+    def test_non_object_state_refuses(self):
+        # A valid JSON document that is not an object is the existing
+        # not-a-JSON-object receipt refusal (regression pin): no
+        # authorization resolves and the file is left unchanged.
+        for raw in ("[1, 2, 3]", '"junk"', "true"):
+            self.write_raw_state(raw)
+            ok, msg = self.verify()
+            self.assertFalse(ok, raw)
+            assert_refusal(self, msg, "receipt", "unresolvable witness",
+                           "not a JSON object")
+            self.assertEqual(
+                (self.primary / cr.SCHEDULER_STATE_RELPATH).read_text(),
+                raw, raw)
+
+    def test_mixed_chain_bypasses_classification_only_for_the_acked_later_hop(self):
+        # A script-verified first hop followed by a valid operator-acked
+        # second hop: the chain verifies and classification runs for the
+        # first hop only (zero-based hop index 0); an absent or invalid
+        # authorization for the second hop still refuses.
+        hop1 = self.repo.commit_file(PLAN_REL, D2, "script-verified fix")
+        hop2 = self.repo.commit_file(PLAN_REL, D3, "operator-acked fix")
+        row1 = plan_row(hx(D1), hx(D2), hop1)
+        row2 = ack_state_row(hx(D2), hx(D3), hop2)
+        # The setUp gap row already quotes the shared default hunk digest
+        # both rows carry.
+        classify_calls = []
+
+        def classify(old_bytes, new_bytes):
+            classify_calls.append((old_bytes, new_bytes))
+            if old_bytes == D2 and new_bytes == D3:
+                return ["second hop unclassified"]
+            return None
+
+        self.write_entries([ack_entry(row2)])
+        ok, msg = self.verify(rows=[row1, row2], classify=classify)
+        self.assertTrue(ok, msg)
+        self.assertIn("chain verified", msg)
+        self.assertEqual(classify_calls, [(D1, D2)])
+        # An absent authorization for the second hop still refuses.
+        self.write_entries([])
+        ok, msg = self.verify(rows=[row1, row2], classify=classify)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt",
+                       "no correction_authorizations entry")
+        # An invalid authorization for the second hop still refuses.
+        self.write_entries([ack_entry(row2, writer_session_id=ACK_AUTHOR)])
+        ok, msg = self.verify(rows=[row1, row2], classify=classify)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt",
+                       "written by the recording session")
+
 
 class CorrectionAuthorizationWriterTest(unittest.TestCase):
     """The production acknowledgment writer (plan Task 3): a later
@@ -2108,6 +2179,95 @@ class CorrectionAuthorizationWriterTest(unittest.TestCase):
         doc = self.read_doc()
         self.assertEqual(doc["last_run_at"], "2026-10-20T09:32:00Z")
         self.assertEqual(doc["correction_authorizations"], [])
+
+    def test_deep_state_pre_read_refuses_and_writes_nothing(self):
+        # The writer's pre-read parse hits the deep-nesting RecursionError
+        # through the same shared refusal shape: the named not-decodable
+        # receipt refusal, the on-disk bytes untouched, and no temporary
+        # acknowledgment file left behind.
+        self.pin_env(**{sc.CODEX_SESSION_ENV: self.WRITER})
+        self.state_path().write_text(DEEP_STATE_TEXT)
+        ok, msg = self.record()
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt", "unresolvable witness",
+                       "not decodable JSON")
+        self.assertEqual(self.state_path().read_text(), DEEP_STATE_TEXT)
+        self.assertEqual(
+            list((self.repo.root / ".ai-playbook").glob(
+                "scheduler-state.json.ack-tmp-*")), [])
+
+    def test_non_object_state_refuses_the_writer(self):
+        # A valid JSON non-object state is the existing not-a-JSON-object
+        # receipt refusal on the writer path too (regression pin):
+        # nothing is appended and the file is unchanged.
+        self.pin_env(**{sc.CODEX_SESSION_ENV: self.WRITER})
+        raw = json.dumps([1, 2, 3])
+        self.state_path().write_text(raw)
+        ok, msg = self.record()
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt", "unresolvable witness",
+                       "not a JSON object")
+        self.assertEqual(self.state_path().read_text(), raw)
+
+    def test_serialization_recursion_refuses_and_leaves_no_temp_file(self):
+        # A RecursionError raised by the writer's serialization step is
+        # contained by the existing append leg: a named refusal, the
+        # state file byte-identical, and no temporary acknowledgment
+        # file behind.
+        self.pin_env(**{sc.CODEX_SESSION_ENV: self.WRITER})
+        before = self.state_path().read_bytes()
+        real_dumps = cr.json.dumps
+
+        def state_serialization_recurses(obj, **kwargs):
+            # Only the writer's targeted-state serialization signature
+            # (indent=2, sort_keys=True) recurses; the row-digest
+            # canonical encoding and fixture writes ride through.
+            if kwargs.get("indent") == 2 and kwargs.get("sort_keys"):
+                raise RecursionError("depth")
+            return real_dumps(obj, **kwargs)
+
+        with mock.patch.object(cr.json, "dumps", state_serialization_recurses):
+            ok, msg = self.record()
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "append",
+                       "the scheduler state file is not writable")
+        self.assertEqual(self.state_path().read_bytes(), before)
+        self.assertEqual(
+            list((self.repo.root / ".ai-playbook").glob(
+                "scheduler-state.json.ack-tmp-*")), [])
+
+    def test_drift_reread_decode_failure_refuses_and_leaves_no_temp_file(self):
+        # The writer's second state read raising UnicodeDecodeError while
+        # the on-disk authorization bytes stay valid and unchanged is the
+        # existing absent-or-unreadable receipt refusal: unchanged state
+        # bytes and no temporary acknowledgment file left behind.
+        self.pin_env(**{sc.CODEX_SESSION_ENV: self.WRITER})
+        state = self.state_path()
+        before = state.read_bytes()
+        real_read_text = Path.read_text
+        reads = {"n": 0}
+
+        def second_read_undecodable(path, *args, **kwargs):
+            text = real_read_text(path, *args, **kwargs)
+            # git reports the physical checkout path (/private/var on
+            # macOS), so compare resolved paths, never lexical ones.
+            if path.resolve() == state.resolve():
+                reads["n"] += 1
+                if reads["n"] == 2:
+                    raise UnicodeDecodeError(
+                        "utf-8", b"\xff", 0, 1, "injected decode failure")
+            return text
+
+        with mock.patch.object(Path, "read_text", second_read_undecodable):
+            ok, msg = self.record()
+        self.assertEqual(reads["n"], 2)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "receipt", "unresolvable witness",
+                       "absent or unreadable")
+        self.assertEqual(state.read_bytes(), before)
+        self.assertEqual(
+            list((self.repo.root / ".ai-playbook").glob(
+                "scheduler-state.json.ack-tmp-*")), [])
 
 
 class MarkerConstantsTest(unittest.TestCase):

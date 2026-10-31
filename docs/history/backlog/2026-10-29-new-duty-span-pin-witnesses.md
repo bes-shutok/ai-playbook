@@ -11,6 +11,7 @@
 - **Capture hygiene:** scan-public-hygiene --files pass over this draft before landing (2026-10-29).
 - **Why not fixed now:** the Machinery admission protocol refuses a mid-lane blocking pin without a witnessed catch; warning-only presence pins are the admitted remedy and belong to a scheduled maintenance pass, not this address pass.
 
+Cluster: docs/history/backlog/2026-10-29-payload-placeholder-set-pin-parity.md (shared surface: maintenance duty and payload pins in the same pins suite)
 ## Problem
 
 The changed duties' load-bearing clauses have no pins-suite witnesses. Mutation-verified by the Phase 3 testing lens (scratch-clone deletion runs, HEAD-validator-versus-tree differential; no tree writes): each clause listed below can be deleted from the working tree with every plan Validation grep and `scripts/check_maintenance_pins.sh` staying green:

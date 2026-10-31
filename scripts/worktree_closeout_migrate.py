@@ -24,6 +24,12 @@ Subcommands:
            current state still matches the latest valid receipt for that
            exact path; invalid or mismatched receipt history keeps the
            foreign rename, and replacements are recorded under "replaced".
+           A byte-identical primary target whose current state matches
+           the path's latest valid receipt is likewise receipt-proven:
+           it is recorded under "migrated" as verified (instead of
+           "skipped") without rewriting the target bytes, so the
+           removal gate's verified-destination check sees it; a target
+           with no valid receipt keeps the skipped row.
            The migration holds the repository-keyed merge lock across its
            copies through one bounded-wait merge-wait-acquire under label
            worktree-closeout-migrate (wait default 300s, overridable by
@@ -113,7 +119,23 @@ Subcommands:
            (--branch with an explicit --migration-manifest, no
            --worktree) adjudicates a ref with no linked worktree under
            the same guard chain; deletion in either mode is operator
-           work only.
+           work only. The verified no-charter stand-down arm (plan
+           2026-10-28-plan-authoring-stand-down-before-charter): in
+           worktree mode, when --authoring-claim names the authoring
+           claim file and the expected plan file is absent, the gate
+           verifies - each check refusing with preservation - the
+           claim's session and origin, the frozen PLAN-PROMPTS entry
+           naming the claim and its origin, the done-run manifest
+           identity (owned_plan_paths naming the expected plan and
+           start_commit), the claim-derived worktree placement (the
+           claim-file stem) and authoring branch, the branch's
+           start-commit equality, the clean worktree, and the
+           zero-owned artifact accounting over every binding done-run
+           manifest, then authorizes the
+           removal through the shared removal line; the plan header is
+           never parsed and the ordinary empty-owned-set refusal never
+           runs in this arm, while every ordinary-plan gate-removal
+           check stays unchanged.
   sweep    Mechanical ad-hoc worktree residue sweep beside a --target
            primary checkout. Report-only by default: every enumerated
            ad-hoc-shaped candidate (same parent directory as the primary,
@@ -175,8 +197,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Callable
 import review_plan_identity
 
@@ -1009,6 +1031,11 @@ def cmd_capture(args: argparse.Namespace) -> int:
     root = Path.cwd()
     files: dict[str, str] = {}
     skipped: list[dict] = []
+    # The capture time is recorded before the source walk (plan Terms: the
+    # UTC time when the baseline capture starts walking its configured
+    # paths), so it describes the baseline operation rather than the later
+    # baseline-file write.
+    captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for path in _iter_configured_files(root, dirs):
         rel = path.relative_to(root).as_posix()
         # Every OSError from the per-file digest read is contained the same
@@ -1030,7 +1057,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
-            {"dirs": dirs, "files": files, "skipped": skipped},
+            {"captured_at": captured_at, "dirs": dirs, "files": files, "skipped": skipped},
             indent=2,
             sort_keys=True,
         )
@@ -1155,6 +1182,93 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             _migrate_merge_lock_release(target, merge_exports, merge_started)
 
 
+def _print_zero_delta_report(source: Path, dirs: list[str], baseline: dict, baseline_path: Path) -> None:
+    """Zero-delta distinguishability report (warning-only; entry
+    closeout-migrate-zero-delta-silence): a zero-result migrate is ambiguous
+    between a correctly empty delta and a baseline that postdates the run
+    edits (the late-capture shape that strands run-era records); naming the
+    baseline's recorded captured_at against the newest configured-dir file
+    mtime lets the closeout reader adjudicate the two readings in the
+    tool's own output. The baseline file itself is excluded from the mtime
+    walk (capture writes it after walking the source paths), a legacy
+    baseline whose captured_at is absent or unreadable reports its capture
+    time as unknown rather than borrowing the baseline file's mtime, and
+    the report never changes the exit code."""
+    try:
+        excluded = baseline_path.resolve()
+    except OSError:
+        excluded = None
+    newest: tuple[float, str] | None = None
+    for path in _iter_configured_files(source, dirs):
+        if excluded is not None:
+            try:
+                is_baseline = path.resolve() == excluded
+            except OSError:
+                is_baseline = False
+            if is_baseline:
+                continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or mtime > newest[0]:
+            newest = (mtime, path.relative_to(source).as_posix())
+    if newest is None:
+        print(
+            "WARNING: zero-delta report: no readable files found under the configured "
+            f"dirs ({', '.join(dirs)}); a correctly empty delta and a mis-resolved dir "
+            "set are indistinguishable here; re-derive the run's owned paths before "
+            "teardown",
+            file=sys.stderr,
+        )
+        return
+    newest_iso = datetime.fromtimestamp(newest[0], timezone.utc).isoformat(
+        timespec="seconds"
+    )
+    captured_at = baseline.get("captured_at")
+    captured: datetime | None = None
+    if isinstance(captured_at, str):
+        try:
+            captured = datetime.fromisoformat(captured_at)
+        except ValueError:
+            captured = None
+    if captured is None:
+        print(
+            "WARNING: zero-delta report: baseline capture time unknown (a legacy "
+            "baseline without a readable captured_at); newest file mtime "
+            f"{newest_iso} ({newest[1]}); the postdates/predates comparison cannot "
+            "run; re-derive the run's owned paths before teardown (manual-delta-carry "
+            "remedy per the Worktree-first standard's closeout migration paragraph)",
+            file=sys.stderr,
+        )
+        return
+    # A naive captured_at (never written by capture) reads as UTC, and both
+    # sides compare at the whole-second granularity the report prints, so
+    # the verdict always matches the printed timestamps.
+    if captured.tzinfo is None:
+        captured = captured.replace(tzinfo=timezone.utc)
+    newest_dt = datetime.fromtimestamp(newest[0], timezone.utc).replace(microsecond=0)
+    if newest_dt > captured:
+        print(
+            f"WARNING: zero-delta report: newest file mtime {newest_iso} ({newest[1]}) "
+            f"postdates the baseline capture {captured_at}; the empty delta reflects "
+            "content the baseline never saw being touched without a digest change; "
+            "re-derive the run's owned paths before teardown (manual-delta-carry remedy "
+            "per the Worktree-first standard's closeout migration paragraph)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"WARNING: zero-delta report: newest file mtime {newest_iso} ({newest[1]}) predates "
+            f"the baseline capture {captured_at}; this signature fits both a correctly "
+            "empty delta and a baseline that postdates the run edits (a late capture "
+            "absorbs run-era records and migrates nothing); adjudicate against the "
+            "run's owned paths before teardown, the manual-delta-carry remedy applying "
+            "when the baseline postdates the edits",
+            file=sys.stderr,
+        )
+
+
 def _cmd_migrate_transfer(
     args: argparse.Namespace,
     source: Path,
@@ -1208,8 +1322,10 @@ def _cmd_migrate_transfer(
     priors: list[tuple[Path, Path]] = []
     # Receipt-proven same-run mirrors (plan
     # 2026-10-24-closeout-migration-same-run-mirror-replace): loaded inside
-    # the lock span, consulted only at a different-byte collision, and
-    # rechecked immediately before the atomic install.
+    # the lock span, consulted at a different-byte collision (the
+    # replacement, rechecked immediately before the atomic install) and at a
+    # byte-identical target (the verified migrated row the receipt backs,
+    # plan 2026-10-30-execute-plan-teardown-staging-record-mirror Task 2).
     if scoped_files is not None:
         receipts: dict[str, dict] = {}
         run_session_id = None
@@ -1269,6 +1385,26 @@ def _cmd_migrate_transfer(
                         # destination (the skipped disposition would leave the
                         # gate's presence check and the sweep's retention with
                         # no reference) without rewriting identical bytes.
+                        migrated.append(
+                            {
+                                "source": rel,
+                                "destination": dst.as_posix(),
+                                "verified": True,
+                            }
+                        )
+                        continue
+                    receipt = receipts.get(rel)
+                    if receipt is not None and _target_matches_receipt(dst, receipt):
+                        # A byte-identical target covered by the exact path's
+                        # valid same-run mirror receipt is a verified transfer:
+                        # the receipt (verified against the target's current
+                        # digest, the same check the replacement path uses)
+                        # proves the primary copy carries the mirrored state,
+                        # so the verified migrated row - the skipped row would
+                        # leave the removal gate's presence check with no
+                        # reference - records it without rewriting identical
+                        # bytes. A path with no valid receipt keeps the
+                        # skipped row unchanged.
                         migrated.append(
                             {
                                 "source": rel,
@@ -1389,20 +1525,36 @@ def _cmd_migrate_transfer(
         f"Migrated {len(migrated)} file(s), renamed {len(renamed)} on collision, "
         f"replaced {len(replaced)}, skipped {len(skipped)} identical; manifest at {manifest_path}."
     )
+    # Trigger scope (plan Terms): zero-delta means no copied, no
+    # collision-renamed, AND no receipt-proven replaced files, so a
+    # rename-only or replaced-only migration never reaches the adjudication
+    # line: only the truly empty shape is ambiguous enough to warrant it.
+    if not migrated and not renamed and not replaced and args.baseline:
+        # The scoped-inventory route has no baseline file; its emptiness is
+        # inventory-scoped and already refuses on a missing source, so the
+        # baseline-adjudication report does not apply there.
+        _print_zero_delta_report(source, dirs, baseline, Path(args.baseline))
     return 0
 
 
-def _reviews_home(target: Path) -> Path | None:
-    """Resolve the target's reviews home from its facts block; None when the
-    facts file or the reviews_dir key is unresolvable (fail-closed, never a
+def _facts_resolved_home(target: Path, facts_key: str) -> Path | None:
+    """Resolve one facts-block directory key under the target root; None
+    when the facts file or the key is unresolvable (fail-closed, never a
     guessed default)."""
-    raw = facts_paths.resolve_toml_key_raw(target, "reviews_dir")
+    raw = facts_paths.resolve_toml_key_raw(target, facts_key)
     if raw is None or not raw.strip():
         return None
     expanded = Path(raw).expanduser()
     if expanded.is_absolute():
         return expanded
     return (target / expanded).resolve()
+
+
+def _reviews_home(target: Path) -> Path | None:
+    """Resolve the target's reviews home from its facts block; None when the
+    facts file or the reviews_dir key is unresolvable (fail-closed, never a
+    guessed default)."""
+    return _facts_resolved_home(target, "reviews_dir")
 
 
 # A path-like token: slash/word/dot characters ending in a review-record
@@ -1841,6 +1993,33 @@ _GATE_CITATION_REMEDY_LINE = (
     "then re-run gate-removal"
 )
 
+# The empty-owned-set refusal's remedy line (plan
+# 2026-10-27-gate-removal-empty-owned-set-remedy Task 1): no migrate run
+# can create the missing inputs (the plan header carries no citation and
+# the claims file names no record path), so the attainable repair is
+# adding a Plan review record:/Plan review: citation to the plan's header
+# or passing a --claims file listing review-record paths, then re-running
+# gate-removal.
+_GATE_EMPTY_SET_REMEDY_LINE = (
+    "remedy: no migrate run can create the missing inputs; add a "
+    "Plan review record:/Plan review: citation to the plan's header, or "
+    "pass a --claims file listing review-record paths, then re-run "
+    "gate-removal"
+)
+
+# The no-charter stand-down refusals' remedy line (plan
+# 2026-10-28-plan-authoring-stand-down-before-charter Task 1): a refused
+# pre-plan cleanup preserves the worktree and branch, names the exact
+# missing or ambiguous evidence above, and the attainable repair is
+# resolving that evidence or removing the resources deliberately as
+# operator work; no migrate run applies (no plan file exists to migrate
+# records for).
+_GATE_NO_CHARTER_REMEDY_LINE = (
+    "remedy: the authoring worktree and branch stay preserved; resolve "
+    "the named evidence, or remove the resources deliberately as operator "
+    "work, then re-run gate-removal"
+)
+
 
 def _review_label_rest(plan_text: str) -> str:
     """The gate's own extraction: the joined post-label text of every
@@ -1984,6 +2163,18 @@ def _add_gate_removal_arguments(parser: argparse.ArgumentParser) -> None:
         "derived from the target's facts tmp_dir plus the plan stem when "
         "omitted.",
     )
+    parser.add_argument(
+        "--authoring-claim",
+        default=None,
+        help="The authoring claim file enabling the no-charter stand-down "
+        "arm: in worktree mode, when the expected plan file is absent, "
+        "the gate verifies the claim's session and origin, the frozen "
+        "PLAN-PROMPTS entry, the done-run manifest identity (owned plan "
+        "and start_commit), the claim-derived worktree placement and "
+        "authoring branch, the clean worktree, and the zero-owned-review "
+        "artifact accounting before authorizing the removal; ignored "
+        "when the plan file exists.",
+    )
     parser.set_defaults(func=cmd_gate_removal)
 
 
@@ -2110,6 +2301,676 @@ def build_gate_removal_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# The no-charter stand-down arm's fixed surfaces (plan
+# 2026-10-28-plan-authoring-stand-down-before-charter Task 1): the prompt
+# log the frozen binding reads, and the Worktree-first pre-plan authoring
+# arm's branch placement (agents/skills/execute-plan/worktree-first.md:
+# branch `authoring/<claim-file-stem>` for a worktree at
+# <worktree-root>/<claim-file-stem>).
+_NO_CHARTER_PROMPTS_LOG_REL = "docs/history/backlog/PLAN-PROMPTS.md"
+_NO_CHARTER_BRANCH_PREFIX = "authoring/"
+
+
+def _no_charter_claim_fields(claim_path: Path) -> tuple[str | None, str | None]:
+    """The authoring claim's `session:` and `item:` values (r3 F2: the
+    first occurrence of each key, scanned line-by-line over the whole
+    file; no frontmatter block is parsed or bounded); (None, None) when
+    the file is unreadable. An absent or empty field stays None: the
+    caller refuses, never guesses."""
+    try:
+        text = claim_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+    session: str | None = None
+    item: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if session is None and stripped.startswith("session:"):
+            session = stripped[len("session:"):].strip() or None
+        elif item is None and stripped.startswith("item:"):
+            item = stripped[len("item:"):].strip() or None
+    return session, item
+
+
+def _no_charter_frozen_entry(
+    log_path: Path, slug: str, claim_name: str, item: str
+) -> tuple[dict | None, str | None]:
+    """The prompt-log entry binding this pre-plan claim: (entry, None) when
+    exactly one entry whose heading slug is the session slug carries a
+    ``Frozen:`` line naming the claim file and an ``Origins:`` list holding
+    the claim's origin; (None, reason) for every other shape (missing log,
+    zero or duplicate slug headings, absent freeze mark, a foreign witness,
+    a missing origin), so the caller refuses with the specific reason."""
+    try:
+        text = log_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"the prompt log {_NO_CHARTER_PROMPTS_LOG_REL} is unreadable ({exc})"
+    entries: list[dict] = []
+    current: dict | None = None
+    in_origins = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current is not None:
+                entries.append(current)
+            current = {"slug": line[3:].strip(), "frozen": None, "origins": []}
+            in_origins = False
+            continue
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("Frozen:") and current["frozen"] is None:
+            current["frozen"] = stripped[len("Frozen:"):].strip()
+        elif stripped == "Origins:":
+            in_origins = True
+        elif stripped.startswith("- ") and in_origins:
+            current["origins"].append(stripped[2:].strip())
+        elif stripped:
+            in_origins = False
+    if current is not None:
+        entries.append(current)
+    shape = [entry for entry in entries if entry["slug"] == slug]
+    if not shape:
+        return None, (
+            f"no prompt-log entry names the session slug {slug} "
+            f"({_NO_CHARTER_PROMPTS_LOG_REL})"
+        )
+    if len(shape) > 1:
+        return None, (
+            f"{len(shape)} prompt-log entries name the session slug {slug} "
+            "(ambiguous own-entry binding)"
+        )
+    entry = shape[0]
+    if not entry["frozen"]:
+        return None, (
+            f"the prompt-log entry {slug} carries no Frozen: mark, so the "
+            "authoring claim has no frozen prompt binding"
+        )
+    if claim_name not in entry["frozen"]:
+        return None, (
+            f"the prompt-log entry {slug} is frozen for a different witness: "
+            f"its Frozen: line does not name the claim file {claim_name}"
+        )
+    if item not in entry["origins"]:
+        return None, (
+            f"the prompt-log entry {slug} does not list the claim's origin "
+            f"{item} under Origins:"
+        )
+    return entry, None
+
+
+def _no_charter_run_manifests(
+    target: Path,
+    worktree_resolved: Path,
+    expected_plan_rel: str,
+    root_matches: Callable[[object, Path], bool],
+) -> list[tuple[str, dict]]:
+    """The done-run manifests binding the expected plan: every parseable
+    ``run-manifest-*.json`` under the target's AND the run worktree's
+    facts-resolved ``done-session`` directories (r1 F1: the producer's
+    ``session_dir`` resolves from the dispatching checkout's toplevel, so a
+    worktree-dispatched run records under the worktree side while a
+    primary-dispatched run records under the target side; a shared
+    ``tmp_dir`` collapses to one scanned directory) whose recorded
+    ``repo_root`` binds the target or the run worktree through the
+    producer's shared two-arm matcher (``root_matches``: a 64-hex identity
+    digest, or a legacy raw-path record kept loadable), and whose
+    ``owned_plan_paths`` name the expected plan exactly. Manifest identity
+    is the producer's ``run-manifest-<run_id>.json`` filename: the same
+    record visible through both sides dedupes to one binding, and the
+    first scanned side (the target side) is authoritative for a filename
+    whose twins disagree. Unparseable or foreign records match nothing
+    (the conservative fallback), so a run whose only record is corrupt
+    refuses through the zero-match arm."""
+    done_dirs: list[Path] = []
+    for root in (target, worktree_resolved):
+        done_dir = _facts_tmp_root(root) / "done-session"
+        if done_dir not in done_dirs:
+            done_dirs.append(done_dir)
+    matches: list[tuple[str, dict]] = []
+    seen_names: set[str] = set()
+    for done_dir in done_dirs:
+        if not done_dir.is_dir():
+            continue
+        for path in sorted(done_dir.glob("run-manifest-*.json")):
+            if path.name in seen_names:
+                continue
+            seen_names.add(path.name)
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            plans = payload.get("owned_plan_paths")
+            if not isinstance(plans, list):
+                continue
+            root_raw = payload.get("repo_root")
+            if not root_matches(root_raw, target) and not root_matches(
+                root_raw, worktree_resolved
+            ):
+                continue
+            if not any(isinstance(plan, str) and plan == expected_plan_rel for plan in plans):
+                continue
+            matches.append((path.name, payload))
+    return matches
+
+
+def _gate_no_charter_refusal(*lines: str) -> int:
+    """Print one no-charter refusal (the named refused: lines plus the
+    shared preservation remedy and the fail outcome) and return the gate's
+    refusal exit. The worktree and branch stay untouched on every path
+    through here."""
+    for line in lines:
+        print(f"refused: {line}")
+    print(_GATE_NO_CHARTER_REMEDY_LINE)
+    print("OUTCOME: fail")
+    return 1
+
+
+def _manifest_created_epoch(payload: dict) -> float:
+    """The done-run manifest's creation epoch, 0.0 when absent or
+    non-numeric: the newest-binding tiebreaker over agreeing done-run
+    manifest generations."""
+    epoch = payload.get("created_epoch")
+    if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+        return 0.0
+    return float(epoch)
+
+
+def _no_charter_manifest_owned_entries(
+    matches: list[tuple[str, dict]], key: str, label: str
+) -> tuple[list[tuple[str, str]], str | None]:
+    """One manifest owned-set field aggregated across EVERY binding
+    done-run manifest (r3 F1): the newest binding alone fixes the plan and
+    start commit, but zero-owned must hold for every binding generation,
+    so an older manifest declaring owned records refuses even when the
+    newest declares none. Returns the non-empty string entries as
+    (declaring manifest filename, entry) pairs, or ([], refusal) when some
+    binding manifest lacks the key or carries a non-list value: that
+    manifest proves nothing about ownership, so zero-owned is not proven."""
+    pairs: list[tuple[str, str]] = []
+    for name, payload in matches:
+        if key not in payload:
+            return [], (
+                f"the done-run manifest {name} carries no {key} key, so "
+                f"zero-owned {label} is not proven"
+            )
+        raw = payload.get(key)
+        if not isinstance(raw, list):
+            return [], (
+                f"the done-run manifest {name} carries a non-list {key} "
+                f"value ({type(raw).__name__}), so zero-owned {label} is "
+                "not proven"
+            )
+        pairs.extend(
+            (name, entry) for entry in raw if isinstance(entry, str) and entry
+        )
+    return pairs, None
+
+
+def _no_charter_owned_entries_refusal(
+    pairs: list[tuple[str, str]], claim: str, tail: str
+) -> str:
+    """One aggregated owned-set refusal line (r3 F1): names every declaring
+    manifest filename and up to three declared entries."""
+    names = ", ".join(sorted({name for name, _entry in pairs}))
+    named = ", ".join(entry for _name, entry in pairs[:3])
+    more = f" and {len(pairs) - 3} more" if len(pairs) > 3 else ""
+    return f"the done-run manifest(s) {names} {claim} ({named}{more}) {tail}"
+
+
+# The gitignored homes the Worktree-first transfer-in copies from the
+# primary checkout into a fresh worktree (agents/skills/execute-plan/
+# worktree-first.md Transfer-in implementation; agents/skills/maintenance/
+# template-authoring.md WORKTREE DUTY): each entry is (label, facts key).
+# A pre-plan authoring stand-down's staging homes therefore hold
+# provisioned mirrors of primary records, not run-created artifacts.
+_NO_CHARTER_TRANSFERRED_HOMES = (
+    ("reviews", "reviews_dir"),
+    ("review-certs", "review_certs_dir"),
+)
+
+
+def _unmirrored_staging_files(staging_home: Path, primary_home: Path) -> list[Path]:
+    """The staging-home files that are NOT provisioned transfer-in mirrors:
+    a file is a mirror only when the same relative path under the primary
+    home exists and matches byte-for-byte (symlinks compare by link target,
+    per _same_content). Everything else - no twin, a missing twin file, or
+    differing bytes - is run-created or drifted state the removal would
+    destroy unaccounted."""
+    unmirrored: list[Path] = []
+    for child in sorted(path for path in staging_home.rglob("*") if path.is_file()):
+        twin = primary_home / child.relative_to(staging_home)
+        if not (twin.is_symlink() or twin.is_file()):
+            unmirrored.append(child)
+            continue
+        if not _same_content(child, twin):
+            unmirrored.append(child)
+    return unmirrored
+
+
+def _no_charter_staging_refusal(target: Path, worktree_resolved: Path) -> list[str]:
+    """The transferred-homes scan behind the no-charter zero-owned verdict
+    (r2 F1). The Worktree-first transfer-in copies the primary reviews and
+    review-certs homes into the worktree at provisioning, so a staging
+    record whose byte-identical twin survives under the target's
+    primary-side home is a provisioned mirror: harmless to destroy, the
+    primary original survives. A staging record with no primary twin, or
+    with bytes differing from its twin, is not a mirror and the run owns
+    none: the removal would destroy it unaccounted. Returns the refusal
+    lines (empty when every scanned home holds only mirrors or nothing).
+    An unresolvable staging home refuses (r1 F3: never a silently skipped
+    scan), as does an unresolvable primary twin home while staging records
+    exist (the twin semantics are unprovable there)."""
+    lines: list[str] = []
+    for label, facts_key in _NO_CHARTER_TRANSFERRED_HOMES:
+        staging_home = _facts_resolved_home(worktree_resolved, facts_key)
+        if staging_home is None:
+            lines.append(
+                f"the worktree's facts cannot resolve {facts_key}, so the "
+                f"staging {label} home cannot be scanned for unaccounted "
+                "run-owned records"
+            )
+            continue
+        if not staging_home.is_dir():
+            continue
+        staged = sorted(
+            child for child in staging_home.rglob("*") if child.is_file()
+        )
+        if not staged:
+            continue
+        primary_home = _facts_resolved_home(target, facts_key)
+        if primary_home is None:
+            lines.append(
+                f"the target's facts cannot resolve {facts_key}, so the "
+                f"{len(staged)} staging {label} record(s) cannot be proven "
+                "provisioned transfer-in mirrors"
+            )
+            continue
+        unmirrored = _unmirrored_staging_files(staging_home, primary_home)
+        if not unmirrored:
+            continue
+        try:
+            named = [
+                child.resolve().relative_to(worktree_resolved).as_posix()
+                for child in unmirrored[:3]
+            ]
+        except ValueError:
+            named = [child.name for child in unmirrored[:3]]
+        more = f" and {len(unmirrored) - 3} more" if len(unmirrored) > 3 else ""
+        lines.append(
+            f"the worktree staging {label} home holds record(s) the "
+            f"removal would destroy ({', '.join(named)}{more}): a "
+            "provisioned transfer-in copy is safe to destroy only because "
+            "its byte-identical twin survives under the primary home, and "
+            "these records carry no such twin or differ from it, and the "
+            "run owns none"
+        )
+    return lines
+
+
+def _gate_removal_no_charter(
+    args: argparse.Namespace,
+    plan_path: Path,
+    target: Path,
+    worktree_resolved: Path,
+) -> int:
+    """The verified no-charter authoring stand-down arm (plan
+    2026-10-28-plan-authoring-stand-down-before-charter Task 1): cleanup of
+    an authoring worktree provisioned before its first plan-file write,
+    entered only in worktree mode when --authoring-claim is explicit and
+    the expected plan file is absent. The evidence chain, each refusing
+    with preservation before the next runs:
+
+    1. the authoring claim parses its session and origin;
+    2. the expected plan operand is a dated plan file at the plans root
+       whose date-stripped stem is the claim's slug;
+    3. the prompt log holds exactly one entry with that slug, frozen for
+       this claim file, listing the claim's origin;
+    4. exactly one binding done-run manifest (or several agreeing on the
+       start commit; the newest binds) names the expected plan in its
+       ``owned_plan_paths`` and records a non-empty ``start_commit``;
+    5. the worktree is the claim's placement (the claim-file stem) and a
+       registered, unlocked worktree of the target bound to the
+       claim-derived branch ``authoring/<claim-file-stem>``;
+    6. the branch ref still sits at the recorded start commit (zero run
+       commits);
+    7. the worktree is clean, every binding done-run manifest carries its
+       owned_review_paths and owned_paths keys as lists whose entries,
+       aggregated across all bindings (r3 F1: not only the newest), are
+       empty, and the transferred reviews/review-certs
+       staging homes hold only provisioned transfer-in mirrors
+       (byte-identical primary twins) or nothing.
+
+    On a full pass the arm prints its evidence lines, the zero-owned
+    records verdict, and rides the shared branch-closeout and removal tail:
+    no plan-header citation is parsed and the ordinary empty-owned-set
+    refusal never runs. Every ordinary-plan gate-removal check is unchanged."""
+    claim_path = Path(args.authoring_claim)
+    if not claim_path.is_file():
+        return _gate_no_charter_refusal(
+            f"the authoring claim file was not found: "
+            f"{_gate_refusal_text(str(claim_path), claim_path, target)}"
+        )
+    session, item = _no_charter_claim_fields(claim_path)
+    if not session or not item:
+        missing = []
+        if not session:
+            missing.append("session:")
+        if not item:
+            missing.append("item:")
+        return _gate_no_charter_refusal(
+            "the authoring claim "
+            f"{_gate_refusal_text(str(claim_path), claim_path, target)} "
+            f"carries no parseable {' and '.join(missing)} line(s); the "
+            "claim must bind this stand-down to a session id and a backlog "
+            "origin"
+        )
+
+    # The expected plan operand: a dated plan file directly under the plans
+    # root whose date-stripped stem is the claim's slug (the canonical
+    # feature slug the coverage rule keys).
+    slug = _plan_session_slug(claim_path)
+    try:
+        plan_rel = plan_path.resolve().relative_to(target).as_posix()
+    except (OSError, ValueError):
+        plan_rel = None
+    if plan_rel is None:
+        return _gate_no_charter_refusal(
+            "the --plan operand does not resolve under the target checkout: "
+            "pass the expected plan's absolute (or target-relative) path"
+        )
+    plan_base = plan_rel.rsplit("/", 1)[-1]
+    plans_prefix = _PLANS_DIR + "/"
+    under_plans_root = plan_rel.startswith(plans_prefix) and "/" not in plan_rel[len(plans_prefix):]
+    if not under_plans_root or not _DATED_PLAN_RE.match(plan_base):
+        return _gate_no_charter_refusal(
+            f"the --plan operand is not a dated plan file at the plans root "
+            f"({_PLANS_DIR}/): {plan_rel}"
+        )
+    if _plan_session_slug(plan_path) != slug:
+        return _gate_no_charter_refusal(
+            f"the --plan operand's session slug "
+            f"{_plan_session_slug(plan_path)} does not match the claim's "
+            f"slug {slug}"
+        )
+
+    entry, binding_refusal = _no_charter_frozen_entry(
+        target / _NO_CHARTER_PROMPTS_LOG_REL, slug, claim_path.name, item
+    )
+    if binding_refusal is not None:
+        return _gate_no_charter_refusal(binding_refusal)
+
+    # The root identity borrows the done producer's shared two-arm matcher
+    # (r1 F1): the producer records ``repo_root`` as the same 64-hex
+    # identity digest the run-start marker records, so only the producer's
+    # own matcher can bind current-producer manifests; a local raw-path
+    # comparison would match nothing and silently refuse every clean
+    # stand-down. The lazy import keeps the heavy sweep lib off the other
+    # subcommands; an unimportable producer is a tool error, never a
+    # zero-match refusal.
+    try:
+        from done_sweep_gates_lib import (
+            _repo_root_matches_value as shared_repo_root_matcher,
+        )
+    except ImportError as exc:
+        print(
+            f"gate-removal: the done producer's shared repo-root matcher is "
+            f"unimportable ({exc}); the no-charter arm cannot bind "
+            "done-run manifests",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+
+    matches = _no_charter_run_manifests(
+        target, worktree_resolved, plan_rel, shared_repo_root_matcher
+    )
+    if not matches:
+        return _gate_no_charter_refusal(
+            f"no done-run manifest under the target's or the worktree's "
+            f"done-session records names the expected plan {plan_rel} in "
+            "its owned_plan_paths"
+        )
+    start_commits = {
+        payload.get("start_commit")
+        for _name, payload in matches
+        if isinstance(payload.get("start_commit"), str) and payload.get("start_commit")
+    }
+    if len(start_commits) != 1:
+        return _gate_no_charter_refusal(
+            f"{len(matches)} done-run manifests name the expected plan "
+            f"{plan_rel} with disagreeing or missing start commits "
+            "(ambiguous run identity: "
+            + ", ".join(sorted(name for name, _payload in matches))
+            + ")"
+        )
+    manifest_name, manifest = max(
+        matches, key=lambda match: _manifest_created_epoch(match[1])
+    )
+    start_commit = manifest.get("start_commit")
+
+    # The placement identity: the Worktree-first pre-plan authoring arm
+    # names the worktree after the claim file stem and the branch after the
+    # stem under authoring/.
+    claim_stem = claim_path.stem
+    expected_branch = _NO_CHARTER_BRANCH_PREFIX + claim_stem
+    if worktree_resolved.name != claim_stem:
+        return _gate_no_charter_refusal(
+            f"the --worktree operand is not the claim's placement worktree "
+            f"(expected the worktree directory named after the claim file "
+            f"stem {claim_stem}, found {worktree_resolved.name})"
+        )
+    probe = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--git-dir"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode != 0:
+        print(
+            "gate-removal: the target is not a git checkout; the no-charter "
+            "arm cannot verify the branch identity",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+    try:
+        entries = _parse_worktree_entries(target)
+    except _SweepToolError as exc:
+        print(
+            f"gate-removal: the target's worktree list is unreadable ({exc})",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+    mine = None
+    for candidate in entries:
+        try:
+            if Path(candidate["path"]).resolve() == worktree_resolved:
+                mine = candidate
+                break
+        except OSError:
+            continue
+    if mine is None:
+        return _gate_no_charter_refusal(
+            f"the worktree {worktree_resolved.name} is not a registered "
+            f"worktree of the target, so the placement identity "
+            f"{expected_branch} cannot be verified"
+        )
+    if mine.get("locked"):
+        return _gate_no_charter_refusal(
+            f"the worktree registration is locked ({mine.get('locked')}); "
+            "an operator hold keeps the resources in place"
+        )
+    actual_branch = mine.get("branch")
+    if mine.get("detached") or not actual_branch:
+        return _gate_no_charter_refusal(
+            f"the worktree is on a detached HEAD, not the claim-derived "
+            f"authoring branch {expected_branch}"
+        )
+    if actual_branch != expected_branch:
+        return _gate_no_charter_refusal(
+            f"exact-branch identity mismatch: the worktree is bound to "
+            f"branch '{actual_branch}', not the claim-derived authoring "
+            f"branch '{expected_branch}'"
+        )
+    ref = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--verify", expected_branch],
+        capture_output=True, text=True,
+    )
+    if ref.returncode != 0:
+        return _gate_no_charter_refusal(
+            f"the authoring branch {expected_branch} does not resolve in "
+            f"the target repository ({ref.stderr.strip()})"
+        )
+    branch_oid = ref.stdout.strip()
+    if branch_oid != start_commit:
+        return _gate_no_charter_refusal(
+            f"the authoring branch {expected_branch} moved past the "
+            f"recorded start commit (branch {branch_oid} != start commit "
+            f"{start_commit}); the run's content is not provably empty"
+        )
+
+    # Clean worktree and zero-owned artifact accounting.
+    dirty = _owned_files_report(worktree_resolved)
+    if any(line.startswith("tool_error:") for line in dirty):
+        for line in dirty:
+            print(line)
+        print("OUTCOME: tool_error")
+        return 3
+    if dirty:
+        lines = [
+            f"the no-charter worktree holds uncommitted owned files: {line}"
+            for line in dirty[:5]
+        ]
+        if len(dirty) > 5:
+            lines.append(
+                f"the no-charter worktree holds uncommitted owned files: "
+                f"and {len(dirty) - 5} more"
+            )
+        return _gate_no_charter_refusal(*lines)
+    # The zero-owned proof (r1 F2, r3 F1): every binding done-run manifest
+    # must carry each owned-set key as a list, and the entries aggregated
+    # across ALL binding manifests must be empty. The newest binding alone
+    # fixes the plan and start commit, so an older generation declaring
+    # owned records while the newest declares none would otherwise remove
+    # the worktree while the older generation's declared records are
+    # destroyed unaccounted.
+    review_pairs, owned_shape_refusal = _no_charter_manifest_owned_entries(
+        matches, "owned_review_paths", "review records"
+    )
+    if owned_shape_refusal is not None:
+        return _gate_no_charter_refusal(owned_shape_refusal)
+    if review_pairs:
+        return _gate_no_charter_refusal(
+            _no_charter_owned_entries_refusal(
+                review_pairs,
+                "own review record(s)",
+                ", so zero-owned review records is not proven",
+            )
+        )
+    # The general run-owned artifact set (r2 F2): the producer's
+    # --owned-path accumulation lands in owned_paths; a non-empty aggregate
+    # names run-owned artifacts outside the reviews home - ignored-path
+    # artifacts the porcelain check cannot see and the staging scan does
+    # not cover - so zero-owned is not proven. The key checks mirror the
+    # owned_review_paths enforcement above: a missing or non-list key on
+    # any binding manifest proves nothing about artifact ownership.
+    artifact_pairs, owned_shape_refusal = _no_charter_manifest_owned_entries(
+        matches, "owned_paths", "run artifacts"
+    )
+    if owned_shape_refusal is not None:
+        return _gate_no_charter_refusal(owned_shape_refusal)
+    if artifact_pairs:
+        return _gate_no_charter_refusal(
+            _no_charter_owned_entries_refusal(
+                artifact_pairs,
+                "carry a non-empty owned_paths set",
+                ": unaccounted run-owned artifact(s) outside the reviews "
+                "home, so zero-owned is not proven",
+            )
+        )
+    # The transferred-homes staging scan (r1 F3, r2 F1): the Worktree-first
+    # transfer-in copies the primary reviews and review-certs homes into
+    # the worktree at provisioning, so a staging record whose byte-identical
+    # twin survives under the target's primary-side home is a provisioned
+    # mirror (harmless to destroy; the primary original survives), while a
+    # record with no twin or differing bytes is run-created or drifted
+    # state the removal would destroy unaccounted. An unresolvable staging
+    # home is a refusal with preservation, never a silently skipped scan.
+    staging_refusal = _no_charter_staging_refusal(target, worktree_resolved)
+    if staging_refusal:
+        return _gate_no_charter_refusal(*staging_refusal)
+
+    # Full pass: the evidence lines, then the shared tail.
+    print(
+        f"no-charter: authoring claim {claim_path.name} verified "
+        f"(session {session}; origin {item})"
+    )
+    print(f"no-charter: frozen PLAN-PROMPTS entry {slug} binds this claim")
+    print(
+        f"no-charter: done-run manifest {manifest.get('run_id')} "
+        f"({manifest_name}) owns plan {plan_rel} "
+        f"at start commit {start_commit}"
+    )
+    print(
+        f"no-charter: branch {expected_branch} remains at the recorded "
+        "start commit; the worktree is clean and owns no review record"
+    )
+    print(
+        "verified 0 owned record(s): every binding done-run manifest owns "
+        "no review record or run artifact, and the worktree staging reviews "
+        "and review-certs homes hold no record without a byte-identical "
+        "primary twin"
+    )
+    identity = getattr(args, "plan_identity", None)
+    accounting_basename = Path(identity).name if identity else plan_path.name
+    refusal, branch_lines, disposition = _gate_branch_closeout(
+        target,
+        worktree_resolved,
+        plan_path,
+        getattr(args, "migration_manifest", None),
+        branch_only=False,
+        expected_branch=None,
+        plan_basename=accounting_basename,
+    )
+    if disposition is not None:
+        print(_branch_disposition_line(disposition))
+    if refusal is not None:
+        print(f"refused: {refusal}")
+        print(_GATE_REMEDY_LINE)
+        print("OUTCOME: fail")
+        return 1
+    for line in branch_lines:
+        print(line)
+    if disposition is not None and disposition.get("removal_blocked"):
+        print(
+            "held: the branch disposition above names a failed guard; the "
+            "on-disk worktree stays retained with the ref for operator "
+            "resolution (cleanup is authorized only when the accounting and "
+            "identity/artifact checks pass)"
+        )
+        print("OUTCOME: fail")
+        return 1
+    _print_gate_removal_line(args.worktree)
+    print("OUTCOME: pass")
+    return 0
+
+
+def _print_gate_removal_line(worktree_operand: str) -> None:
+    """The sanctioned removal line shared by both gate arms: the exact
+    git command for an on-disk worktree, the stale-registration note
+    otherwise (the operand is echoed exactly as given, the cleanup line
+    staying truthful about what exists on disk)."""
+    if Path(worktree_operand).exists():
+        print(f"removal: git worktree remove --force {shlex.quote(worktree_operand)}")
+    else:
+        print(
+            f"removal: no on-disk worktree at {worktree_operand} (stale "
+            "registration; only the sweep's scoped administrative drain "
+            "applies)"
+        )
+
+
 def cmd_gate_removal(args: argparse.Namespace) -> int:
     """Fail-closed pre-removal gate: the records the executing plan's
     header cites (label lines only) plus any --claims paths must exist
@@ -2123,6 +2984,7 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     classified run."""
     branch_only = bool(getattr(args, "branch", None))
     explicit_manifest = getattr(args, "migration_manifest", None)
+    authoring_claim = getattr(args, "authoring_claim", None)
     if branch_only and args.worktree:
         print(
             "gate-removal: --branch and --worktree are mutually exclusive: "
@@ -2147,8 +3009,24 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         )
         print("OUTCOME: tool_error")
         return 3
+    if branch_only and authoring_claim:
+        print(
+            "gate-removal: --authoring-claim applies only in worktree mode: "
+            "the no-charter stand-down arm removes a linked authoring "
+            "worktree, never an unlinked ref",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
     plan_path = Path(args.plan)
-    if not plan_path.is_file():
+    # The no-charter stand-down arm (plan
+    # 2026-10-28-plan-authoring-stand-down-before-charter Task 1): entered
+    # only when an explicit authoring-claim operand is supplied in worktree
+    # mode and the expected plan file is absent; every other absent-plan
+    # run keeps the legacy tool error. The common operand and home guards
+    # below run for both arms before the dispatch.
+    no_charter = bool(authoring_claim) and not branch_only and not plan_path.is_file()
+    if not no_charter and not plan_path.is_file():
         print(f"gate-removal: plan file not found: {plan_path}", file=sys.stderr)
         print("OUTCOME: tool_error")
         return 3
@@ -2238,6 +3116,14 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
             "2027-01-19"
         )
 
+    if no_charter:
+        # The verified no-charter stand-down: claim, frozen prompt entry,
+        # done-run manifest identity, placement, start commit, clean
+        # worktree, and zero-owned artifact accounting all bind before any
+        # plan-specific check is skipped (the plan header is never parsed
+        # and the ordinary empty-owned-set refusal never runs in this arm).
+        return _gate_removal_no_charter(args, plan_path, target, worktree_resolved)
+
     claims_entries: list[str] = []
     if args.claims:
         claims_path = Path(args.claims)
@@ -2265,7 +3151,12 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
             "refused: empty owned set: the plan carries no Plan review record:/"
             "Plan review: header citation and --claims names no record path"
         )
-        print(_GATE_REMEDY_LINE)
+        # The remedy follows its class (plan
+        # 2026-10-27-gate-removal-empty-owned-set-remedy Task 1): no migrate
+        # run can create a plan-header citation or a claims-file entry, so
+        # the empty set carries its own attainable-input remedy, never the
+        # migrate remedy.
+        print(_GATE_EMPTY_SET_REMEDY_LINE)
         print("OUTCOME: fail")
         return 1
 
@@ -2489,14 +3380,7 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         )
         print("OUTCOME: fail")
         return 1
-    if Path(args.worktree).exists():
-        print(f"removal: git worktree remove --force {shlex.quote(args.worktree)}")
-    else:
-        print(
-            f"removal: no on-disk worktree at {args.worktree} (stale "
-            "registration; only the sweep's scoped administrative drain "
-            "applies)"
-        )
+    _print_gate_removal_line(args.worktree)
     print("OUTCOME: pass")
     return 0
 
@@ -2650,6 +3534,25 @@ def _closeout_manifest_candidate(
         if candidate.is_file():
             return candidate, False
     return None, False
+
+
+def _is_done_session_gate_report(destination: str) -> bool:
+    """True when the verified destination is a done-session bounded gate
+    report (the ``gate-reports/run-<id>-<gate>-full.txt`` shape the producer
+    writes and the sanctioned docs/tmp sweep expires): the swept-artifact
+    class both 2026-10-31 witnesses name. The match is anchored: adjacent
+    ``gate-reports/run-`` components, the ``-full.txt`` suffix, and a
+    target-relative path (an absolute destination would discard the target
+    at the join, so it stays fail-closed); the transfer rows record these
+    destinations as target-relative POSIX paths."""
+    if PurePosixPath(destination).is_absolute():
+        return False
+    parts = PurePosixPath(destination).parts
+    adjacent = any(
+        parts[i] == "gate-reports" and parts[i + 1].startswith("run-")
+        for i in range(len(parts) - 1)
+    )
+    return adjacent and destination.endswith("-full.txt")
 
 
 def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
@@ -2903,16 +3806,38 @@ def _gate_branch_closeout(
         # inline destination comprehension raised (after identity
         # binding): no normalization, no new refusal class.
         raise state["destinations_error"]
+    # Swept-artifact classification (the 2026-10-31 closeout-gates trio,
+    # landed 52750a1fe; shared-slug second witness): a missing verified destination under the done-session
+    # gate-reports home is a bounded gate report the sanctioned docs/tmp
+    # sweep legitimately expires - the OWNING run's disposition, report-only,
+    # never a hold on the adjudicated run's branch. Every other missing
+    # destination keeps its fail-closed hold.
     missing_dest = [
         destination
         for destination in state["verified_destinations"]
         if not (target / destination).exists()
+        and not _is_done_session_gate_report(destination)
     ]
     if missing_dest:
         guard_failed = True
         reasons.append(
             "migrated artifact(s) missing under the target: "
             + ", ".join(missing_dest[:5])
+        )
+    foreign_missing = [
+        destination
+        for destination in state["verified_destinations"]
+        if not (target / destination).exists()
+        and _is_done_session_gate_report(destination)
+    ]
+    foreign_notes: list[str] = []
+    if foreign_missing:
+        foreign_notes.append(
+            "branch-closeout: expired gate-report destination(s) missing "
+            "under the target (report-only; each cites its owning run's "
+            "disposition - the sanctioned docs/tmp sweep expires bounded "
+            "gate reports - never a hold on this branch): "
+            + ", ".join(foreign_missing[:5])
         )
 
     # Capture ONE proven tip OID for the ancestry/tree checks.
@@ -3026,7 +3951,7 @@ def _gate_branch_closeout(
         )
         disposition = _disposition("retained", proven_oid, reasons)
         disposition["removal_blocked"] = guard_failed
-        return None, lines, disposition
+        return None, lines + foreign_notes, disposition
     if accounted == "exact-tree-accounted":
         return None, [
             f"branch-closeout: branch {recorded} exact-tree-accounted at "
@@ -3037,7 +3962,7 @@ def _gate_branch_closeout(
             f"closeout may delete it at expected OID {proven_oid} only "
             "after the documented quiesce-and-reconcile sequence while "
             "writers stay stopped",
-        ], _disposition("exact-tree-accounted", proven_oid, [])
+        ] + foreign_notes, _disposition("exact-tree-accounted", proven_oid, [])
     return None, [
         f"branch-closeout: branch {recorded} ancestry-accounted at "
         f"{proven_oid} (single live worktree binds it; migrated artifacts "
@@ -3047,7 +3972,7 @@ def _gate_branch_closeout(
         f"expected OID {proven_oid} after the documented quiesce-and-"
         "reconcile sequence (plain git branch -d must print deletable; "
         "never force while a linked worktree remains)",
-    ], _disposition("ancestry-accounted", proven_oid, [])
+    ] + foreign_notes, _disposition("ancestry-accounted", proven_oid, [])
 
 
 # ---------------------------------------------------------------------------

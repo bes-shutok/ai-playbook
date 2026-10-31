@@ -1,7 +1,7 @@
 # Landing diagnostic selects a foreign plan and a foreign source worktree
 
 - **Filed:** 2026-10-21, execute-plan closeout of plan-validation-command-undefined-repo (landed 28127e322)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-28-landing-diagnostic-own-plan-target.md)
 Quarantine: 2026-10-27
 - **Workflow:** backlog
 - **Priority:** low (warning-only diagnostic; no block, but most receipts diagnose an unrelated plan)

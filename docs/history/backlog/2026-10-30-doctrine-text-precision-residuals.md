@@ -1,4 +1,5 @@
 # Backlog: doctrine-text and registry-citation precision residuals (baseline-repair r2)
+Status: covered (docs/history/plans/2026-10-31-doctrine-text-precision-residuals.md)
 
 Driving force: docs (primary), code-quality (secondary)
 Origin class: fix-class

@@ -2076,6 +2076,395 @@ NO_MANIFEST_REFUSAL_PIN = (
 RECORD_ONLY_CORPUS_REL = "projects/.ai-playbook/development_lessons.md"
 
 
+class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan
+    docs/history/plans/2026-10-27-done-run-untrack-ignored-path.md): the
+    explicit repeatable --untrack declaration for pre-staged index-only
+    deletions of ignored paths. A valid declaration lands only the index
+    deletion and keeps the local ignored copy and rule with the exact
+    committed tree; each invalid path condition (absent from HEAD, still
+    indexed, missing worktree copy, not ignored) refuses at the read-only
+    preflight with HEAD, the index, and the working tree unchanged; an
+    unchanged ignored tracked file stays outside the changed-blob refusal;
+    a force-added ignored blob declared through --stage refuses at the
+    preflight changed-blob scan; and two separate late-race cases exercise
+    the two captured-tree invariants (a re-added untrack target; a
+    force-added ignored non-target --stage path injected after preflight
+    but before stage-operand processing and tree capture) with no commit
+    or ref update and the injected caller index state preserved."""
+
+    TARGET_REL = "local-home/local.properties"
+
+    def untrack_fixture(self, *force_tracked_ignored: str) -> None:
+        """The untrack boundary: an ignored worktree file force-tracked at
+        HEAD beside its ignore rule, origin/HEAD pinned at the seed so the
+        branch-added deletion takes the dirt gate's input-set skip."""
+        self.init_fixture_repo(branch="feature/PROJ-1-done-run")
+        (self.fixture / ".gitignore").write_text(
+            "docs/tmp/\n__pycache__/\nlocal-home/\n*.conf\n"
+        )
+        (self.fixture / "local-home").mkdir()
+        (self.fixture / self.TARGET_REL).write_text("key=local\n")
+        if force_tracked_ignored:
+            for rel in force_tracked_ignored:
+                (self.fixture / rel).write_text("tracked-ignored bytes\n")
+            self.git("add", "-f", *force_tracked_ignored)
+        self.git("add", "-f", self.TARGET_REL)
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "track the local-only file beside its ignore rule")
+        seed_sha = self.git("rev-parse", "HEAD~1").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/main", seed_sha)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD",
+                 "refs/remotes/origin/main")
+
+    def stage_target_deletion(self) -> None:
+        """The caller's recovery action: the index-only deletion with the
+        local copy retained (git rm --cached)."""
+        self.git("rm", "--cached", "--quiet", self.TARGET_REL)
+
+    def snapshot_state(self, worktree_rels: list[str]) -> tuple[str, str, dict[str, bytes]]:
+        """HEAD oid, full index entries, and the named working-tree bytes."""
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        index = self.git("ls-files", "-s").stdout
+        work = {
+            rel: (self.fixture / rel).read_bytes() for rel in worktree_rels
+        }
+        return head, index, work
+
+    def assert_state_unchanged(
+        self, snap: tuple[str, str, dict[str, bytes]]
+    ) -> None:
+        head, index, work = snap
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), head)
+        self.assertEqual(self.git("ls-files", "-s").stdout, index)
+        for rel, data in work.items():
+            self.assertEqual((self.fixture / rel).read_bytes(), data)
+
+    def git_injector_shim(
+        self, trigger_args: list[str], inject_shell: str
+    ) -> Path:
+        """A PATH-shim git that performs one injected shell snippet the
+        first time it sees the trigger argument vector, then forwards every
+        call (including the triggering one) to the real git unchanged."""
+        real_git = shutil.which("git")
+        shim_dir = self.tmp / "git-shim"
+        shim_dir.mkdir()
+        marker = shim_dir / "injection-fired"
+        script = shim_dir / "git"
+        script.write_text(
+            "#!/bin/bash\n"
+            "REAL_GIT=%s\n"
+            "if [ \"$*\" = %s ] && [ ! -e %s ]; then\n"
+            "  : > %s\n"
+            "  {\n%s\n} >/dev/null 2>&1\n"
+            "fi\n"
+            "exec \"$REAL_GIT\" \"$@\"\n"
+            % (
+                shlex.quote(real_git or "git"),
+                shlex.quote(" ".join(trigger_args)),
+                shlex.quote(str(marker)),
+                shlex.quote(str(marker)),
+                inject_shell,
+            )
+        )
+        script.chmod(0o755)
+        return shim_dir
+
+    def run_with_shim(self, shim_dir: Path, exports: dict,
+                      *args: str) -> subprocess.CompletedProcess:
+        env = self.commit_env() | exports
+        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
+        return self.run_commit(*args, env=env)
+
+    def test_valid_untrack_lands_index_deletion_and_keeps_local_copy_and_rule(self) -> None:
+        self.untrack_fixture()
+        self.stage_target_deletion()
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL,
+            "--subject", "untrack the ignored local-only file",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn(
+            "untrack preflight: accepted index-only deletion: "
+            + self.TARGET_REL,
+            combined,
+        )
+        self.assertEqual(self.commit_count(), count_before + 1)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        # the exact committed tree: only the target's deletion against the
+        # parent tree, no other entry changed
+        self.assertEqual(
+            self.git("diff", "--name-only", f"{landing}^", landing).stdout,
+            self.TARGET_REL + "\n",
+        )
+        shown = self.git("show", "--name-status", "--format=", landing).stdout
+        self.assertIn("D\t" + self.TARGET_REL, shown)
+        # the retained local ignored copy and the intact ignore rule
+        local_copy = self.fixture / self.TARGET_REL
+        self.assertTrue(local_copy.is_file())
+        self.assertEqual(local_copy.read_text(), "key=local\n")
+        self.assertEqual(
+            self.git("check-ignore", "-q", "--", self.TARGET_REL,
+                     check=False).returncode,
+            0,
+        )
+        gitignore = (self.fixture / ".gitignore").read_text()
+        self.assertIn("local-home/", gitignore)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[0], "untrack-preflight")
+        self.assertIn("untrack-captured-tree-invariants", stages)
+
+    def test_untrack_path_absent_from_head_refuses_with_state_preserved(self) -> None:
+        self.untrack_fixture()
+        self.stage_target_deletion()
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        count_before = self.commit_count()
+        snap = self.snapshot_state([self.TARGET_REL, "seed.txt"])
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", "ghost.txt",
+            "--subject", "untrack a path HEAD never tracked",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "--untrack path is not tracked by HEAD: ghost.txt", proc.stderr)
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "untrack-preflight")
+
+    def test_untrack_path_still_indexed_refuses_with_state_preserved(self) -> None:
+        self.untrack_fixture()
+        # no git rm --cached: the target is still an index entry
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        count_before = self.commit_count()
+        snap = self.snapshot_state([self.TARGET_REL, "seed.txt"])
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL,
+            "--subject", "untrack while the index entry remains",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "--untrack path is still in the index: " + self.TARGET_REL,
+            proc.stderr,
+        )
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "untrack-preflight")
+
+    def test_untrack_path_missing_worktree_copy_refuses_with_state_preserved(self) -> None:
+        self.untrack_fixture()
+        self.stage_target_deletion()
+        (self.fixture / self.TARGET_REL).unlink()
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        count_before = self.commit_count()
+        snap = self.snapshot_state(["seed.txt"])
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL,
+            "--subject", "untrack after the local copy vanished",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "--untrack path is absent from the working tree: "
+            + self.TARGET_REL,
+            proc.stderr,
+        )
+        self.assert_state_unchanged(snap)
+        self.assertFalse((self.fixture / self.TARGET_REL).exists())
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "untrack-preflight")
+
+    def test_untrack_path_not_ignored_refuses_with_state_preserved(self) -> None:
+        self.untrack_fixture()
+        (self.fixture / "plain.txt").write_text("plain tracked bytes\n")
+        self.git("add", "plain.txt")
+        self.git("commit", "-qm", "add a plain tracked file")
+        self.git("rm", "--cached", "--quiet", "plain.txt")
+        setup_proc, exports = self.setup_session("--owned-path", "plain.txt")
+        count_before = self.commit_count()
+        snap = self.snapshot_state(["plain.txt", "seed.txt"])
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", "plain.txt",
+            "--subject", "untrack a path no ignore rule matches",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn(
+            "--untrack path does not match an ignore rule: plain.txt",
+            proc.stderr,
+        )
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "untrack-preflight")
+
+    def test_unchanged_ignored_tracked_file_is_allowed(self) -> None:
+        self.untrack_fixture("local-home/keystore.bin")
+        self.stage_target_deletion()
+        # keystore.bin stays a tracked index entry with unchanged content:
+        # outside the staged delta, so the changed-blob scan never sees it
+        setup_proc, exports = self.setup_session(
+            "--owned-path", self.TARGET_REL,
+            "--owned-path", "local-home/keystore.bin",
+        )
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL,
+            "--subject", "untrack one ignored file beside an unchanged one",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("carries an ignored blob", combined)
+        self.assertEqual(self.commit_count(), count_before + 1)
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        shown = self.git("show", "--name-status", "--format=", landing).stdout
+        self.assertIn("D\t" + self.TARGET_REL, shown)
+        self.assertNotIn("keystore.bin", shown)
+        self.assertIn(
+            "keystore.bin",
+            self.git("ls-tree", "--name-only", landing, "local-home/").stdout,
+        )
+        self.assertTrue((self.fixture / "local-home" / "keystore.bin").is_file())
+
+    def test_force_added_ignored_blob_via_stage_refuses_preflight(self) -> None:
+        self.untrack_fixture()
+        self.stage_target_deletion()
+        # a never-tracked ignored path force-added to the index by the
+        # caller before the invocation, then declared through --stage
+        (self.fixture / "local-home" / "other.conf").write_text("forced bytes\n")
+        self.git("add", "-f", "local-home/other.conf")
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        count_before = self.commit_count()
+        snap = self.snapshot_state(
+            [self.TARGET_REL, "local-home/other.conf", "seed.txt"]
+        )
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL, "--stage", "local-home/other.conf",
+            "--subject", "smuggle a forced ignored blob through --stage",
+        )
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("carries an ignored blob", combined)
+        self.assertIn("local-home/other.conf", combined)
+        # the injected caller index state (other.conf still staged) and the
+        # rest of HEAD, index, and worktree are unchanged
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+        stages = self.trace_stages(self.commit_env() | exports)
+        self.assertEqual(stages[-1], "untrack-preflight")
+
+    def test_late_readded_target_refuses_at_captured_tree(self) -> None:
+        self.untrack_fixture()
+        self.stage_target_deletion()
+        # a real declared edit authored after setup keeps the landing
+        # non-empty, so the run reaches the captured-tree invariants
+        # instead of the clean-index skip
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        (self.fixture / "seed.txt").write_text("seed\nrace edit\n")
+        count_before = self.commit_count()
+        head_before = self.git("rev-parse", "HEAD").stdout.strip()
+        # the injection rides the first plain check-ignore of the --stage
+        # loop: strictly after the read-only preflight, before stage-operand
+        # processing re-adds the target into the index
+        shim_dir = self.git_injector_shim(
+            ["check-ignore", "-q", "seed.txt"],
+            f'"$REAL_GIT" -C {shlex.quote(str(self.fixture))} '
+            f"add -f -- {shlex.quote(self.TARGET_REL)}",
+        )
+        proc = self.run_with_shim(
+            shim_dir, exports,
+            "--untrack", self.TARGET_REL, "--stage", "seed.txt",
+            "--subject", "re-added target races past the preflight",
+        )
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("re-entered the captured tree after the preflight", combined)
+        self.assertIn(self.TARGET_REL, combined)
+        # no commit and no ref update
+        self.assertEqual(self.commit_count(), count_before)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), head_before)
+        # the injected caller index state and ordinary explicit staging are
+        # preserved, never undone
+        self.assertIn(self.TARGET_REL, self.git("ls-files", "-s").stdout)
+        self.assertIn(
+            "seed.txt",
+            self.git("diff", "--cached", "--name-only", "HEAD").stdout,
+        )
+        self.assertEqual(
+            (self.fixture / self.TARGET_REL).read_text(), "key=local\n"
+        )
+
+    def test_late_force_added_ignored_stage_path_refuses_at_captured_tree(self) -> None:
+        self.untrack_fixture()
+        # the ignored non-target is a flat-pattern (*.conf) tracked file at
+        # HEAD whose content is unchanged, so the preflight changed-blob
+        # scan sees nothing and the runner's own git add of the tracked
+        # path is not refused
+        (self.fixture / "late.conf").write_text("tracked conf bytes\n")
+        self.git("add", "-f", "late.conf")
+        self.git("commit", "-qm", "force-track the ignored conf file")
+        self.stage_target_deletion()
+        setup_proc, exports = self.setup_session(
+            "--owned-path", self.TARGET_REL, "--owned-path", "late.conf",
+        )
+        (self.fixture / "seed.txt").write_text("seed\nrace edit\n")
+        count_before = self.commit_count()
+        head_before = self.git("rev-parse", "HEAD").stdout.strip()
+        # the injection fires before stage-operand processing: the force-add
+        # of the ignored non-target's modified blob lands while the --stage
+        # loop is between its first declared path and late.conf, so ordinary
+        # matching declares late.conf and the captured-tree changed-blob
+        # check, not the target check or the foreign-path fence, refuses
+        shim_dir = self.git_injector_shim(
+            ["check-ignore", "-q", "seed.txt"],
+            f"printf 'forced conf bytes\\n' > "
+            f"{shlex.quote(str(self.fixture / 'late.conf'))} && "
+            f'"$REAL_GIT" -C {shlex.quote(str(self.fixture))} '
+            "add -f -- late.conf",
+        )
+        proc = self.run_with_shim(
+            shim_dir, exports,
+            "--untrack", self.TARGET_REL,
+            "--stage", "seed.txt", "--stage", "late.conf",
+            "--subject", "force-added ignored blob races past the preflight",
+        )
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn(
+            "captured tree carries an ignored blob among entries changed "
+            "from HEAD: late.conf",
+            combined,
+        )
+        # neither the target check nor the foreign-path fence refused
+        self.assertNotIn("re-entered the captured tree", combined)
+        self.assertNotIn("foreign path entered the staged index", combined)
+        self.assertNotIn("git add refused the declared pathspec", combined)
+        # no commit and no ref update
+        self.assertEqual(self.commit_count(), count_before)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), head_before)
+        # the injected caller index state and ordinary explicit staging are
+        # preserved, never undone; the target stays index-absent
+        self.assertIn("late.conf", self.git("ls-files", "-s").stdout)
+        self.assertIn(
+            "seed.txt",
+            self.git("diff", "--cached", "--name-only", "HEAD").stdout,
+        )
+        self.assertNotIn(self.TARGET_REL, self.git("ls-files", "-s").stdout)
+        self.assertEqual(
+            (self.fixture / "late.conf").read_text(), "forced conf bytes\n"
+        )
+
+
 class DoneRunDeclaredStageRecoveryReplayTest(FixtureMixin, unittest.TestCase):
     """Task 5 witnesses (plan
     docs/history/plans/2026-10-14-done-ownership-post-setup-learn-edits.md):
@@ -3331,6 +3720,155 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertTrue(record.get("complete", False))
         self.assertFalse(checkpoint.exists())
         self.assertIn("removed: checkpoint-manifest", proc.stdout)
+
+    # ---- held-lock guidance (plan
+    # docs/history/plans/2026-10-31-done-finalize-manifest-leg-post-removal-ordering.md
+    # Task 2): when the done
+    # lock survives the release attempts, the FAILED line is chosen from the
+    # manifest state and the finalize's own refusal cause. The hold is kept
+    # standing by controlled inputs, never by wall-clock delay or fixture
+    # timestamp aging: a deliberately wrong done-lock token refuses every
+    # env-token release, and the lock's staleness and dead-holder clocks are
+    # pinned far beyond the test's lifetime so the held verdict cannot flip.
+
+    def held_lock_clock_env(self) -> dict:
+        return {
+            "DONE_LOCK_STALE_SECS": "999999",
+            "DONE_LOCK_DEAD_HOLDER_GRACE_SECS": "999999",
+        }
+
+    def held_lock_finalize_env(self, exports: dict) -> dict:
+        """Finalize env under which the setup hold survives the release
+        attempts: the correct lock dir beside a deliberately wrong token
+        (the controlled lock-state input that refuses every env-token
+        release) plus the pinned staleness clocks."""
+        env = self.runner_env()
+        env.update(exports)
+        env["DONE_LOCK_TOKEN"] = "0" * 64  # never the setup hold's token
+        env.update(self.held_lock_clock_env())
+        return env
+
+    def assert_held_done_lock(self, proc: subprocess.CompletedProcess) -> None:
+        """The run reported the held done-lock state and the hold still
+        stands after it."""
+        self.assertIn("done lock status is not free after the release", proc.stderr)
+        self.assertIn(": held", proc.stdout)  # the status evidence the run printed
+        held = self.lock_invocation(
+            "status", extra_env=self.held_lock_clock_env(),
+        )
+        self.assertIn(": held", held.stdout + held.stderr)
+
+    def test_finalize_identity_refusal_with_held_lock_reports_without_full_retry(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "refusal-fixture")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        # The post-removal refusal shape: a schema-valid manifest whose
+        # recorded root is a foreign 64-hex fingerprint, so finalize-manifest
+        # aborts named and leaves the bytes unchanged.
+        self.rewrite_manifest(
+            manifest, repo_root=hashlib.sha256(b"/elsewhere/repo").hexdigest(),
+        )
+        refused_bytes = manifest.read_bytes()
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        # The non-zero identity-refusal result is preserved and the manifest
+        # stays byte-identical.
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("run-manifest identity mismatch", proc.stdout)
+        self.assertIn("manifest left unchanged", proc.stdout)
+        self.assertEqual(manifest.read_bytes(), refused_bytes)
+        # The held done-lock state is reported with no full finalize retry
+        # and no release-only advice after the identity refusal.
+        self.assert_held_done_lock(proc)
+        self.assertIn(
+            "the finalize above refused this manifest's identity", proc.stderr,
+        )
+        self.assertNotIn("full finalize re-run", proc.stderr)
+        self.assertNotIn("release-only retry", proc.stderr)
+
+    def test_finalize_other_incomplete_cause_with_held_lock_keeps_full_retry(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "incomplete-fixture")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        # Another incomplete-manifest cause, no identity refusal: the
+        # session dir is read-only, so the finalize's own rewrite fails
+        # named and the record stays incomplete.
+        self.done_session().chmod(0o555)
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("cannot rewrite the run manifest", proc.stdout)
+        self.assertNotIn("run-manifest identity mismatch", proc.stdout)
+        # The contrasting held-lock guidance keeps the full-retry advice.
+        self.assert_held_done_lock(proc)
+        self.assertIn("the run manifest is NOT complete", proc.stderr)
+        self.assertIn("needs its full finalize re-run", proc.stderr)
+
+    def test_finalize_identity_refusal_unreadable_manifest_routes_refusal_disposition(self) -> None:
+        """[class: REPOSITORY_TEST] Residual wrapper#identity-arm-invalid-json-miss
+        (the 2026-10-31 closeout-gates trio, landed 52750a1fe): an
+        unparseable manifest makes the completion probe print `unknown`, and
+        the held-lock guidance must still route to the refusal-specific
+        disposition when the finalize above refused the manifest's identity,
+        never to the generic unreadable arm."""
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "unreadable-fixture")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        manifest.write_text("{not json")
+        # The re-run shape: --run-id keeps the run bound while the manifest
+        # bytes are unparseable (the completion probe then prints `unknown`).
+        proc = self.run_finalize(
+            "--run-id", exports["DONE_RUN_ID"],
+            env=self.held_lock_finalize_env(exports),
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("run-manifest identity mismatch", proc.stdout)
+        self.assert_held_done_lock(proc)
+        self.assertIn(
+            "refused this manifest's identity (the manifest itself was "
+            "unreadable)", proc.stderr,
+        )
+        self.assertNotIn("re-derive it from the manifest", proc.stderr)
+
+    def test_finalize_marking_withheld_with_held_lock_never_claims_identity_refusal(self) -> None:
+        """[class: REPOSITORY_TEST] Residual wrapper-hold-guard-untested
+        (the 2026-10-31 closeout-gates trio, landed 52750a1fe): with the
+        marking withheld by the deferred-squash guard, the held-lock guidance
+        keeps the full-retry advice and the identity-refusal disposition never
+        prints (the `marking_withheld -eq 0` guard pins the deferred-squash
+        path to its own resume advice)."""
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "withheld-held-fixture")
+        run_id = exports["DONE_RUN_ID"]
+        self.git("checkout", "-qb", "run/withheld-held")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        self.make_checkpoint(run_id)
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assert_held_done_lock(proc)
+        self.assertIn("needs its full finalize re-run", proc.stderr)
+        self.assertNotIn("refused this manifest's identity", proc.stderr)
+
+    def test_finalize_completed_manifest_with_held_lock_keeps_release_only_retry(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "completed-fixture")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        # A completed manifest: the finalize step has nothing left to mark,
+        # so the only safe retry is release-only.
+        self.rewrite_manifest(manifest, complete=True)
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("already complete; nothing to do", proc.stdout)
+        self.assertNotIn("run-manifest identity mismatch", proc.stdout)
+        # The contrasting held-lock guidance keeps the release-only advice.
+        self.assert_held_done_lock(proc)
+        self.assertIn("the run manifest is complete", proc.stderr)
+        self.assertIn("release-only retry", proc.stderr)
+        self.assertNotIn("full finalize re-run", proc.stderr)
 
     # ---- deferred-squash honesty (backlog
     # 2026-10-26-finalize-deferred-squash-silent-success): a ledger landing

@@ -7,11 +7,13 @@ Modes:
   --scaffold  generate candidate registry rows (disposition "pending") from
               tracked sources only and merge them into the registry file.
   --check     validate the registry against the tracked tree; exit non-zero
-              on regrowth, unresolved witnesses, bad rows, or pending rows
-              (skipped only under --allow-pending).
+              on regrowth, unresolved or non-exercising red-test witnesses,
+              bad rows, or pending rows (skipped only under --allow-pending).
 
-All check inputs come from the committed tree (git ls-tree HEAD, never the index), so the guard is
-worktree-independent. The gitignored observed scheduler state file, when
+Tracked-tree and witness check inputs come from the committed tree (git
+ls-tree HEAD and git show HEAD:, never the index), so those checks are
+worktree-independent; the registry JSON and the State-file skill text are
+read from the worktree. The gitignored observed scheduler state file, when
 present, is a scaffold cross-check that only adds rows, never a check input.
 """
 
@@ -72,6 +74,34 @@ def tracked_files(repo):
 def is_test_path(path):
     name = os.path.basename(path)
     return name.startswith("test_") or "/test_" in path
+
+
+def is_test_source_path(path):
+    """A Python or shell test-source path: `.py`/`.sh` extension and a
+    basename beginning `test_` (witness-ref-validation plan 2026-10-30)."""
+    return path.endswith((".py", ".sh")) \
+        and os.path.basename(path).startswith("test_")
+
+
+def resolved_script_stems(entry):
+    """Script stems a red-test witness must name for a `kind: script` row:
+    the row's non-test `.py`/`.sh` file paths; when `paths` is empty, a
+    `.py`/`.sh` filename in the row id, then explicit non-test
+    `scripts/<file>` paths in its note; when neither resolves there is no
+    stem to check and only the tracked-test-source check applies."""
+    if entry.get("paths"):
+        sources = [p for p in entry["paths"]
+                   if p.endswith((".py", ".sh")) and not is_test_source_path(p)]
+    else:
+        id_match = re.fullmatch(r"script:([A-Za-z0-9._-]+\.(?:py|sh))",
+                                entry.get("id") or "")
+        if id_match:
+            sources = [id_match.group(1)]
+        else:
+            sources = [p for p in re.findall(
+                r"scripts/[A-Za-z0-9._/-]+\.(?:py|sh)", entry.get("note") or "")
+                if not is_test_source_path(p)]
+    return sorted({os.path.splitext(os.path.basename(s))[0] for s in sources})
 
 
 def script_paths(tracked):
@@ -245,6 +275,20 @@ def check_failures(repo, registry, allow_pending, skill_path=SKILL_PATH):
             if wclass != "none":
                 if not ref or ref not in tracked:
                     failures.append("{}: witness ref does not resolve to a tracked path: {}".format(rid, ref))
+                elif wclass == "red-test" and not is_test_source_path(ref):
+                    failures.append("{}: red-test witness ref is not a tracked test-source path (test_*.py or test_*.sh): {}".format(rid, ref))
+                elif wclass == "red-test" and kind == "script":
+                    # Reached only for a script row whose ref resolved to a
+                    # tracked test source (the two fences above), so those
+                    # conditions are not re-tested here. Witness test content
+                    # comes from the committed tree (git show HEAD:), never
+                    # the index or worktree copies.
+                    missing = [stem for stem in resolved_script_stems(entry)
+                               if stem not in _git(repo, "show",
+                                                   "HEAD:{}".format(ref))]
+                    if missing:
+                        failures.append("{}: red-test witness {} omits resolved script stem(s): {}".format(
+                            rid, ref, ", ".join(missing)))
             for path in entry.get("paths", []):
                 if path.endswith("/"):
                     if not any(t.startswith(path) for t in tracked):

@@ -957,7 +957,11 @@ def load_correction_authorizations(primary_checkout):
             "is absent or unreadable" % SCHEDULER_STATE_RELPATH)
     try:
         doc = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # ValueError covers malformed JSON; RecursionError covers nesting
+        # deep enough to cross the interpreter's parse recursion guard.
+        # Both refuse through the same not-decodable leg, never an
+        # escaping crash.
         return None, leg_reason(
             "receipt", "unresolvable witness: the scheduler state file %s "
             "is not decodable JSON" % SCHEDULER_STATE_RELPATH)
@@ -1262,7 +1266,11 @@ def record_correction_authorization(repo, row, operator_direction,
                 "file %s is absent or unreadable" % SCHEDULER_STATE_RELPATH)
         try:
             doc = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # ValueError covers malformed JSON; RecursionError covers
+            # nesting deep enough to cross the interpreter's parse
+            # recursion guard. Both refuse through the same
+            # not-decodable leg, never an escaping crash.
             return False, leg_reason(
                 "receipt", "unresolvable witness: the scheduler state "
                 "file %s is not decodable JSON" % SCHEDULER_STATE_RELPATH)
@@ -1296,10 +1304,15 @@ def record_correction_authorization(repo, row, operator_direction,
                 "with a different writer identity or subject; exact "
                 "repeats are idempotent, conflicts refuse" % digest)
         doc[CORRECTION_AUTHORIZATIONS_KEY] = current + [entry]
-        written = json.dumps(doc, indent=2, sort_keys=True) + "\n"
         tmp_path = state_path.with_name(
             "%s.ack-tmp-%d" % (state_path.name, os.getpid()))
         try:
+            # The serialization step sits inside the same append-leg
+            # guard as the temp write: state nesting deep enough to
+            # cross the interpreter's recursion guard during dumps
+            # refuses through the existing not-writable append leg
+            # instead of escaping, before any byte is written.
+            written = json.dumps(doc, indent=2, sort_keys=True) + "\n"
             tmp_path.write_text(written, encoding="utf-8")
             # Targeted-edit drift guard: re-read immediately before the
             # replace and retry once; the precondition re-evaluates on
@@ -1317,7 +1330,7 @@ def record_correction_authorization(repo, row, operator_direction,
             if fresh == raw:
                 os.replace(tmp_path, state_path)
                 break
-        except OSError as exc:
+        except (OSError, RecursionError) as exc:
             return False, leg_reason(
                 "append", "the scheduler state file is not writable: %s"
                 % exc)

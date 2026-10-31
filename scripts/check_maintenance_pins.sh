@@ -1548,7 +1548,7 @@ for wf_span, wf_body, wf_desc in ((exec_wf_span, exec_bodies[0], "execution"), (
 # fenced body. The whole-file landing-race discipline span pin below stays
 # green off the deviation-list history entries, so the body-scoped count is
 # the real enforcement that the clause survives the rewrite.
-rework_delegation = "Worktree arm of the execution blueprint's final-merge paragraph in `agents/skills/maintenance/prompt-templates.md`"
+rework_delegation = "Worktree arm of the execution blueprint's final-merge paragraph in `agents/skills/maintenance/template-execution.md`"
 if norm(p).count(rework_delegation) != 1:
     print("PIN FAIL: unblock step 6 Worktree-arm delegation sentence count %d != 1 (wrap-tolerant whole-file)" % norm(p).count(rework_delegation)); sys.exit(1)
 if rework_delegation not in norm(unblock_bodies[0]):
@@ -3475,7 +3475,20 @@ pin "validator validates run-wide attempt carry-forward" grep -qF 'consumed or u
 # string, read from the live table, must remain a heading or inline mention
 # in the review-staging skill, so a renamed section or a new mapping cannot
 # silently leave hard-mode pointers aiming at nothing. Presence-grep pin
-# class; review alongside the pointer table.
+# class; review alongside the pointer table. Provenance (R2-4): admitted by
+# the Phase 3 r1 panel of
+# docs/history/plans/completed/2026-10-22-review-staging-hard-validator-fail-fast-iteration.md,
+# owned and reviewed 2026-10-23 in
+# docs/history/backlog/2026-10-23-hard-mode-pointer-pinning-and-fixture-residuals.md
+# (findings T1/C3/D2; residuals R2-1 funnel routing, R2-4 this comment).
+# Funnel routing (R2-1, hard-mode clause pointer residuals plan Task 2):
+# each site consults recorded_red_check under a stable name, so a planned
+# review-staging section rename records red, and an unrecorded fire refuses
+# immediately through the outcome funnel
+# (`recorded_red_check ... || { emit_outcome fail; exit 1; }`), never a raw
+# exit without the final OUTCOME line. The loop runs in the main shell over
+# a here-string, so the suppressed-red bookkeeping and the immediate exits
+# stay in the main shell instead of the old pipeline subshell.
 ptr_sections="$(python3 - "$repo/scripts/validate_review_staging.py" <<'PYEOF_PTR'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
@@ -3488,10 +3501,24 @@ for _marker, section in re.findall(r'\(\s*"([^"]+)",\s*"([^"]+)"\s*\)', src[star
 print("\n".join(seen))
 PYEOF_PTR
 )"
-[ -n "$ptr_sections" ] || { echo "PIN FAIL: clause-pointer table yielded no sections (parse drift)" >&2; exit 1; }
-printf '%s\n' "$ptr_sections" | while IFS= read -r ptr_section; do
-  grep -qF "$ptr_section" "$RS" || { echo "PIN FAIL: clause-pointer section missing from review-staging skill: $ptr_section" >&2; exit 1; }
-done || exit 1
+[ -n "$ptr_sections" ] || recorded_red_check "clause-pointer table yielded no sections (parse drift)" "PIN FAIL: clause-pointer table yielded no sections (parse drift)" || { emit_outcome fail; exit 1; }
+while IFS= read -r ptr_section; do
+  grep -qF -- "$ptr_section" "$RS" || recorded_red_check "clause-pointer section missing from review-staging skill: $ptr_section" "PIN FAIL: clause-pointer section missing from review-staging skill: $ptr_section" || { emit_outcome fail; exit 1; }
+done <<< "$ptr_sections"
+# Extractor completeness (hard-mode clause pointer residuals plan, Task 1):
+# the regex extractor above must account for every distinct section in the
+# live SKILL_CLAUSE_POINTERS table (read by importing the validator), so a
+# table-shape drift the regex cannot parse fails closed here instead of
+# silently shrinking the guarded section set.
+ptr_extracted_count="$(printf '%s\n' "$ptr_sections" | grep -c .)"
+ptr_live_count="$(python3 - "$repo/scripts" <<'PYEOF_PTR_LIVE'
+import sys
+sys.path.insert(0, sys.argv[1])
+from validate_review_staging import SKILL_CLAUSE_POINTERS as _PTR_TABLE
+print(len({section for _marker, section in _PTR_TABLE}))
+PYEOF_PTR_LIVE
+)" || recorded_red_check "clause-pointer live table unreadable (import drift)" "PIN FAIL: clause-pointer live table unreadable (import drift)" || { emit_outcome fail; exit 1; }
+[ "$ptr_extracted_count" -eq "$ptr_live_count" ] 2>/dev/null || recorded_red_check "clause-pointer extractor drift" "PIN FAIL: clause-pointer extractor drift: regex extractor found $ptr_extracted_count distinct sections vs $ptr_live_count in the live table" || { emit_outcome fail; exit 1; }
 pin "validator binds consumption to current round and digest" grep -qF 'unused-to-consumed transition must bind to this round and its sidecar source_digest' "$repo/scripts/validate_review_staging.py"
 pin "validator requires new r1 identity" grep -qF 'r1 must start a new run with unused or consumed state bound to its review-run-id' "$repo/scripts/validate_review_staging.py"
 pin "validator rejects later-round allowance reset" grep -qF 'run_id cannot change after r1 in the same artifact chain' "$repo/scripts/validate_review_staging.py"
@@ -3511,7 +3538,7 @@ pin "selection refuses duplicate round identities" grep -qF 'matching records co
 pin "selection tests unnumbered singleton continuation" grep -qF 'test_select_reuses_unnumbered_singleton_as_round_one' "$repo/scripts/test_review_record_selection.py"
 pin "review-plan records run-wide self-heal consumption" grep -qF 'the run-wide `self_heal_attempt` member' "$RP"
 pin "review-plan defines consumed self-heal state" grep -qF '"status":"consumed","run_id":"<stable-run-id>","round":"rN","source_digest":"<sha256>"' "$RP"
-pin "review-plan reads attempt state after resume" grep -qF 'A resumed post-fence workflow reads the latest value' "$RP"
+pin "review-plan reads attempt state after resume" grep -qF 'the run reads the latest value and, when it is consumed or unknown, pauses before another review' "$RP"
 pin "fixture distinguishes resume after consumed attempt" grep -qF '| G, resumed after attempt | Latest state is consumed' "$repo/scripts/review_policy_sample_contexts.md"
 pin "fixture asserts strict churn threshold outcomes" grep -qF '2 of 4 does not trigger; 3 of 4 triggers reconciliation' "$repo/scripts/review_policy_sample_contexts.md"
 pin "fixture asserts staged-total churn outcomes" grep -qF '4 to 3 does not trigger; 4 to 4 and 4 to 5 trigger reconciliation' "$repo/scripts/review_policy_sample_contexts.md"
@@ -3731,12 +3758,13 @@ placement_pin() { # placement_pin <file> <span>: warning-only presence grep, nev
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
 placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "outside the two spelled forms"
 placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "immediate-commit rule"
-# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md Task 1): the removed full-rule wording is not restored; the pin guards the done skill's retained by-name reference to the immediate-commit rule owned by the Worktree-first standard.
+# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md Task 3): the span is the done skill's retained by-name reference to the immediate-commit rule.
 placement_pin "$PD" "immediate-commit rule"
 placement_pin "$PD" "editing no tracked corpus and committing nothing"
 placement_pin "$PD" "dangling session-owned work product"
-# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-19-done-immediate-commit-single-homing.md Task 1): the threshold fragment alone under-pins the advisory; the pin now guards a distinctive span within the advisory's cumulative-diff measurement clause.
+# Re-aimed 2026-10-20 (plan docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md Task 3): the span is the advisory's cumulative-diff measurement clause.
 placement_pin "$PD" "measures the session's cumulative diff of its own committed changes"
+placement_pin "$PD" "a behavior, API, or schema change, or more than four files"
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
 placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "Delete only after verification"
 placement_pin "$repo/agents/skills/execute-plan/worktree-first.md" "before any worktree removal, migrate the run"

@@ -71,13 +71,30 @@ SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 ```
 
 This idiom is PINNED here so the plans-skill marker recipe and every adapter
-use the SAME artifact (Family D single source). The helper prints the first
+use the SAME artifact (Family D single source); the no-argument form is
+environment precedence, and a runtime whose session identity lives in runtime
+context passes `--session-id` (see the v5 paragraph below). The helper prints the first
 set and non-empty value of ``CLAUDE_CODE_SESSION_ID, CURSOR_SESSION_ID,
 CURSOR_CONVERSATION_ID, CODEX_SESSION_ID``, else `""`, with NO trailing
 newline. When `SID` is empty (every supported source unset or empty) the
 adapter OMITS `--session-id`, so the core keys the literal `no-session` and
 uses the FULL window. The cores NEVER import `session_channel.py`; they
 accept `--session-id` as opaque data.
+
+At v5 the helper also accepts an EXPLICIT identity, `--session-id <value>`,
+which outranks every env source. A runtime whose session identity lives in
+runtime context rather than the subprocess environment (ZCode) passes that
+identity through the recipe's derivation line:
+`SID="$(python3 ~/.ai-playbook/scripts/session_channel.py --session-id '<runtime session id>')"`.
+Precondition: the runtime id must contain no shell metacharacters, no quote
+characters, and no leading dash (the value is
+interpolated into a shell command line).
+An explicit value PRESENT but empty-after-whitespace makes the helper exit NON-ZERO with empty
+stdout, so the recipe's fail-loud discipline aborts BEFORE the core: no env
+fallback, no `no-session` marker. This input is marker-recipe-only; it does
+not by itself make the runtime a trusted gateway channel. The precedence
+contract home stays `agents/hooks/lessons-recall/README.md` (**Session
+channel precedence**).
 
 **Precedence, the all-source empty rule, and per-runtime session behavior:**
 `agents/hooks/lessons-recall/README.md` owns that contract (**Session channel
@@ -118,7 +135,7 @@ there and in `skill_gate.py`):
    (emptiness check FIRST; empty-after-strip -> literal `no-session`; otherwise
    `sha1(value)[:16]` hex). In an ad-hoc-worktree session the project key MUST come from the WRITE TARGET's project derivation (the worktree root), never the session's default or primary-checkout cwd; the gate consult keys from the directory its adapter supplies (Claude and Cursor pass the hook payload's cwd, falling back to the write target's dirname when the payload carries none; agy and Codex pass none and the core keys from its own process cwd), so the marker write must key the same write-target derivation the consult will use.
 5. CLI: `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker [--cwd <write-target project root>] [--session-id "$SID"]`
-   (bare `--write-marker` defaults to the plans class; `--cwd` keys the marker to an explicit project root such as an ad-hoc worktree, independent of the invoking shell's cwd - the core already accepts it for both consult and write).
+   (bare `--write-marker` defaults to the plans class; `--cwd` keys the marker to an explicit project root such as an ad-hoc worktree, independent of the invoking shell's cwd - the core already accepts it for both consult and write). On a runtime whose session identity lives in runtime context rather than the subprocess environment (ZCode), the `$SID` derivation uses the helper's explicit input (`--session-id '<runtime session id>'`, see **Session channel derivation** above); the fail-loud rule of this recipe applies to that derivation unchanged - a non-zero helper exit aborts BEFORE this step and writes NO marker: run the derivation as its own command and abort on a non-zero exit, with the abort OUTSIDE the capture substitution (a bare `exit 1` inside `$()` cannot escape it): for example `SID="$(python3 ~/.ai-playbook/scripts/session_channel.py --session-id '<runtime session id>')" || { echo "session derivation failed" >&2; exit 1; }`; never chain it with `;`.
 6. Acceptance: the marker EXISTS AND `0 <= (now - mtime) <= SKILL_GATE_WINDOW`
    (default 4h, FLAGGED; future-dated/negative delta or `mtime == 0` is STALE ->
    block, M4). ALL agents use the FULL window (r10-M10).
@@ -145,6 +162,9 @@ same atomic write, same `FileExistsError` benign catch, same window). Only step
 4. Marker filename: `learn.<project>.<session>.marker` (same `project`/`session`
    derivation as plans).
 5. CLI: `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker learn [--session-id "$SID"]`.
+   On a runtime whose session identity lives in runtime context rather than the
+   subprocess environment (ZCode), the `$SID` derivation uses the helper's
+   explicit input; see **Session channel derivation** above.
 6. Acceptance: the marker EXISTS AND `0 <= (now - mtime) <= SKILL_GATE_WINDOW`
    (same rule as plans step 6).
 

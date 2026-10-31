@@ -4,7 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** moderate
-- **Cluster:** docs/history/backlog/2026-10-30-done-session-cross-repo-marker-immortality.md; docs/history/backlog/2026-10-30-execute-plan-proof-family-retention-unbounded.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md; docs/history/backlog/2026-10-29-done-gate-report-retention.md
+- **Cluster:** docs/history/backlog/2026-10-30-done-session-cross-repo-marker-immortality.md; docs/history/backlog/2026-10-30-execute-plan-proof-family-retention-unbounded.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md; docs/history/backlog/2026-10-29-done-gate-report-retention.md; docs/history/backlog/2026-10-31-gate-removal-stranded-drained-migration-destination.md (same surface: docs/tmp drain of done-session artifacts vs downstream consumers; distinct defect class: stranded gate-removal teardown accounting)
 - **Origin class:** operator-directed cleanup request; accumulation measured and root-caused in a repository survey
 - **Class:** fix-class (a retention-policy decision inside the existing sweep gate; no new machinery)
 - **Driving force:** simplicity

@@ -714,16 +714,14 @@
       "disposition": "keep",
       "id": "script:hooks_probe.py",
       "kind": "script",
-      "note": "red test in the suite fails when this script breaks",
+      "note": "standing written instruction references this probe (agents/hooks/lessons-recall/README.md install, weekly cron, and probe invocation sections; also agents/hooks/plan-readiness/README.md and agents/hooks/skill-gate/README.md); witness repaired 2026-10-31 by the witness-ref-validation fence: the prior red-test ref scripts/test_hooks_probe.py never referenced the script stem and no tracked test exercises it, so the row took the script:hooks_log_summary.py user-decision precedent",
       "paths": [
         "scripts/hooks_probe.py"
       ],
-      "tests": [
-        "scripts/test_hooks_probe.py"
-      ],
+      "tests": [],
       "witness": {
-        "class": "red-test",
-        "ref": "scripts/test_hooks_probe.py"
+        "class": "user-decision",
+        "ref": "agents/hooks/lessons-recall/README.md"
       }
     },
     {
@@ -2046,6 +2044,34 @@
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-27-agent-type-affinity-before-plan-work.md"
       }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-privacy-locators.py",
+      "kind": "script",
+      "note": "origin Expected kept set; ordinary tracked release script owned by the completed release privacy gate plan; registered 2026-10-31 baseline-red-gates-regreen plan",
+      "paths": [
+        "scripts/release-privacy-locators.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-10-26-release-privacy-gate-diagnostics-and-replay.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-diagnostic-replay.sh",
+      "kind": "script",
+      "note": "origin Expected kept set; ordinary tracked release script owned by the completed release privacy gate plan; registered 2026-10-31 baseline-red-gates-regreen plan",
+      "paths": [
+        "scripts/release-diagnostic-replay.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-10-26-release-privacy-gate-diagnostics-and-replay.md"
+      }
     }
   ],
   "removals": [
@@ -2198,16 +2224,16 @@
       }
     },
     {
+      "disposition": "delete",
       "id": "guard:maintenance-pins-recorded-red-consult",
       "kind": "guard",
-      "disposition": "delete",
+      "note": "Pre-registered removal of the pins suite's recorded-red consult. Misfire class: a recorded red masking a distinct new failure on the same pin name. Admission record: incident, the red-on-main baseline (the pins suite exited non-zero on main with a 21-failure set every lane silently inherited while machinery landings continued over it) plus the dormant tail (docs/history/backlog/2026-10-13-maintenance-pins-dormant-tail-baseline.md (deleted at its covering landing; durable carrier: commit b4fe56682); a negative-arm run with a deliberately broken span produced a failure set byte-identical to the unbroken run, so a red baseline also hid new pins behind the first firing checkpoint); expected catch, every lane run while any standing red exists; false-positive cost, a recorded red masking a same-name new failure, bounded by the review-by expiry and the loud per-run summary. Review no later than 2026-11-13 (recording date 2026-10-14 plus 30 days). Promotion criteria: a true catch (an expired review-by re-blocking a drifted pin) keeps the consult standing and retires this removals row; a confirmed misfire of the masking class deletes the consult in the same change that retires this row. Paths reconciled to empty 2026-10-29 (plan docs/history/plans/completed/2026-10-29-phase2-baseline-repair.md @ commit fe04f7a7b, Task 3): the consult mechanism is still live in scripts/check_maintenance_pins.sh (its recorded-red consult block) and the gate liveness ledger holds no check_maintenance_pins guard key (zero recorded reds stand, no true catch has fired), while a removals row naming a live path fails --check, so the row keeps the registry's pre-registered-removal shape (empty paths, commitment in this note, the skill-text-duplication-report two-mode precedent) until the consult's own removal or retirement lands.",
       "paths": [],
       "tests": [],
       "witness": {
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-13-red-on-main-baseline-repair-and-auto-demote.md"
-      },
-      "note": "Pre-registered removal of the pins suite's recorded-red consult. Misfire class: a recorded red masking a distinct new failure on the same pin name. Admission record: incident, the red-on-main baseline (the pins suite exited non-zero on main with a 21-failure set every lane silently inherited while machinery landings continued over it) plus the dormant tail (docs/history/backlog/2026-10-13-maintenance-pins-dormant-tail-baseline.md (deleted at its covering landing; durable carrier: commit b4fe56682); a negative-arm run with a deliberately broken span produced a failure set byte-identical to the unbroken run, so a red baseline also hid new pins behind the first firing checkpoint); expected catch, every lane run while any standing red exists; false-positive cost, a recorded red masking a same-name new failure, bounded by the review-by expiry and the loud per-run summary. Review no later than 2026-11-13 (recording date 2026-10-14 plus 30 days). Promotion criteria: a true catch (an expired review-by re-blocking a drifted pin) keeps the consult standing and retires this removals row; a confirmed misfire of the masking class deletes the consult in the same change that retires this row. Paths reconciled to empty 2026-10-29 (plan docs/history/plans/2026-10-29-phase2-baseline-repair.md Task 3): the consult mechanism is still live in scripts/check_maintenance_pins.sh (its recorded-red consult block) and the gate liveness ledger holds no check_maintenance_pins guard key (zero recorded reds stand, no true catch has fired), while a removals row naming a live path fails --check, so the row keeps the registry's pre-registered-removal shape (empty paths, commitment in this note, the skill-text-duplication-report two-mode precedent) until the consult's own removal or retirement lands."
+      }
     },
     {
       "disposition": "delete",
@@ -2282,24 +2308,24 @@
       }
     },
     {
+      "disposition": "delete",
       "id": "script:check-prompt-log-origins-receipt-without-removal-warning",
       "kind": "script",
-      "disposition": "delete",
+      "note": "Pre-registered removals row for the prune audit's warning-only RECEIPT-WITHOUT-REMOVAL finding class (landing-conflict-intent-union plan, 2026-10-19). Incidents: the 2026-10-18 escape (landing aca98a237, repair c3a283738) and the 2026-10-09 near-miss (docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md). Review by 2027-01-18; promotion criteria: a true catch, then blocking promotion only with the operator's net-growth approval per the repository guidelines' Machinery admission protocol. The warned class stays live under warning-only shaping while this row stands.",
       "paths": [],
       "tests": [],
-      "note": "Pre-registered removals row for the prune audit's warning-only RECEIPT-WITHOUT-REMOVAL finding class (landing-conflict-intent-union plan, 2026-10-19). Incidents: the 2026-10-18 escape (landing aca98a237, repair c3a283738) and the 2026-10-09 near-miss (docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md). Review by 2027-01-18; promotion criteria: a true catch, then blocking promotion only with the operator's net-growth approval per the repository guidelines' Machinery admission protocol. The warned class stays live under warning-only shaping while this row stands.",
       "witness": {
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-18-landing-conflict-intent-union.md"
       }
     },
     {
+      "disposition": "delete",
       "id": "release-recovery-push-rails",
       "kind": "script",
-      "disposition": "delete",
+      "note": "Pre-registered review row for the recovery push-time rails (release-merge-history-recovery plan, 2026-10-19): the lease-bound publish bound to the expected remote OID, the remote re-assertion, and the final-tree plus privacy re-runs inside the persisted push script. Review by 2026-11-18; promotion criteria: a true catch by the push-time rails, or a second witnessed recovery. Incident link: docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md.",
       "paths": [],
       "tests": [],
-      "note": "Pre-registered review row for the recovery push-time rails (release-merge-history-recovery plan, 2026-10-19): the lease-bound publish bound to the expected remote OID, the remote re-assertion, and the final-tree plus privacy re-runs inside the persisted push script. Review by 2026-11-18; promotion criteria: a true catch by the push-time rails, or a second witnessed recovery. Incident link: docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md.",
       "witness": {
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md"

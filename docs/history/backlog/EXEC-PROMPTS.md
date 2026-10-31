@@ -2,6 +2,90 @@ Ready ad-hoc entries, most urgent first, consumed by exec-mode sessions. Prompt-
 
 EXEC-PROMPTS-PRUNE: closeout-baseline-capture-placement-remedy -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py's migrate baseline-missing refusal gained the primary-checkout remedy clause - check the primary checkout's same-slug session dir for closeout-baseline.json and copy it in before recapturing, a recapture recorded as a late-baseline capture-failure deviation - and the capture success output now names the checkout it captured in so a wrong-checkout Phase 0 capture is visible; both message shapes pinned (focused migrate suite 288 passed + 17 subtests, wrapper suite 178 passed + 2 subtests), em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule with both Cluster pointers tidied and this entry section removed in the same change)
 
+EXEC-PROMPTS-PRUNE: done-closeout-gates-trio -> landed ad-hoc (gate-removal's missing-destination guard no longer holds a branch on an expired done-session gate-report destination - the owning run's disposition, report-only - while every other missing destination keeps its fail-closed hold; done_run.sh declares FM_OUT local, routes an unreadable-manifest identity refusal to the refusal-specific held-lock disposition via --run-id, and scopes the env-lost advice to release-only re-runs; the parked branch 2026-10-31-done-finalize-manifest was disposed at its verified tip fae94c63a with its worktree removed; focused migrate suite 337 passed + 25 subtests, wrapper suite 193 passed + 2 subtests, em-dash gate and public hygiene scan pass; the three origin rows are deleted per the covered-row rule and this entry section is removed in the same change)
+
+## untrack-operand-residual-trio
+
+Added: 2026-10-31, learn Step 1.9 investigate over the done-run-untrack-ignored-path execution run's backlogged Phase 3 findings
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): body-named fixes to one freshly landed script and its test file - fail-closed ignore-scan operands (`-z` output, `--` separator, rc>1 refusal), a directory-operand `[ -f ]` contract check, a head-identity capture before the captured-tree baseline read, missing parser-guard and repeatable-operand tests, a one-line usage-window fix, and a mislabeled refusal message for the `--expected-ref` combination - no open design choice, no new dependency, no guard or state change; the landing constraint (declared-deletion semantics from the landed plan) is stated on the origin rows.
+
+Origins:
+- docs/history/backlog/2026-10-31-untrack-ignore-scan-robustness-residuals.md
+- docs/history/backlog/2026-10-31-untrack-wrapper-test-coverage-residuals.md
+- docs/history/backlog/2026-10-31-untrack-minor-usage-and-expectedref-residuals.md
+
+Urgency: medium - the dash-prefixed and C-quoted fail-open shapes can land a changed tracked-ignored blob the declaration gate exists to refuse (a false pass on a fresh blocking check); the test-coverage and usage/message items are correctness-only.
+
+Scope arms: one bounded script-and-test session over `scripts/done_run.sh` and `scripts/test_done_run_wrapper.py`: both ignore rescans reworked to `-z`/`--`/rc-fail-closed, the `[ -f ]` preflight arm, head identity captured once before the captured-tree scan, repeatable-operand and parser-guard (missing value, `--`-prefixed value, duplicate) tests, a `--untrack`+`--guard-firing` ordering pin, the race-injection docstring wording fix, the usage `sed` window extended one line, and the `--expected-ref`+`--untrack` refusal message corrected; no behavioral widening beyond the rows.
+
+Orientation: `docs/history/plans/completed/2026-10-27-done-run-untrack-ignored-path.md` (landed fc479f6a5, the operand's introduction commit and archaeology), the three origin rows, and the plan's Phase 3 review records under `docs/tmp/execute-plan/done-run-untrack-ignored-path/`.
+
+Rejected alternatives:
+- Remove the `--untrack` operand as fail-open-by-design: rejected on the remove-or-keep axis - the operand closes the witnessed silent-track of gitignored paths (force-add class, `agents/skills/done/SKILL.md` Untrack declaration paragraph); removal re-exposes that hazard, and the missing-complement arm (fail-closed scan operands) fixes the residual without touching the declaration semantics (docs/history/plans/completed/2026-10-27-done-run-untrack-ignored-path.md)
+- Close the captured-tree HEAD-race window with an atomic snapshot or lock: rejected, machinery arm with no witnessed incident of the microsecond race firing - admission protocol wants an incident, expected catch frequency, and false-positive cost, and none is on record; the row's capture-head-identity-once remedy is the non-machinery narrowing (docs/history/backlog/2026-10-31-untrack-ignore-scan-robustness-residuals.md residual 3)
+- Accept the exotic-name fail-open as unreachable: rejected - the row's witness shows a reachable landing path (`--stage` beside `--untrack` with a dash-prefixed changed tracked-ignored blob), so the false pass is plausible-edge, not theoretical (docs/history/backlog/2026-10-31-untrack-ignore-scan-robustness-residuals.md residual 1)
+
+## plans-authoring-pre-review-text-gate-sweep
+
+Added: 2026-10-31, learn Step 1.9 investigate anchored on the row (filed by the interactive authoring session's learn run)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named fix composing existing read-only text-policy gates into the plans skill's authoring phases plus a one-line mirror in the maintenance authoring payload - tracked skill text only, never a guard-bearing path, no new dependency, no state-schema or guard change, no machinery removal; the composed gates already exist, so no open design choice remains beyond the stated placement.
+
+Origins:
+- docs/history/backlog/2026-10-31-plans-authoring-pre-review-text-gate-sweep.md
+
+Urgency: medium - every authoring run that emits a policy-violating byte (em-dash, hygiene, pins drift) pays discovery at closeout, after certification: a fix commit plus a fresh certification round per incident (witnessed 2026-10-31; lesson #36's third instance in `docs/maintenance/development_lessons.md`).
+
+Scope arms: one authoring-flow edit over `agents/skills/plans/SKILL.md` - in the authoring phases, between the last plan-file write and the first review-plan round launch, run from the placement root: `bash scripts/check-no-em-dash.sh added-lines`, the public hygiene scan, and `bash scripts/check_maintenance_pins.sh` when pinned files are touched, gating the first review launch on their exit codes - plus the mirrored one-line duty in `agents/skills/maintenance/template-authoring.md`; no new gate or validator (machinery admission: composition of existing scripts at an earlier boundary, nothing added, removal-shaped wording not needed).
+
+Orientation: the origin row whole; lesson #36 in `docs/maintenance/development_lessons.md` (the rule's home and its two prior witnesses); `scripts/check-no-em-dash.sh` (introduced 10480a1a5, the authoring-and-execution wave); the plans skill's authoring phases fresh read.
+
+Rejected alternatives:
+- Enforce via a new pre-commit hook on plan files: rejected on the remove-or-keep axis - new machinery for a sequencing gap; the admission protocol prices a gate per witnessed incident and the cost is one wasted certification round per incident (origin row Suggested direction)
+- Leave it to the review lens catalogs: rejected - the catalogs own defect classes, not a repository's text policy; four review workers passed a plan the one-second gate refused (origin row Problem; witnessed 2026-10-31, lesson #36 docs/maintenance/development_lessons.md)
+- Run the sweep only at the done boundary: rejected - that is today's failing shape; the point is discovery before the first review round so the fix costs an edit, not a certification round (lesson #36, `docs/maintenance/development_lessons.md`)
+
+## stop-boundary-skill-text-growth-trim-deferral
+
+Added: 2026-10-31, learn Step 1.9 investigate over the maintenance-stop-boundary-continuation execution run's backlogged r6 finding
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a single deferred trim pass over four named skill files with a stated trigger condition - no code surface, no open design choice, no dependency; the entry's scope is the trigger's bookkeeping, not an immediate edit.
+
+Origins:
+- docs/history/backlog/2026-10-31-stop-boundary-skill-text-growth-residual.md
+
+Urgency: low - the ~1.3 KB net growth is review-time discipline today, the old unconditional-stop text was deleted in the same change, and the row names no harm beyond byte count until the byte-budget gate lands.
+
+Scope arms: a trim pass over the four named maintenance skill files (`agents/skills/maintenance/template-authoring.md`, `template-execution.md`, `template-unblock.md`, `zcode.md`) that removes equivalent operative bytes while preserving the D-6 semantics landed 7bae9745a, executed when the repo-wide byte-budget gate lands and priced by that gate's own breach report - not before; until then the row stays open as the review-time finding-class record.
+
+Orientation: docs/history/plans/completed/2026-10-27-maintenance-stop-boundary-continuation.md (landed 7bae9745a, the growth's introduction), the repository guidelines' Skill text anti-growth rules section (the pricing discipline the trim obeys), and the origin row.
+
+Rejected alternatives:
+- Trim the four files now by hand: rejected - without the gate's breach report there is no equivalence measure, and the trim would risk cutting the just-landed D-6 operative semantics (directive D-6, docs/maintenance/operator-directives.md) to hit a byte count; the growth rule requires equivalent operative bytes, not semantic loss (repository guidelines, Skill text anti-growth rules)
+- Land the repo-wide byte-budget gate immediately to unblock the trim: rejected, machinery arm - the anti-growth rules stage the gate's landing as its own change and price growth at review time until then; this 1.3 KB finding is the first data point, not the true catch the admission protocol wants (repository guidelines, Skill text anti-growth rules; Machinery admission protocol; docs/history/backlog/2026-10-31-stop-boundary-skill-text-growth-residual.md)
+- Accept the growth as final: rejected - the row records a live review-time finding class; closing it without the trim or the gate leaves the growth unpaid (docs/history/backlog/2026-10-31-stop-boundary-skill-text-growth-residual.md)
+
+## done-interrupted-run-remedy-names-script
+
+Added: 2026-10-31, learn+investigate over the machinery-registry-rt exec run (anchored learn Step 1.9 pass)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin names one bounded mechanical message edit in a freshly landed closeout script - the dead-root interrupted-run remedy line at `scripts/done_sweep_gates_lib.py:8127` names `disposition-manifest --run-id <id>` without the owning invocation, so a session following it verbatim runs `done_run.sh disposition-manifest` and refuses `unknown subcommand` before grepping both scripts; no open design choice, no dependency, no machinery (a wording fix), no gate or schema change.
+
+Origins:
+- docs/history/backlog/2026-10-31-done-interrupted-run-remedy-names-script.md
+
+Urgency: low - the cost is one wasted refuse-and-grep round per dead-root close (witnessed once today); the setup remedy line at `scripts/done_run.sh:468` already models the correct shape, so the drift is readability, not a blocked recovery.
+
+Scope arms: one-line message edit at `scripts/done_sweep_gates_lib.py:8127` naming the owning invocation verbatim (`python3 scripts/done_sweep_gates_lib.py disposition-manifest --run-id <id>`), matching the `scripts/done_run.sh:468` remedy-line convention; pin or suite touch only if an existing assertion covers that message text.
+
+Orientation: scripts/done_sweep_gates_lib.py (the dead-root branch at lines 8118-8130, introduced by the orphaned-manifest widening commit 61e868979), scripts/done_run.sh:468 (the convention the fix matches), docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md (the sibling cluster row whose pool this remedy line serves).
+
+Rejected alternatives:
+- Add a `disposition-manifest` alias subcommand to `scripts/done_run.sh`: rejected - it duplicates a surface owned by the sweep-gates lib and widens the two-script remedy ladder the pool row already tracks (scripts/done_run.sh usage text; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md)
+- Remove the remedy line: rejected - dead-root orphans have no adoption path (a dead root refuses adoption per the same branch), so the line is the only close pointer for that class; removing it strands the dead-root close, the adoption-refuse branch witnessed at scripts/done_sweep_gates_lib.py:8118-8126
+- Fix it in skill text instead: rejected - the message is the mechanical surface and the done skill's paragraph reference inside the line is already correct; skill text cannot re-point the printed command, and the message's own dead-boundary paragraph reference is already correct (witnessed in the emitted line, scripts/done_sweep_gates_lib.py:8127)
+
 ## hygiene-scanner-frozen-arm-and-report-residuals
 
 Added: 2026-10-30, learn Step 1.9 investigate over the hygiene-scanner-default-scope-parity execution run's backlogged review findings
@@ -237,6 +321,34 @@ Rejected alternatives:
 
 Machinery admission: arm 1 is warning-only output with its four admission fields carried in the origin row (incident: this entry's witnessed strand; catch frequency: every closeout whose baseline postdates owned edits; false-positive cost: one report line on a legitimately empty delta; sunset: promotion to a hard report on the next true catch or review after three closeouts); the validator arm is rejected with the missing-incident absence named above.
 
+## zero-delta-report-defensive-arm-tests
+
+Added: 2026-10-31, learn+investigate over the session that landed closeout-migrate-zero-delta-silence (origin row below; single open origin, no open siblings: the covered EXEC entry closeout-migrate-zero-delta-silence owns the report arm itself, this row owns only pinning its untested defensive branches, a different defect class on the same surface)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (agents/skills/maintenance/decisions.md): the item is test-only additions to one existing suite (scripts/test_worktree_closeout_migrate.py) against already-landed behavior, with no design choice, no new dependency, no state-schema change, and no gate-bearing path.
+
+Origins:
+- docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md
+
+Urgency: low - the report arm itself is landed, warning-only, and reviewed; the exposure is latent branch drift in three untested defensive arms (non-string `captured_at`, naive-timestamp read-as-UTC, `Path.resolve()` OSError exclusion fallbacks) that a future refactor could silently change with the suite staying green.
+
+Scope arms:
+1. Table-driven tests pinning the three defensive-arm classes named in the origin row: non-string `captured_at` renders as `unknown`, a naive (timezone-less) `captured_at` reads as UTC, and both `resolve()` OSError fallbacks exclude the offending path from the newest-mtime render without failing the report.
+2. Delete the origin row per the covered-row rule when the tests land, with this entry's section removed in the same change.
+
+Orientation: read the origin row, then `_print_zero_delta_report` in scripts/worktree_closeout_migrate.py and the existing zero-delta test arms in scripts/test_worktree_closeout_migrate.py (the landed report's introduction story is the covering plan docs/history/plans/completed/2026-10-28-closeout-migrate-zero-delta-silence.md and lesson 288 in docs/maintenance/development_lessons.md). Disk re-derivation at the entry's write: the origin row exists (ls plus git cat-file -e at the tip both pass), and `_print_zero_delta_report` exists at scripts/worktree_closeout_migrate.py:1169 (working-tree grep).
+
+Prompt: Using the ad-hoc backlog arm, land the table-driven tests for the three defensive-arm classes and the origin-row deletion in one change; run the module selftest suite, the em-dash added-lines gate, and the public hygiene scan; remove this entry's section in the same change.
+
+Rejected alternatives:
+- Refactor the defensive arms out of the print helper into a pure function so they can be unit-tested directly: rejected as machinery churn for a test-only gain; the function's current output-capture-based tests already pin behavior at the seam consumers rely on, and a refactor widens the reviewed surface the covering plan just landed (scripts/worktree_closeout_migrate.py `_print_zero_delta_report`)
+- Delete the defensive arms as unreachable (capture always writes a UTC string; `resolve()` on an existing path cannot fail): rejected because the arms carry defensive value against a legacy or hand-edited baseline file (non-string or naive `captured_at`) and against a file vanishing between the directory walk and the resolve call during closeout; removal converts a guarded report into a crash (docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md)
+- Leave the arms untested and rely on the next review to catch drift: rejected because the row's driving force is exactly the silent-drift class the suite exists to lock; the report arm is warning-only, so a silently changed arm produces no failure signal anywhere else (scripts/test_worktree_closeout_migrate.py)
+- Property/fuzz testing over arbitrary `captured_at` values: rejected as overkill for three enumerated branches with enumerable inputs; table-driven cases pin each arm deterministically (scripts/worktree_closeout_migrate.py `_print_zero_delta_report`)
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the change is tests plus a row deletion; the only machinery-shaped alternative (the pure-function refactor) is rejected above.
+
+
 
 
 ## gate-removal-adhoc-invocation-shape
@@ -246,7 +358,7 @@ Added: 2026-10-27, learn+investigate over the 2026-10-27 exec-mode max-2 run (or
 Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (agents/skills/maintenance/decisions.md): both arms are string-level help and remedy-text edits on one script surface (scripts/worktree_closeout_migrate.py) with no open design choice, no behavior change beyond the printed remedy line, no new dependency, no state-schema or machinery change; the origin is a singleton whose both facets (the unattainable remedy line, the undocumented ad-hoc invocation shape) the arms resolve together, so it routes as one entry to this log.
 
 Origins:
-- docs/history/backlog/2026-10-21-gate-removal-empty-owned-set-remedy.md
+- docs/history/plans/completed/2026-10-27-gate-removal-empty-owned-set-remedy.md
 
 Stage 1 roster: the singleton origin above; the Stage 0 sweep found the one open sibling on this surface (2026-10-26-plan-authoring-stand-down-before-charter.md) already reciprocal-Cluster-annotated with the origin row and routed to its own entry, so no new annotations are owed.
 
@@ -263,7 +375,7 @@ Prompt: Land both arms in one change per the scope arms (one script, string-leve
 Rejected alternatives:
 - Relax required=True so --claims alone admits a plan-less run: rejected - it changes a fail-closed gate's input contract and needs new test pins, while the witnessed cost is improvisation, not a refusal blocking a legal closeout; the documented passthrough keeps the contract closed (scripts/worktree_closeout_migrate.py, _add_gate_removal_arguments)
 - A separate gate-removal-adhoc subcommand: rejected as surface duplication for one documented invocation - two parsers to keep in sync on one gate's contract, the nested-parser shape the standalone-parser refactor just removed (the build_gate_removal_parser docstring; plan docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md Task 4)
-- Leave the shape improvised per run: rejected - the origin row now carries the witness, and per-run improvisation of a fail-closed gate's invocation is the recurring friction the row exists to end (docs/history/backlog/2026-10-21-gate-removal-empty-owned-set-remedy.md, the 2026-10-27 witness section)
+- Leave the shape improvised per run: rejected - the origin row now carries the witness, and per-run improvisation of a fail-closed gate's invocation is the recurring friction the row exists to end (docs/history/plans/completed/2026-10-27-gate-removal-empty-owned-set-remedy.md, the 2026-10-27 witness section)
 - Remove-or-keep on the --plan requirement itself: keep - the plan-citation extraction is the gate's primary ownership model for plan runs (the machinery arrived with the gate family, f3894756d); the ad-hoc case is the minority shape served by the documented passthrough, never by opening the requirement (git log -S "empty owned set" over scripts/worktree_closeout_migrate.py)
 
 Machinery admission: no gate, validator, lock, ledger, or ceremony is added; both arms are help and remedy text; the contract-relaxation alternative is rejected above and no admission wording is owed.
@@ -772,3 +884,245 @@ Rejected alternatives:
 - Retroactive commit-subject rewrite to move the closure subject onto the true closure commit (history arm): rejected - rewrites landed history for a readability nit the annotation resolves at zero risk (witness: docs/history/backlog/2026-10-30-reauthorization-plan-annotation-precision-lows.md)
 
 Machinery admission: nothing added; the recommended arm removes ambiguity in existing prose.
+
+## template-split-residual-pointers-and-labels
+
+Added: 2026-10-31, investigate over the claim-procedure-pointer execution run's backlogged review residuals (operator-directed learn+investigate over the session)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): body-named single-surface docs and registry-text corrections - reword one machinery-registry note's blueprint citation, delete one dead test constant, add module paths to one dispatch-slice sentence, correct one stale field-line count, and reconcile one duty label with its owning module's wording - no code behavior, no open design choice, no new dependency, no gate or state change; every item is a pointer or count accuracy fix recorded on its origin row.
+
+Origins:
+- docs/history/backlog/2026-10-31-template-split-residual-pointers.md
+- docs/history/backlog/2026-10-31-pre-execution-re-verification-label-mismatch.md
+
+Urgency: medium - all five residuals are reference-accuracy defects introduced by the 2026-10-10 maintenance module split (git log -S witness: the split plan's Task 1 moved the operative paragraphs byte-verbatim); each one sends a reader or a deciding turn to a file that does not contain the cited procedure, but none blocks a gate today (the pins suite freezes only the one delegation sentence, already re-aimed by the covering landing 3f47241c5).
+
+Scope arms: the registry-note reword and the dead-constant deletion as one scripts-scoped change (registry row plus `scripts/test_authoring_plans_liveness.py`), then the scheduling.md path-anchor and field-line count corrections and the state-file.md label reconciliation as one maintenance-docs change; re-run `bash scripts/check_maintenance_pins.sh` and the affected test files per change and expect only the tracked baseline red (`review-plan reads attempt state after resume`, own backlog row).
+
+Orientation: `scripts/machinery_registry.json`, `scripts/test_authoring_plans_liveness.py`, `agents/skills/maintenance/scheduling.md`, `agents/skills/maintenance/state-file.md`, `agents/skills/maintenance/template-authoring.md`, and the two origin rows' per-item witnesses; the mechanism history lives in `docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor.md`.
+
+Rejected alternatives:
+- Fix the residuals in the covering run itself: rejected - all five predate that run and sit outside its plan's audited 10-file scope, so in-task fixes would have widened the boundary commit and hidden the deferral; durable rows were the sanctioned capture (docs/history/backlog/2026-10-31-template-split-residual-pointers.md)
+- Widen the pins suite to freeze each corrected sentence: rejected on the machinery-admission axis - no witnessed incident of a corrected sentence re-drifting, the corrections are one-time accuracy fixes, and adding pins would price a permanent maintenance cost for no catch (no witnessed incident; evidence basis: `scripts/check_maintenance_pins.sh` currently freezes none of the affected sentences and no gate reads them)
+- Leave the label mismatch unfixed and grep-train readers instead: rejected - the label is the referencing docs' own vocabulary, so renaming the label in the referencing text to the owning module's wording is a two-file edit with no behavioral risk (docs/history/backlog/2026-10-31-pre-execution-re-verification-label-mismatch.md)
+
+Standing pre-authorization: the operator's standing maintenance exec mandate covers this entry's ad-hoc run; no contested recommendation stands.
+
+## task-primary-capability-request-attach-disjunct
+
+Added: 2026-10-31, learn/investigate over the task-primary-worktree-archive-refusal execute-plan session (operator-directed over the 03:00 WET one-shot run, landed b7b6afa41)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named single-clause wording widening in one skill file's already-landed paragraph - widen the capability request in `agents/skills/execute-plan/worktree-first.md` step 6's archival shape from "detach or rebind with a checkable postcondition" to also name unmanaged-primary-checkout attach as the second acceptable disjunct, paid from same-paragraph slack per the anti-growth rules - no code surface, no open design choice, no new dependency, no gate or state change.
+
+Origins:
+- docs/history/backlog/2026-10-31-task-primary-capability-request-attach-disjunct.md
+
+Urgency: low - the operative text is narrower than, not contradictory to, the covering run's Task 1 disposition of record; the adjacent limit sentence ("attach refuses unmanaged checkouts") already keeps the gap inventory complete, so nothing misleads a reader today; the widening rides the next edit of the same paragraph.
+
+Scope arms: one bounded docs-only edit to the step-6 archival-shape paragraph: insert the attach disjunct into the capability-request clause with a checkable postcondition named for it, byte-balanced within the paragraph; re-run the affected pins/test class after the edit and expect only tracked baseline red; the vendored/runtime twins land in the same change or leave a tracked landing path.
+
+Orientation: `agents/skills/execute-plan/worktree-first.md` step 6 (the archival shape sentence of record, landed in b7b6afa41 together with the peer gate-removal wording); the origin row; docs/history/plans/completed/2026-10-27-task-primary-worktree-archive-refusal.md (the Task 1 disposition naming both disjuncts).
+
+Rejected alternatives:
+- Leave the skill text as-is and let the completed plan's disposition carry the disjunct: rejected on the remove-or-keep axis - the skill file is the operative lifecycle source the next executor reads, so a capability request narrower than the recorded evidence is the exact fidelity gap the covering plan's review targeted (witness: the origin row's problem statement; agents/skills/execute-plan/worktree-first.md step 6, verified by grep at HEAD)
+- Fold the widening into the covering run's landing itself: rejected at review time to avoid a third fold-and-review cycle for a non-blocking fidelity item; the durable row plus this entry is the sanctioned deferral shape (docs/history/backlog/2026-10-31-task-primary-capability-request-attach-disjunct.md, Alternatives)
+- Remove the "attach refuses unmanaged checkouts" limit sentence to resolve the tension by deletion: rejected - the sentence is a true capability statement of the app's current surface and deleting it would hollow the gap inventory the capability request depends on for context (witness: the paragraph's own attested operation list at `agents/skills/execute-plan/worktree-first.md` step 6)
+
+Machinery admission: nothing added; the recommended arm removes no gate and adds none.
+
+Disk re-derivation at the entry's write (2026-10-31): the origin row exists in the working tree and at HEAD (filesystem probe + `git cat-file -e`); the operative clause "detach or rebind with a checkable postcondition" and the limit sentence "attach refuses unmanaged checkouts" confirmed by grep at HEAD in `agents/skills/execute-plan/worktree-first.md`.
+
+## lesson-139-empty-set-remedy-refresh
+
+Added: 2026-10-31, learn/investigate over the gate-removal-empty-owned-set-remedy execute-plan run (landed 790096fcb)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a one-sentence corpus refresh in `docs/maintenance/development_lessons.md` lesson #139 - reword the remedy clause to match the gate's landed two-input remedy line and re-anchor the certified-plan caveat to the claims path - no code surface, no open design choice, no gate or state change.
+
+Origins:
+- docs/history/backlog/2026-10-31-lesson-139-empty-set-remedy-refresh.md
+
+Urgency: low-medium - the corpus currently contradicts the gate's own printed remedy: lesson #139 says the only remedy is a `--claims` file and forbids a header edit, while the landed gate (`_GATE_EMPTY_SET_REMEDY_LINE` in `scripts/worktree_closeout_migrate.py`, printed at the empty-owned-set refusal) offers the header citation as the first attainable input; a stuck run following the lesson over the printed line mis-prices a legal repair.
+
+Scope arms: one bounded docs-only edit to lesson #139's Rule sentence: name both attainable inputs exactly as the gate prints them (a `Plan review record:`/`Plan review:` header citation, or a `--claims` file listing review-record paths), and keep the digest caveat scoped to digest-bound certified plans where the claims path is the safe option; re-run the maintenance pins script after the edit and expect only tracked baseline red; the origin row is deleted per the covered-row rule in the same change with the EXEC-PROMPTS-PRUNE receipt line, removing this entry's section.
+
+Orientation: `docs/maintenance/development_lessons.md` lesson #139 (Rule sentence), `_GATE_EMPTY_SET_REMEDY_LINE` and its print site in `scripts/worktree_closeout_migrate.py` (disk re-derivation at write time), the covering plan `docs/history/plans/completed/2026-10-27-gate-removal-empty-owned-set-remedy.md`, and the origin row.
+
+Rejected alternatives:
+- Refresh the lesson inside the covering run's own landing: rejected - the row was filed by that run's intermediate review as a deferred Low, and folding a corpus edit into the landing would have widened the audited boundary commit; the row-plus-entry is the sanctioned deferral shape (docs/history/backlog/2026-10-31-lesson-139-empty-set-remedy-refresh.md, Origin line)
+- Pin the lesson's remedy sentence in the maintenance pins suite so it cannot re-drift: rejected on the machinery-admission axis - no witnessed incident of a refreshed lesson re-drifting, the refresh is a one-time accuracy fix, and a pin would price permanent maintenance for no catch (no witnessed incident; evidence basis: `scripts/check_maintenance_pins.sh` freezes none of lesson #139's sentences)
+- Delete lesson #139 and let the gate's printed line be the single source: rejected on the remove-or-keep axis - the lesson carries the post-pass teardown verification rule and the printed-step ownership routing, which the gate does not print; deleting it would orphan that guidance (docs/maintenance/development_lessons.md lesson #139, Rule + Why)
+
+Machinery admission: nothing added; the recommended arm is corpus prose; the pins alternative is rejected above with the missing-incident absence named.
+
+Standing pre-authorization: the operator's standing maintenance exec mandate covers this entry's ad-hoc run; no contested recommendation stands.
+
+Disk re-derivation at the entry's write (2026-10-31): the origin row exists in the working tree and at HEAD (filesystem cat + `git cat-file -e`); lesson #139's "empty owned set" text confirmed at HEAD by `git grep` (2 hits); the gate's two-input remedy line confirmed at HEAD by `git grep` in `scripts/worktree_closeout_migrate.py` (1 hit).
+
+## boundary-mirror-transfer-in-gap-lesson-329
+
+Added: 2026-10-31, learn/investigate over the 02:00 WET one-shot execute-plan run (teardown-staging-record-mirror, landed 374f75cfa)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the witnessed defect is already remedied by the durable record - lesson #329 in `docs/maintenance/development_lessons.md` (landed 5736d2449) captures the mechanism, trigger, rule, and witness - so no machinery, code, or skill-text surface remains; the residual is the lesson itself plus this entry as the second-witness dispatch marker.
+
+Origins:
+- docs/maintenance/development_lessons.md (lesson #329, Transfer Session Logs Into the Run Worktree Before Any Boundary Mirror)
+
+Urgency: low - the rule is captured and the run's own remedy (copying the session dir into the worktree before each boundary mirror) cleared the leg on first retry every time; the only cost is the per-boundary first-attempt exit-1 noise, which the lesson's Rule sentence tells future runs to avoid up front.
+
+Scope arms: none beyond the landed lesson; no skill edit, no script change, no gate. The Phase 0 transfer-in instruction already names the canonical transfer (Worktree-first standard, Transfer-in implementation); the lesson operationalizes it for the session directory specifically.
+
+Orientation: `docs/maintenance/development_lessons.md` lesson #329; `scripts/worktree_closeout_migrate.py` `boundary-mirror` (worktree-side source reads); the Worktree-first standard's Transfer-in implementation (the canonical transfer the lesson points at); the sibling cluster row `docs/history/backlog/2026-10-15-execute-plan-closeout-remedy-mirror-wording.md` (shared boundary-mirror wording surface, distinct defect).
+
+Prompt: no dispatch; the lesson is the artifact. If a future run witnesses the same all-paths-missing first mirror attempt despite the lesson's rule, reopen with the new witness.
+
+Rejected alternatives:
+- Teach `boundary-mirror` to fall back to primary-side sources when the worktree copy is missing: rejected on the remove-or-keep axis - the helper's worktree-side read is the identity bound that keeps receipts tied to the run worktree, and a silent fallback would mask the transfer-in gap the lesson exists to close (witness: the receipt identity binding in `scripts/worktree_closeout_migrate.py`, verified by grep at HEAD)
+- File a backlog row for a Phase 0 transfer-in enforcement gate: rejected on the machinery-admission axis - no witnessed incident of a run proceeding past a failed mirror with data loss (every first attempt here was repaired within the boundary and receipts landed on retry), so no admission test passes (no witnessed incident; evidence basis: the run's manifest rows in `.ai-playbook` and lesson #329's Why)
+- Fold the lesson into the Worktree-first standard's Transfer-in paragraph instead of the lessons corpus: rejected - the standard already owns the canonical transfer duty and the corpus is where per-mechanics incident witnesses live; duplicating the operational detail in operative skill text would grow the skill without a new rule (witness: the Transfer-in implementation paragraph in `agents/skills/execute-plan/worktree-first.md`)
+
+Machinery admission: nothing added; both machinery-shaped arms are rejected above with the missing-incident absence named.
+
+Disk re-derivation at the entry's write (2026-10-31): lesson #329 exists in the working tree and at HEAD (filesystem probe + `git cat-file -e 5736d2449:docs/maintenance/development_lessons.md`); the receipt identity binding confirmed in `scripts/worktree_closeout_migrate.py` by `git grep` at HEAD; the sibling row exists in the working tree and at HEAD (filesystem probe + `git cat-file -e`).
+
+## docs-branch-floor-review-lessons-334-335
+
+Added: 2026-10-31, learn/investigate over the interactive $maintenance exec run (docs-branch-supported-python-runtime, landed b3dcd1f62)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): both witnessed defects are already remedied by durable records - lesson #334 (bash octal `10#` version arithmetic, landed e6c09729e) and lesson #335 (author validator-valid review pairs from a passing twin) in `docs/maintenance/development_lessons.md` capture mechanism, trigger, rule, and witness - so no machinery, code, or skill-text surface remains; the residual is this entry as the second-witness dispatch marker, and the run's two non-blocking finding classes ride their own backlog rows (`docs/history/backlog/2026-10-31-docs-branch-floor-review-residuals.md`, `docs/history/backlog/2026-10-31-docs-branch-floor-doc-polish.md`).
+
+Origins:
+- docs/maintenance/development_lessons.md (lessons #334, #335)
+- scripts/docs_branch_sync.sh (below-floor preflight, landed b3dcd1f62; the octal-degrade witness surface)
+
+Re-witnesses: lesson #35 (lock exports die at the tool-call boundary) re-witnessed by the same run's landing - an acquire in one shell invocation left the next invocation's `land-worktree` refusing on missing `MERGE_LOCK_DIR`, and the abandoned own hold needed `merge-stale-clean` before the single-invocation acquire-land-release retry passed.
+
+Urgency: low - both lessons are captured and landed; the run's own remedies cleared every gate on retry; residual cost is validator round-trip noise for future record authors, which lesson #335's Rule sentence collapses.
+
+Scope arms: none beyond the landed lessons; no skill edit, no script change, no gate. The review-staging skill already owns the scaffold-first recipe (its SKILL.md drafting step); lesson #335 operationalizes it for the exec-record family and the mint key name.
+
+Orientation: `docs/maintenance/development_lessons.md` lessons #334/#335; `scripts/validate_review_staging.py` `--scaffold`/`--hard` (the fence set that produced the round-trips); `scripts/review_usage_capture.py mint` (the `minted_at_ms` key); `scripts/docs_branch_sync.sh` preflight (the octal witness surface); the two backlog rows above (the deferred Low findings' durable home).
+
+Prompt: no dispatch; the lessons are the artifacts. If a future run witnesses a zero-padded version component reaching production output, or another multi-round ERROR loop staging a record whose family already has a passing twin, reopen with the new witness.
+
+Rejected alternatives:
+- Fix BC-2 (octal `10#`) in the run instead of backlogging: rejected on the off-plan-findings axis - it was a non-blocking Low outside the plan's must-fix scope, and folding it would have invalidated the blocking-clean r1 digest and forced an r2 witnessed in the r1 record's calibration; the record lives under `.ai-playbook/reviews/2026-10-31-docs-branch-supported-python-runtime-code-review-r1.md` beside plan docs/history/plans/completed/2026-10-28-docs-branch-supported-python-runtime.md
+- Backfill the archive-egress exec record by editing the landing message with `--ack-egress`: rejected - the operator had not directed that specific archive in-turn, so the acked-egress exception did not apply; the completion-record leg was the sanctioned evidence route and passed on retry (witness: the guard's sanctioned-exits text in the landing attempt output; `scripts/reverse_squash_guard.py` check-archive)
+- Widen the review panel to a full lens set for the two-task plan: rejected on the budget-proportionality axis - the declared complexity was small, and the focused two-lens panel returned blocking-clean on the first round, witnessed in the r1 record's ### Panel counts beside plan docs/history/plans/completed/2026-10-28-docs-branch-supported-python-runtime.md
+
+Machinery admission: nothing added; all machinery-shaped arms are rejected above with the missing-incident absence named (no witnessed incident of a blocking finding missed by the focused panel, nor of a zero-padded component reaching production output).
+
+Disk re-derivation at the entry's write (2026-10-31): both backlog rows exist in the working tree and at HEAD (filesystem cat + `git cat-file -e`); lesson #334 confirmed at HEAD by `git grep` (1 hit); lesson #335 confirmed in the working tree at `## 335.` (filesystem probe; committed in the same turn's learn commit e6c-class, verified by `git log -1` before this write); the landed commit `b3dcd1f62` verified via `git log --oneline -1` at main.
+
+## plan-doc-evidence-pointer-discrimination
+
+Added: 2026-10-31, learn+investigate over the session-channel-zcode-runtime-derivation-empty execution run (anchored on the run's two backlogged Phase 3 rows)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): both origins name bounded guidance/text fixes with the shapes already prescribed in the rows (a house-style pass over plan-header review-series citations; a discriminating-needle rewrite of one plan family's Validation Commands or a plans-skill guidance tightening) - no open design choice, no new machinery, no guard or schema change; the second origin's option (a) spans are already rg-verified against the landed docs.
+
+Origins:
+- docs/history/backlog/2026-10-31-plan-review-record-glob-infix.md
+- docs/history/backlog/2026-10-31-plan-validation-grep-needles.md
+
+Urgency: low - both defects are informational today: the readiness gate locates review records by slug logic rather than the header glob, and the covering run completed with the doc paths additionally pinned by a discriminating selftest (37 arms), so a reader or a rerun is misled only in the narrow shapes the rows name; the cost recurs per new plan, not per existing one.
+
+Scope arms: one bounded docs-and-guidance session: (1) settle the plan-header review-series citation house style together for both named shapes - the run-id infix (or the plans skill resolving a dateless citation itself) and the snapshot-exclusion shape (a dateless glob matches the `.backup-20261030T*` twins beside the genuine records), and normalize the two sibling plans the glob-infix row names; the citation form the closeout series primitive actually recognizes is the tokenless `*-plan-review-<slug>-r*.md` (optional `-p<8hex>` infix), witnessed by the landing-day citation fix e160db2d6 after a literal `-p*` infix form reported a present series missing; (2) reword the covering plan family's doc-path Validation Commands to the per-file discriminating spans option (a) the grep-needles row already verified, or tighten the plans skill's Validation Commands guidance so must-fix doc paths get non-pre-existing needles by construction; the family's plan is archived, so the digest-churn concern that parked the row no longer applies.
+
+Orientation: both origin rows whole; docs/maintenance/development_lessons.md lessons 69 (derive a downstream match pattern from on-disk names, third witness 2026-10-31) and 335 (author a validator-valid review pair from a passing twin); the closeout series primitive in scripts/worktree_closeout_migrate.py `_series_members`; the archived plan docs/history/plans/completed/2026-10-30-session-channel-zcode-runtime-derivation-empty.md.
+
+Rejected alternatives:
+- Add a validator gate that checks every plan header's review-series citation against disk at readiness time: rejected for missing machinery admission - the witnessed catches (the landing-day gate-removal refusal and the informational glob mismatch) were both caught by existing machinery at zero added-gate cost and remedied citation-only, and a readiness-time glob validator's false-positive cost (churning plan digests mid-execution, the exact concern that parked the glob-infix row) is priced in the row itself (evidence basis: docs/history/backlog/2026-10-31-plan-review-record-glob-infix.md; docs/maintenance/development_lessons.md lesson 69).
+- Fix the two sibling plans' header globs inside this investigation: rejected - the skill ends at the log entry and the rows' own remedy shape (a house-style pass) covers them with the infix-and-snapshot shape settled once rather than twice (evidence basis: the sibling paths named in docs/history/backlog/2026-10-31-plan-review-record-glob-infix.md)
+- Retro-edit the archived plan's Validation Commands as part of the covering run: rejected on the record at capture time - the certified plan digest churned mid-run would have invalidated the executing review chain's binding; the row was the sanctioned capture (evidence basis: docs/history/backlog/2026-10-31-plan-validation-grep-needles.md, Why-not-fixed-now paragraph)
+
+Machinery admission: nothing added; the machinery-shaped arm is rejected above with the missing-incident absence named (no witnessed incident of a readiness failure caused by an unchecked header citation; both catches rode existing gates).
+
+## hard-mode-clause-pointer-residual-fix-trio
+
+Added: 2026-10-31, learn+investigate over the hard-mode-clause-pointer-residuals exec closeout session (carrier-fired resume session; run landed a5024b396)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): all three origins name bounded, body-prescribed fixes to the freshly landed clause-pointer surface in `scripts/validate_review_staging.py` and `scripts/check_maintenance_pins.sh` - re-case one dead marker and re-derive its pin probe, add leader rows with byte-real pins from enumerated emit sites, sharpen a check's failure diagnostics, harden one `python3 -` herestring invocation; no open design choice, no new dependency, no new machinery (all removal/narrowing or existing-family extension), no gate or state change.
+
+Origins:
+- docs/history/backlog/2026-10-31-witness-ledger-pointer-marker-case-dead.md
+- docs/history/backlog/2026-10-31-clause-pointer-residual-under-routing-families.md
+- docs/history/backlog/2026-10-31-clause-pointer-r2-residual-improvements.md
+
+Urgency: medium - the landed state routes a handful of real ERROR lines to the bare skill pointer or a wrong-but-existing section (advisory print-layer only, pinned behavior unaffected), and every future table edit pays the unenforced-invariant cost the r2 panel named; the fixes are each one row or one assertion.
+
+Scope arms: one bounded validator-and-pins session: (1) re-case the `witness ledger` marker to the real emission prefix and re-derive its selftest probe from the emit site (respect the `post-fix round` ordering caveat); (2) add leader rows from the residual rows' enumerated families (`required top-level field` ahead of `source_digest`, the COVERAGE date-fence / hyphenated mint-pair / freshness Metadata variants, the full-panel composition siblings, a routing-neutral `severity disagrees` row) each with a byte-real pin; (3) make the set-equality failure diagnostic symmetric (both set differences plus counts); (4) harden the import-based live-count herestring against cwd stdlib shadowing (`-P`/`-I` or spec_from_file_location); (5) align the predicate docstring/comment precision notes from the r2 rows. Run the selftest and pins suite fresh; the extractor completeness assertion must stay green both directions.
+
+Orientation: the three origin rows whole; `SKILL_CLAUSE_POINTERS` and `_skill_clause_pointer` in `scripts/validate_review_staging.py` (landed a5024b396); the r2 review record `.ai-playbook/reviews/2026-10-31-hard-mode-clause-pointer-residuals-code-review-r2.md` (findings F1-F7 carry the per-finding evidence).
+
+Rejected alternatives:
+- Fold the residuals into the run's own landing: rejected at review time - r2 certified clean with zero blocking findings, and the certification-residual routing requires durable backlog capture rather than a third review round; the r1 fix round already took the blocking share; witness: the r2 record's Summary verdict ready=yes and the r2-residual row's creation in the same change, .ai-playbook/reviews/2026-10-31-hard-mode-clause-pointer-residuals-code-review-r2.md, landed a5024b396
+- Remove the quote-position anchoring to eliminate the quoted-only under-capture class: rejected on the remove-or-keep axis - the anchoring kills the C3 misroute class with mutation-proven pins and one uniform rule; removing it reintroduces the witnessed misroute to fix an advisory-only under-fire (witness: lesson in the r1 record F1, `docs/history/backlog/2026-10-31-clause-pointer-r2-residual-improvements.md` last bullet).
+- Add `source_digest` to the quoted-template exemption set instead of a leader row: rejected - the exemption matches anywhere and would widen the misroute surface the r2 risk lens measured; the leader row routes the whole missing/null family by first-match-wins without reopening that window; witness: the r2 record's F1 Comment, probe-backed, .ai-playbook/reviews/2026-10-31-hard-mode-clause-pointer-residuals-code-review-r2.md, landed a5024b396
+
+## execute-plan-review-panel-selection-reference-repoint
+
+Added: 2026-10-31, learn+investigate over the same closeout session (Step 1.8 skill-usage issue capture)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a bounded three-reference re-point in one skill file - `agents/skills/execute-plan/SKILL.md` names `review-panel-selection.md` bare in three operative places while the real file lives at `agents/skills/review-agents/review-panel-selection.md`; no code surface, no open design choice, no new machinery.
+
+Origins:
+- docs/history/backlog/2026-10-31-execute-plan-missing-review-panel-selection.md
+
+Urgency: medium - every execute-plan run's Step 1.2b and Phase 3 worker-set resolution silently falls back to deriving tiers when the reference does not resolve, so the tier-selection contract is undiscoverable at the moment of use and is re-derived (uncontrolled) run after run.
+
+Scope arms: one docs-only edit: re-point the three references at the review-agents path in the form the skill set uses for cross-skill pointers, verify the linked sections exist (Per-task intermediate review selection; Targeted follow-ups), and confirm no other bare reference to the file remains in the executing skill set.
+
+Orientation: the origin row whole; `agents/skills/execute-plan/SKILL.md` Step 1.2b, the Residual-acceptance exit row, and Phase 3 Step 3.1; `agents/skills/review-agents/review-panel-selection.md` (the real home, verified on disk).
+
+Rejected alternatives:
+- Copy `review-panel-selection.md` into `agents/skills/execute-plan/`: rejected - a duplicated file drifts from the review-agents home and violates the single-home rule for cross-cutting skill modules; the pointer re-point is the one-change fix; witness: the file exists and is maintained there, agents/skills/review-agents/review-panel-selection.md
+- Inline the tier-selection rules into execute-plan's SKILL.md: rejected on the cost axis - the selection contract is shared across review consumers and inlining duplicates it into a second home with two update sites; witness: the file's shared-consumer structure at agents/skills/review-agents/review-panel-selection.md
+- Leave the bare references and rely on executing sessions to derive tiers: rejected - the fallback is exactly the uncontrolled derivation this row witnessed twice in one run (witness: the origin row's problem statement).
+
+## two-owner-race-corpus-residuals
+
+Added: 2026-10-31, learn/investigate over the interactive $maintenance exec run (plan-authoring-stand-down-before-charter, landed 721e6cc21)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the race mechanics are captured by lessons #339 (discharge your armed resume carrier), #340 (record findings before a pause leg), #341 (verify the diff surface after a delegated reviewer returns), and #342 (an errored hand-back is liveness-unknown) - so no machinery, code, or skill-text surface remains; the residual is the corpus defect the race itself produced: the lessons corpus now carries two distinct lessons numbered `## 337.` (the run's fixture-derivation lesson and a peer's session-dir baseline lesson, landed concurrently by the two owners of the race), which breaks the fresh-read numbering rule (next number = max existing + 1) and every `#337` cross-reference's disambiguation.
+
+Origins:
+- docs/maintenance/development_lessons.md (the duplicate `## 337.` heading pair; verify by grep)
+
+Urgency: medium - every future lesson numbers from a max() that now has a tie, and citation text like "lesson #337" is ambiguous until renumbered; the defect self-perpetuates with each new corpus write.
+
+Scope arms: renumber the later `## 337.` heading (the session-dir baseline lesson at the higher line number) to the next free number with a recorded renumber note in its body, keeping the earlier #337 stable; grep and retarget every live `#337` citation that refers to the renumbered lesson; no machinery, no validator (the corpus gate already owns concision checks; a numbering-uniqueness gate is rejected below).
+
+Orientation: docs/maintenance/development_lessons.md (both `## 337.` headings and their Why cross-references); lessons #339/#340/#341/#342 (the race's recorded sides); the lessons corpus numbering rule in agents/skills/learn/step-1-extract.md (fresh read, max + 1).
+
+Prompt: in one ad-hoc closeout, renumber the duplicate lesson (rename the later `## 337.` heading to the next free number, add one line recording the renumber and the two-owner race witness), grep the corpus and repo for `#337` citations and retarget only those whose subject matches the renumbered lesson, run the lessons-corpus gates, and land in one commit. Delete this entry with its `EXEC-PROMPTS-PRUNE` receipt in the same landing.
+
+Rejected alternatives:
+- Add a numbering-uniqueness validator gate: rejected on the machinery-admission axis - no witnessed incident of the duplicate surviving a fresh-read numbering pass by an attentive writer; the defect was produced by the two-owner race itself (two sessions numbering concurrently), which the race lessons already address at the root, so a new blocker would price a one-off collision class (evidence basis: the duplicate's git history, both landed within minutes of each other by the race's two owners)
+- Leave both as #337 and disambiguate citations by title: rejected - the corpus rule derives the next number from the max heading number, and a permanent tie makes every future `#337` citation ambiguous, which is worse than a one-line renumber (evidence basis: docs/maintenance/development_lessons.md `## 337.` duplicate headings and the fresh-read max-plus-one rule in agents/skills/learn/step-1-extract.md)
+
+Machinery admission: nothing added; the validator arm is rejected above with the missing-incident absence named.
+
+Disk re-derivation at the entry's write (2026-10-31): the duplicate confirmed by `grep -c '^## 337\.'` = 2 on the working tree; lessons #339-#342 confirmed present by grep; the run's landing commit 721e6cc21 and registry rider c63419139 confirmed on main via `git log`.
+
+## corrections-record-operand-recursion-containment
+
+Added: 2026-10-31, investigate over the interactive exec session that landed corrections-chain-recursion-refusal-and-pins (learn second witnesses already landed 56a84206e; anchored pass on the session's filed row)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin row names a bounded, body-prescribed fix to one script and its test file - widening three except tuples and moving one `json.dumps` inside an existing guard in `scripts/corrections_record.py`, plus refusal-mapping tests mirroring the seven-test shape the sibling plan landed; no open design choice beyond the row's named MemoryError-arm decision, no new dependency, no gate, validator, lock, or state-schema change.
+
+Origins:
+- docs/history/backlog/2026-10-31-corrections-record-operand-recursion-unguarded.md
+
+Urgency: low - the unguarded sites are fail-closed by construction (a crash never grants authority), the trigger needs write access to the primary checkout and an adversarially deep operand, and the residual is a traceback instead of the established named refusal family.
+
+Scope arms: one bounded script-and-test session over `scripts/corrections_record.py` and `scripts/test_corrections_record.py`: add `RecursionError` to the two parse except tuples (`load_corrections`, `append_corrections`) AND to the append guard's tuple, move the append `dumps` inside that guard, map failures to the existing named refusal legs, and pin with tests mirroring the deep-state/serialization shape of the sibling plan; the same session decides the row's recorded MemoryError arm (widen the writer guard's class set, or record the indent-amplification as an accepted writer-contract risk) and, if touching the refusal text, renders the "not writable" trailing cause only for the OSError family per the row's false-prefix residual.
+
+Orientation: the origin row whole; the sibling plan `docs/history/plans/completed/2026-10-29-corrections-chain-recursion-refusal-and-pins.md` (landed 7179bc995, the mirrored two-line shape and its seven tests); lesson #142 in `docs/maintenance/development_lessons.md` (the decode-error catch-tuple family); the row's Accepted residuals section.
+
+Rejected alternatives:
+- Widen only the two parse tuples and leave the append `dumps` outside the guard: rejected - the row's original suggested fix wording had exactly this hole; RecursionError is not an OSError, so a serialization-depth failure still escapes the un-widened append guard (evidence basis: docs/history/backlog/2026-10-31-corrections-record-operand-recursion-unguarded.md Origin paragraph, corrected by review finding F3)
+- Route the MemoryError/giant-string class through a new size precheck validator before serialization: rejected on the machinery-admission axis - no witnessed incident of the giant-write firing (the risk panel's probe triggered allocation pressure only synthetically), so a new blocker lacks its incident, catch-frequency, and false-positive pricing; the row's fold-the-decision arm is the smallest step that removes the witnessed traceback class (evidence basis: .ai-playbook/reviews/2026-10-31-corrections-chain-recursion-refusal-and-pins-code-review-r1.md finding F5)
+- Leave the sites unguarded as acceptable operational noise: rejected - the named-refusal family is the established contract at every adjacent boundary (lesson #142; the sibling plan's landed receipt legs), so the traceback is a contract outlier, not an accepted posture (evidence basis: docs/maintenance/development_lessons.md lesson #142)
+
+Machinery admission: nothing added; the precheck-validator arm is rejected above with the missing-incident absence named.
+
+Disk re-derivation at the entry's write (2026-10-31): the three sites confirmed by `grep -n "except (ValueError, UnicodeDecodeError)" scripts/corrections_record.py` (both parse sites) and `sed -n 1494,1498p scripts/corrections_record.py` (the `dumps` outside the `except OSError` guard); the sibling plan confirmed at `git cat-file -e main:docs/history/plans/completed/2026-10-29-corrections-chain-recursion-refusal-and-pins.md`; lesson #142 confirmed by grep in docs/maintenance/development_lessons.md.

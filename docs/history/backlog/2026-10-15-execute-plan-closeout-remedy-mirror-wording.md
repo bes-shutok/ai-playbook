@@ -2,6 +2,7 @@
 
 - **Filed:** 2026-10-15, plan-review r2 overflow residual of docs/history/plans/2026-10-15-execute-plan-closeout-cycle-and-filed-records.md
 - **Status:** open
+- **Cluster:** docs/maintenance/development_lessons.md lesson #329 (shared boundary-mirror wording surface; that lesson records the mirror's worktree-side source-resolution gap, distinct from this row's certified-plan remedy-wording contradiction)
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** review residual durable capture

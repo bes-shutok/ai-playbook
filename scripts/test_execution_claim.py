@@ -517,14 +517,21 @@ class TestExecutionClaim(unittest.TestCase):
     # conversion; the restored-worktree recognition arm's successor) --------
 
     def _conversion_fixture(self, holder="session-holder", status="terminal",
-                            form="canonical"):
+                            form="canonical", facts_shape="bare",
+                            home_witness=False):
         """The full dead-run conversion fixture: a registered worktree at
         the take target carrying a facts-resolved run manifest (the chosen
         identity form), a terminal-shaped runtime state with a well-formed
         pre_archive_receipt whose plan_digest hashes the plan bytes, the
         task implement log at its contract path, a fixture provider
         executable answering the chosen status, and the primary facts file
-        naming the provider. Returns (worktree_path, manifest_path)."""
+        naming the provider. facts_shape selects the primary facts input:
+        "bare" appends the provider line as raw TOML (the pre-existing
+        fixture shape), "fenced" rewrites the file as the repository's
+        actual Markdown shape with the keys inside the first ```toml
+        fence. home_witness makes the provider record the HOME it was
+        invoked with into a file under that home, beside answering.
+        Returns (worktree_path, manifest_path)."""
         import hashlib
         import json
 
@@ -618,25 +625,51 @@ class TestExecutionClaim(unittest.TestCase):
             body = 'printf \'{"session_id": "someone-else", "status": "terminal"}\\n\' "$1"\n'
         else:
             body = 'printf \'{"session_id": "%s", "status": "bogus"}\\n\' "$1"\n'
+        if home_witness:
+            # The provider records the HOME it was invoked with beside
+            # answering: where the witness file lands discriminates which
+            # home reached the provider process.
+            body = (
+                'printf \'%s\\n\' "$HOME" > "$HOME/provider-home-witness"\n'
+                + body
+            )
         provider.write_text("#!/bin/sh\n" + body, encoding="utf-8")
         provider.chmod(0o755)
         facts_dir = self.repo / ".ai-playbook"
         facts_dir.mkdir(exist_ok=True)
-        with open(facts_dir / "facts.md", "a", encoding="utf-8") as fh:
-            fh.write(f'session_status_command = "{provider}"\n')
+        facts_path = facts_dir / "facts.md"
+        if facts_shape == "fenced":
+            # The repository's actual facts input shape: Markdown whose
+            # configuration lives in the first ```toml fence.
+            facts_path.write_text(
+                "# Scratch primary facts\n"
+                "\n"
+                "```toml\n"
+                'tmp_dir = "docs/tmp"\n'
+                f'session_status_command = "{provider}"\n'
+                "```\n",
+                encoding="utf-8",
+            )
+        else:
+            with open(facts_path, "a", encoding="utf-8") as fh:
+                fh.write(f'session_status_command = "{provider}"\n')
         return wt, manifest
 
-    def _conversion_take(self, session, branch=None, plan=None, parent=None):
+    def _conversion_take(self, session, branch=None, plan=None, parent=None,
+                         extra_env=None):
+        env = {
+            "CLAUDE_CODE_SESSION_ID": session,
+            "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+        }
+        if extra_env:
+            env.update({k: str(v) for k, v in extra_env.items()})
         return self._run(
             "take",
             str(plan or self.plan),
             "--session", session,
             "--branch", branch or self.branch,
             "--worktree-parent", str(parent or self.wt_parent),
-            extra_env={
-                "CLAUDE_CODE_SESSION_ID": session,
-                "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
-            },
+            extra_env=env,
         )
 
     def test_restored_worktree_takeover_on_verifiable_same_run_state(self):
@@ -725,6 +758,98 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_fenced_facts_resolves_provider_and_converts(self):
+        # The repository's actual facts input shape (fence-wrapped
+        # Markdown, plan 2026-10-30-session-status-facts-parse-shape-gap
+        # Task 2): session_status_command resolved from the first ```toml
+        # fence reaches the same provider gate, and the conversion
+        # proceeds identically. Both HOME pins: the invocation runs with
+        # HOME at the scratch fixture home, and the provider's witness
+        # file proves that pinned home is the one the provider saw.
+        fixture_home = self.scratch / "fixture-home"
+        fixture_home.mkdir()
+        wt, manifest = self._conversion_fixture(
+            facts_shape="fenced", home_witness=True
+        )
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._conversion_take(
+            "session-b", extra_env={"HOME": str(fixture_home)}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
+        self.assertEqual(self._claim_session(), "session-b")
+        self.assertIn("session_id: session-b", manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            (fixture_home / "provider-home-witness")
+            .read_text(encoding="utf-8")
+            .strip(),
+            str(fixture_home),
+            "the provider did not run under the pinned fixture home",
+        )
+
+    def test_conversion_fenced_facts_malformed_or_missing_key_refuse_unchanged(self):
+        # Fence-wrapped inputs that cannot name a provider — a malformed
+        # TOML fence body, and a valid fence without the key — hit the
+        # existing fail-closed provider refusal with the specific cause
+        # echoed under the gateway's provider prefix, and the claim and
+        # manifest stay byte-identical.
+        for shape, cause in (
+            ("malformed fence body", "unreadable or malformed"),
+            ("missing key", "not configured"),
+        ):
+            with self.subTest(shape=shape):
+                fixture_home = self.scratch / "fixture-home"
+                fixture_home.mkdir(exist_ok=True)
+                wt, manifest = self._conversion_fixture()
+                if shape == "malformed fence body":
+                    # The tmp_dir line stays resolvable (the registered-
+                    # manifest scan's sed reads the primary checkout's
+                    # facts too, and primary is itself a registered
+                    # worktree); the malformedness lands on the provider
+                    # key line: an unterminated TOML basic string.
+                    body = (
+                        'tmp_dir = "docs/tmp"\n'
+                        'session_status_command = "unterminated\n'
+                    )
+                else:
+                    body = 'tmp_dir = "docs/tmp"\n'
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    "# Scratch primary facts\n"
+                    "\n"
+                    "```toml\n" + body + "```\n",
+                    encoding="utf-8",
+                )
+                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+                claim_before = self._hash_file(self.claim)
+                manifest_before = self._hash_file(manifest)
+                proc = self._conversion_take(
+                    "session-b", extra_env={"HOME": str(fixture_home)}
+                )
+                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+                combined = proc.stdout + proc.stderr
+                self.assertIn("did not return prior owner", combined)
+                # The provider's own refusal cause is echoed under the
+                # gateway's "  provider: " prefix, discriminating the two
+                # shapes' failure reasons.
+                self.assertIn("  provider: session-status refused:", combined)
+                self.assertIn(cause, combined)
+                self.assertEqual(self._hash_file(self.claim), claim_before)
+                self.assertEqual(self._hash_file(manifest), manifest_before)
+                # Reset the fixture state the next iteration rebuilds.
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                # Restore the facts baseline: the fixture appends the
+                # provider line, so a stale duplicate key would refuse the
+                # next iteration's provider resolution.
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
 
     def test_conversion_refuses_incomplete_run_boundary(self):
         # The runtime state names task 2 in progress: the completed-run

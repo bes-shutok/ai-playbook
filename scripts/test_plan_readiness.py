@@ -5489,7 +5489,7 @@ class ReviewTrajectoryPolicyFixtureTest(unittest.TestCase):
         self.assertIn("never renews across later rounds or triggers", review_plan)
         self.assertIn("the run-wide `self_heal_attempt` member", review_plan)
         self.assertIn('"status":"consumed","run_id":"<stable-run-id>","round":"rN","source_digest":"<sha256>"', review_plan)
-        self.assertIn("A resumed post-fence workflow reads the latest value", review_plan)
+        self.assertIn("the run reads the latest value and, when it is consumed or unknown, pauses before another review", review_plan)
         self.assertIn("it is consumed or unknown", review_plan)
         self.assertIn("resume records `status:\"unknown\"` with the current round's `review-run-id`", review_plan)
         self.assertIn("Use the active mechanical-churn and recurrence triggers, convergence decisions, and bounded self-heal rule defined in `review-plan`", plans)

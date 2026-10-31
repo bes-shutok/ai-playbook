@@ -6,4 +6,4 @@ Append contract: each receipt is written as one append-mode (`O_APPEND`) write w
 
 Retention: both ledgers and their origin and dispatch-entry links are removed only when neither tracked file has a receipt; either file holding any receipt, including confirmed passes, retains both files and links (the dispatching entry's Machinery admission).
 
-Outcome matrix: the single receipt outcome matrix lives in Task 2 of the certifying plan `docs/history/plans/2026-10-20-certification-seal-landing-survival.md` (after archive, `docs/history/plans/completed/` under the same basename) and is the only source for receipt branch behavior.
+Outcome matrix: the single receipt outcome matrix lives in the plans skill's Plan Lifecycle post-squash diagnostic outcome matrix (`agents/skills/plans/SKILL.md`) and is the only source for receipt branch behavior; this ledger receives both records whose primary append failed and direct run-identity-mismatch records, each carrying the matrix row's warning value; the certifying plan's archived Task 2 matrix is a historical snapshot, not a second operative source.

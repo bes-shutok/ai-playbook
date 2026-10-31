@@ -522,11 +522,16 @@ def ledger_lines(lines: list[str]) -> list[dict]:
         "free-text lines",
         "1-based launch sequence",
         "per-path pass number",
-        "per-round wave ordinal",
-        # the "receipt wave 2 is not ledger ordinal 2" example clause was
-        # dropped 2026-10-30 (review round: it leaned on an absent
-        # wave_budget_receipts example); the parenthetical it leaned on is
-        # pinned by "per-round wave ordinal" above
+        # the stale contrast parenthetical ("this per-role per-boundary
+        # ordinal is not a per-round wave ordinal") was dropped 2026-10-31
+        # (plan 2026-10-31-doctrine-text-precision-residuals, Task 2: it
+        # leaned on a wave_budget_receipts surface absent from this
+        # lineage); its absence is pinned by
+        # test_stale_wave_receipt_contrast_absent_from_operational_doctrine,
+        # the surviving per-round ordinal wording ("1-based launch
+        # sequence", "per-path pass number", "the per-role ordinals may
+        # repeat", "consumes no ordinal") by the literals around this
+        # comment
         "launch-wave: <role> <n>",
         "the lines never collide across roles (the per-role ordinals may repeat)",
         "consumes no ordinal",
@@ -558,6 +563,16 @@ def ledger_lines(lines: list[str]) -> list[dict]:
             }
         )
     return ledger
+
+
+def test_stale_wave_receipt_contrast_absent_from_operational_doctrine():
+    """The stale ordinal contrast leaned on a wave_budget_receipts manifest
+    surface absent from this lineage; neither the contrast phrase nor the
+    surface name may return to the operational doctrine prose (the whole
+    execution skill text is the doctrine's operational home)."""
+    text = _exec_text()
+    assert "wave_budget_receipts" not in text
+    assert "per-round wave ordinal" not in text
 
 
 def three_wave_manifest() -> list[str]:

@@ -1,5 +1,9 @@
 # Producer review follow-ups from the exec-review-records-at-round-close r1 panel
 
+Status: open
+Priority: high
+Origin class: self-serving
+
 Added: 2026-10-22, execute-plan Phase 3 r1 fresh-adversarial panel over the branch delta (plan exec-review-records-at-round-close); valid non-blocking findings folded forward as durable backlog capture.
 Cluster: docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md (same script: `scripts/produce_exec_review_record.py` follow-up family)
 Cluster: docs/history/backlog/2026-10-27-verify-digest-recompute-head-vs-expect-head.md (same defect family: `scripts/review_record_selection.py verify-digest` refusals forcing manual work; additive digest-domain rows docs/history/backlog/2026-10-18-plan-delta-classifier-scope-fold.md and docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md)
@@ -51,3 +55,21 @@ Observed: when a run must hand-build a code-family review record pair (the produ
 Expected: either the producer gains the code-family arm (this row's larger `--range` arm), or a canonical clear code-family record example lives in a non-test home (skill text or the validator's usage text) that the staging refusal cites by repo-relative path, so a hand-built pair converges in one produce-validate cycle.
 
 Rejected: filing a separate row (same script family and defect root: the code-family record surface has no owned producer or template, and this row is the follow-up home); capturing as a project lesson (the fix is corpus machinery; the witness rides this row). If the template arm is chosen over the producer arm, the template single-homes beside the validator's usage text and joins the seam scope of docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md.
+
+## Exec-run witness 2026-10-31 (raw diff digest conflicts with reviewed-scope digest)
+
+Added: 2026-10-31, learn Step 1.8 from a Codex execute-plan Phase 3 review in a first-party repository worktree. In `agents/skills/execute-plan/SKILL.md` Step 3.1, the digest-family paragraph describes the code-family digest as a SHA-256 of the raw `git diff <base>...<head>` bytes. The freshness verifier imports `reviewed_scope_bytes()` from `scripts/corrections_record.py` as `_reviewed_scope_bytes` and excludes the `docs/history/backlog/` bookkeeping prefix. A staged review pair and seal made from the raw hash passed the staging validator but `review_record_selection.py verify-digest` refused it: recorded `3635c0a38c06f444250598b1a1bdbdcb9594accd6e9b875e21923e92d85659ba`, recomputed reviewed-scope digest `34f5d57296ba0181e2eea249309b90c4a84bfe3e8b395501aa682d71ec52b43c`. Repricing the record and seal to the helper-derived digest restored freshness without any source change.
+
+Expected: derive every code-family source digest and seal range through `reviewed_scope_bytes()` before record selection and staging; keep raw diff size as a separate magnitude measurement.
+
+Suggested fix: amend execute-plan Step 3.1 to identify the canonical helper and its bookkeeping exclusions as the source-digest recipe, then align the review staging and seal instructions with it. Do not add a new blocker or duplicate digest implementation.
+
+Why not fixed now: this shared execute-plan digest contract is outside the maintenance-autopilot plan's must-fix scope. A separate skill change can update the canonical wording and consumers together.
+
+Severity: Low. Source: `.ai-playbook/reviews/2026-10-31-maintenance-autopilot-continuation-code-review-r7.md`, round r7, plus `docs/tmp/execute-plan/maintenance-autopilot-continuation/review-r7-doing-code-review.log.md`; this is a workflow incident, not a staged finding. Capture hygiene verdict: passed.
+
+Driving force: simplicity (primary); maintainability (secondary).
+Class: fix-class.
+Consumer urgency: projects running execute-plan need the same canonical digest recipe; the shared skill issue must not be parked as formal-hardening for the skills repository alone.
+
+Dedup probe: searched open backlog filenames and Problem bodies for `raw diff digest`, `reviewed-scope digest`, `reviewed_scope_bytes`, `code-family digest`, and `verify-digest`. The existing producer-review finding covers a producer source-family mismatch, but not the raw-versus-filtered reviewed-scope hash disagreement; this witness stays in the same execute-plan digest-family SOT.

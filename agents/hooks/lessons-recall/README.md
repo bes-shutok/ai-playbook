@@ -54,14 +54,31 @@ CURSOR_CONVERSATION_ID, CODEX_SESSION_ID``, else `""`, with NO trailing
 newline (Claude at v9; Cursor hook bridge at v2 via `CURSOR_SESSION_ID`;
 Cursor agent-shell fallback at v3 via `CURSOR_CONVERSATION_ID`, which matches
 the bridged session id for the same composer tab; Codex final fallback at v4
-via `CODEX_SESSION_ID`, not a generic `SESSION_ID` fallback). When `SID` is
+via `CODEX_SESSION_ID`, not a generic `SESSION_ID` fallback). At v5 the same
+invocation accepts an explicit identity, `--session-id <value>`: a runtime
+whose session identity lives in runtime context rather than the subprocess
+environment (ZCode) passes that identity through it, and the explicit value
+outranks ALL four env sources. Run the derivation as its own command and abort
+on a non-zero exit, with the abort OUTSIDE the capture substitution (a bare
+`exit 1` inside `$()` cannot escape it): for example
+`SID="$(python3 ~/.ai-playbook/scripts/session_channel.py --session-id '<runtime session id>')" || { echo "session derivation failed" >&2; exit 1; }`;
+never chain it with `;`. The runtime id must contain no shell metacharacters,
+no quote characters, and no leading dash (the value is interpolated into a
+shell command line; see the skill-gate
+marker recipe's precondition). An explicit input PRESENT but empty-after-whitespace is a
+fail-loud caller error: the helper exits NON-ZERO with empty stdout and a
+stderr message, so the calling recipe aborts BEFORE the marker core: no env
+fallback, no `no-session` key. When `SID` is
 empty (every supported source unset or empty) the adapter OMITS
 `--session-id`, so the core keys the literal `no-session` and uses the FULL
 window. Per-session isolation is Claude-only at v9 and Cursor-without-bridge
 at v9; optional Cursor bridge install (v2) supplies `CURSOR_SESSION_ID` per
 composer tab; v3 also lets agent-shell marker writers (learn/plans) key the
 same session without the bridge env var; at v4 an exported
-`CODEX_SESSION_ID` keys a Codex session the same way.
+`CODEX_SESSION_ID` keys a Codex session the same way; at v5 a
+runtime-context identity passed explicitly keys a ZCode session the same way
+(marker recipes only; this input does not by itself make the runtime a
+trusted gateway channel).
 
 The cores NEVER import `session_channel.py`; they accept `--session-id` as
 opaque data, so the agent-agnostic-core invariant holds.
@@ -71,14 +88,21 @@ opaque data, so the agent-agnostic-core invariant holds.
 `session_channel.py` evaluates **one subprocess environment** per hook invocation:
 
 ```text
-CLAUDE_CODE_SESSION_ID      →  if set and non-empty, use it
+explicit --session-id input →  if present and non-empty, use it (runtime-context
+                               identity; ZCode marker recipes)
+else CLAUDE_CODE_SESSION_ID →  if set and non-empty, use it
 else CURSOR_SESSION_ID      →  if set and non-empty, use it (hook bridge)
 else CURSOR_CONVERSATION_ID →  if set and non-empty, use it (Cursor agent shell)
 else CODEX_SESSION_ID       →  if set and non-empty, use it (Codex)
 else ""                     →  adapter omits --session-id (no-session key)
 ```
 
+A present-but-empty-after-whitespace explicit input is not the bottom row: the helper fails
+loud (non-zero exit) before any keying, and the bottom row applies only to
+callers that pass no explicit input at all.
+
 **Claude wins when both Claude and any Cursor var are set in the same process.**
+The explicit `--session-id` input outranks every env source, Claude included.
 `CURSOR_SESSION_ID` wins over `CURSOR_CONVERSATION_ID` when both are set.
 Cursor does not override Claude. `CODEX_SESSION_ID` is the FINAL fallback: it
 is consulted only when the Claude and Cursor sources are all unset or empty,
@@ -91,7 +115,10 @@ Cursor's.
 
 **All-source empty rule:** when every supported source is unset or empty, the
 helper prints `""` and every adapter OMITS `--session-id`, so the core keys
-the literal `no-session` and uses the FULL window. Per-runtime empty shapes:
+the literal `no-session` and uses the FULL window. (This rule covers callers
+WITHOUT the explicit input; a caller passing an explicit `--session-id` that
+strips empty gets the fail-loud refusal above instead, never this rule.)
+Per-runtime empty shapes:
 Claude empty is the unexpected case (the Claude adapter warns on stderr);
 Cursor is empty without the optional bridge; Codex is empty unless something
 exported `CODEX_SESSION_ID` into its subprocess (the documented Codex steady

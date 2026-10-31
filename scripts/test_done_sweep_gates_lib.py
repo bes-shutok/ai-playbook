@@ -10688,8 +10688,12 @@ def test_legacy_manifest_rejected_with_named_mismatch(
     """[class: REPOSITORY_TEST] Given a wrong-version manifest and a
     schema-valid manifest carrying a foreign 64-hex root, expects
     finalize-manifest to abort non-zero on both with the exact
-    ``run-manifest identity mismatch`` sentence and to leave each file
-    byte-identical (the root arm cannot regress to silent acceptance)."""
+    ``run-manifest identity mismatch`` sentence, to leave each file
+    byte-identical (the root arm cannot regress to silent acceptance),
+    and to carry the conditional post-removal disposition (report the
+    failed finalization step, do not rerun it from the primary
+    checkout), the future finalize-before-worktree-removal order, and
+    the development_lessons.md #326 citation."""
     root = mktemp_repo("legacy-mismatch")
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
     done_session = root / "docs" / "tmp" / "done-session"
@@ -10747,6 +10751,16 @@ def test_legacy_manifest_rejected_with_named_mismatch(
         )
         assert "is not supported by this finalizer" in err
         assert "manifest left unchanged" in err
+        assert (
+            "if the run worktree has already been removed, the failed "
+            "finalization step must be reported and not rerun from the "
+            "primary checkout" in err
+        )
+        assert (
+            "future closeouts must run the done runner's finalize "
+            "subcommand before worktree removal" in err
+        )
+        assert "development_lessons.md #326" in err
         assert manifest_path.read_bytes() == before
 
 

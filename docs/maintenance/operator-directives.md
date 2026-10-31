@@ -66,11 +66,11 @@ Record format (one `## D-<n>: <title>` section per directive):
 ## D-6: executing and authoring lanes continue unless the 5h limit is low
 
 - issued: 2026-10-09
-- status: active
+- status: superseded
 - expiry: none
 - scope: every scheduler turn and payload session in this repository, the execution and authoring lanes, in-session and dispatched forms
 - directive: operator wording, 2026-10-09 ~12:15 WEST, on the witnessed stop (the 11:00 D-3 carrier turn landed its execution child and then ended at the payload's designed stop-after-report boundary while the authoring lane held a fully specified dispatchable target and the primary window had hours of headroom): "You are not supposed to stop the maintenance work executing or authoring unless 5h limit is low. create backlog on the main project in ai-playbook and find a workaround to continue." Standing rule until superseded: a turn does not end at a designed stop boundary while an execution or authoring lane still holds dispatchable work and the 5h limit is not low; the turn continues the lane in-session (the sanctioned workaround legs: the authoring lane's in-session authoring primitive, the execution lane's in-session leg) instead of deferring dispatchable work to the next fixed-cadence fire. The stop condition is the 5h limit being low: the primary-window probe reading at its pause thresholds (the quota leg's decision), at which point the turn records the resume point in the state file and stops. The weekly-secondary binding window's pause stays report-only for same-day resume scheduling (the probe's own reason line) and never by itself stops in-session lane work under this directive. This directive overrides the default quota-defer branches for in-session lane work only; child dispatch scheduling still follows the quota leg.
-- superseded_by: none
+- superseded_by: D-17 for the in-session-only continuation wording; the primary 5h pause and weekly-secondary report-only clauses remain active under D-17
 - witness: backlog row 2026-10-09-scheduler-turn-boundary-stops-live-lanes.md (the durable skill-text fix this record orders, committed with this record) and the same-turn in-session authoring dispatch on the PLAN-PROMPTS entry primary-class-anchors-grammar-drift recorded as this directive's first application.
 
 ## D-7: ledger-evidenced closeout-gate demotions are sanctioned ad-hoc work
@@ -173,3 +173,12 @@ Record format (one `## D-<n>: <title>` section per directive):
 - directive: a maintenance run defaults to dual mode. An explicit mode keyword in the current run selects that run's mode: `auth`, `author`, or `authoring` selects author mode; `exec`, `execute`, or `execution` selects exec mode; `both`, `dual`, or alternation wording selects dual mode. A direct manual ruling for the current run also selects its mode. The selection is session-local and does not change the default or later runs. Survey or stand-down wording keeps the maintenance skill's survey-only precedence.
 - superseded_by: none
 - witness: the operator's 2026-10-15 clarification in the maintenance execution session: "default mode is dueal, and the mode of current run can be set with the key words like auth or exec (as short versions) or their full counterparts as well as manual rulling"; normalized spelling in this record follows the maintenance skill's `dual` term and its existing mode-binding vocabulary.
+## D-17: maintenance autopilot continues across picks without user turns
+
+- issued: 2026-10-31
+- status: active
+- expiry: none
+- scope: every maintenance run and its authoring or execution picks in this repository, including continuation-summary resumes
+- directive: the operator's 2026-10-31 direction to run maintenance in autopilot without requiring user input. Continue after each completed pick while another eligible pick remains, using the normal lane selection and guards. A context-management stop that was used to let the operator manage context is not a user-paced cycle gate; when such a stop armed `authoring_cycle_gate`, clear it with the existing dated clear trace, record the D-17 disposition, and continue without a prompt. An explicit directive that requires user action before the next cycle still arms the gate and stops. Preserve the primary five-hour quota pause, empty-queue stop, and an explicit current stop or pause request. Runtime continuation strategy: ZCode uses a fresh session per pick; Codex continues in the same session and compacts at safe boundaries. These strategies do not add runtime session-spawn or compaction machinery to this shared policy.
+- superseded_by: none
+- witness: operator direction in the 2026-10-31 maintenance autopilot planning conversation.

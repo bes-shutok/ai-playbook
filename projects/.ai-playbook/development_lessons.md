@@ -3112,22 +3112,24 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 **See also:** #145, `projects/.ai-playbook/skill-upstream-catalog.md`, `agents/skills/review-agents/simplification.md`, `coding_guidelines.md` **#28**.
 
 
-## 147. Orchestrator Skills Must Treat Slash Invocation as Explicit Mode Choice and Auto-Continue Through Defined Steps
+## 147. Treat Orchestrator Invocation as Mode Choice and Continue Its Defined Steps
 
-**Principle:** Family D (Single source of truth for workflow contracts) applied to skill orchestrators: when the user invokes a slash command or attaches a skill, that is the mode selection; do not re-ask with a softer gate or pause between steps the contract already defines.
+**Principle:** Family D (Single source of truth for workflow contracts): invoking an orchestrator skill selects its workflow; do not add confirmation pauses between its defined steps.
 
-**Trigger:** A user runs `/execute-plan <plan-path>`, types `execute plan docs/history/plans/foo.md` or shorthand `execute docs/history/plans/foo.md`, or attaches the execute-plan skill, but the agent still shows the execute-plan / manual / read-only gate, asks to confirm or re-create the Phase 0 worktree branch the Worktree-first standard already resolves, or ends a task with "want me to proceed to Task N+1?"
+**Trigger:** The user attaches an orchestrator skill or explicitly requests its workflow, but the agent asks whether to start, repeats a choice the skill resolves, or stops between required steps.
 
 **Rule:**
-1. Run **invocation detection first**: `execute plan` + path, shorthand `execute`/`implement`/`run` + plan `.md` path under `.../plans/...`, `/execute-plan`, and skill attachment are equivalent execute-plan choice; the three-way gate applies only when `invoked = false` (bare path or `@mention` with no verb before the plan path).
-2. On Phase 0 branch setup, **auto-continue**: the run works inside the ad-hoc worktree on its own branch per the Worktree-first standard (branch named by the run's convention, base per the Base-branch resolution rule); never prompt to confirm the branch and never fall back to the primary checkout. (Correction 2026-10-01, driving incident: the worktree-first standard consolidation, plan `docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md`, deleted Step 0.1a and retired the in-checkout branch-match arm this rule used to teach; "continue when `git branch --show-current` equals the plan slug" is no longer a sanctioned Phase 0 shape.)
-3. After each task `done`, Phase 2 pass, or review-round `done`, **start the next defined step immediately**; brief progress reports are fine, permission prompts are not.
+1. Treat a skill attachment, slash invocation, or explicit execute/implement/run request as the workflow choice. Offer a three-way route only when none occurred.
+2. Complete required setup, including the Worktree-first Phase 0; do not ask to confirm the skill's default worktree or fall back to the primary checkout.
+3. After each task, phase, or review boundary, start the next defined step. Brief progress reports are fine; permission prompts are not.
 
-**Why this happens:** Agents pattern-match on "plan path in message" and generic safety habits (confirm branch, confirm next step). Slash commands attach the skill without putting trigger text in the user message, so text-only trigger lists miss the invocation. Step boundaries feel like natural pause points unless the skill forbids asking.
+**Why this happens:** Generic safety habits turn natural pause points into consent gates, and attachments may not appear as trigger text. Invocation is mode selection; continue within the skill's scope.
 
-**Shape trigger (when to suspect this family):** User explicitly invoked an orchestrator skill but the agent behaves like they only mentioned a file path, or asks yes/no between tasks on a plan they already asked to execute end-to-end.
+**Shape trigger (when to suspect this family):** An explicitly invoked workflow has not started its first required step or pauses before its defined completion boundary.
 
-**See also:** `agents/skills/execute-plan/SKILL.md` (Invocation detection, Continuous execution, the Worktree-first standard section, Step 1.5; corrected 2026-10-01, the previously cited Step 0.1a was deleted by the worktree-first standard consolidation), `plan-execution-routing` Cursor rule, `done` skill workflow continuity.
+**Example (2026-10-31 maintenance authoring):** A user attached the maintenance skill and authorized plan authoring, but the agent stopped before required setup. The user repeated the instruction. Resuming at setup carried the workflow through closeout.
+
+**See also:** `agents/skills/execute-plan/SKILL.md` (Invocation detection, Continuous execution, Worktree-first); `agents/skills/maintenance/SKILL.md`; `agents/skills/plans/SKILL.md`; `done` workflow continuity.
 
 ## 148. Tune Review Panels From Review Statistics, Not Agent Count Alone
 
@@ -3561,7 +3563,7 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 1. Before producing any plan, review, RFC, or session-finalization artifact, check whether an installed skill owns that workflow. If yes, invoke THAT skill (via the Skill tool or its slash command) and follow its steps; do not substitute the harness's plan-mode or a hand-rolled document.
 2. The skill's quality gate is not optional theater. A plan written outside the `plans` skill skips `review-plan`; a review done inline skips the panel catalog; a commit done by hand skips `learn` + `docs-branch`. Each omission is a defect the skill exists to prevent.
 3. If a generic harness mode is already active (e.g. plan mode) when you realize a skill should own the workflow, exit that mode and invoke the skill; do not try to "then run the skill after": the skill IS the workflow, including its own branch/file steps the generic mode blocks.
-4. Corollary of UL#148: invocation is the mode selection. But invocation requires actually invoking: pattern-matching "this looks plannable" and entering generic plan mode is NOT invoking the `plans` skill.
+4. Corollary of UL#147: invocation is the mode selection. But invocation requires actually invoking: pattern-matching "this looks plannable" and entering generic plan mode is NOT invoking the `plans` skill.
 
 **Why this happens:** Generic plan mode and hand-rolled output feel faster (no Phase 0 branch, no interview, no review gate). The skill's value is invisible until the artifact hits its gate and fails, or until the user notices the skipped conventions. Agents also conflate "thinking about a plan" with "running the plans skill."
 
@@ -3569,9 +3571,9 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Example:** Asked to create an implementation plan, the agent entered the harness's generic plan mode, drafted the plan inline, and tried to exit-plan-mode to "then run plans." The user corrected twice ("you should have used plans skill instead"; "the plan is wrong. Create a proper plan with plans skill"). Fix: invoke the `plans` skill, which ran Phase 0 branch setup, wrote the format-correct file, and ran the mandatory `review-plan` gate (3 rounds, caught 2 Blockers + 8 Mediums the hand-rolled version would have shipped with).
 
-**Distinguishing from UL#148 (auto-continue after invocation):** UL#148 fires AFTER a skill is correctly invoked (don't re-ask yes/no between its steps). This lesson fires BEFORE invocation (don't bypass the skill with a generic mode in the first place). Fix UL#148 = stop pausing inside the workflow; fix this = enter the workflow.
+**Distinguishing from UL#147 (auto-continue after invocation):** UL#147 fires AFTER a skill is correctly invoked (don't re-ask yes/no between its steps). This lesson fires BEFORE invocation (don't bypass the skill with a generic mode in the first place). Fix UL#147 = stop pausing inside the workflow; fix this = enter the workflow.
 
-**See also:** `plans` SKILL (Plan Quality Gate), `review-plan` SKILL, UL#148 (auto-continue), UL#166 (do not override an agent-enforced gate), `agent_workflow_guidelines.md` Family D.
+**See also:** `plans` SKILL (Plan Quality Gate), `review-plan` SKILL, UL#147 (auto-continue), UL#166 (do not override an agent-enforced gate), `agent_workflow_guidelines.md` Family D.
 
 ## 168. Softened review fixes need a cross-round watchlist
 

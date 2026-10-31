@@ -8,7 +8,8 @@
 - **Class:** fix-class (a script-internal checkout-relative facts resolution audits a partial corpus copy)
 - **Driving force:** simplicity
 - **Surface:** `scripts/done_run.sh` finalize, the report-only missing-review-record scan (trace_stage `missing-review-record-scan`); operating rule recorded as the canonical-home direction arm of development_lessons.md #74
-- **Environment context:** this repository's done closeout flow; witnessed 2026-10-28 in an ad-hoc worktree finalize, re-derived 2026-10-29 at the primary checkout
+- - **Cluster:** docs/history/backlog/2026-10-31-done-finalize-manifest-leg-refuses-after-worktree-removal.md (same done finalize manifest/teardown ordering surface; the open origin of the family's diagnosability entry)
+**Environment context:** this repository's done closeout flow; witnessed 2026-10-28 in an ad-hoc worktree finalize, re-derived 2026-10-29 at the primary checkout
 - **Dedup probe:** searched open backlog filenames and bodies for missing-review-record, missing review record, and reconstruction duty; no existing row covers the scan's corpus-root resolution or the over-report class. Nearest rows cover done advisory sentence pinning and receipt-loss reconciliation; neither touches this scan.
 
 ## Problem

@@ -8487,7 +8487,12 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
             f"{schema_render} repo_root {root_state} is not supported by "
             "this finalizer (expected schema_version 1 and a 64-hex "
             "fingerprint root matching this repository); manifest left "
-            "unchanged"
+            "unchanged; if the run worktree has already been removed, "
+            "the failed finalization step must be reported and not rerun "
+            "from the primary checkout (let the existing lock-release "
+            "steps run); future closeouts must run the done runner's "
+            "finalize subcommand before worktree removal "
+            "(development_lessons.md #326)"
         )
     manifest = _read_manifest_by_run_id(ctx.done_session_dir, args.run_id)
     if manifest is None or not _manifest_root_matches(

@@ -4,7 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** moderate
-- **Cluster:** docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md
+- **Cluster:** docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md; docs/history/backlog/2026-10-31-gate-removal-stranded-drained-migration-destination.md (same surface: docs/tmp drain of done-session artifacts vs downstream consumers; distinct defect class: stranded gate-removal teardown accounting)
 - **Origin class:** survey finding challenging a landed deliberate retention decision; sized during archaeology
 - **Class:** fix-class (a keep-and-narrow decision over a landed retention design; no machinery change)
 - **Driving force:** simplicity

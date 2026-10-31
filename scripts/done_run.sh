@@ -17,6 +17,7 @@
 #        [--owned-plan PATH]... [--owned-review PATH]... [--owned-path PATH]...
 #        [--foreign-review PATH]... [--foreign-review-from FILE] [--claim-none]
 #   done_run.sh commit --stage PATH... --subject TEXT
+#        [--untrack PATH]...
 #        [--expected-ref REF --expected-oid OID]
 #        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
@@ -96,7 +97,20 @@
 #
 # commit owns the collapsed Step 3 (the plan's authoritative composed order):
 # stage by explicit pathspec from the run's owned set (--stage, gitignored
-# paths reported and never staged), append staged plans-root paths to the
+# paths reported and never staged), the explicit --untrack declaration for
+# pre-staged index-only deletions of ignored paths (repeatable per file
+# path; a read-only preflight before any runner-owned index mutation,
+# ledger append, or staging accepts only paths tracked by HEAD, absent
+# from the index, present in the working tree, and matched by an
+# index-independent ignore check, and with --untrack present a staged
+# index entry changed from HEAD that carries a blob and matches an ignore
+# rule under the same index-independent matching refuses, naming the
+# path, while intended deletions and unchanged tracked files stay
+# allowed; accepted deletions join the declared set without adding their
+# contents, and after write-tree the captured tree is revalidated to
+# still omit every untrack target and carry no ignored blob among
+# entries changed from HEAD, refusing before the ref update without
+# undoing staging already performed), append staged plans-root paths to the
 # deliverables file, the stale-checkout adjudication (revert_set_classifier
 # classify restores ancestor-blob debris outside the declared set, never
 # staging it), the cached-diff guard (a declared staged path whose content
@@ -918,9 +932,9 @@ landing_die() { # rc message...: a captured-tree-landing refusal (cleans the com
 # hooks, index-tree and HEAD-identity refusals, and one compare-and-swap
 # ref transaction. Caller globals: FULL_SUBJECT, DRIFT_WITNESS, LEDGER_PATH,
 # the validated AUTH_* run tuple, the cached-diff authorization (AUTH_PATH
-# and AUTH_BLOB), and the dirt correction set (DIRT_CORRECTION_PATHS and
-# DIRT_CORRECTION_BLOBS). Every refusal here happens before the ref update
-# and before the ledger append.
+# and AUTH_BLOB), the dirt correction set (DIRT_CORRECTION_PATHS and
+# DIRT_CORRECTION_BLOBS), and the untrack declaration (UNTRACK_ARGS). Every
+# refusal here happens before the ref update and before the ledger append.
 captured_tree_landing() {
   local tree_accepted head_target="" head_detached=0 head_oid \
     git_dir msg_file tree_after new_oid gpgsign \
@@ -976,6 +990,29 @@ captured_tree_landing() {
     if [ "$rl_ref" != "$EXPECTED_REF" ] || [ "$rl_oid" != "$EXPECTED_OID" ]; then
       landing_die 1 "rolling-log ref precondition: primary HEAD moved during the tree capture (${rl_ref:-detached} at ${rl_oid:-unresolved}, expected $EXPECTED_REF at $EXPECTED_OID); recover and reselect under the done lock, then retry; refusing without a ref update; nothing committed"
     fi
+  fi
+  # 1c. The --untrack captured-tree invariants over the exact tree this
+  #     landing commits: every untrack target stays absent, and no entry
+  #     changed from HEAD that carries a blob matches an ignore rule under
+  #     index-independent matching. A late race (a caller re-add of a
+  #     target, or a force-added ignored blob staged after the preflight)
+  #     refuses here before the hooks, the ref update, and the ledger
+  #     append; concurrent caller mutation or ordinary staging already
+  #     performed is never undone.
+  if [ "${#UNTRACK_ARGS[@]}" -gt 0 ]; then
+    trace_stage untrack-captured-tree-invariants
+    local ut_path ut_changed ut_head
+    for ut_path in ${UNTRACK_ARGS+"${UNTRACK_ARGS[@]}"}; do
+      git cat-file -e "$tree_accepted:$ut_path" 2>/dev/null && \
+        landing_die 1 "captured-tree landing: an untrack target re-entered the captured tree after the preflight: $ut_path; refusing before the ref update; nothing committed"
+    done
+    ut_head="$(git rev-parse --verify HEAD)" || \
+      landing_die 3 "captured-tree landing: cannot resolve HEAD"
+    while IFS= read -r ut_changed; do
+      [ -n "$ut_changed" ] || continue
+      git check-ignore --no-index -q "$ut_changed" && \
+        landing_die 1 "captured-tree landing: the captured tree carries an ignored blob among entries changed from HEAD: $ut_changed; refusing before the ref update; nothing committed"
+    done < <(git diff --no-renames --name-only --diff-filter=d "$ut_head" "$tree_accepted")
   fi
   # 2. The dirt regression gate, exactly once, against the captured tree:
   #    done commits classify the immutable tree (--tree mode), never the
@@ -1230,6 +1267,7 @@ side_facts_value() { # key -> value from the user facts markdown table
 cmd_commit() {
   local subject="" receipts_file="" path row
   STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=(); GUARD_FIRINGS=()
+  UNTRACK_ARGS=()
   DECLARED=()
   COMMIT_MANIFEST=""; RUN_ID_ARG=""; BOUNDARY_CLASS="final-closeout"
   AUTH_PATH=""; AUTH_BLOB=""
@@ -1242,6 +1280,18 @@ cmd_commit() {
     case "$1" in
       --boundary-class) BOUNDARY_CLASS="$2"; shift 2;;
       --stage) STAGE_ARGS+=("$2"); shift 2;;
+      --untrack)
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --untrack needs <repo-relative-path>" >&2
+          exit 3;;
+        esac
+        for path in ${UNTRACK_ARGS+"${UNTRACK_ARGS[@]}"}; do
+          [ "$path" = "$2" ] && {
+            echo "done_run commit: --untrack given more than once for path: $2; one entry per path" >&2
+            exit 3;
+          }
+        done
+        UNTRACK_ARGS+=("$2"); shift 2;;
       --guard-firing) GUARD_FIRINGS+=("$2"); shift 2;;
       --revert-formatting) REVERT_FMT_ARGS+=("$2"); shift 2;;
       --side-commit) SIDE_COMMIT_ARGS+=("$2"); shift 2;;
@@ -1373,7 +1423,40 @@ cmd_commit() {
       commit_die 1 "rolling-log pre-stage guard: a staged path outside the declared owned log set refuses before staging; bytes left untouched:$rl_foreign"
   fi
 
-  # 0b. Guard-firing appends: the advisory rows supplied for this landing are
+  # 0b. The --untrack read-only preflight, before any runner-owned index
+  #     mutation, ledger append, or staging: each declared path must be
+  #     tracked by HEAD, absent from the index, present in the working
+  #     tree, and matched by an index-independent ignore check (plain
+  #     matching omits indexed paths). Accepted paths join the declared
+  #     set without adding their contents. With --untrack present, any
+  #     index entry changed relative to HEAD that carries a blob and
+  #     matches an ignore rule under the same index-independent matching
+  #     refuses, naming the path; the intended deletions carry no blob and
+  #     unchanged tracked files sit outside the staged delta, so both stay
+  #     allowed. Every refusal here leaves HEAD, the index, and the
+  #     working tree exactly as the caller left them.
+  if [ "${#UNTRACK_ARGS[@]}" -gt 0 ]; then
+    trace_stage untrack-preflight
+    for path in ${UNTRACK_ARGS+"${UNTRACK_ARGS[@]}"}; do
+      git cat-file -e "HEAD:$path" 2>/dev/null || \
+        commit_die 3 "--untrack path is not tracked by HEAD: $path; an untrack declaration removes an existing tracked path only"
+      git ls-files -- "$path" | grep -qxF -- "$path" && \
+        commit_die 3 "--untrack path is still in the index: $path; stage the index-only deletion first (git rm --cached -- $path), then re-run"
+      [ -e "$path" ] || \
+        commit_die 3 "--untrack path is absent from the working tree: $path; an untrack declaration keeps the local ignored copy in place"
+      git check-ignore --no-index -q "$path" || \
+        commit_die 3 "--untrack path does not match an ignore rule: $path; only an ignored path needs the untrack declaration"
+      DECLARED+=("$path")
+      echo "done_run commit: untrack preflight: accepted index-only deletion: $path"
+    done
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      git check-ignore --no-index -q "$row" && \
+        commit_die 1 "--untrack preflight: a staged index entry changed from HEAD carries an ignored blob; unstage that content (git restore --staged -- $row) and retry; nothing committed: $row"
+    done < <(git diff --cached --name-only --diff-filter=d HEAD)
+  fi
+
+  # 0c. Guard-firing appends: the advisory rows supplied for this landing are
   #     written BEFORE the declared-path staging and the landing sweep (plan
   #     2026-10-24-done-run-lock-span-and-append-ordering), then the ledger
   #     path is staged into the declared set so the accepted bytes ride the
@@ -2222,7 +2305,7 @@ cmd_finalize() {
 
   RUN_MANIFEST="$(resolve_manifest_path)" || RUN_MANIFEST=""
   RUN_ID="$(resolve_run_id)"
-  local finalize_rc=0 release_rc=0 marking_withheld=0
+  local finalize_rc=0 release_rc=0 marking_withheld=0 FM_OUT=""
 
   # 1. Checkpoint refresh at the finalize preamble: a no-checkpoint refusal
   #    falls back to create-then-refresh; an already-finalized manifest is
@@ -2398,7 +2481,7 @@ cmd_finalize() {
     if [ "$from_holder" -eq 1 ]; then
       echo "done_run finalize: release inputs: the from-holder arm (no session env consumed; the hold's own acquire-time records gate the release)" >&2
     elif [ -z "${DONE_LOCK_DIR:-}" ] || [ -z "${DONE_LOCK_TOKEN:-}" ]; then
-      echo "done_run finalize: release inputs: DONE_LOCK_DIR/DONE_LOCK_TOKEN empty or unset (env lost with its tool-call shell); re-derive both from the hold's meta.env and re-run finalize" >&2
+      echo "done_run finalize: release inputs: DONE_LOCK_DIR/DONE_LOCK_TOKEN empty or unset (env lost with its tool-call shell); re-derive both from the hold's meta.env and re-run the release only (do not re-run a full finalize when the manifest finalize above refused this run's identity)" >&2
     else
       echo "done_run finalize: release inputs: lock dir ${DONE_LOCK_DIR}; token prefix ${DONE_LOCK_TOKEN:0:8}... (the env this shell actually read)" >&2
     fi
@@ -2446,15 +2529,44 @@ try:
 except Exception:
     print("unknown")' "$RUN_MANIFEST" 2>/dev/null)" || manifest_complete="unknown"
     fi
+    # Identity-refusal routing (plan
+    # docs/history/plans/completed/2026-10-31-done-finalize-manifest-leg-post-removal-ordering.md,
+    # residual wrapper#identity-arm-invalid-json-miss): the predicate is
+    # checked beside each completion arm so an unparseable manifest ("unknown")
+    # still routes to the refusal-specific disposition when the finalize above
+    # refused this manifest's identity, instead of the generic unreadable arm.
+    local finalize_identity_refused=0
+    if [ "$marking_withheld" -eq 0 ] \
+       && [ "$finalize_rc" -ne 0 ] \
+       && printf '%s\n' "${FM_OUT:-}" | grep -q "run-manifest identity mismatch"; then
+      finalize_identity_refused=1
+    fi
     case "$manifest_complete" in
       true)
         echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is complete, so a release-only retry of this finalize with corrected DONE_LOCK_DIR/DONE_LOCK_TOKEN env is safe; do not report completion while a hold survives" >&2;;
       false)
-        echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is NOT complete, so the run needs its full finalize re-run after the hold resolves, not a release-only retry; do not report completion while a hold survives" >&2;;
+        # Identity-refusal arm (plan
+        # docs/history/plans/2026-10-31-done-finalize-manifest-leg-post-removal-ordering.md,
+        # aligned with the helper refusal's post-removal disposition): when
+        # the finalize above already refused this manifest's identity, a
+        # full finalize re-run cannot succeed from this checkout, so the
+        # held-lock state is reported without the full-retry advice the
+        # other incomplete-manifest causes keep.
+        if [ "$marking_withheld" -eq 0 ] \
+           && [ "$finalize_rc" -ne 0 ] \
+           && printf '%s\n' "${FM_OUT:-}" | grep -q "run-manifest identity mismatch"; then
+          echo "done_run finalize: FAILED: done lock status is not free after the release; the finalize above refused this manifest's identity, so report the failed finalization step and do not re-run finalize from the primary checkout (the lock-release steps above already ran); do not report completion while a hold survives" >&2
+        else
+          echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is NOT complete, so the run needs its full finalize re-run after the hold resolves, not a release-only retry; do not report completion while a hold survives" >&2
+        fi;;
       no-manifest)
         echo "done_run finalize: FAILED: done lock status is not free after the release; no run manifest was bound, so there is no finalize state to resume; do not report completion while a hold survives" >&2;;
       *)
-        echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest's completion state is unreadable, so re-derive it from the manifest before choosing a release-only retry; do not report completion while a hold survives" >&2;;
+        if [ "$finalize_identity_refused" -eq 1 ]; then
+          echo "done_run finalize: FAILED: done lock status is not free after the release; the finalize above refused this manifest's identity (the manifest itself was unreadable), so report the failed finalization step and do not re-run finalize from the primary checkout (the lock-release steps above already ran); do not report completion while a hold survives" >&2
+        else
+          echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest's completion state is unreadable, so re-derive it from the manifest before choosing a release-only retry; do not report completion while a hold survives" >&2
+        fi;;
     esac
     [ "$finalize_rc" -eq 0 ] && finalize_rc=1
   fi
@@ -2654,7 +2766,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,182p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,195p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

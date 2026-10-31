@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -100,6 +102,53 @@ def fixture_git_environment(root: Path) -> dict[str, str]:
     }
 
 
+def install_stub_python(
+    root: Path,
+    *,
+    version_stdout: str = "",
+    version_stderr: str = "",
+    version_exit: int = 0,
+    delegate_to: str | None = None,
+) -> Path:
+    """Install a stub python3 whose directory is meant to go first on PATH.
+
+    The stub's --version prints the test-controlled strings and exits
+    version_exit, so the wrapper's floor preflight is independent of the
+    host's Python selection. Every invocation appends its argv to
+    invocations.log, and every non---version invocation delegates to
+    delegate_to (the supported path: the same resolved executable then runs
+    the embedded program) or exits 90, a marker exit the wrapper must never
+    reach on a refusal. Returns the stub directory."""
+    stub_dir = root / "stub-python"
+    stub_dir.mkdir(parents=True, exist_ok=True)
+    log_path = stub_dir / "invocations.log"
+    lines = [
+        "#!/bin/bash",
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log_path))}",
+        'if [ "${1-}" = "--version" ]; then',
+    ]
+    if version_stdout:
+        lines.append(f"  printf '%s\\n' {shlex.quote(version_stdout)}")
+    if version_stderr:
+        lines.append(f"  printf '%s\\n' {shlex.quote(version_stderr)} 1>&2")
+    lines.append(f"  exit {version_exit}")
+    lines.append("fi")
+    if delegate_to:
+        lines.append(f"exec {shlex.quote(delegate_to)} \"$@\"")
+    else:
+        lines.append("exit 90")
+    stub = stub_dir / "python3"
+    stub.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return stub_dir
+
+
+def stub_path_env(stub_dir: Path) -> dict[str, str]:
+    """A PATH with the stub python3 first; the host tail keeps git and other
+    tools resolvable while the interpreter selection stays test-controlled."""
+    return {"PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+
+
 @contextmanager
 def direct_main_environment(repo: "SyncRepo", trace_name: str, now: str = NOW):
     original = dict(os.environ)
@@ -130,7 +179,7 @@ def direct_main_environment(repo: "SyncRepo", trace_name: str, now: str = NOW):
 
 def load_runner_namespace():
     source = SCRIPT.read_text(encoding="utf-8")
-    marker = "python3 - \"$@\" <<'PY'\n"
+    marker = "\"$python_bin\" - \"$@\" <<'PY'\n"
     start = source.index(marker) + len(marker)
     end = source.index("\ntry:\n    sys.exit(main())", start)
     module = types.ModuleType("docs_branch_sync_test_module")
@@ -1436,6 +1485,104 @@ class DocsBranchSyncTests(unittest.TestCase):
         # merge-lock spans and carries no skill-side merge-acquire block.
         self.assertIn("Runner-owned merge-lock spans", done_skill)
         self.assertNotIn("merge-wait-acquire", done_skill)
+
+    # The Python runtime floor preflight (plan
+    # 2026-10-28-docs-branch-supported-python-runtime Task 1): every outcome
+    # below runs the canonical wrapper with a test-controlled PATH whose first
+    # python3 is the stub, so the host's interpreter selection cannot change
+    # the result.
+
+    def assert_preflight_refused_before_sync_side_effects(self, result, stub_dir: Path) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("3.11", result.stderr)
+        self.assertIn("first on PATH", result.stderr)
+        self.assertNotIn("docs-branch:", result.stdout)
+        self.assertFalse((self.repo.root / ".git" / "docs-branch-sync.lock").exists())
+        locks_root = self.repo.root / "merge-locks"
+        self.assertFalse(locks_root.exists() and any(locks_root.iterdir()))
+        self.assertEqual((stub_dir / "invocations.log").read_text(encoding="utf-8").splitlines(), ["--version"])
+
+    def test_python_below_floor_refuses_before_any_sync_side_effect(self) -> None:
+        stub_dir = install_stub_python(Path(self.temp.name), version_stdout="Python 3.10.12")
+        tip = self.repo.seed_docs([
+            (".ai-playbook/reviews/kept.md", b"old\n", NOW, None),
+        ])
+        self.repo.local_file(".ai-playbook/reviews/new.md", b"recent local archive\n")
+        trace = self.repo.root / "floor-trace.log"
+
+        result = self.repo.run(extra_env={
+            **stub_path_env(stub_dir),
+            "DOCS_SYNC_TRACE_FILE": str(trace),
+        })
+
+        self.assertIn("detected Python 3.10.12", result.stderr)
+        self.assertIn("tomllib", result.stderr)
+        self.assert_preflight_refused_before_sync_side_effects(result, stub_dir)
+        self.assertEqual(self.repo.git("rev-parse", "refs/heads/docs").stdout.strip(), tip)
+        self.assertFalse(trace.exists())
+
+    def test_supported_python_performs_preflight_and_sync_through_same_executable(self) -> None:
+        if sys.version_info < (3, 11):
+            self.skipTest("the delegation target must satisfy the 3.11 floor itself")
+        stub_dir = install_stub_python(
+            Path(self.temp.name), version_stdout="Python 3.11.4", delegate_to=sys.executable,
+        )
+        self.repo.local_file(".ai-playbook/reviews/new.md", b"recent local archive\n")
+
+        result = self.repo.run(extra_env=stub_path_env(stub_dir))
+
+        self.assert_ok(result)
+        self.assertIn("docs-branch: landed", result.stdout)
+        self.assertIn(".ai-playbook/reviews/new.md", self.repo.docs_paths())
+        # The invocation log is the same-executable pin: the resolved stub
+        # answered the preflight probe and then ran the embedded program.
+        self.assertEqual(
+            (stub_dir / "invocations.log").read_text(encoding="utf-8").splitlines(),
+            ["--version", "-"],
+        )
+
+    def test_unusable_python_version_refuses_before_sync_work(self) -> None:
+        tip = self.repo.seed_docs([
+            (".ai-playbook/reviews/kept.md", b"old\n", NOW, None),
+        ])
+        cases = [
+            ("unparseable", {"version_stdout": "stub-python-3-eleven"}),
+            ("failing-version-command", {"version_stderr": "stub boom", "version_exit": 7}),
+        ]
+        for name, kwargs in cases:
+            with self.subTest(case=name):
+                stub_dir = install_stub_python(Path(self.temp.name) / f"stub-{name}", **kwargs)
+
+                result = self.repo.run(extra_env=stub_path_env(stub_dir))
+
+                self.assert_preflight_refused_before_sync_side_effects(result, stub_dir)
+                if name == "unparseable":
+                    self.assertIn("reported no usable version", result.stderr)
+                    self.assertIn("stub-python-3-eleven", result.stderr)
+                else:
+                    self.assertIn("--version failed", result.stderr)
+                self.assertEqual(self.repo.git("rev-parse", "refs/heads/docs").stdout.strip(), tip)
+
+    def test_missing_python3_refuses_before_sync_work(self) -> None:
+        missing_dir = Path(self.temp.name) / "no-python3"
+        missing_dir.mkdir()
+        real_bash = shutil.which("bash")
+        self.assertIsNotNone(real_bash)
+        launcher = missing_dir / "bash"
+        launcher.write_text(f"#!/bin/sh\nexec {shlex.quote(real_bash)} \"$@\"\n", encoding="utf-8")
+        launcher.chmod(0o755)
+
+        result = self.repo.run(extra_env={"PATH": str(missing_dir)})
+
+        self.assertIn("no python3 found on PATH", result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("3.11", result.stderr)
+        self.assertIn("first on PATH", result.stderr)
+        self.assertFalse((self.repo.root / ".git" / "docs-branch-sync.lock").exists())
+        self.assertEqual(
+            self.repo.git("show-ref", "--verify", "--quiet", "refs/heads/docs", check=False).returncode,
+            1,
+        )
 
 
 if __name__ == "__main__":

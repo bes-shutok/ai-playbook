@@ -2,9 +2,10 @@
 name: self-heal
 description: >
   Recover useful progress when a workflow is about to stop on a blocker, repeated review cycles,
-  a failed tool, or another recoverable obstacle. Diagnose first, find the smallest safe workaround,
-  and carry it out within the caller's authority and existing gates. Use before pausing or asking
-  the user for direction; it cannot replace a required user decision or authorization.
+  a failed tool, or another obstacle that may have a remedy. Diagnose first, find the smallest
+  safe workaround, and carry it out within the caller's authority and existing gates. Use before
+  judging the stop unrecoverable, pausing, or asking the user for direction; it cannot replace a
+  required user decision or authorization.
 ---
 
 # Self-heal
@@ -25,13 +26,13 @@ After `investigate` commits its log entry, mutate the prompt's origin only under
 
 When a plans, execute-plan, or other review loop has gone through repeated correction rounds, inspect the chronological review artifacts, sidecars, fix history, and current digest. Use `review-reconciliation` when its recurrence, contradiction, or churn trigger applies. Decide from the evidence whether findings are converging, fixes are producing new defects, the witness is inadequate, or the review surface is misdesigned.
 
-Recommend and carry out the smallest coherent correction that the active workflow already authorizes. If results are converging, continue under that workflow's review budget and exit criteria. If fixes regenerate findings or blocker counts stop improving, simplify or refactor the responsible mechanism before another review when the caller's run-wide attempt state is unused and its bounded allowance permits it; a consumed or unknown state reuses its recorded evidence and pauses without another assessment. Do not reset its allowance or relax its review gate.
+Recommend and carry out the smallest coherent correction that the active workflow already authorizes. If results are converging, continue under that workflow's review budget and exit criteria. If fixes regenerate findings or blocker counts stop improving, simplify or refactor the responsible mechanism before another review when the caller's run-wide attempt state is unused and its bounded allowance permits it; a consumed or unknown state reuses its recorded evidence and pauses without another assessment. Do not reset its allowance or relax its review gate. When reporting to the operator, preserve the evidence and ask only the specific question the stop turns on.
 
 ## Integration Points
 
-- `using-skills` routes any recoverable skill-workflow stop here before asking the user or ending work.
-- `plans` calls this skill before pausing a non-converging plan-review loop and for recoverable authoring stops; its review budgets and cap-closure rules remain authoritative.
-- `done` invokes this handoff before stopping on a recoverable closeout failure; its fail-closed runner refusals, staging decisions, and user-only stops stay authoritative.
+- `using-skills` routes any skill-workflow stop here for the before-judgment recovery check; user-only decisions stay with the user.
+- `plans` calls this skill once before judging a non-converging plan-review loop or an authoring stop unrecoverable; its review budgets and cap-closure rules remain authoritative.
+- `done` invokes this handoff once before judging a closeout failure unrecoverable; its fail-closed runner refusals, staging decisions, and user-only stops stay authoritative.
 - `execute-plan` calls this skill before a Phase 3 review stop for recurring or regenerated findings, escalation, or re-entry limits; its review-reconciliation and fix-risk gates remain authoritative.
 - `review-plan` calls this skill at its active churn or recurrence trigger, before any pause; its one-attempt self-heal state and authorization contract remain authoritative.
 - `review-loop` reaches this skill only through `review-plan`'s churn sequence, never a direct call before its standalone fix-risk stop; its review-round, escalation, budget, and authorization limits remain authoritative.

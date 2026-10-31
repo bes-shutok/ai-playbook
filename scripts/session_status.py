@@ -59,17 +59,50 @@ class SessionStatus:
     status: str
 
 
+def _first_toml_fence_body(text: str) -> str | None:
+    """Return the body of the FIRST ```toml fenced block in ``text``, or
+    ``None`` when the document carries no TOML fence.
+
+    The repository's facts document is Markdown whose configuration lives in a
+    ```toml fence (the convention ``facts_paths.py`` established): the opening
+    fence starts the block, the next closing fence ends it (an unclosed fence
+    runs to end of document), and the first fence is the authoritative one.
+    This extracts only; parsing stays with ``tomllib``.
+    """
+    in_fence = False
+    body: list[str] = []
+    for line in text.splitlines():
+        if not in_fence:
+            if line.lstrip().startswith("```toml"):
+                in_fence = True
+            continue
+        if line.lstrip().startswith("```"):
+            break
+        body.append(line)
+    if not in_fence:
+        return None
+    return "\n".join(body)
+
+
 def read_provider_command(facts_path: str) -> str:
     """Resolve ``session_status_command`` from the primary facts file.
 
+    Configuration is read from the first ```toml fenced block in the primary
+    checkout's facts document (the repository convention ``facts_paths.py``
+    established); a document with no TOML fence is parsed whole as raw TOML.
+    The selected body is parsed with standard ``tomllib``, so the key keeps
+    full TOML string semantics.
+
     Returns the configured command string. Refuses (never defaults) when the
-    facts file is missing/unreadable, is not valid TOML, lacks the key, or
-    carries a non-string or relative value (Terms: absolute executable
-    required; no default provider exists).
+    facts file is missing/unreadable, the selected payload is not valid TOML,
+    lacks the key, or carries a non-string or relative value (Terms: absolute
+    executable required; no default provider exists).
     """
     try:
         with open(facts_path, "rb") as handle:
-            data = tomllib.load(handle)
+            text = handle.read().decode("utf-8")
+        body = _first_toml_fence_body(text)
+        data = tomllib.loads(text if body is None else body)
     except FileNotFoundError as exc:
         raise SessionStatusRefused(
             f"provider facts file not found: {facts_path}"

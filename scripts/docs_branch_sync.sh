@@ -2,7 +2,32 @@
 set -euo pipefail
 
 docs_branch_sync_main() {
-python3 - "$@" <<'PY'
+# The Python runtime floor preflight (plan
+# 2026-10-28-docs-branch-supported-python-runtime Task 1): the embedded sync
+# imports stdlib tomllib, first shipped in Python 3.11, so the wrapper
+# resolves python3 once from PATH, checks its version, and refuses below-floor
+# or unusable runtimes before the program can acquire the sync lock, read
+# project facts, or change the docs ref. The same resolved executable then
+# runs the embedded program.
+local python_bin version version_re='^Python ([0-9]+)\.([0-9]+)'
+if ! python_bin="$(command -v python3 2>/dev/null)"; then
+  echo "docs-branch sync: no python3 found on PATH; the embedded sync requires Python 3.11 or newer (stdlib tomllib); put a supported python3 first on PATH and retry" >&2
+  return 1
+fi
+if ! version="$("$python_bin" --version 2>&1)"; then
+  echo "docs-branch sync: $python_bin --version failed; the embedded sync requires Python 3.11 or newer (stdlib tomllib); put a supported python3 first on PATH and retry" >&2
+  return 1
+fi
+if [[ ! $version =~ $version_re ]]; then
+  printf -v version_q '%q' "$version"
+  echo "docs-branch sync: $python_bin reported no usable version ($version_q); the embedded sync requires Python 3.11 or newer (stdlib tomllib); put a supported python3 first on PATH and retry" >&2
+  return 1
+fi
+if (( BASH_REMATCH[1] * 100 + BASH_REMATCH[2] < 311 )); then
+  echo "docs-branch sync: detected $version at $python_bin, below the required Python 3.11 floor (stdlib tomllib); put a supported python3 first on PATH and retry" >&2
+  return 1
+fi
+"$python_bin" - "$@" <<'PY'
 from __future__ import annotations
 
 import calendar

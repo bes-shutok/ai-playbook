@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -259,6 +260,69 @@ class WorktreeCloseoutTest(unittest.TestCase):
                 files["docs/tmp/scratch.md"],
                 hashlib.sha256(b"scratch pad\n").hexdigest(),
             )
+            # The capture time (entry closeout-migrate-zero-delta-silence):
+            # every baseline carries an ISO-8601 UTC captured_at.
+            self.assertIn("captured_at", data)
+            captured = datetime.fromisoformat(data["captured_at"])
+            self.assertIsNotNone(captured.utcoffset())
+            self.assertEqual(captured.utcoffset(), timedelta(0))
+
+    def test_capture_records_captured_at_before_the_source_walk(self):
+        """[class: REPOSITORY_TEST] capture records captured_at before it
+        walks the configured source paths: the recorded value is ISO-8601
+        UTC and does not postdate the walk itself, observed through the
+        walk seam (entry closeout-migrate-zero-delta-silence, Task 1
+        capture-time ordering). The marking walk crosses a whole-second
+        boundary, so a captured_at recorded after the walk (the
+        second-truncation mutation) truncates to a strictly later second
+        than the mark and fails, while the correct order can only render
+        equal-or-earlier and always passes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / ".ai-playbook/reviews/notes.md", b"review notes\n")
+            walk_marks: list[str] = []
+            original_walk = MODULE._iter_configured_files
+
+            def marking_walk(walk_root, walk_dirs):
+                walk_marks.append(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                # Sleep past the next whole-second boundary inside the walk:
+                # without this, a capture that recorded captured_at after
+                # the walk still truncated into the mark's own second
+                # (same-second runs passed), so the assertion did not
+                # discriminate the ordering at whole-second granularity.
+                time.sleep(1.1)
+                return original_walk(walk_root, walk_dirs)
+
+            baseline = root / "baseline.json"
+            previous_cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                MODULE._iter_configured_files = marking_walk
+                try:
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        code = MODULE.main(
+                            [
+                                "capture",
+                                "--out",
+                                str(baseline),
+                                "--dirs",
+                                ".ai-playbook/reviews",
+                            ]
+                        )
+                finally:
+                    MODULE._iter_configured_files = original_walk
+            finally:
+                os.chdir(previous_cwd)
+            self.assertEqual(code, 0, stderr.getvalue())
+            data = json.loads(baseline.read_text(encoding="utf-8"))
+            self.assertIn(".ai-playbook/reviews/notes.md", data["files"])
+            captured = datetime.fromisoformat(data["captured_at"])
+            self.assertIsNotNone(captured.utcoffset())
+            self.assertEqual(captured.utcoffset(), timedelta(0))
+            self.assertTrue(walk_marks)
+            for mark in walk_marks:
+                self.assertLessEqual(captured, datetime.fromisoformat(mark))
 
     def test_capture_facts_unresolvable_fails_loud(self):
         root = Path(tempfile.mkdtemp())
@@ -887,6 +951,311 @@ class WorktreeCloseoutTest(unittest.TestCase):
                     new_artifacts[rel],
                 )
 
+    def test_zero_delta_report_predates_reading_names_both_timestamps(self):
+        """[class: REPOSITORY_TEST] A zero-result migrate whose newest
+        configured-dir file predates the baseline capture prints the
+        zero-delta report naming both timestamps with the ambiguity wording
+        (correctly empty delta vs a baseline that postdates the run edits),
+        warning-only with the exit code unchanged (entry
+        closeout-migrate-zero-delta-silence, arm 1)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            _write(source / ".ai-playbook/reviews/pre-existing-r1.md", b"old\n")
+            # A fixture-set mtime (not the natural now) so the printed
+            # newest time is exactly assertable (fix pass 2 UTC rendering).
+            old = time.time() - 120
+            os.utime(source / ".ai-playbook/reviews/pre-existing-r1.md", (old, old))
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            baseline_bytes = baseline.read_bytes()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            # No auto-recapture: the migrate run leaves the baseline file
+            # byte-identical (fix pass 2 baseline-unchanged arm).
+            self.assertEqual(baseline.read_bytes(), baseline_bytes)
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("predates the baseline capture", text)
+            self.assertIn("correctly empty delta", text)
+            self.assertIn("baseline that postdates the run edits", text)
+            # The reported capture time is the recorded captured_at, not the
+            # baseline file's mtime.
+            captured_at = json.loads(baseline.read_text(encoding="utf-8"))["captured_at"]
+            self.assertIn(captured_at, text)
+            # The printed newest time is the UTC rendering of the fixture's
+            # mtime, not a local-naive one (fix pass 2): it names the exact
+            # second the fixture set and never carries microseconds.
+            expected_newest = datetime.fromtimestamp(
+                old, timezone.utc
+            ).isoformat(timespec="seconds")
+            self.assertIn(expected_newest, text)
+            self.assertIn(".ai-playbook/reviews/pre-existing-r1.md", text)
+
+    def test_zero_delta_report_equal_second_boundary_takes_predates_arm(self):
+        """[class: REPOSITORY_TEST] A zero-result migrate whose newest
+        configured-dir file mtime shares its whole second with the baseline
+        capture instant (the equal-second boundary) takes the predates/
+        ambiguity arm, never the postdates warning: both sides compare at
+        the whole-second granularity the report prints, so an equal second
+        is not evidence of a post-capture touch (entry
+        closeout-migrate-zero-delta-silence, Phase 3 boundary pin)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/boundary-r1.md"
+            _write(source / rel, b"boundary\n")
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            captured_at = json.loads(baseline.read_text(encoding="utf-8"))["captured_at"]
+            # Pin the newest mtime to exactly the captured_at instant,
+            # truncated to the whole second both sides of the comparison
+            # use, so the fixture is deterministic rather than racing the
+            # capture clock.
+            same_second = int(datetime.fromisoformat(captured_at).timestamp())
+            os.utime(source / rel, (same_second, same_second))
+            baseline_bytes = baseline.read_bytes()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            # No auto-recapture: the migrate run leaves the baseline file
+            # byte-identical (fix pass 2 baseline-unchanged arm).
+            self.assertEqual(baseline.read_bytes(), baseline_bytes)
+            text = stderr.getvalue()
+            self.assertIn("WARNING: zero-delta report:", text)
+            self.assertIn("predates the baseline capture", text)
+            self.assertNotIn("postdates the baseline capture", text)
+            self.assertIn(captured_at, text)
+            # The printed newest time is the exact shared second, UTC.
+            expected_newest = datetime.fromtimestamp(
+                same_second, timezone.utc
+            ).isoformat(timespec="seconds")
+            self.assertIn(expected_newest, text)
+            self.assertIn(rel, text)
+
+    def test_zero_delta_report_postdates_reading_flags_touched_without_change(self):
+        """[class: REPOSITORY_TEST] A zero-result migrate whose newest
+        configured-dir file mtime postdates the baseline capture (a
+        content-identical touch) prints the explicit postdates warning and
+        still exits 0 with nothing migrated (entry
+        closeout-migrate-zero-delta-silence, arm 1, warning-only)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/touched-r1.md"
+            _write(source / rel, b"same\n")
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            future = time.time() + 120
+            os.utime(source / rel, (future, future))
+            baseline_bytes = baseline.read_bytes()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            # No auto-recapture: the migrate run leaves the baseline file
+            # byte-identical (fix pass 2 baseline-unchanged arm).
+            self.assertEqual(baseline.read_bytes(), baseline_bytes)
+            data = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["migrated"], [])
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("postdates the baseline capture", text)
+            captured_at = json.loads(baseline.read_text(encoding="utf-8"))["captured_at"]
+            self.assertIn(captured_at, text)
+            # The printed newest time is the UTC rendering of the fixture's
+            # mtime, not a local-naive one (fix pass 2): it names the exact
+            # second the fixture set and never carries microseconds.
+            expected_newest = datetime.fromtimestamp(
+                future, timezone.utc
+            ).isoformat(timespec="seconds")
+            self.assertIn(expected_newest, text)
+            self.assertIn(rel, text)
+
+    def test_zero_delta_report_legacy_baseline_reports_unknown_capture_time(self):
+        """[class: REPOSITORY_TEST] A legacy baseline written before
+        captured_at still migrates, exits 0, and the zero-delta report names
+        its capture time as unknown without borrowing the baseline file's
+        own (later) mtime: no postdates/predates comparison runs (entry
+        closeout-migrate-zero-delta-silence, legacy unknown arm)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/legacy-r1.md"
+            _write(source / rel, b"legacy\n")
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            data = json.loads(baseline.read_text(encoding="utf-8"))
+            del data["captured_at"]
+            baseline.write_text(
+                json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("capture time unknown", text)
+            # The newest source mtime is still named, and the baseline
+            # file's later mtime is never borrowed as the capture time, so
+            # neither comparison verdict appears.
+            self.assertIn(rel, text)
+            self.assertNotIn("predates the baseline capture", text)
+            self.assertNotIn("postdates the baseline capture", text)
+
+    def test_zero_delta_report_unreadable_source_mtime_reports_none(self):
+        """[class: REPOSITORY_TEST] When no source artifact under the
+        configured dirs yields a readable mtime (the only entry a dangling
+        symlink), the zero-delta report states the none arm and the
+        migration still exits 0 (entry closeout-migrate-zero-delta-silence,
+        missing-mtime none arm)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            reviews = source / ".ai-playbook/reviews"
+            reviews.mkdir(parents=True, exist_ok=True)
+            os.symlink("missing-target.md", reviews / "dangling-r1.md")
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("no readable files found under the configured dirs", text)
+            self.assertNotIn("predates", text)
+            self.assertNotIn("postdates", text)
+
+    def test_zero_delta_report_excludes_the_baseline_file_from_newest_mtime(self):
+        """[class: REPOSITORY_TEST] When the baseline file sits under a
+        configured source dir, the zero-delta report's newest-mtime walk
+        excludes it (capture writes the baseline after walking the source
+        paths, so a broken exclusion makes the baseline itself the newest
+        artifact); the newest named file is the real source artifact (entry
+        closeout-migrate-zero-delta-silence, baseline-file exclusion arm)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/earlier-r1.md"
+            _write(source / rel, b"earlier\n")
+            old = time.time() - 120
+            os.utime(source / rel, (old, old))
+            # The baseline lives under the facts-resolved docs/tmp dir of
+            # the source tree.
+            baseline = source / "docs/tmp/closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            # A re-run shape: the target already holds a byte-identical twin
+            # of the un-baselined baseline file, so the transfer skips it
+            # and the delta stays at zero.
+            _write(target / "docs/tmp/closeout-baseline.json", baseline.read_bytes())
+            # Widen the margin: a broken exclusion would make the baseline
+            # file the newest artifact by a full two minutes.
+            future = time.time() + 120
+            os.utime(baseline, (future, future))
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("predates the baseline capture", text)
+            self.assertIn(rel, text)
+            self.assertNotIn("closeout-baseline.json", text)
+            self.assertNotIn("postdates the baseline capture", text)
+
+    def test_zero_delta_report_unbaselined_target_identical_file_contributes_newest_mtime(self):
+        """[class: REPOSITORY_TEST] A source file absent from the baseline
+        whose target copy is byte-identical is skipped without a rename or
+        rewrite, leaving the transfer delta at zero, and its mtime still
+        anchors the zero-delta report as the newest source artifact (entry
+        closeout-migrate-zero-delta-silence, un-baselined contributor
+        arm)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/pre-existing-r1.md"
+            _write(source / rel, b"old\n")
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            # The baseline never saw this artifact and the target already
+            # carries a byte-identical copy: skipped without rename or
+            # rewrite, the delta stays zero.
+            extra_rel = ".ai-playbook/reviews/unbaselined-r2.md"
+            _write(source / extra_rel, b"unbaselined\n")
+            _write(target / extra_rel, b"unbaselined\n")
+            old = time.time() - 120
+            newer = time.time() - 60
+            os.utime(source / rel, (old, old))
+            os.utime(source / extra_rel, (newer, newer))
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            data = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["migrated"], [])
+            skipped = {entry["source"]: entry for entry in data["skipped"]}
+            self.assertIn(extra_rel, skipped)
+            self.assertEqual(
+                skipped[extra_rel]["reason"],
+                "target byte-identical; skipped without rename or rewrite",
+            )
+            text = stderr.getvalue()
+            self.assertIn("zero-delta report", text)
+            self.assertIn("predates the baseline capture", text)
+            self.assertIn(extra_rel, text)
+
+    def test_migrate_rename_only_delta_prints_no_zero_delta_report(self):
+        """[class: REPOSITORY_TEST] A migration whose only delta is one
+        collision rename (nothing copied, the target holding different
+        bytes) exits 0, keeps the manifest rename entry, and prints no
+        zero-delta report line: the plan Terms define zero-delta as no
+        copied, collision-renamed, OR receipt-proven replaced files, so a
+        rename-only migration is not the ambiguous empty shape the
+        adjudication line exists for (entry
+        closeout-migrate-zero-delta-silence, fix pass 2 trigger scope)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir(parents=True)
+            baseline = root / "closeout-baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / ".ai-playbook/reviews/collide.md", b"incoming content\n")
+            _write(target / ".ai-playbook/reviews/collide.md", b"existing different\n")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, root / "manifest.json")
+            self.assertEqual(code, 0)
+            data = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["migrated"], [])
+            self.assertEqual(
+                [entry["source"] for entry in data.get("renamed", [])],
+                [".ai-playbook/reviews/collide.md"],
+            )
+            self.assertEqual(
+                (target / ".ai-playbook/reviews/collide.wt-1.md").read_bytes(),
+                b"incoming content\n",
+            )
+            self.assertNotIn("zero-delta report", stderr.getvalue())
 
 
 class MigrateMergeLockTest(unittest.TestCase):
@@ -1215,10 +1584,58 @@ class MigrateMirrorReceiptTest(unittest.TestCase):
         self.assertIn("replaced 1", buf.getvalue())
         self.assertNotIn("COLLISION:", buf.getvalue())
 
+    def test_migrate_replaced_only_delta_prints_no_zero_delta_report(self):
+        """[class: REPOSITORY_TEST] A migration whose only delta is one
+        receipt-proven replacement (nothing copied, no collision rename)
+        exits 0, keeps the manifest replaced entry intact, and prints no
+        zero-delta report line: the plan Terms define zero-delta as no
+        copied, collision-renamed, OR receipt-proven replaced files, so a
+        replaced-only migration is not the ambiguous empty shape the
+        adjudication line exists for (entry
+        closeout-migrate-zero-delta-silence, Phase 3 trigger scope)."""
+        rel = ".ai-playbook/reviews/runtime_state.json"
+        prior = b'{"state": "boundary-1"}\n'
+        incoming = b'{"state": "boundary-2"}\n'
+        row = self._boundary_row([_file_receipt(rel, _digest(prior))])
+        source, baseline, target = self._collision_case([row], rel, prior, incoming)
+        # The un-baselined baseline file itself would otherwise be the one
+        # copied file; a byte-identical twin at the target keeps it a
+        # verified no-op skip so the transfer delta is the replacement only.
+        _write(
+            target / "docs/tmp/execute-plan/mirror-fixture/closeout-baseline.json",
+            baseline.read_bytes(),
+        )
+        manifest = self.root / "closeout-migration.json"
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0)
+        self.assertEqual((target / rel).read_bytes(), incoming)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data["migrated"], [])
+        self.assertEqual([entry["source"] for entry in data.get("renamed", [])], [])
+        replaced = data["replaced"]
+        self.assertEqual([entry["source"] for entry in replaced], [rel])
+        self.assertTrue(replaced[0]["verified"])
+        self.assertEqual(replaced[0]["prior_state"], {"type": "file", "sha256": _digest(prior)})
+        self.assertEqual(replaced[0]["incoming_state"], {"type": "file", "sha256": _digest(incoming)})
+        # The summary shape the Worktree-first companion clause quotes: the
+        # transfer was fully non-empty in the replaced arm only.
+        self.assertIn(
+            "Migrated 0 file(s), renamed 0 on collision, replaced 1, skipped 1 identical",
+            stdout.getvalue(),
+        )
+        self.assertNotIn("zero-delta report", stderr.getvalue())
+
     def test_migrate_identical_target_with_receipt_stays_verified_noop(self):
         """[class: REPOSITORY_TEST] A receipt-proven path whose target
-        already equals the incoming bytes remains the verified no-op skip:
-        no rewrite, no rename, no replaced record."""
+        already equals the incoming bytes is a verified transfer recorded
+        without a rewrite: the verified migrated row (plan
+        2026-10-30-execute-plan-teardown-staging-record-mirror Task 2)
+        carries the destination so the removal gate's presence check sees
+        it, while the bytes stay identical, the mtime stands, and no
+        rename or replaced record appears."""
         shared = b'{"state": "boundary-2"}\n'
         row = self._boundary_row([_file_receipt(self.CONTROL, _digest(shared))])
         source, baseline = self._seed([row])
@@ -1233,9 +1650,16 @@ class MigrateMirrorReceiptTest(unittest.TestCase):
         self.assertEqual(self._renamed_sibling(target, self.CONTROL).exists(), False)
         data = json.loads(manifest.read_text(encoding="utf-8"))
         self.assertEqual(data.get("replaced", []), [])
-        skipped = {entry["source"]: entry for entry in data.get("skipped", [])}
-        self.assertIn(self.CONTROL, skipped)
-        self.assertTrue(skipped[self.CONTROL]["verified"])
+        migrated = {entry["source"]: entry for entry in data.get("migrated", [])}
+        self.assertIn(self.CONTROL, migrated)
+        self.assertTrue(migrated[self.CONTROL]["verified"])
+        self.assertEqual(
+            migrated[self.CONTROL]["destination"],
+            (target.resolve() / self.CONTROL).as_posix(),
+        )
+        self.assertNotIn(
+            self.CONTROL, {entry["source"] for entry in data.get("skipped", [])}
+        )
 
     def test_migrate_same_digest_other_path_stays_foreign(self):
         """[class: REPOSITORY_TEST] Cross-path same-digest rejection: a
@@ -2986,14 +3410,33 @@ class GateRemovalTest(unittest.TestCase):
 
     def test_refuse_empty_owned_set_names_absent_header_line(self):
         # The fail-closed arm: no header citations and no claims is a refuse,
-        # never a vacuous pass; the line names the absent header label.
+        # never a vacuous pass; the line names the absent header label and
+        # carries the empty-set remedy (plan
+        # 2026-10-27-gate-removal-empty-owned-set-remedy Task 1): the
+        # citation or claims-file input that can make the set non-empty,
+        # never the capture-and-migrate remedy; no migrate run can create
+        # the missing inputs.
         plan = self._plan("# Plan\n\nNo review rounds.\n")
         code, out, err = self._run_gate(plan)
         self.assertEqual(code, 1)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
         self.assertIn("empty owned set", out)
         self.assertIn("Plan review record", out)
-        self.assertIn("worktree_closeout_migrate.py migrate", out)
+        self.assertIn(
+            "remedy: no migrate run can create the missing inputs", out,
+            "empty-set refusal carried no attainable-input remedy",
+        )
+        self.assertIn("Plan review record:/Plan review: citation", out)
+        self.assertIn("--claims file listing review-record paths", out)
+        self.assertIn("then re-run gate-removal", out)
+        self.assertNotIn(
+            "worktree_closeout_migrate.py capture", out,
+            "empty-set refusal carried the capture-and-migrate remedy",
+        )
+        self.assertNotIn(
+            "worktree_closeout_migrate.py migrate", out,
+            "empty-set refusal carried a migrate-command remedy",
+        )
 
     def test_refuse_claims_entry_outside_reviews_home(self):
         # A claims entry outside the reviews home is refused with its path,
@@ -5897,6 +6340,36 @@ class GateRemovalBranchCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
             Path(self.worktree).is_dir(), "the guarded worktree was removed"
         )
 
+    def test_expired_gate_report_destination_reports_only_and_passes(self):
+        # The cross-run swept-artifact shape (the 2026-10-31 closeout-gates
+        # trio, landed 52750a1fe; shared-slug second witness): a verified destination under the done-session
+        # gate-reports home expired by the sanctioned docs/tmp sweep is the
+        # owning run's disposition - report-only, never a hold on this
+        # run's branch or worktree removal.
+        manifest_path = self._seed_migration_manifest(landed=True)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["migrated"].append(
+            {
+                "source": "docs/tmp/done-session/gate-reports/report.txt",
+                "destination": (
+                    "docs/tmp/done-session/gate-reports/"
+                    "run-20261031T085111Z-foreign-review-staging-full.txt"
+                ),
+                "verified": True,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "expired gate-report destination(s) missing under the target",
+            out,
+        )
+        self.assertIn("report-only", out)
+        self.assertNotIn("migrated artifact(s) missing under the target", out)
+        self.assertNotIn("held: the branch disposition above names a failed guard", out)
+        self.assertIn("removal: git worktree remove", out)
+
     def test_unreadable_ref_at_capture_retains_branch_and_worktree(self):
         # The proven OID cannot be captured (the ref does not resolve): the
         # accounting is unknown, the gate refuses, and the branch and the
@@ -6859,6 +7332,353 @@ class CloseoutReferenceConsumerParityTest(_BranchCloseoutFixture, unittest.TestC
         self.assertEqual(code, 0, out)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
         self.assertIn(f"branch-closeout: branch {branch} ancestry-accounted at {expected}", out)
+
+
+class TeardownRecordMirrorEndToEndTest(unittest.TestCase):
+    """[class: REPOSITORY_TEST] The record-preservation contract end to end
+    (plan 2026-10-30-execute-plan-teardown-staging-record-mirror Task 3):
+    a real git primary plus a registered run worktree drive the production
+    sequence over the four run-produced review path classes Task 1 names -
+    the review staging document, its .stats.json sidecar, the producing
+    round's review-certs seal entry, and the Phase 4 plans-egress pointer.
+    The boundary-mirror operands carry exactly those four paths (never a
+    directory copy), the closeout migration records the byte-identical
+    receipt-backed primary copies as verified migrated rows, and
+    gate-removal passes over the manifest only while every destination
+    stands, refusing and retaining the worktree and branch when one does
+    not."""
+
+    GIT_IDENTITY = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    RUN_SESSION_ID = "sess-record-mirror-e2e-1"
+    PLAN_REL = "docs/history/plans/2026-10-30-record-mirror-e2e.md"
+    SESSION_DIR_REL = "docs/tmp/execute-plan/record-mirror-e2e"
+
+    # The four Task 1 path classes, one boundary-mirror operand each, at the
+    # homes the fixture facts resolve: the review staging document and its
+    # .stats.json sidecar twin, the producing round's review-certs seal
+    # entry, and the Phase 4 plans-egress pointer written before the archive
+    # move.
+    REVIEW_DOC_REL = ".ai-playbook/reviews/2026-10-30-plan-review-record-mirror-e2e-code-review-r1.md"
+    # The sidecar twin grammar the staging validator and the gate's
+    # sibling arm enforce: the .md suffix is replaced, not appended.
+    STATS_SIDECAR_REL = str(Path(REVIEW_DOC_REL).with_suffix(".stats.json"))
+    SEAL_ENTRY_REL = ".ai-playbook/review-certs/record-mirror-e2e.wt-proj-wt-run.md"
+    EXEC_POINTER_REL = ".ai-playbook/reviews/2026-10-30-plan-review-record-mirror-e2e-exec-r1.md"
+
+    RECORD_BYTES = {
+        REVIEW_DOC_REL: b"code review round r1: verdict yes\n",
+        STATS_SIDECAR_REL: b'{"round": 1, "verdict": "yes"}\n',
+        SEAL_ENTRY_REL: (
+            b"## round 1\n"
+            b"artifact: docs/history/plans/2026-10-30-record-mirror-e2e.md\n"
+            b"round_start_commit: abc1234def\n"
+            b"round_close_commit: abc1234def\n"
+        ),
+        EXEC_POINTER_REL: (
+            b"plans-egress pointer: the plan archive commit carries these bytes\n"
+        ),
+    }
+
+    MIRROR_OPERANDS = [
+        REVIEW_DOC_REL,
+        STATS_SIDECAR_REL,
+        SEAL_ENTRY_REL,
+        EXEC_POINTER_REL,
+    ]
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wcm-record-mirror-e2e-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.primary = self.root / "proj"
+        self.primary.mkdir(parents=True)
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
+        subprocess.run(
+            ["git", "-C", str(self.primary), "init", "-q", "-b", "main"],
+            capture_output=True, env=env, check=True,
+        )
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            b"```toml\n"
+            b'reviews_dir = ".ai-playbook/reviews/"\n'
+            b'tmp_dir = "docs/tmp/"\n'
+            b'metrics_dir = ".ai-playbook/metrics/"\n'
+            b'review_certs_dir = ".ai-playbook/review-certs/"\n'
+            b"```\n",
+        )
+        (self.primary / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DONE_LOCK_SCRIPT_PATH, self.primary / "scripts" / "done-lock.sh")
+        _write(self.primary / self.PLAN_REL, self._plan_bytes())
+        self._git(self.primary, "add", "-A")
+        self._git(self.primary, "commit", "-q", "-m", "init: fixture repo")
+        self.worktree = self.root / "proj-wt-run"
+        self._git(self.primary, "worktree", "add", "-q", "-b", "wt-run", str(self.worktree))
+        session_dir = self.worktree / self.SESSION_DIR_REL
+        _write_session_manifest(
+            session_dir / "manifest.md",
+            [],
+            run_worktree=str(self.worktree),
+            run_session_id=self.RUN_SESSION_ID,
+            plan_path=self.PLAN_REL,
+        )
+        self.baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(self.worktree, self.baseline)
+        self.migration_manifest = (
+            self.primary / self.SESSION_DIR_REL / "closeout-migration.json"
+        )
+        pins = _hermetic_lock_env(self.root)
+        self._saved_lock_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        self.addCleanup(self._restore_lock_env)
+
+    def _restore_lock_env(self) -> None:
+        for key, value in self._saved_lock_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _plan_bytes(self) -> bytes:
+        return (
+            "# Plan: record-mirror e2e fixture\n"
+            "\n"
+            f"Plan review record: {self.REVIEW_DOC_REL}\n"
+        ).encode("utf-8")
+
+    def _git(self, repo: Path, *args: str, check: bool = True):
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env
+        )
+        if check and proc.returncode != 0:
+            raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr}")
+        return proc
+
+    def _facts_home_dirs(self) -> dict[str, str]:
+        text = (self.worktree / ".ai-playbook/facts.md").read_text(encoding="utf-8")
+        homes: dict[str, str] = {}
+        for line in text.splitlines():
+            for key in ("reviews_dir", "review_certs_dir"):
+                prefix = key + " = "
+                if line.startswith(prefix):
+                    homes[key] = line[len(prefix):].strip().strip('"')
+        return homes
+
+    def _produce_run_records(self) -> None:
+        """The run's Phase 3/4 outputs: the four record files appear in the
+        worktree only after the Phase 0 baseline capture."""
+        for rel, data in self.RECORD_BYTES.items():
+            _write(self.worktree / rel, data)
+
+    def _boundary_row_lines(self) -> list[str]:
+        manifest = self.worktree / self.SESSION_DIR_REL / "manifest.md"
+        return [
+            line.strip()
+            for line in manifest.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("task_boundary:")
+        ]
+
+    def _run_boundary_mirror(self) -> tuple[int, str, str]:
+        """The real boundary-mirror operation over exactly the four Task 1
+        operands, in-process under the hermetic lock env."""
+        argv = [
+            "boundary-mirror",
+            "--worktree", str(self.worktree),
+            "--target", str(self.primary),
+            "--manifest", str(self.worktree / self.SESSION_DIR_REL / "manifest.md"),
+            "--run-session-id", self.RUN_SESSION_ID,
+            "--plan-path", self.PLAN_REL,
+            "--run-worktree", str(self.worktree),
+            "--boundary-note", "task 1 commit abc1234 verification: pass",
+        ]
+        for rel in self.MIRROR_OPERANDS:
+            argv += ["--mirror-path", rel]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = MODULE.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def _run_gate(self) -> tuple[int, str, str]:
+        return _run_cli(
+            "gate-removal",
+            "--plan", str(self.worktree / self.PLAN_REL),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+            "--migration-manifest", str(self.migration_manifest),
+            cwd=self.root,
+        )
+
+    def _resources_registered(self) -> tuple[bool, bool]:
+        """(worktree registered, branch live), read with the gate's own
+        identity-binding predicate."""
+        registered = any(
+            Path(entry["path"]).resolve() == self.worktree.resolve()
+            for entry in MODULE._parse_worktree_entries(self.primary)
+        )
+        branch_live = self._git(
+            self.primary, "rev-parse", "--verify", "--quiet", "refs/heads/wt-run", check=False
+        ).returncode == 0
+        return registered, branch_live
+
+    def _drive_to_migrated_state(self) -> None:
+        """Produce the four records, boundary-mirror them by exact path,
+        then migrate over the byte-identical primary copies: the state both
+        Task 3 witnesses start from."""
+        self._produce_run_records()
+        code, _out, err = self._run_boundary_mirror()
+        self.assertEqual(code, 0, err)
+        code = _migrate(self.worktree, self.primary, self.baseline, self.migration_manifest)
+        self.assertEqual(code, 0)
+
+    def test_four_class_record_set_mirrors_migrates_and_gates_clean(self):
+        """[class: REPOSITORY_TEST] The complete end-to-end pass: the four
+        Task 1 operands produce verified mirror receipts, the closeout
+        migration records every byte-identical primary copy as a verified
+        migrated destination without rewriting it, and gate-removal passes
+        with the removal disposition while every destination exists."""
+        self._produce_run_records()
+        code, out, err = self._run_boundary_mirror()
+        self.assertEqual(code, 0, out + err)
+        # Verified receipts: one complete row carrying exactly the four
+        # operands, each item verified with the produced bytes' digest.
+        rows = self._boundary_row_lines()
+        self.assertEqual(len(rows), 1)
+        status, items = MODULE._parse_mirror_row(rows[0])
+        self.assertEqual(status, "complete")
+        self.assertEqual([item["path"] for item in items], self.MIRROR_OPERANDS)
+        for item in items:
+            self.assertEqual(item["status"], "verified")
+            self.assertEqual(item["sha256"], _digest(self.RECORD_BYTES[item["path"]]))
+        # The primary homes hold byte-identical copies; freeze their mtimes
+        # so the no-rewrite property below is observable.
+        for rel in self.MIRROR_OPERANDS:
+            self.assertEqual((self.primary / rel).read_bytes(), self.RECORD_BYTES[rel])
+            os.utime(self.primary / rel, (1000, 1000))
+        code = _migrate(self.worktree, self.primary, self.baseline, self.migration_manifest)
+        self.assertEqual(code, 0)
+        data = json.loads(self.migration_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("replaced"), [])
+        self.assertEqual(data.get("renamed"), [])
+        self.assertEqual(data.get("failed"), [])
+        migrated = {entry["source"]: entry for entry in data.get("migrated", [])}
+        for rel in self.MIRROR_OPERANDS:
+            with self.subTest(path_class=rel):
+                self.assertIn(rel, migrated)
+                self.assertTrue(migrated[rel]["verified"])
+                self.assertEqual(
+                    migrated[rel]["destination"],
+                    (self.primary.resolve() / rel).as_posix(),
+                )
+                self.assertEqual((self.primary / rel).read_bytes(), self.RECORD_BYTES[rel])
+                self.assertEqual(
+                    os.stat(self.primary / rel).st_mtime,
+                    1000,
+                    "the byte-identical primary copy was rewritten",
+                )
+        # The manifest-backed gate passes while every destination stands.
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            f"removal: git worktree remove --force {shlex.quote(str(self.worktree))}",
+            out,
+        )
+        self.assertIn("branch wt-run ancestry-accounted at", out)
+        for rel in self.MIRROR_OPERANDS:
+            self.assertTrue((self.primary / rel).is_file())
+
+    def test_missing_migrated_destination_refuses_and_retains_per_path_class(self):
+        """[class: REPOSITORY_TEST] The missing-primary-artifact control
+        after migration, once per Task 1 path class: removing one mirrored
+        destination from the primary home makes gate-removal refuse with
+        that exact path named, while the source worktree and its branch
+        stay registered for recovery. The cited document and its sidecar
+        are caught by the gate's pre-existing records arms (the document's
+        missing-record refusal, the sidecar's destroyed-sibling refusal);
+        the uncited seal entry and plans-egress pointer are caught only by
+        the migration-manifest destination guard this plan binds, whose
+        held disposition retains both resources."""
+        self._drive_to_migrated_state()
+        expectations = {
+            self.REVIEW_DOC_REL: (
+                "missing: " + self.REVIEW_DOC_REL,
+                None,
+            ),
+            self.STATS_SIDECAR_REL: (
+                "refused: claimed record's required stats sibling exists only "
+                "in the worktree staging home: " + self.STATS_SIDECAR_REL,
+                None,
+            ),
+            self.SEAL_ENTRY_REL: (
+                "migrated artifact(s) missing under the target: "
+                + (self.primary.resolve() / self.SEAL_ENTRY_REL).as_posix(),
+                "held:",
+            ),
+            self.EXEC_POINTER_REL: (
+                "migrated artifact(s) missing under the target: "
+                + (self.primary.resolve() / self.EXEC_POINTER_REL).as_posix(),
+                "held:",
+            ),
+        }
+        for rel, (evidence, extra) in expectations.items():
+            with self.subTest(path_class=rel):
+                destination = self.primary / rel
+                destination.unlink()
+                try:
+                    code, out, _err = self._run_gate()
+                    self.assertEqual(code, 1, out)
+                    self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+                    self.assertIn(evidence, out)
+                    if extra is not None:
+                        self.assertIn(extra, out)
+                    registered, branch_live = self._resources_registered()
+                    self.assertTrue(
+                        registered, "the refused gate dropped the worktree registration"
+                    )
+                    self.assertTrue(branch_live, "the refused gate removed the branch ref")
+                finally:
+                    # Restore so the next path class starts from the complete
+                    # set, even when a subTest assertion fails.
+                    _write(destination, self.RECORD_BYTES[rel])
+
+    def test_boundary_mirror_operands_carry_exactly_the_four_task1_path_classes(self):
+        """[class: REPOSITORY_TEST] Caller path completeness: the
+        boundary-mirror operand list is exactly one path per Task 1 class -
+        the review staging document, its .stats.json sidecar twin, the
+        producing round's review-certs seal entry, and the Phase 4
+        plans-egress pointer - each under the facts home its class is
+        produced in, with no directory operand and no extra paths."""
+        operands = self.MIRROR_OPERANDS
+        homes = self._facts_home_dirs()
+        self.assertEqual(len(operands), 4)
+        self.assertEqual(len(set(operands)), 4, "a duplicate or directory operand")
+        for rel in operands:
+            self.assertFalse(rel.endswith("/"), "a whole-directory operand")
+        self.assertEqual(operands[0], self.REVIEW_DOC_REL)
+        self.assertEqual(operands[1], self.STATS_SIDECAR_REL)
+        self.assertEqual(operands[2], self.SEAL_ENTRY_REL)
+        self.assertEqual(operands[3], self.EXEC_POINTER_REL)
+        reviews_dir = homes["reviews_dir"].rstrip("/")
+        certs_dir = homes["review_certs_dir"].rstrip("/")
+        self.assertTrue(self.REVIEW_DOC_REL.startswith(reviews_dir + "/"))
+        self.assertTrue(self.STATS_SIDECAR_REL.startswith(reviews_dir + "/"))
+        self.assertTrue(self.EXEC_POINTER_REL.startswith(reviews_dir + "/"))
+        self.assertTrue(self.SEAL_ENTRY_REL.startswith(certs_dir + "/"))
+        # The sidecar is the document's .stats.json twin, not a loose file.
+        self.assertEqual(
+            Path(self.STATS_SIDECAR_REL).name,
+            Path(self.REVIEW_DOC_REL).with_suffix(".stats.json").name,
+        )
+        # The plans-egress pointer carries the Phase 4 naming grammar.
+        self.assertRegex(
+            Path(self.EXEC_POINTER_REL).name,
+            r"^\d{4}-\d{2}-\d{2}-plan-review-.+-exec-r\d+\.md$",
+        )
 
 
 class ZeroPlanMigrateSkeletonProducerTest(unittest.TestCase):
@@ -8060,6 +8880,944 @@ class HelpCatalogTest(unittest.TestCase):
         proc = self._run_help("sweep", "--help")
         self.assertEqual(proc.returncode, 0)
         self.assertIn("usage: worktree_closeout_migrate.py sweep sweep", proc.stdout)
+
+
+class NoCharterFixture:
+    """Shared git fixture for the no-charter gate-removal arm (plan
+    2026-10-28-plan-authoring-stand-down-before-charter Task 1): a primary
+    checkout plus a pre-plan authoring worktree provisioned under the
+    Worktree-first pre-plan authoring arm (worktree
+    <worktree-root>/<claim-file-stem> on branch authoring/<claim-file-stem>),
+    the session's authoring claim file, the frozen PLAN-PROMPTS entry, and
+    the done-run manifest binding the expected plan path and start_commit.
+    Carries only helpers, never test methods, so each concrete class
+    collects its own tests."""
+
+    GIT_IDENTITY = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    CLAIM_BASENAME = "2026-10-26-no-charter-demo.md"
+    CLAIM_STEM = "2026-10-26-no-charter-demo"
+    SLUG = "no-charter-demo"
+    ITEM = "docs/history/backlog/2026-10-26-no-charter-demo.md"
+    PLAN_REL = "docs/history/plans/2026-10-28-no-charter-demo.md"
+    SESSION_ID = "0f1e2d3c-4b5a-6978-8765-4321abcdef01"
+    RUN_ID = "20261026T080000Z-nocharterfixture"
+    MARKER = "run-start-20261026T080000Z"
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wrmg-nocharter-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.primary = self.root / "proj"
+        self.primary.mkdir(parents=True)
+        self._git(self.primary, "init", "-q", "-b", "main")
+        # The producer repo's wholesale-ignored surfaces (the real
+        # .gitignore): done-session records live under docs/tmp/ and the
+        # whole .ai-playbook/ home is ignored, so a worktree-dispatched
+        # run's own records never fake worktree dirtiness and the facts
+        # file is an untracked-but-present provision, not a tracked one.
+        _write(self.primary / ".gitignore", b"/docs/tmp/\n/.ai-playbook/\n")
+        facts_bytes = (
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\n"
+            b"tmp_dir = \"docs/tmp/\"\n"
+            b"metrics_dir = \".ai-playbook/metrics/\"\n"
+            b"review_certs_dir = \".ai-playbook/review-certs/\"\n"
+            b"plans_dir = \"docs/history/plans/\"\n"
+            b"backlog_dir = \"docs/history/backlog/\"\n```\n"
+        )
+        _write(self.primary / ".ai-playbook/facts.md", facts_bytes)
+        self._commit_all(self.primary, "init: fixture repo")
+        self.branch = f"authoring/{self.CLAIM_STEM}"
+        # The Worktree-first pre-plan authoring arm's placement: the worktree
+        # directory is the claim-file stem, the branch is authoring/ + stem.
+        self.worktree = self.root / self.CLAIM_STEM
+        self._git(
+            self.primary, "worktree", "add", "-q", "-b", self.branch, str(self.worktree)
+        )
+        # The arm provisions the (ignored) facts copy worktree-side; the
+        # worktree checkout stays clean with it on disk.
+        _write(self.worktree / ".ai-playbook/facts.md", facts_bytes)
+        # The transfer-in provision (r2 F1): the Worktree-first transfer-in
+        # copies the primary reviews and review-certs homes into the fresh
+        # worktree (cp -R semantics, worktree-first.md Transfer-in
+        # implementation), so a pre-plan staging home starts as byte-identical
+        # mirrors of the primary records. A prior run's record and its seal
+        # cert ride both sides, so the clean cases exercise the real
+        # provisioning shape, never an empty staging home.
+        self.prior_record_rel = (
+            ".ai-playbook/reviews/2026-10-01-plan-review-prior-r1.md"
+        )
+        prior_bytes = b"prior run's review record\n"
+        _write(self.primary / self.prior_record_rel, prior_bytes)
+        _write(self.worktree / self.prior_record_rel, prior_bytes)
+        self.prior_seal_rel = ".ai-playbook/review-certs/2026-10-01-plan-review-prior.md"
+        seal_bytes = b"prior run's certification seal\n"
+        _write(self.primary / self.prior_seal_rel, seal_bytes)
+        _write(self.worktree / self.prior_seal_rel, seal_bytes)
+        self.start_commit = self._git(
+            self.primary, "rev-parse", self.branch
+        ).stdout.strip()
+
+    def _git(self, repo: Path, *args: str, check: bool = True):
+        env = _hermetic_git_env(self.root, **self.GIT_IDENTITY)
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, env=env
+        )
+        if check and proc.returncode != 0:
+            raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr}")
+        return proc
+
+    def _commit_all(self, repo: Path, message: str) -> None:
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", message)
+
+    def _branch_oid(self, branch: str) -> str:
+        return self._git(self.primary, "rev-parse", branch).stdout.strip()
+
+    def _claim_path(self) -> Path:
+        return self.primary / "docs/tmp/authoring-claims" / self.CLAIM_BASENAME
+
+    def _plan_abs(self) -> Path:
+        # The expected plan file: it does NOT exist (the no-charter arm's
+        # entry premise); the path is what done setup declared as the run's
+        # owned plan before the first plan-file write.
+        return self.primary / self.PLAN_REL
+
+    def _seed_claim(self, text: str | None = None) -> Path:
+        claim = self._claim_path()
+        if text is None:
+            text = (
+                f"session: {self.SESSION_ID}\n"
+                f"item: {self.ITEM}\n"
+                "created: 2026-10-26T08:00:00Z\n"
+                "updated: 2026-10-26T08:00:00Z\n"
+            )
+        _write(claim, text.encode("utf-8"))
+        return claim
+
+    def _seed_prompt_log(self, entry_body: str | None = None) -> Path:
+        log = self.primary / "docs/history/backlog/PLAN-PROMPTS.md"
+        if entry_body is None:
+            entry_body = (
+                f"## {self.SLUG}\n"
+                "\n"
+                "Added: 2026-10-26, test fixture\n"
+                "\n"
+                f"Frozen: docs/tmp/authoring-claims/{self.CLAIM_BASENAME} "
+                "(2026-10-26)\n"
+                "\n"
+                "Origins:\n"
+                f"- {self.ITEM}\n"
+                "\n"
+                "Urgency: low - fixture entry for the no-charter gate arm.\n"
+            )
+        _write(log, entry_body.encode("utf-8"))
+        return log
+
+    def _manifest_payload(self, **overrides) -> dict:
+        payload = {
+            "schema": 1,
+            "run_id": self.RUN_ID,
+            "marker": self.MARKER,
+            "created_epoch": 1790000000.0,
+            "repo_root": str(self.worktree),
+            "pid": 1,
+            "start_commit": self.start_commit,
+            "start_porcelain": [],
+            "owned_paths": [],
+            "owned_plan_paths": [self.PLAN_REL],
+            "owned_review_paths": [],
+            "foreign_review_paths": [],
+            "adopted_from": None,
+            "complete": False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _write_manifest(self, payload: dict, run_id: str | None = None) -> Path:
+        session_dir = self.primary / "docs/tmp/done-session"
+        path = session_dir / f"run-manifest-{run_id or payload['run_id']}.json"
+        _write(path, json.dumps(payload).encode("utf-8"))
+        return path
+
+    def _write_worktree_manifest(self, payload: dict, run_id: str | None = None) -> Path:
+        # The worktree-side record (r1 F1): the producer's session dir
+        # resolves from the dispatching checkout's toplevel, so a
+        # worktree-dispatched done run writes under the worktree's
+        # docs/tmp/done-session, never the primary's.
+        session_dir = self.worktree / "docs/tmp/done-session"
+        path = session_dir / f"run-manifest-{run_id or payload['run_id']}.json"
+        _write(path, json.dumps(payload).encode("utf-8"))
+        return path
+
+    def _digest_root(self, root: Path) -> str:
+        # The done producer's real repo_root shape: the 64-hex identity
+        # digest of the dispatching checkout's toplevel. Derived through the
+        # producer lib's own function so the fixture cannot drift from the
+        # matcher's derivation (local import keeps collection light, the
+        # suite idiom).
+        import done_sweep_gates_lib as sweep_lib
+        return sweep_lib._repo_root_digest(root.resolve())
+
+    def _seed_clean(self) -> Path:
+        """The full clean no-charter state: claim, frozen entry, one done-run
+        manifest binding the expected plan and the untouched start commit."""
+        self._seed_claim()
+        self._seed_prompt_log()
+        return self._write_manifest(self._manifest_payload())
+
+    def _run_gate(self, *extra: str, claim: Path | None = "default") -> tuple[int, str, str]:
+        operands = [
+            "gate-removal",
+            "--plan", str(self._plan_abs()),
+            "--target", str(self.primary),
+            "--worktree", str(self.worktree),
+        ]
+        if claim == "default":
+            claim = self._claim_path()
+        if claim is not None:
+            operands += ["--authoring-claim", str(claim)]
+        return _run_cli(*operands, *extra, cwd=self.worktree)
+
+
+class NoCharterGateTest(NoCharterFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The verified no-charter authoring stand-down
+    arm (plan 2026-10-28-plan-authoring-stand-down-before-charter Task 1):
+    cleanup is accepted only when the claim, the frozen prompt entry, the
+    done-run manifest identity, the placement-derived branch, and the
+    artifact accounting all agree, and every disagreement preserves the
+    worktree and branch with a specific refusal."""
+
+    def test_clean_case_passes_and_leaves_unrelated_shared_record_unchanged(self):
+        # The required clean case: an unrelated record in the shared primary
+        # reviews home must not block the run's cleanup, and the cleanup must
+        # leave that record byte-unchanged while the run owns none. The
+        # worktree staging homes hold the provisioned transfer-in mirrors
+        # (r2 F1: the real provisioning shape, not an empty home), and the
+        # pass verdict states what was actually verified (r2 F3).
+        manifest_path = self._seed_clean()
+        unrelated = (
+            self.primary / ".ai-playbook/reviews/2026-10-01-plan-review-unrelated-r1.md"
+        )
+        _write(unrelated, b"unrelated prior run's record\n")
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"authoring claim {self.CLAIM_BASENAME}", out)
+        self.assertIn(f"session {self.SESSION_ID}", out)
+        self.assertIn(f"origin {self.ITEM}", out)
+        self.assertIn(f"frozen PLAN-PROMPTS entry {self.SLUG}", out)
+        self.assertIn(f"done-run manifest {self.RUN_ID}", out)
+        self.assertIn(f"plan {self.PLAN_REL}", out)
+        self.assertIn(f"start commit {self.start_commit}", out)
+        self.assertIn("verified 0 owned record(s)", out)
+        self.assertIn("byte-identical primary twin", out)
+        removal_lines = [ln for ln in out.splitlines() if "git worktree remove" in ln]
+        self.assertEqual(len(removal_lines), 1, out)
+        self.assertIn(str(self.worktree), removal_lines[0])
+        # The unrelated shared record is untouched by the gate's verdict.
+        self.assertEqual(
+            unrelated.read_bytes(), b"unrelated prior run's record\n",
+            "the cleanup verdict disturbed an unrelated shared record",
+        )
+        # The provisioned transfer-in mirrors survive byte-unchanged: the
+        # gate is read-only and the pass treats them as mirrors, not
+        # run-owned artifacts.
+        self.assertEqual(
+            (self.worktree / self.prior_record_rel).read_bytes(),
+            b"prior run's review record\n",
+        )
+        self.assertEqual(
+            (self.worktree / self.prior_seal_rel).read_bytes(),
+            b"prior run's certification seal\n",
+        )
+        # The manifest that bound the run survives the gate (read-only gate).
+        self.assertTrue(manifest_path.is_file())
+        # The branch is not deleted by the gate itself (operator work only).
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", self.branch, check=False).returncode,
+            0,
+        )
+
+    def test_claim_operand_with_existing_plan_keeps_ordinary_empty_set_refusal(self):
+        # An ordinary plan closeout is unchanged when the claim operand rides
+        # along but the plan file exists: the ordinary gate's own checks run,
+        # here the empty-owned-set refusal for a plan without citations.
+        self._seed_clean()
+        plan = self.primary / self.PLAN_REL
+        _write(plan, b"# Plan\n\nNo review rounds.\n")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("empty owned set", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_plan_absent_without_claim_operand_stays_tool_error(self):
+        # The arm's entry is the explicit claim operand: a plan-absent gate
+        # run without it keeps the legacy tool-error shape byte-for-byte.
+        self._seed_clean()
+        code, out, err = self._run_gate(claim=None)
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("plan file not found", err)
+
+    def test_missing_claim_file_preserves(self):
+        self._seed_clean()
+        absent = self.primary / "docs/tmp/authoring-claims/gone.md"
+        code, out, _err = self._run_gate(claim=absent)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused", out)
+        self.assertIn("authoring claim", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_claim_without_parseable_session_line_preserves(self):
+        self._seed_prompt_log()
+        self._write_manifest(self._manifest_payload())
+        claim = self._seed_claim(
+            text=(
+                f"item: {self.ITEM}\n"
+                "created: 2026-10-26T08:00:00Z\n"
+                "updated: 2026-10-26T08:00:00Z\n"
+            )
+        )
+        code, out, _err = self._run_gate(claim=claim)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("session", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_unfrozen_prompt_entry_preserves(self):
+        # The frozen prompt binding: an entry whose body never marks the
+        # claim frozen cannot authorize the pre-plan cleanup.
+        self._seed_claim()
+        self._seed_prompt_log(
+            entry_body=(
+                f"## {self.SLUG}\n"
+                "\n"
+                "Added: 2026-10-26, test fixture\n"
+                "\n"
+                "Origins:\n"
+                f"- {self.ITEM}\n"
+                "\n"
+                "Urgency: low - fixture entry, never frozen.\n"
+            )
+        )
+        self._write_manifest(self._manifest_payload())
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("frozen", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_frozen_entry_without_claim_origin_preserves(self):
+        # The frozen entry must bind this claim's origin: an entry frozen for
+        # a different item's claim is not this run's binding evidence.
+        self._seed_claim()
+        self._seed_prompt_log(
+            entry_body=(
+                f"## {self.SLUG}\n"
+                "\n"
+                "Added: 2026-10-26, test fixture\n"
+                "\n"
+                f"Frozen: docs/tmp/authoring-claims/{self.CLAIM_BASENAME} "
+                "(2026-10-26)\n"
+                "\n"
+                "Origins:\n"
+                "- docs/history/backlog/2026-10-26-some-other-item.md\n"
+                "\n"
+                "Urgency: low - fixture entry frozen for another origin.\n"
+            )
+        )
+        self._write_manifest(self._manifest_payload())
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused", out)
+        self.assertIn("origin", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_missing_done_run_manifest_preserves(self):
+        self._seed_claim()
+        self._seed_prompt_log()
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("done-run manifest", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_manifest_naming_other_plan_preserves(self):
+        # A done-run manifest whose owned plan is a different path is not
+        # this run's binding: the expected-plan identity fails closed.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(
+            self._manifest_payload(
+                owned_plan_paths=["docs/history/plans/2026-10-28-other-demo.md"]
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertNotIn("git worktree remove", out)
+
+    def test_two_manifests_disagreeing_on_start_commit_preserve(self):
+        # Ambiguous identity: two manifests naming the expected plan with
+        # different start commits cannot bind one run; the resources stay.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(self._manifest_payload())
+        self._write_manifest(
+            self._manifest_payload(
+                run_id=self.RUN_ID + "-b",
+                marker=self.MARKER + "-b",
+                created_epoch=1790000900.0,
+                start_commit="0" * 40,
+            ),
+            run_id=self.RUN_ID + "-b",
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused", out)
+        self.assertNotIn("git worktree remove", out)
+        # Both resources stay registered and on disk.
+        self.assertTrue(self.worktree.is_dir())
+        names = [
+            entry["branch"]
+            for entry in MODULE._parse_worktree_entries(self.primary)
+            if Path(entry["path"]).resolve() == self.worktree.resolve()
+        ]
+        self.assertEqual(names, [self.branch])
+
+    def test_branch_past_start_commit_preserves(self):
+        # Any commit landing on the authoring branch after setup voids the
+        # start-commit identity: the run's content is not provably empty.
+        self._seed_clean()
+        _write(self.worktree / "feature.txt", b"work\n")
+        self._commit_all(self.worktree, "work: authoring residue")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("start commit", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_dirty_worktree_preserves(self):
+        self._seed_clean()
+        _write(self.worktree / "scratch.md", b"draft\n")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_manifest_owned_review_record_preserves(self):
+        # Manifest ownership says the run owns a review record: zero-owned is
+        # not proven and the staging record's only copy may live worktree-side.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(
+            self._manifest_payload(
+                owned_review_paths=[
+                    ".ai-playbook/reviews/2026-10-26-plan-review-no-charter-demo-r1.md"
+                ]
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("review record", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_worktree_staging_review_record_preserves(self):
+        # Actual run artifacts (r2 F1): a review record in the worktree's
+        # staging reviews home with NO byte-identical twin under the primary
+        # reviews home is not a provisioned transfer-in mirror - it is
+        # run-created or drifted state the removal would destroy unaccounted.
+        self._seed_clean()
+        _write(
+            self.worktree / ".ai-playbook/reviews/2026-10-26-plan-review-no-charter-demo-r1.md",
+            b"staging record\n",
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("refused", out)
+        self.assertIn("reviews", out)
+        self.assertIn("byte-identical twin", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_staging_record_differing_from_primary_twin_preserves(self):
+        # r2 F1, the drifted-mirror half: a staging record whose primary twin
+        # exists but carries different bytes is not a provisioned mirror (the
+        # worktree copy is not provably the transfer-in copy), so the run
+        # refuses with preservation instead of destroying the delta.
+        self._seed_clean()
+        _write(self.primary / self.prior_record_rel, b"primary bytes moved on\n")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("byte-identical twin", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_staging_seal_record_without_primary_twin_preserves(self):
+        # r2 F1, the review-certs seal copy: the same transfer-in contract
+        # copies the seal home into the worktree, so the twin-aware scan
+        # covers it too; a seal record with no primary twin refuses with
+        # preservation, while the provisioned seal mirror passes in the
+        # clean cases.
+        self._seed_clean()
+        _write(
+            self.worktree / (
+                ".ai-playbook/review-certs/"
+                "2026-10-26-plan-review-no-charter-demo.md"
+            ),
+            b"run-created seal record\n",
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("review-certs", out)
+        self.assertIn("byte-identical twin", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_target_facts_without_seal_key_with_staging_seal_records_preserves(self):
+        # r2 F1: with staging seal records present, an unresolvable primary
+        # twin home cannot prove the transfer-in mirrors, so the run refuses
+        # instead of scanning against nothing.
+        _write(
+            self.primary / ".ai-playbook/facts.md",
+            b"```toml\nreviews_dir = \".ai-playbook/reviews/\"\n"
+            b"tmp_dir = \"docs/tmp/\"\n"
+            b"metrics_dir = \".ai-playbook/metrics/\"\n```\n",
+        )
+        self._seed_clean()
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("cannot resolve review_certs_dir", out)
+        self.assertIn("cannot be proven provisioned transfer-in mirrors", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_worktree_on_foreign_branch_preserves(self):
+        # Placement identity: a worktree rebound to a foreign branch does not
+        # match the claim-derived authoring branch.
+        self._seed_clean()
+        self._git(self.worktree, "checkout", "-q", "-b", "foreign-branch")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(self.branch, out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_worktree_outside_claim_stem_shape_preserves(self):
+        # The placement rule derives the worktree from the claim file stem:
+        # a worktree directory named otherwise is not this claim's placement
+        # (the done-run manifest is bound to the operand worktree so the
+        # refusal isolates the placement shape).
+        self.worktree = self.root / "proj-wt-elsewhere"
+        self._git(
+            self.primary, "worktree", "add", "-q", "-b", "authoring/elsewhere",
+            str(self.worktree),
+        )
+        self._seed_clean()
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(self.CLAIM_STEM, out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_producer_shape_digest_manifest_in_worktree_done_session_passes(self):
+        # r1 F1 regression, the producer's real shape: the run-start digest
+        # form of repo_root and the manifest under the dispatching worktree's
+        # done-session directory (a worktree-dispatched run never records in
+        # the primary's). Before the fix this refused: the matcher compared
+        # the digest as a path and the scan never left the target side.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_worktree_manifest(
+            self._manifest_payload(repo_root=self._digest_root(self.worktree))
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"done-run manifest {self.RUN_ID}", out)
+        self.assertIn("git worktree remove", out)
+
+    def test_primary_shape_digest_manifest_in_target_done_session_passes(self):
+        # The other producer shape (r1 F1): a primary-dispatched run records
+        # the primary's digest under the target-side done-session; the
+        # two-arm matcher binds it through the digest arm too.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(
+            self._manifest_payload(repo_root=self._digest_root(self.primary))
+        )
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("git worktree remove", out)
+
+    def test_legacy_raw_path_manifest_in_worktree_done_session_passes(self):
+        # r1 F1, the legacy shape: pre-digest writers recorded the raw path;
+        # the matcher's raw arm keeps such records loadable on both sides of
+        # the scan.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_worktree_manifest(self._manifest_payload())
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("git worktree remove", out)
+
+    def test_foreign_digest_manifest_naming_plan_preserves(self):
+        # The digest arm discriminates: a 64-hex record whose digest names a
+        # foreign checkout binds neither scanned root, so a manifest naming
+        # the expected plan from another checkout is not this run's binding.
+        self._seed_claim()
+        self._seed_prompt_log()
+        foreign = self.root / "foreign-checkout"
+        foreign.mkdir()
+        self._write_manifest(
+            self._manifest_payload(repo_root=self._digest_root(foreign))
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("no done-run manifest", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_run_manifest_matcher_dedupes_shared_identity_across_sides(self):
+        # r1 F1, the dedupe rule: one producer record visible through both
+        # scanned sides (a shared tmp_dir spelled twice) dedupes to one
+        # binding by its run-manifest-<run_id>.json identity.
+        self._seed_claim()
+        self._seed_prompt_log()
+        payload = self._manifest_payload(repo_root=self._digest_root(self.worktree))
+        self._write_manifest(payload)
+        self._write_worktree_manifest(payload)
+        import done_sweep_gates_lib as sweep_lib
+        matches = MODULE._no_charter_run_manifests(
+            self.primary,
+            self.worktree.resolve(),
+            self.PLAN_REL,
+            sweep_lib._repo_root_matches_value,
+        )
+        self.assertEqual(
+            [name for name, _payload in matches],
+            [f"run-manifest-{self.RUN_ID}.json"],
+        )
+
+    def test_manifest_without_owned_review_paths_key_preserves(self):
+        # r1 F2: a manifest lacking the owned_review_paths key proves nothing
+        # about review ownership; the run refuses with preservation instead
+        # of silently proving zero.
+        self._seed_claim()
+        self._seed_prompt_log()
+        payload = self._manifest_payload()
+        del payload["owned_review_paths"]
+        self._write_manifest(payload)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("owned_review_paths", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_manifest_with_non_list_owned_review_paths_preserves(self):
+        # r1 F2, the other half: the key present but not a list is equally
+        # unproven ownership, mirroring the start_commit enforcement.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(self._manifest_payload(owned_review_paths="none"))
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("non-list owned_review_paths", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_manifest_owned_run_artifact_preserves(self):
+        # r2 F2: a non-empty owned_paths set names run-owned artifacts
+        # outside the reviews home - ignored-path artifacts the porcelain
+        # check cannot see and the staging scan does not cover - so
+        # zero-owned is not proven and the refusal names them. (The empty
+        # shape passes: every clean case rides the fixture's default
+        # owned_paths: [].)
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._write_manifest(
+            self._manifest_payload(
+                owned_paths=["docs/tmp/execute-plan/scratch/state.md"]
+            )
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("owned_paths", out)
+        self.assertIn("docs/tmp/execute-plan/scratch/state.md", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_manifest_without_owned_paths_key_preserves(self):
+        # r2 F2, the missing-key mirror of the owned_review_paths
+        # enforcement: a manifest lacking owned_paths proves nothing about
+        # run-artifact ownership, so zero-owned is not proven.
+        self._seed_claim()
+        self._seed_prompt_log()
+        payload = self._manifest_payload()
+        del payload["owned_paths"]
+        self._write_manifest(payload)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("no owned_paths key", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def _seed_older_generation(
+        self, drop: tuple[str, ...] = (), **overrides
+    ) -> str:
+        # An older binding generation of the same run: same expected plan,
+        # same start commit, an earlier created_epoch, a distinct run_id
+        # (so the filename differs and no dedupe collapses the pair).
+        # `drop` removes keys, e.g. to simulate an older manifest generation
+        # that predates an owned-set field.
+        run_id = self.RUN_ID + "-older"
+        payload = self._manifest_payload(
+            run_id=run_id,
+            marker=self.MARKER + "-older",
+            created_epoch=self._manifest_payload()["created_epoch"] - 100.0,
+            **overrides,
+        )
+        for key in drop:
+            payload.pop(key, None)
+        self._write_manifest(payload, run_id=run_id)
+        return f"run-manifest-{run_id}.json"
+
+    def test_two_agreeing_bindings_with_empty_owned_sets_pass(self):
+        # r3 F1, the agreement half: two same-plan same-start_commit
+        # generations both declaring empty owned sets aggregate to zero;
+        # the newest still binds the plan and start commit and the cleanup
+        # passes.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._seed_older_generation()
+        self._write_manifest(self._manifest_payload())
+        code, out, err = self._run_gate()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("verified 0 owned record(s)", out)
+        self.assertIn("git worktree remove", out)
+
+    def test_older_binding_declaring_owned_review_records_preserves(self):
+        # r3 F1, the owned_review_paths disagreement: the newest binding
+        # declares no review records, but the older generation of the same
+        # run declares one; binding the newest alone would print the
+        # zero-owned verdict and remove the worktree while the older
+        # generation's declared record is destroyed unaccounted. The
+        # aggregate across all bindings refuses with preservation.
+        self._seed_claim()
+        self._seed_prompt_log()
+        older_name = self._seed_older_generation(
+            owned_review_paths=[
+                ".ai-playbook/reviews/2026-10-26-plan-review-no-charter-demo-r1.md"
+            ]
+        )
+        self._write_manifest(self._manifest_payload())
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("review record", out)
+        self.assertIn(older_name, out)
+        self.assertNotIn("verified 0 owned record(s)", out)
+        self.assertNotIn("git worktree remove", out)
+        self.assertTrue(self.worktree.is_dir())
+
+    def test_older_binding_declaring_owned_paths_preserves(self):
+        # r3 F1, the owned_paths disagreement: an older generation's
+        # non-empty run-artifact set refuses even when the newest
+        # generation declares none, and the refusal names the declaring
+        # manifest and the artifacts.
+        self._seed_claim()
+        self._seed_prompt_log()
+        older_name = self._seed_older_generation(
+            owned_paths=["docs/tmp/execute-plan/scratch/state.md"]
+        )
+        self._write_manifest(self._manifest_payload())
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("owned_paths", out)
+        self.assertIn("docs/tmp/execute-plan/scratch/state.md", out)
+        self.assertIn(older_name, out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_older_binding_without_owned_review_paths_key_preserves(self):
+        # r3 F1, the shape half of the aggregation: every binding manifest
+        # must carry the owned-set keys, so an older generation lacking
+        # owned_review_paths refuses even though the newest generation's
+        # key is present and empty.
+        self._seed_claim()
+        self._seed_prompt_log()
+        self._seed_older_generation(drop=("owned_review_paths",))
+        self._write_manifest(self._manifest_payload())
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("owned_review_paths", out)
+        self.assertNotIn("git worktree remove", out)
+
+    def test_worktree_facts_without_reviews_dir_preserves(self):
+        # r1 F3: the staging scan never silently skips. The worktree's
+        # (ignored) facts provision loses its reviews_dir key, so the worktree
+        # stays clean while the staging home is unresolvable; the run refuses
+        # with a specific reason instead of skipping the scan.
+        facts = self.worktree / ".ai-playbook/facts.md"
+        _write(
+            facts,
+            b"```toml\ntmp_dir = \"docs/tmp/\"\n"
+            b"metrics_dir = \".ai-playbook/metrics/\"\n```\n",
+        )
+        self._seed_clean()
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("reviews_dir", out)
+        self.assertIn("cannot resolve", out)
+        self.assertNotIn("git worktree remove", out)
+        # The resources stay: the worktree remains registered on its branch.
+        self.assertTrue(self.worktree.is_dir())
+        names = [
+            entry["branch"]
+            for entry in MODULE._parse_worktree_entries(self.primary)
+            if Path(entry["path"]).resolve() == self.worktree.resolve()
+        ]
+        self.assertEqual(names, [self.branch])
+
+
+class NoCharterProducerWriteTest(NoCharterFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The routed producer leg of the no-charter
+    stand-down closeout (plan 2026-10-28-plan-authoring-stand-down-before-
+    charter Task 3, review r1 F1): the done producer's actual write path
+    (scripts/done_sweep_gates_lib.py write-manifest, the writer done_run.sh
+    setup invokes at its step 7) dispatched from the placement worktree's
+    CWD with the routed repo-relative ``--owned-plan`` spelling, and the
+    Task 1 arm binds the record it writes. The staging homes start empty
+    here (a repository with no prior review records, so the Worktree-first
+    transfer-in copies nothing): the producer's claim-or-foreign gate owns
+    the mirrored-home shape, the foreign-by-default split deliberately keeps
+    the refuse arm for a worktree dispatch, and the routed setup leg carries
+    no review operands."""
+
+    MARKER_TS = "20261026T080000Z"
+
+    def _clear_transfer_in_mirrors(self) -> None:
+        for rel in (self.prior_record_rel, self.prior_seal_rel):
+            (self.primary / rel).unlink()
+            (self.worktree / rel).unlink()
+
+    def _write_producer_run_marker(self) -> Path:
+        # done_run.sh cmd_setup step 6's run-start marker recipe, verbatim:
+        # the bash step writes this marker, the lib writer binds the
+        # manifest to it (the digest is the sha256 of the worktree toplevel
+        # with the trailing slash stripped, the same derivation the lib's
+        # confirmation recomputes).
+        session = self.worktree / "docs/tmp/done-session"
+        session.mkdir(parents=True, exist_ok=True)
+        repo_top = self._git(
+            self.worktree, "rev-parse", "--show-toplevel"
+        ).stdout.strip()
+        repo_hash = hashlib.sha256(repo_top.rstrip("/").encode("utf-8")).hexdigest()
+        marker = session / f"run-start-{self.MARKER_TS}"
+        _write(marker, f"1790000000 {repo_hash} 4242\n".encode("utf-8"))
+        return marker
+
+    def _run_producer_write(self, operand: str, marker: Path) -> tuple[int, str, str]:
+        # done_run.sh cmd_setup step 7's writer invocation, verbatim (the
+        # same write path done setup uses), dispatched from the placement
+        # worktree's CWD exactly like the routed stand-down leg.
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH.parent / "done_sweep_gates_lib.py"),
+                "write-manifest",
+                "--run-marker",
+                str(marker),
+                "--owned-plan",
+                operand,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(self.worktree),
+            env=_hermetic_lock_env(self.root),
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def _producer_manifest_path(self, out: str) -> Path:
+        line = next(ln for ln in out.splitlines() if ln.startswith("manifest: "))
+        return Path(line[len("manifest: "):])
+
+    def test_producer_write_from_worktree_with_routed_relative_plan_binds(self):
+        # The routed leg's spelling (r1 F1): --owned-plan carries the
+        # repo-relative dated plans path resolved from the worktree CWD, so
+        # the producer's _repo_relative against its dispatching root records
+        # the target-relative form the arm's binding string-matches.
+        self._clear_transfer_in_mirrors()
+        self._seed_claim()
+        self._seed_prompt_log()
+        marker = self._write_producer_run_marker()
+        code, out, err = self._run_producer_write(self.PLAN_REL, marker)
+        self.assertEqual(code, 0, out + err)
+        manifest_path = self._producer_manifest_path(out)
+        # The record lands under the dispatching worktree's gitignored
+        # done-session directory, never the primary's.
+        self.assertEqual(
+            manifest_path.parent.resolve(),
+            (self.worktree / "docs/tmp/done-session").resolve(),
+        )
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["owned_plan_paths"], [self.PLAN_REL])
+        import done_sweep_gates_lib as sweep_lib
+
+        self.assertTrue(
+            sweep_lib._repo_root_matches_value(
+                payload["repo_root"], self.worktree.resolve()
+            ),
+            payload["repo_root"],
+        )
+        self.assertEqual(payload["start_commit"], self.start_commit)
+        self.assertEqual(payload["owned_review_paths"], [])
+        self.assertEqual(payload["owned_paths"], [])
+        # The Task 1 arm binds the producer-written record: the clean
+        # no-charter state passes end to end.
+        gate_code, gate_out, gate_err = self._run_gate()
+        self.assertEqual(gate_code, 0, gate_out + gate_err)
+        self.assertEqual(gate_out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("done-run manifest", gate_out)
+        self.assertIn("git worktree remove", gate_out)
+
+    def test_producer_write_with_primary_absolute_plan_operand_does_not_bind(self):
+        # The mis-spelling the routing pins against (r1 F1): a primary-
+        # anchored absolute operand relativizes against the DISPATCHING
+        # root, fails its containment check, and survives verbatim, so the
+        # arm's string equality against the target-relative expected path
+        # never matches and the arm refuses with preservation.
+        self._clear_transfer_in_mirrors()
+        self._seed_claim()
+        self._seed_prompt_log()
+        marker = self._write_producer_run_marker()
+        code, out, err = self._run_producer_write(str(self._plan_abs()), marker)
+        self.assertEqual(code, 0, out + err)
+        payload = json.loads(
+            self._producer_manifest_path(out).read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["owned_plan_paths"], [str(self._plan_abs())])
+        gate_code, gate_out, _err = self._run_gate()
+        self.assertEqual(gate_code, 1)
+        self.assertEqual(gate_out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("no done-run manifest", gate_out)
+        self.assertNotIn("git worktree remove", gate_out)
 
 
 if __name__ == "__main__":

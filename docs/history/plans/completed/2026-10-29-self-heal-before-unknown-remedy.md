@@ -90,4 +90,4 @@ Files:
 ## Disposition of migrated backlog items
 
 - `docs/history/backlog/2026-10-29-self-heal-unknown-remedy-trigger.md` (origin row, Status: covered) — fully served by Task 1; deleted from the living backlog in this completion pass; durable home is this archived plan.
-- `docs/history/backlog/2026-10-30-self-heal-integration-points-recoverable-precondition.md` — not a migrated origin: a follow-up row created by the execution run's Step 1.2b review (self-heal/using-skills Integration Points drift); stays open in the living backlog with its owning reference to this plan.
+- `docs/history/backlog/2026-10-30-self-heal-integration-points-recoverable-precondition.md`: not a migrated origin, a follow-up row created by the execution run's Step 1.2b review (self-heal/using-skills Integration Points drift); landed ad-hoc 2026-10-31 (covered-row deletion in the self-heal caller-map restoration change).

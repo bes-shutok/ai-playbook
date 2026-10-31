@@ -37,13 +37,13 @@ The runner uses the latest committer timestamp that changed each existing archiv
 
 ## Step 2: Sync to the `docs` branch
 
-Run the canonical sync entry point from the target repository root as one command:
+Requires Python 3.11 or newer; putting a supported python3 first on PATH selects the interpreter for the runtime check and the sync. Run the canonical sync entry point from the target repository root as one command:
 
 ```bash
 bash scripts/docs_branch_sync.sh
 ```
 
-The runner uses one repository-level `commit-tree` backend with a temporary index and compare-and-swap, regardless of `worktree_policy`. If another writer moved the docs ref, the sync refuses and leaves the competing tip current; it restores no branch-only files. This backend preserves the active checkout and index, keeps earlier docs commits reachable, and never pushes. The runner restores only recent allowed branch-only archives after the branch update succeeds, skipping the restore leg in a linked worktree. It does not remove, sweep, or rewrite local `docs/tmp/` files. `done` retains its separate `docs-tmp-sweep` gate for plan-lifetime and one-off scratch cleanup.
+If another writer has moved the docs ref, the sync refuses and leaves the competing tip current; it restores no branch-only files. This backend preserves the active checkout and index, keeps earlier docs commits reachable, and never pushes. The runner restores only recent allowed branch-only archives after the branch update succeeds, skipping the restore leg in a linked worktree. It does not remove, sweep, or rewrite local `docs/tmp/` files. `done` retains its separate `docs-tmp-sweep` gate for plan-lifetime and one-off scratch cleanup.
 
 The runner prints any pruned branch paths (including paths absent from the checkout) and the final outcome. Root validation and symlink containment failures stop before docs-branch ref mutation.
 

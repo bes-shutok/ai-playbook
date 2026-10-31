@@ -1,13 +1,14 @@
 # Backlog: restore the reply-permission vs push-authorization separation statement in done
 
 - **Filed:** 2026-10-27, execute-plan Phase 3 r1 review (self-heal-before-workflow-stop; both lenses, independent)
-- **Status:** open
+- **Status:** resolved — the separation sentence exists at HEAD (`agents/skills/done/SKILL.md` passive-review paragraph carries "Keep push authorization separate from permission to reply to review feedback."), restored by 9c318d3e2 (plans: land self-heal recovery plan); re-derived 2026-10-31 during the learn/investigate pass over the self-heal-before-unknown-remedy session.
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** review-finding
 - **Class:** fix-class (byte-balance deletion removed a rule, not a duplicate)
 - **Driving force:** reliability (an improvising session could treat review-reply permission as push authorization); secondary: clarity
 - **Skill/step:** `agents/skills/done/SKILL.md` passive-review finalization paragraph
+- **Cluster:** docs/history/plans/completed/2026-10-29-self-heal-before-unknown-remedy.md (self-heal/done skill-text restoration family; sibling rows landed ad-hoc 2026-10-31)
 
 ## Problem
 

@@ -6859,6 +6859,27 @@ def _write_staging(root: Path, name: str, md: str, sidecar: object | None = None
     return path
 
 
+@contextlib.contextmanager
+def _selftest_captured() -> Iterator[tuple[io.StringIO, io.StringIO]]:
+    """Both-stream capture for the embedded selftest's CLI arms (hoisted from
+    the identical per-arm private copies; hard-mode clause pointer residuals
+    plan, D2)."""
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+        yield out_buf, err_buf
+
+
+def _selftest_call(argv: list[str]) -> tuple[int, str, str]:
+    """Run main(argv) under both-stream capture; SystemExit is the argparse
+    errors' channel, so its code is the return value."""
+    with _selftest_captured() as (out_buf, err_buf):
+        try:
+            code = main(argv)
+        except SystemExit as exc:
+            code = exc.code
+    return code, out_buf.getvalue(), err_buf.getvalue()
+
+
 def _current_clear_payload() -> dict:
     """Canonical current-format five-worker clear-review sidecar payload."""
     return {
@@ -6974,13 +6995,67 @@ def _payload_with_findings(findings: list[dict]) -> dict:
     return payload
 
 
+def _current_finding_block(finding: dict) -> str:
+    """One ``#### F<id>.`` current-format Markdown finding block.
+
+    Shared per-finding block builder (hard-mode clause pointer residuals plan,
+    D2): ``_current_findings_markdown`` and the hard-mode selftest arm compose
+    their fixtures from this one block shape, which carries the Severity and
+    Pattern bullets beside Blocking and Triage (the arm's former private
+    ``md_block`` re-implemented the same boilerplate to add them). The Pattern
+    bullet renders only when the finding dict declares a pattern, so the
+    absent-bullet arm of the version-1 pattern-conservation check stays
+    reachable.
+    """
+    fid = finding.get("id", 0)
+    lines = [
+        f"#### F{fid}. Sample finding {fid}",
+        f"- **Severity**: {finding.get('severity', 'Low')}",
+        f"- **Blocking**: {'true' if finding.get('blocking', False) else 'false'}",
+    ]
+    pattern = finding.get("pattern")
+    if pattern:
+        lines.append(f"- **Pattern**: {pattern}")
+    lines.extend(
+        [
+            f"- **Triage**: {finding.get('triage', 'pending')}",
+            "#### Comment",
+            (
+                f"Concrete claim for finding {fid}: the reviewed change "
+                "introduces a reachable condition where the stated contract "
+                "and observed behavior diverge. Anchored to the exact lines "
+                "in the reviewed artifact. Why it matters: a follow-on "
+                "caller relies on the documented invariant, so the gap can "
+                "surface as wrong normal-path behavior when the caller "
+                "exercises the affected branch under typical load. Fix: "
+                "align the code with the contract, or update the contract "
+                "and every caller that depends on the prior shape. Record "
+                "the verification anchor and the discriminating input that "
+                "demonstrates the divergence."
+            ),
+            "#### Analysis",
+            (
+                "Verified against the reviewed artifact at the cited anchor. "
+                "Reachability confirmed on a normal path under stated inputs "
+                "and realistic load assumptions. No mitigating guard, feature "
+                "flag, or upstream validation was present. Severity reflects "
+                "tangible consequence, not effort, reviewer fatigue, or "
+                "comment length; the budget and ordering rules apply."
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _current_findings_markdown(findings: list[dict], *, title: str = "conservation") -> str:
     """Build a current-format staging markdown whose Findings section lists the
     given findings under their severity groups.
 
     Each finding dict must carry ``id``, ``severity``, ``blocking`` (bool), and
-    optionally ``triage`` (default ``pending``). The Markdown mirrors the
-    sidecar so the conservation cross-check can reconcile the two.
+    optionally ``triage`` (default ``pending``); each block is rendered by the
+    shared ``_current_finding_block`` builder (Severity, Blocking, Pattern when
+    declared, and Triage bullets). The Markdown mirrors the sidecar so the
+    conservation cross-check can reconcile the two.
     """
     by_severity: dict[str, list[dict]] = {sev: [] for sev in SEVERITY_ORDER}
     for finding in findings:
@@ -6991,42 +7066,11 @@ def _current_findings_markdown(findings: list[dict], *, title: str = "conservati
         if not rows:
             sections.append(f"### {severity}\nNone.")
             continue
-        lines = [f"### {severity}"]
-        for finding in rows:
-            fid = finding.get("id", 0)
-            blocking = finding.get("blocking", False)
-            triage = finding.get("triage", "pending")
-            lines.extend(
-                [
-                    f"#### F{fid}. Sample finding {fid}",
-                    f"- **Blocking**: {'true' if blocking else 'false'}",
-                    f"- **Triage**: {triage}",
-                    "#### Comment",
-                    (
-                        f"Concrete claim for finding {fid}: the reviewed change "
-                        "introduces a reachable condition where the stated contract "
-                        "and observed behavior diverge. Anchored to the exact lines "
-                        "in the reviewed artifact. Why it matters: a follow-on "
-                        "caller relies on the documented invariant, so the gap can "
-                        "surface as wrong normal-path behavior when the caller "
-                        "exercises the affected branch under typical load. Fix: "
-                        "align the code with the contract, or update the contract "
-                        "and every caller that depends on the prior shape. Record "
-                        "the verification anchor and the discriminating input that "
-                        "demonstrates the divergence."
-                    ),
-                    "#### Analysis",
-                    (
-                        "Verified against the reviewed artifact at the cited anchor. "
-                        "Reachability confirmed on a normal path under stated inputs "
-                        "and realistic load assumptions. No mitigating guard, feature "
-                        "flag, or upstream validation was present. Severity reflects "
-                        "tangible consequence, not effort, reviewer fatigue, or "
-                        "comment length; the budget and ordering rules apply."
-                    ),
-                ]
+        sections.append(
+            "\n".join(
+                [f"### {severity}"] + [_current_finding_block(row) for row in rows]
             )
-        sections.append("\n".join(lines))
+        )
     findings_block = "\n\n".join(sections)
     findings_count = len(findings)
     return "\n".join(
@@ -8307,21 +8351,7 @@ def _selftest_scaffold_mode(root: Path, check) -> None:
     # telemetry path, so the selftest-wide guard is lifted temporarily).
     global _selftest_telemetry_suppressed, _scaffold_telemetry_suppressed
 
-    @contextlib.contextmanager
-    def _captured():
-        out_buf, err_buf = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            yield out_buf, err_buf
-
-    def call(argv: list[str]):
-        """Run main(argv) under both-stream capture; SystemExit is the
-        argparse errors' channel, so its code is the return value."""
-        with _captured() as (out_buf, err_buf):
-            try:
-                code = main(argv)
-            except SystemExit as exc:
-                code = exc.code
-        return code, out_buf.getvalue(), err_buf.getvalue()
+    call = _selftest_call  # shared capture helper (hard-mode residuals D2)
 
     # A valid staging pair the positional-path and --hard arms point at:
     # the scaffold dispatch must emit the envelope instead of validating
@@ -9965,11 +9995,8 @@ def _version1_payload(*, pattern: str = "testing#weak-assertion") -> dict:
 def _version1_markdown(*, pattern: str = "testing#weak-assertion") -> str:
     """Current-format findings Markdown whose finding carries a matching
     ``- **Pattern``: <canonical pattern>`` bullet for the conservation check."""
-    md = _current_findings_markdown([_current_finding()], title="versioned")
-    return md.replace(
-        "- **Blocking**: false",
-        f"- **Blocking**: false\n- **Pattern**: {pattern}",
-        1,
+    return _current_findings_markdown(
+        [_current_finding(pattern=pattern)], title="versioned"
     )
 
 
@@ -10106,8 +10133,15 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
     )
 
     # Markdown/sidecar pattern conservation: the Markdown finding must carry
-    # the same canonical pattern as the sidecar.
-    no_pattern_md = _current_findings_markdown([_current_finding()], title="versioned")
+    # the same canonical pattern as the sidecar. The shared block builder
+    # emits the Pattern bullet whenever the finding declares one, so the
+    # absent-bullet fixture drops the key before rendering.
+    no_pattern_row = _current_finding()
+    del no_pattern_row["pattern"]
+    no_pattern_md = _current_findings_markdown([no_pattern_row], title="versioned")
+    assert "- **Pattern**:" not in no_pattern_md, (
+        "fixture defanged: the absent-Pattern arm lost its absent bullet"
+    )
     result = validate_staging_file(
         stage("md-nopattern", base_payload, no_pattern_md), hard=True
     )
@@ -10682,7 +10716,9 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         # Full-text pin (r1 F2): the emitted warning equals the exact full
         # message built from the same template the parser emits, so the
         # plan's byte-identical wording invariant is enforced end to end,
-        # not via substrings. The hardcoded line 11 (r1 F6) keeps pinning
+        # not via substrings. The hardcoded line 13 (r1 F6; was 11 before
+        # the shared block builder added the Severity and Pattern bullets
+        # above the injected fence, hard-mode residuals D2) keeps pinning
         # the fixture's true opener line so a coordinated indexing drift in
         # the classifier and warning cannot ship a misleading number while
         # staying green; the classifier call above stays as the defang
@@ -10690,7 +10726,7 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         # derived index).
         and warns[0] == (
             "warning: unclosed code fence in the Findings section (opener "
-            f"at line 11 of the Findings section); "
+            f"at line 13 of the Findings section); "
             "findings after the opener are recovered with heading "
             "resets, but post-opener metadata bullets are not recovered; "
             "this warning repeats once per parsing pass of the Findings "
@@ -17164,11 +17200,7 @@ def _selftest_outcome_contract(root: Path, check) -> None:
     `OUTCOME: tool_error` naming the path (today it straggles at exit 1);
     and a `--json` run emits no stdout OUTCOME line and carries the outcome
     as the JSON `outcome` field (the declared placement deviation)."""
-    @contextlib.contextmanager
-    def _captured():
-        out_buf, err_buf = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            yield out_buf, err_buf
+    call = _selftest_call  # shared capture helper (hard-mode residuals D2)
 
     def outcome_rows(text: str) -> list[str]:
         return [
@@ -17176,16 +17208,6 @@ def _selftest_outcome_contract(root: Path, check) -> None:
             for row in text.splitlines()
             if row.strip().startswith("OUTCOME:")
         ]
-
-    def call(argv: list[str]):
-        """Run main(argv) under both-stream capture; SystemExit is the
-        argparse errors' channel, so its code is the return value."""
-        with _captured() as (out_buf, err_buf):
-            try:
-                code = main(argv)
-            except SystemExit as exc:
-                code = exc.code
-        return code, out_buf.getvalue(), err_buf.getvalue()
 
     valid_path = _write_staging(
         root,
@@ -19570,21 +19592,7 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
     code (report-only), while an unreadable input path keeps the outcome
     contract's tool_error class beside usage violations, matching the
     existing non-hard run for the same input."""
-    @contextlib.contextmanager
-    def _captured():
-        out_buf, err_buf = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            yield out_buf, err_buf
-
-    def call(argv: list[str]):
-        """Run main(argv) under both-stream capture; SystemExit is the
-        argparse errors' channel, so its code is the return value."""
-        with _captured() as (out_buf, err_buf):
-            try:
-                code = main(argv)
-            except SystemExit as exc:
-                code = exc.code
-        return code, out_buf.getvalue(), err_buf.getvalue()
+    call = _selftest_call  # shared capture helper (hard-mode residuals D2)
 
     def error_lines(err: str) -> list[str]:
         return sorted(
@@ -19834,22 +19842,12 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
     multiply-invalid record whose prerequisites stay well-formed, every ERROR
     line carries its clause pointer, the emission order is frozen with the
     established first error on top, and malformed-prerequisite cascades stay
-    suppressed. Fixture builders mirror the plan's regression fixtures; the
-    preflight_inventory arm's ten-error case remains the pre-change
-    characterization witness."""
-    @contextlib.contextmanager
-    def _captured():
-        out_buf, err_buf = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            yield out_buf, err_buf
-
-    def call(argv: list[str]):
-        with _captured() as (out_buf, err_buf):
-            try:
-                code = main(argv)
-            except SystemExit as exc:
-                code = exc.code
-        return code, out_buf.getvalue(), err_buf.getvalue()
+    suppressed. Fixtures compose the shared builders (``_current_finding``,
+    ``_current_finding_block``, ``_version1_payload``, ``_selftest_call``;
+    hard-mode clause pointer residuals plan, D2) and the malformed variant
+    drops the Panel segment at construction; the preflight_inventory arm's
+    ten-error case remains the pre-change characterization witness."""
+    call = _selftest_call
 
     def emitted(err: str) -> list[str]:
         """Hard-mode ERROR lines in EMISSION order (never sorted), pointer
@@ -19874,160 +19872,128 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         "security", "simplification", "testing",
     ]
 
-    def finding(fid, *, workers=("correctness-completeness",),
-                pattern=None, **overrides):
-        row = {
-            "id": fid,
-            "severity": "Medium",
-            "blocking": False,
-            "consequence": (
-                "Concrete harmful outcome: the reviewed change leaves a "
-                "reachable contract gap on a normal path."
-            ),
-            "reachability": "common",
-            "blast_radius": "single-service",
-            "confidence": "verified",
-            "pattern": pattern or f"quality#fixture-candidate-{fid}",
-            "workers": list(workers),
-            "triage": "pending",
-        }
-        row.update(overrides)
-        return row
-
-    def md_block(fid: int, pattern: str, blocking: bool) -> str:
-        return "\n".join([
-            f"#### F{fid}. Sample finding {fid}",
-            "- **Severity**: Medium",
-            f"- **Blocking**: {'true' if blocking else 'false'}",
-            f"- **Pattern**: {pattern}",
-            "- **Triage**: pending",
-            "#### Comment",
-            (
-                f"Concrete claim for finding {fid}: the reviewed change "
-                "introduces a reachable condition where the stated contract "
-                "and observed behavior diverge. Fix: align the code with the "
-                "contract, or update the contract and every caller that "
-                "depends on the prior shape."
-            ),
-            "#### Analysis",
-            (
-                "Verified against the reviewed artifact at the cited anchor. "
-                "Reachability confirmed on a normal path under stated inputs. "
-                "Severity reflects tangible consequence, not effort."
-            ),
-        ])
-
     # The multiply-invalid sidecar: one deliberate defect per origin failure
     # family, every prerequisite well-formed (ids integer where the family is
     # not the id shape itself, digests real where the family is not the hex
-    # shape itself).
+    # shape itself). Rows are shared-builder ``_current_finding`` calls; the
+    # arm supplies only its deliberate defects and the per-finding triage
+    # default.
     rows = [
-        finding(1, blocking=True, pattern="quality#stale-digest-rebind"),
-        finding(2, workers=("testing",), pattern="testing#weak-assertion",
-                reachability="maybe"),
-        finding(3, workers=("risk",), pattern="security#injection",
-                blast_radius="whole-world"),
-        finding(4, workers=("contract-docs",),
-                pattern="prose-clarity#verbose-comment"),
+        _current_finding(id=1, blocking=True,
+                         pattern="quality#stale-digest-rebind",
+                         triage="pending"),
+        _current_finding(id=2, workers=("testing",),
+                         pattern="testing#weak-assertion",
+                         reachability="maybe", triage="pending"),
+        _current_finding(id=3, workers=("risk",),
+                         pattern="security#injection",
+                         blast_radius="whole-world", triage="pending"),
+        _current_finding(id=4, workers=("contract-docs",),
+                         pattern="prose-clarity#verbose-comment",
+                         triage="pending"),
     ]
-    rows += [finding(fid) for fid in range(5, 12)]  # per-worker budget arm
-    rows.append(finding("12", workers=("design-simplicity",),
-                        pattern="architecture#layering-drift"))
-    payload = {
-        "schema_version": 1,
-        "review_type": "Branch Review",
-        "date": "2026-10-20",
-        "artifact_slug": "fixture-multi-invalid",
-        "round": "r1",
-        "depth": "full",
-        "domains": ["telemetry"],
-        "panel_mode": "full",
-        "selection_reason": None,
-        "source_kind": "plan",
-        "source_digest": digest,
-        "escalation_reason": None,
-        "review_mode": "fresh-adversarial",
-        "risk_signals": ["not-a-tag"],
-        "prior_findings_filter": False,
-        "last_fix_commit": "abc123def456",
-        "record_kind": "canonical",
-        "coverage": {
-            "outcome": "clean",
-            "material_lens_set": lens_set,
-            "completed": lens_set,
-            "missing": [],
-            "attempts": [{
-                "attempt_id": "a1",
-                "worker": "testing",
-                "lenses": ["testing"],
-                "started_at": "2026-10-20T10:00:00Z",
-                "deadline": "2026-10-20T10:15:00Z",
-                "elapsed": 30,
-                "outcome": "complete",
-                "attempt_number": 1,
-                "contributed_coverage": True,
-            }],
-            "retry_budget": {
-                "per_attempt_timeout_minutes": 15,
-                "per_worker_max": 2,
-                "wall_clock_ceiling_minutes": 90,
-                "exhausted": False,
+    # per-worker budget arm
+    rows += [
+        _current_finding(id=fid, pattern=f"quality#fixture-candidate-{fid}",
+                         triage="pending")
+        for fid in range(5, 12)
+    ]
+    rows.append(_current_finding(id="12", workers=("design-simplicity",),
+                                 pattern="architecture#layering-drift",
+                                 triage="pending"))
+    # The payload rides the shared version-1 builder for the well-formed
+    # skeleton (schema_version, panel_mode, the null-form and empty-container
+    # fields); every deliberately-invalid or fixture-witness value overrides
+    # it here.
+    payload = _version1_payload()
+    payload.update(
+        {
+            "review_type": "Branch Review",
+            "date": "2026-10-20",
+            "artifact_slug": "fixture-multi-invalid",
+            "round": "r1",
+            "depth": "full",
+            "domains": ["telemetry"],
+            "source_kind": "plan",
+            "source_digest": digest,
+            "review_mode": "fresh-adversarial",
+            "risk_signals": ["not-a-tag"],
+            "prior_findings_filter": False,
+            "last_fix_commit": "abc123def456",
+            "record_kind": "canonical",
+            "coverage": {
+                "outcome": "clean",
+                "material_lens_set": lens_set,
+                "completed": lens_set,
+                "missing": [],
+                "attempts": [{
+                    "attempt_id": "a1",
+                    "worker": "testing",
+                    "lenses": ["testing"],
+                    "started_at": "2026-10-20T10:00:00Z",
+                    "deadline": "2026-10-20T10:15:00Z",
+                    "elapsed": 30,
+                    "outcome": "complete",
+                    "attempt_number": 1,
+                    "contributed_coverage": True,
+                }],
+                "retry_budget": {
+                    "per_attempt_timeout_minutes": 15,
+                    "per_worker_max": 2,
+                    "wall_clock_ceiling_minutes": 90,
+                    "exhausted": False,
+                },
             },
-        },
-        "counts": {
-            "workers_launched": 5,
-            "raw_findings": 12,
-            "staged_findings": 7,
-            "discarded": 0,
-            "solo_staged": 12,
-            "echo_staged": 0,
-        },
-        "panel": [
-            {
-                "worker": worker,
-                "lenses": [l.strip() for l in lens_list.split(",")],
-                "parent_worker": None,
-                "descendant_launches": [],
-                "status": "complete",
-                "raw": 12 if idx == 0 else 0,
-                "solo": 12 if idx == 0 else 0,
-                "echo": 0,
-                "relaunch": False,
-            }
-            for idx, (worker, lens_list) in enumerate(panel_rows)
-        ],
-        "deduplication_groups": [],
-        "discarded": [],
-        "severity_calibration": [],
-        "triage_outcomes": [
-            {"worker": "correctness-completeness", "lens": "quality",
-             "staged": 8, "fixed": 0, "dropped": 0, "deferred": 0,
-             "pending": 8},
-            {"worker": "testing", "lens": "testing",
-             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
-             "pending": 1},
-            {"worker": "design-simplicity", "lens": "architecture",
-             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
-             "pending": 1},
-            {"worker": "contract-docs", "lens": "documentation",
-             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
-             "pending": 1},
-            {"worker": "risk", "lens": "security",
-             "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
-             "pending": 1},
-        ],
-        "findings": rows,
-        "overflow": [],
-        "soften_watchlist": [],
-        "verdict": "no",
-        "extensions": {
-            "convergence": {
-                "self_heal_attempt": {"status": "unused",
-                                      "run_id": "deadbeef"},
+            "counts": {
+                "workers_launched": 5,
+                "raw_findings": 12,
+                "staged_findings": 7,
+                "discarded": 0,
+                "solo_staged": 12,
+                "echo_staged": 0,
             },
-            "certified_range": {"base": "nothex", "head": "b" * 40},
-        },
-    }
+            "panel": [
+                {
+                    "worker": worker,
+                    "lenses": [l.strip() for l in lens_list.split(",")],
+                    "parent_worker": None,
+                    "descendant_launches": [],
+                    "status": "complete",
+                    "raw": 12 if idx == 0 else 0,
+                    "solo": 12 if idx == 0 else 0,
+                    "echo": 0,
+                    "relaunch": False,
+                }
+                for idx, (worker, lens_list) in enumerate(panel_rows)
+            ],
+            "triage_outcomes": [
+                {"worker": "correctness-completeness", "lens": "quality",
+                 "staged": 8, "fixed": 0, "dropped": 0, "deferred": 0,
+                 "pending": 8},
+                {"worker": "testing", "lens": "testing",
+                 "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+                 "pending": 1},
+                {"worker": "design-simplicity", "lens": "architecture",
+                 "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+                 "pending": 1},
+                {"worker": "contract-docs", "lens": "documentation",
+                 "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+                 "pending": 1},
+                {"worker": "risk", "lens": "security",
+                 "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0,
+                 "pending": 1},
+            ],
+            "findings": rows,
+            "verdict": "no",
+            "extensions": {
+                "convergence": {
+                    "self_heal_attempt": {"status": "unused",
+                                          "run_id": "deadbeef"},
+                },
+                "certified_range": {"base": "nothex", "head": "b" * 40},
+            },
+        }
+    )
     by_id = {f["id"]: f for f in rows}
     # F5 is missing from the Markdown (F-id 1:1 block match arm); the string
     # id '12' has no block either, but its reconciliation arm is the
@@ -20045,73 +20011,98 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         "| contract-docs | documentation | 1 | 0 | 0 | 0 | 1 |",
         "| risk | security | 1 | 0 | 0 | 0 | 1 |",
     ])
-    md = "\n".join([
-        "# Branch Review: fixture record",
-        "## Metadata",
-        "- Type: Branch Review",
-        "- Record kind: canonical",
-        "- Date: 2026-10-20",
-        "- URL or Artifact: docs/plans/fixture.md",
-        "- Depth: full",
-        "- Domains: telemetry",
-        "- Round: r1",
-        "- Review mode: fresh-adversarial",
-        "- Changed-risk signals: none",
-        "- Boundary-contract checklist: not applicable (no boundary families)",
-        "- Prior findings supplied as filter: no",
-        "- Last fix commit: none",
-        "",
-        "- Coverage: clean",
-        "- Release-gate ledger: none",
-        "- Panel mode: full",
-        f"- Source digest: {digest}",
-        f"- review-run-id: {run_id}",
-        "- review-started-at-ms: 1791476234267",
-        "- Findings: 8",
-        "- Status: STAGED",
-        "## Review Statistics",
-        "### Panel",
-        "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |",
-        "|--------|--------|---------------|--------|-----|------|------|----------|",
-        counts_rows,
-        "### Counts",
-        "- Workers launched: 5",
-        "- Staged findings: 8",
-        "### Deduplication groups",
-        "None (each staged finding had a single agent origin).",
-        "### Discarded findings",
-        "None.",
-        "### Severity calibration",
-        "None (agent severities matched staged severities).",
-        "### Triage outcomes",
-        "| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |",
-        "|--------|------|--------|-------|---------|----------|---------|",
-        triage_rows,
-        "### Attempt ledger",
-        "| attempt | worker | outcome | contributed_coverage |",
-        "|--------|--------|---------|----------------------|",
-        "| a1 | testing | complete | yes |",
-        "## Findings",
-        "### Critical",
-        "None.",
-        "### High",
-        "None.",
-        "### Medium",
-        "\n\n".join(
-            md_block(fid, by_id[fid]["pattern"],
-                     bool(by_id[fid].get("blocking")))
-            for fid in md_ids
-        ),
-        "### Low",
-        "None.",
-        "### Overflow manifest",
-        "None.",
-        "### Soften watchlist",
-        "None.",
-        "## Verdict for this round (before fixes)",
-        "10 Medium+ findings accepted for fix",
-        "",
-    ])
+    # Segment-built document (D2): the malformed variant drops the Panel
+    # segment at construction instead of re-matching a frozen literal chunk
+    # of the joined text.
+    md_segments = [
+        [
+            "# Branch Review: fixture record",
+            "## Metadata",
+            "- Type: Branch Review",
+            "- Record kind: canonical",
+            "- Date: 2026-10-20",
+            "- URL or Artifact: docs/plans/fixture.md",
+            "- Depth: full",
+            "- Domains: telemetry",
+            "- Round: r1",
+            "- Review mode: fresh-adversarial",
+            "- Changed-risk signals: none",
+            ("- Boundary-contract checklist: not applicable (no boundary "
+             "families)"),
+            "- Prior findings supplied as filter: no",
+            "- Last fix commit: none",
+            "",
+            "- Coverage: clean",
+            "- Release-gate ledger: none",
+            "- Panel mode: full",
+            f"- Source digest: {digest}",
+            f"- review-run-id: {run_id}",
+            "- review-started-at-ms: 1791476234267",
+            "- Findings: 8",
+            "- Status: STAGED",
+        ],
+        [
+            "## Review Statistics",
+        ],
+        [
+            "### Panel",
+            "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo "
+            "| Relaunch |",
+            "|--------|--------|---------------|--------|-----|------|------"
+            "|----------|",
+            counts_rows,
+        ],
+        [
+            "### Counts",
+            "- Workers launched: 5",
+            "- Staged findings: 8",
+            "### Deduplication groups",
+            "None (each staged finding had a single agent origin).",
+            "### Discarded findings",
+            "None.",
+            "### Severity calibration",
+            "None (agent severities matched staged severities).",
+            "### Triage outcomes",
+            "| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |",
+            "|--------|------|--------|-------|---------|----------|---------|",
+            triage_rows,
+            "### Attempt ledger",
+            "| attempt | worker | outcome | contributed_coverage |",
+            "|--------|--------|---------|----------------------|",
+            "| a1 | testing | complete | yes |",
+        ],
+        [
+            "## Findings",
+            "### Critical",
+            "None.",
+            "### High",
+            "None.",
+            "### Medium",
+            "\n\n".join(
+                _current_finding_block(by_id[fid]) for fid in md_ids
+            ),
+            "### Low",
+            "None.",
+            "### Overflow manifest",
+            "None.",
+            "### Soften watchlist",
+            "None.",
+        ],
+        [
+            "## Verdict for this round (before fixes)",
+            "10 Medium+ findings accepted for fix",
+            "",
+        ],
+    ]
+    md = "\n".join(
+        line for segment in md_segments for line in segment
+    )
+    md_malformed = "\n".join(
+        line
+        for idx, segment in enumerate(md_segments)
+        if idx != 2  # the ### Panel segment
+        for line in segment
+    )
     staging = _write_staging(
         root,
         "2026-10-20-branch-review-fixture-multi-invalid-r1.md",
@@ -20226,6 +20217,45 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
             for line in emitted(err)
         ),
     )
+    # Per-family suffix pins, in the frozen emission order (hard-mode
+    # pointer residuals plan, Task 1): each line's clause pointer is
+    # asserted against its hardcoded owning section, so remapping any
+    # pinned marker to a wrong section fails here instead of passing
+    # through a mapping recomputed from the table itself. Keep this check
+    # ahead of the json run below: it reads the text run's stderr.
+    hard_invalid_expected_suffixes = [
+        "(review-staging SKILL.md, Version-1 sidecar contract)",
+        "(review-staging SKILL.md, Coverage sidecar contract "
+        "(COVERAGE_SIDECAR_MIN_DATE))",
+        "(review-staging SKILL.md, Synthesis-time hard gates)",
+        "(review-staging SKILL.md, Pattern id format)",
+        "(review-staging SKILL.md, Corrections sidecar extension "
+        "(declared-when-present))",
+        "(review-staging SKILL.md, Synthesis-time hard gates)",
+        "(review-staging SKILL.md, Finding-construction recipe "
+        "(scaffold before drafting))",
+        "(review-staging SKILL.md, Finding-construction recipe "
+        "(scaffold before drafting))",
+        "(review-staging SKILL.md, JSON sidecar (required for "
+        "aggregation))",
+        "(review-staging SKILL.md, Synthesis-time hard gates)",
+        "(review-staging SKILL.md, Staged Markdown hierarchy (required))",
+        "(review-staging SKILL.md, Version-1 sidecar contract)",
+        "(review-staging SKILL.md, Staged Markdown hierarchy (required))",
+        "(review-staging SKILL.md, JSON sidecar (required for "
+        "aggregation))",
+        "(review-staging SKILL.md, Synthesis-time hard gates)",
+    ]
+    check(
+        "hard invalid fixture pins every line's clause-pointer suffix",
+        len(emitted(err)) == len(hard_invalid_expected_suffixes)
+        and all(
+            line.endswith(f" {suffix}")
+            for line, suffix in zip(
+                emitted(err), hard_invalid_expected_suffixes
+            )
+        ),
+    )
     rc, out, err = call(["--hard", "--json", str(staging)])
     json_payload: dict = json.loads(out) if out.strip() else {}
     check("hard invalid fixture json run exits 1", rc == 1)
@@ -20298,74 +20328,228 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         all(not pointer_suffix_re.search(line) for line in tool_error_lines),
     )
 
-    # Clause-pointer mapping: every table row resolves to its own section,
-    # prefix-shadowed markers keep their precedence, an unmatched message
-    # falls back to the bare skill pointer, and the emitted suffixes equal
-    # the mapping recomputed from the raw lines.
-    check(
-        "clause pointer table maps every marker to its own section",
-        all(
-            _skill_clause_pointer(marker)
-            == f"(review-staging SKILL.md, {section})"
-            for marker, section in SKILL_CLAUSE_POINTERS
-        ),
-    )
-    check(
-        "clause pointer precedence: counts arm outranks generic conservation",
-        _skill_clause_pointer(
-            "finding conservation: counts.staged_findings=7 but sidecar "
-            "has 12 finding(s)"
+    # Clause-pointer mapping pins (hard-mode pointer residuals plan, Task 1):
+    # every table row asserts its exact hardcoded suffix through a
+    # representative emit-site message. The retired checks recomputed the
+    # mapping through _skill_clause_pointer itself (and their emitted-line
+    # twin ran against the json run's empty stderr), so a wrong-section
+    # remap passed both; a hardcoded suffix fails it. Prefix-shaped markers
+    # probe at message start, so the pins hold under the anchored-matching
+    # follow-up too; the precedence probes keep the counts arm, the
+    # per-finding pattern arm, and the per-finding enum markers ahead of
+    # their generics.
+    pointer_pins = [
+        ("coverage attempt record",
+         "coverage attempt record 'a1' elapsed 30 exceeds retry_budget "
+         "per_attempt_timeout_minutes 15 (no silent deadline extension)",
+         "(review-staging SKILL.md, Coverage sidecar contract "
+         "(COVERAGE_SIDECAR_MIN_DATE))"),
+        ("finding conservation: counts.staged_findings=",
+         "finding conservation: counts.staged_findings=7 but sidecar has "
+         "12 finding(s)",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        (" pattern disagrees",
+         "finding conservation: finding 7 pattern disagrees (Markdown "
+         "'quality#stale-pattern', sidecar 'quality#renamed-pattern')",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("Markdown record is missing its Pattern",
+         "finding conservation: finding 3 Markdown record is missing its "
+         "Pattern",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("finding conservation",
+         "finding conservation: Markdown lists 10 finding(s) but sidecar "
+         "lists 12",
+         "(review-staging SKILL.md, Staged Markdown hierarchy (required))"),
+        ("counts parity",
+         "counts parity: the record Counts Staged findings line declares 8 "
+         "but sidecar counts.staged_findings is 7",
+         "(review-staging SKILL.md, JSON sidecar (required for "
+         "aggregation))"),
+        ("finding budget exceeded",
+         "finding budget exceeded: worker 'correctness-completeness' has 7 "
+         "non-blocking High/Medium findings (max 5); move extras to overflow",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("last fix commit disagreement",
+         "last fix commit disagreement: Metadata 'Last fix commit: 'none'' "
+         "and sidecar last_fix_commit 'abc123def456' disagree",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("clean verdict with Metadata Last fix commit",
+         "clean verdict with Metadata Last fix commit 'abc123def456' "
+         "requires Metadata Review mode 'fresh-adversarial'; a 'targeted' "
+         "label on a post-fix clean round bypasses the fresh-adversarial "
+         "mandate",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("Metadata Review mode",
+         "Metadata Review mode 'weird-mode' must be one of "
+         "['fresh-adversarial', 'targeted', 'verification-only']",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("version-1 sidecar risk_signals",
+         "version-1 sidecar risk_signals tag 'not-a-tag' must be one of the "
+         "documented kebab-case signal tags",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("version-1 sidecar field",
+         "version-1 sidecar field 'date' must be a string in YYYY-MM-DD "
+         "format",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("version-1 finding",
+         "version-1 finding 4: pattern owner 'prose-clarity' is not a "
+         "declared shared lens owner",
+         "(review-staging SKILL.md, Pattern id format)"),
+        ("version-1 overflow item",
+         "version-1 overflow item: 'not-a-pattern' is not a canonical "
+         "Pattern ID (expected lens#kebab-slug)",
+         "(review-staging SKILL.md, Pattern id format)"),
+        ("version-1 discarded finding",
+         "version-1 discarded finding: 'not-a-pattern' is not a canonical "
+         "Pattern ID (expected lens#kebab-slug)",
+         "(review-staging SKILL.md, Pattern id format)"),
+        ("has invalid reachability",
+         "current finding 2 has invalid reachability (expected one of "
+         "['common', 'expected', 'plausible-edge', 'theoretical'])",
+         "(review-staging SKILL.md, Finding-construction recipe "
+         "(scaffold before drafting))"),
+        ("has invalid blast_radius",
+         "current finding 3 has invalid blast_radius (expected one of "
+         "['global', 'local', 'multi-service', 'single-service'])",
+         "(review-staging SKILL.md, Finding-construction recipe "
+         "(scaffold before drafting))"),
+        ("has invalid confidence",
+         "current finding 1 has invalid confidence (expected one of "
+         "['verified', 'strong-evidence', 'hypothesis'])",
+         "(review-staging SKILL.md, Finding-construction recipe "
+         "(scaffold before drafting))"),
+        ("current finding",
+         "current finding '12' id must be an integer",
+         "(review-staging SKILL.md, JSON sidecar (required for "
+         "aggregation))"),
+        ("extensions.certified_range",
+         "extensions.certified_range 'base' must be a 40-character hex "
+         "commit sha",
+         "(review-staging SKILL.md, Corrections sidecar extension "
+         "(declared-when-present))"),
+        ("extensions.convergence.self_heal_attempt",
+         "extensions.convergence.self_heal_attempt run_id must be a "
+         "32-character lowercase hexadecimal id",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("extensions.cap_closure",
+         "extensions.cap_closure is missing required key 'plan_section'",
+         "(review-staging SKILL.md, Cap-closure sidecar extension)"),
+        ("extensions.corrections",
+         "extensions.corrections must not be null: absent means absent, "
+         "and null is not the absent form",
+         "(review-staging SKILL.md, Corrections sidecar extension "
+         "(declared-when-present))"),
+        ("corrections verification:",
+         "corrections verification: seal leg refused: hop commit dated "
+         "before the seal entry's round-close commit",
+         "(review-staging SKILL.md, Corrections sidecar extension "
+         "(declared-when-present))"),
+        ("Superseded by link",
+         "Superseded by link resolves to the record itself: 'Superseded "
+         "by: successor.md' names successor.md",
+         "(review-staging SKILL.md, Canonical record and supersession)"),
+        ("Supersedes",
+         "Supersedes link is dangling: 'Supersedes: prior.md' resolves to "
+         "prior.md which does not exist",
+         "(review-staging SKILL.md, Canonical record and supersession)"),
+        ("mint pair",
+         "mint pair field 'review-run-id' is malformed: 'abc' does not "
+         "match the capture producer's grammar",
+         "(review-staging SKILL.md, Usage capture (production write "
+         "path))"),
+        ("source_digest",
+         "current sidecar source_digest is stale (mismatch vs "
+         "expected_digest); reviewed artifact may have changed",
+         "(review-staging SKILL.md, Version-1 sidecar contract)"),
+        ("has no completed coverage",
+         "full panel: worker 'testing' has no completed coverage "
+         "(statuses: ['failed']); failed/timed-out rows count as launches "
+         "but never as coverage",
+         "(review-staging SKILL.md, Record validation levels)"),
+        ("coverage",
+         "coverage outcome 'clean' forbids replacement[] entries",
+         "(review-staging SKILL.md, Coverage sidecar contract "
+         "(COVERAGE_SIDECAR_MIN_DATE))"),
+        ("post-fix round",
+         "post-fix round (sidecar last fix commit 'abc123def456') has "
+         "neither a populated '### Witness ledger' nor the Metadata "
+         "'Witness ledger: N/A (no public mutators)' empty shape",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("witness ledger",
+         "witness ledger",
+         "(review-staging SKILL.md, Synthesis-time hard gates)"),
+        ("missing ### Panel",
+         "missing ### Panel under Review Statistics",
+         "(review-staging SKILL.md, Output discipline)"),
+        ("invalid stats sidecar JSON",
+         "invalid stats sidecar JSON: Expecting value: line 1 column 1 "
+         "(char 0)",
+         "(review-staging SKILL.md, JSON sidecar (required for "
+         "aggregation))"),
+    ]
+    for pin_marker, pin_probe, pin_suffix in pointer_pins:
+        check(
+            f"clause pointer pin: {pin_marker} routes to its owning section",
+            _skill_clause_pointer(pin_probe) == pin_suffix,
         )
-        == "(review-staging SKILL.md, Version-1 sidecar contract)",
-    )
-    check(
-        "clause pointer precedence: per-finding enum outranks current-finding"
-        " schema marker",
-        _skill_clause_pointer(
-            "current finding 2 has invalid reachability (expected one of "
-            "['common', 'expected', 'plausible-edge', 'theoretical'])"
-        )
-        == (
-            "(review-staging SKILL.md, Finding-construction recipe "
-            "(scaffold before drafting))"
-        ),
-    )
     check(
         "clause pointer fallback routes an unmatched message at the skill",
         _skill_clause_pointer("totally unmapped diagnostic text")
         == "(review-staging SKILL.md)",
     )
+    # Direct predicate checks (r1 F1): the quote-position anchoring itself
+    # is pinned, so reverting the find/quote-position loop to
+    # substring-anywhere fails closed instead of silently reopening the C3
+    # misroute class (every pin probe above places its marker at a template
+    # position where anchored and substring behavior coincide).
     check(
-        "emitted pointer suffixes equal the mapping recomputed from the "
-        "emitted text",
-        all(
-            line.endswith(f" {_skill_clause_pointer(line_stripped)}")
-            for line, line_stripped in zip(
-                emitted(err),
-                [re.sub(r" \(review-staging SKILL\.md(, .+)?\)$", "", line)
-                 for line in emitted(err)],
-            )
-        ),
+        "clause pointer predicate: a risk_signals tag equal to an earlier "
+        "marker's text routes to the message's own marker (C3 regression "
+        "pin)",
+        _skill_clause_pointer(
+            "version-1 sidecar risk_signals tag 'coverage attempt record' "
+            "must be one of the documented kebab-case signal tags"
+        )
+        == "(review-staging SKILL.md, Synthesis-time hard gates)",
+    )
+    check(
+        "clause pointer predicate: a marker occurring only inside a quoted "
+        "value falls to the bare skill pointer",
+        _skill_clause_pointer(
+            "sidecar field 'finding conservation' is malformed"
+        )
+        == "(review-staging SKILL.md)",
+    )
+    check(
+        "clause pointer predicate: the allowlisted quoted required-coverage "
+        "template still routes to the Coverage sidecar section",
+        _skill_clause_pointer(
+            "version-1 sidecar dated on or after COVERAGE_SIDECAR_MIN_DATE "
+            f"{COVERAGE_SIDECAR_MIN_DATE} with source_kind 'plan' is "
+            "missing the required 'coverage' object"
+        )
+        == "(review-staging SKILL.md, Coverage sidecar contract "
+        "(COVERAGE_SIDECAR_MIN_DATE))",
+    )
+    # Fail-closed table coverage (r1 F4): a future SKILL_CLAUSE_POINTERS
+    # row without a pointer pin fails here, naming the missing marker,
+    # instead of shipping a wrong-section remap green everywhere.
+    _unpinned_markers = sorted(
+        {m for m, _ in SKILL_CLAUSE_POINTERS} - {p[0] for p in pointer_pins}
+    )
+    check(
+        "clause pointer pins cover SKILL_CLAUSE_POINTERS exactly "
+        f"(unpinned table markers: {_unpinned_markers})",
+        len(pointer_pins) == len(SKILL_CLAUSE_POINTERS)
+        and {m for m, _ in SKILL_CLAUSE_POINTERS}
+        == {p[0] for p in pointer_pins},
     )
 
     # Malformed prerequisite: the truncated sidecar JSON is the only
     # malformation, so every sidecar-dependent gate stays a suppressed
     # cascade behind the JSON gate, and the doc-level independent
-    # diagnostic still reports first.
-    md_malformed = md.replace(
-        "### Panel\n"
-        "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |\n"
-        "|--------|--------|---------------|--------|-----|------|------|----------|\n"
-        "| correctness-completeness | quality, implementation | none | "
-        "complete | 12 | 12 | 0 | no |\n"
-        "| testing | testing | none | complete | 0 | 0 | 0 | no |\n"
-        "| design-simplicity | architecture, simplification | none | "
-        "complete | 0 | 0 | 0 | no |\n"
-        "| contract-docs | documentation | none | complete | 0 | 0 | 0 | "
-        "no |\n"
-        "| risk | security | none | complete | 0 | 0 | 0 | no |\n",
-        "",
-    )
+    # diagnostic still reports first. (The malformed Markdown drops the
+    # Panel segment at construction, beside the segment list above.)
     assert "### Panel" not in md_malformed
     staging_malformed = _write_staging(
         root,
@@ -20666,16 +20850,35 @@ def cmd_preflight(
 SKILL_CLAUSE_POINTERS: tuple[tuple[str, str], ...] = (
     # Marker order matters where one marker is a prefix of another: the
     # counts.staged_findings conservation arm (sidecar-internal parity,
-    # "Version-1 sidecar contract") precedes the generic conservation marker
-    # (Markdown F-block reconciliation), and the per-finding enum markers
-    # precede the generic "current finding" schema marker.
+    # "Version-1 sidecar contract") and the per-finding pattern-conservation
+    # arm (the contract's Canonical Pattern IDs paragraph) precede the
+    # generic conservation marker (Markdown F-block reconciliation); the
+    # per-finding enum markers precede the generic "current finding" schema
+    # marker; the clean-verdict/Last-fix-commit cross-field marker precedes
+    # the "Metadata Review mode" family marker (its own message names that
+    # family mid-message); and the corrections-verification refusal marker
+    # precedes the generic source_digest marker (the corrections routing
+    # contract bans the digest substring inside corrections reasons, and
+    # this precedence keeps any future reason drift routed to the
+    # corrections section first); the version-1 pattern-disagreement and
+    # missing-Pattern markers precede the generic conservation marker
+    # (severity/blocking/triage disagreement emits stay on the generic
+    # row, which owns the Markdown F-block reconciliation class); and the
+    # full-panel completion marker precedes the generic coverage marker
+    # (whose quoted-template exemption stays load-bearing for the
+    # required-coverage-object emit, so the fix is an ordering fix).
     ("coverage attempt record", "Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)"),
     ("finding conservation: counts.staged_findings=", "Version-1 sidecar contract"),
+    (" pattern disagrees", "Version-1 sidecar contract"),
+    ("Markdown record is missing its Pattern", "Version-1 sidecar contract"),
     ("finding conservation", "Staged Markdown hierarchy (required)"),
     ("counts parity", "JSON sidecar (required for aggregation)"),
     ("finding budget exceeded", "Synthesis-time hard gates"),
     ("last fix commit disagreement", "Synthesis-time hard gates"),
+    ("clean verdict with Metadata Last fix commit", "Version-1 sidecar contract"),
+    ("Metadata Review mode", "Synthesis-time hard gates"),
     ("version-1 sidecar risk_signals", "Synthesis-time hard gates"),
+    ("version-1 sidecar field", "Version-1 sidecar contract"),
     ("version-1 finding", "Pattern id format"),
     ("version-1 overflow item", "Pattern id format"),
     ("version-1 discarded finding", "Pattern id format"),
@@ -20685,6 +20888,15 @@ SKILL_CLAUSE_POINTERS: tuple[tuple[str, str], ...] = (
     ("current finding", "JSON sidecar (required for aggregation)"),
     ("extensions.certified_range", "Corrections sidecar extension (declared-when-present)"),
     ("extensions.convergence.self_heal_attempt", "Version-1 sidecar contract"),
+    ("extensions.cap_closure", "Cap-closure sidecar extension"),
+    ("extensions.corrections", "Corrections sidecar extension (declared-when-present)"),
+    ("corrections verification:", "Corrections sidecar extension (declared-when-present)"),
+    ("Superseded by link", "Canonical record and supersession"),
+    ("Supersedes", "Canonical record and supersession"),
+    ("mint pair", "Usage capture (production write path)"),
+    ("source_digest", "Version-1 sidecar contract"),
+    ("has no completed coverage", "Record validation levels"),
+    ("coverage", "Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)"),
     ("post-fix round", "Synthesis-time hard gates"),
     ("witness ledger", "Synthesis-time hard gates"),
     ("missing ### Panel", "Output discipline"),
@@ -20692,11 +20904,46 @@ SKILL_CLAUSE_POINTERS: tuple[tuple[str, str], ...] = (
 )
 
 
+
+# Markers whose own emit-site templates render the marker text inside quotes
+# (the "missing the required 'coverage' object" template): those quoted
+# occurrences are template text, never interpolated author data, so these
+# markers keep the legacy anywhere-match. Every other marker matches only at
+# an occurrence whose immediately preceding character is not a quote; there
+# is no additional prefix or template-position machinery. Only author values
+# BEGINNING with a marker's text are defended, and an occurrence in the
+# interior of a multi-word quoted value (preceded by a space) still matches
+# the earlier marker.
+_QUOTED_TEMPLATE_MARKERS = frozenset({"coverage"})
+
+
 def _skill_clause_pointer(error: str) -> str:
-    """Return the hard-mode clause pointer appended to one ERROR line."""
+    """Return the hard-mode clause pointer appended to one ERROR line.
+
+    Matching is quote-position-anchored (hard-mode clause pointer residuals
+    plan, C3), not substring-anywhere: an occurrence of a marker is skipped
+    only when the character immediately before it is a quote, plus the
+    legacy anywhere-match exemptions in ``_QUOTED_TEMPLATE_MARKERS``. This
+    defends only author values that BEGIN with an earlier marker's text
+    (the row's reproduction: a ``risk_signals`` tag equal to ``coverage
+    attempt record``); an occurrence in the interior of a multi-word quoted
+    value (e.g. a tag ``'no coverage attempt record here'``) is preceded by
+    a space and still matches the earlier marker. Rows stay plain
+    2-tuples; the predicate derives here.
+    """
     for marker, section in SKILL_CLAUSE_POINTERS:
-        if marker in error:
-            return f"(review-staging SKILL.md, {section})"
+        start = 0
+        while True:
+            idx = error.find(marker, start)
+            if idx < 0:
+                break
+            if (
+                idx == 0
+                or error[idx - 1] not in "'\""
+                or marker in _QUOTED_TEMPLATE_MARKERS
+            ):
+                return f"(review-staging SKILL.md, {section})"
+            start = idx + 1
     return "(review-staging SKILL.md)"
 
 
