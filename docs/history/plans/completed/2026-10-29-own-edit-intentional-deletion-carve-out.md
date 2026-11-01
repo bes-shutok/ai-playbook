@@ -95,8 +95,8 @@ Files:
 
 **Evidence:** the origin records both missing qualifiers; Lesson 134 states that a pure-deletion hunk is foreign unless the session deleted it on purpose.
 
-- [ ] [class: IMPLEMENTATION_REQUIRED] Rephrase only the existing own-edit rule in each file to include the same exception: a pure deletion is foreign unless the current task explicitly included that deletion. Achieve byte neutrality by removing equivalent text only within that same own-edit rule; preserve its meaning apart from this exception and leave every other instruction unchanged.
-- [ ] [class: REPOSITORY_TEST] In both skills, verify three cases: a task-owned deletion on an unchanged path remains eligible; an unclaimed deletion on that path remains foreign and skipped; a task-owned deletion on a newer path remains foreign and skipped.
-- [ ] [class: REPOSITORY_TEST] In both skills, verify two cases: an addition this session did not write on an unchanged path remains foreign and skipped; a session-written addition on a newer path remains foreign and skipped. Confirm no new approval, refusal, tracking step, or gate appears.
+- [x] [class: IMPLEMENTATION_REQUIRED] Rephrase only the existing own-edit rule in each file to include the same exception: a pure deletion is foreign unless the current task explicitly included that deletion. Achieve byte neutrality by removing equivalent text only within that same own-edit rule; preserve its meaning apart from this exception and leave every other instruction unchanged.
+- [x] [class: REPOSITORY_TEST] In both skills, verify three cases: a task-owned deletion on an unchanged path remains eligible; an unclaimed deletion on that path remains foreign and skipped; a task-owned deletion on a newer path remains foreign and skipped.
+- [x] [class: REPOSITORY_TEST] In both skills, verify two cases: an addition this session did not write on an unchanged path remains foreign and skipped; a session-written addition on a newer path remains foreign and skipped. Confirm no new approval, refusal, tracking step, or gate appears.
 
 **Acceptance:** the two clauses match on the exception, and the existing pure-addition and newer-path protections still produce their current foreign-skip outcome.

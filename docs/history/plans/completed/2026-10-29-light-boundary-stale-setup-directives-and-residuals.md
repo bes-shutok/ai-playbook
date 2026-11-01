@@ -112,11 +112,11 @@ Files:
 - `agents/skills/receiving-review/SKILL.md`
 
 Acceptance criteria:
-- [ ] Replace the stale AGENTS.md first-action sentence with the worktree Phase 0 and baseline order, reserving done setup for final closeout. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add a supersession note to lesson 81 while preserving its witnessed incident and chronology. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Change only receiving-review Step 1.2b's commit target from the task's done commit to the task boundary commit. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Re-read execute-plan's Phase 0 and final-closeout rules; verify the edits preserve the existing order. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: align light-boundary setup guidance and review consumer` [class: IMPLEMENTATION_REQUIRED]
+- [x] Replace the stale AGENTS.md first-action sentence with the worktree Phase 0 and baseline order, reserving done setup for final closeout. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add a supersession note to lesson 81 while preserving its witnessed incident and chronology. [class: IMPLEMENTATION_REQUIRED]
+- [x] Change only receiving-review Step 1.2b's commit target from the task's done commit to the task boundary commit. [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-read execute-plan's Phase 0 and final-closeout rules; verify the edits preserve the existing order. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: align light-boundary setup guidance and review consumer` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Apply the six pin-safe wording shrinks
 
@@ -130,10 +130,10 @@ Files:
 - `agents/skills/investigate/SKILL.md`
 
 Acceptance criteria:
-- [ ] Remove the duplicate Hard Gate 25 precondition and Step 1.4 residual row-reference sentence at their review-identified spans. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Remove the third placement-universality statement and the done Step 1 versus Integration Points twin clause. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Preserve the distinct Step 1.8 capture/commit failure route and Step 1.9 capture/investigate-invocation failure route as nonblocking manual follow-up; consolidate only their repeated session-log durability sentence across the cited learn blocks. Remove the review-loop copied round-row leg list. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the maintenance pin suite after the edits and retain all currently pinned literals and counts; verify both failure-specific routes remain present and share one durability statement. [class: REPOSITORY_TEST]
-- [ ] Commit: `skills: trim pin-safe light-boundary prose` [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove the duplicate Hard Gate 25 precondition and Step 1.4 residual row-reference sentence at their review-identified spans. [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove the third placement-universality statement and the done Step 1 versus Integration Points twin clause. [class: IMPLEMENTATION_REQUIRED]
+- [x] Preserve the distinct Step 1.8 capture/commit failure route and Step 1.9 capture/investigate-invocation failure route as nonblocking manual follow-up; consolidate only their repeated session-log durability sentence across the cited learn blocks. Remove the review-loop copied round-row leg list. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the maintenance pin suite after the edits and retain all currently pinned literals and counts; verify both failure-specific routes remain present and share one durability statement. [class: REPOSITORY_TEST]
+- [x] Commit: `skills: trim pin-safe light-boundary prose` [class: IMPLEMENTATION_REQUIRED]
 
 

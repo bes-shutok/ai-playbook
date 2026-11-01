@@ -486,7 +486,7 @@ Runs between Step 1.2 exit verification and Step 1.3 checkbox marking so review 
 
 **Off-plan findings:** valid findings and improvement suggestions not causally related to the plan are never fixed in-task; before Step 1.4 runs they become durable backlog items with the Driving force line per receiving-review Backlog capture, and repository-file captured items ride the task's boundary commit; an external or non-tracked destination records its exception on the task's `inter_review` line. An off-plan finding flagged `blocking: yes` is resolved by capture, not by fix: once its backlog item is recorded, the pass verdict records `backlogged-candidates`.
 
-**Record:** append a lightweight pass record to `task-<N>-review.log.md`, and append one `inter_review task <N>:` line to `manifest.md` (tier, workers, rounds, verdict, backlog paths) before Step 1.4; the line is required at the cap-stop and at the timeout stop too, recording verdict `failed-relaunch-exhausted` when the round cap or the recovery budget was exhausted, regardless of the last worker verdict. The Step 1.4 light boundary does not run while blocking findings are unresolved or the off-plan backlog items are uncaptured (Hard Gate 25).
+**Record:** append a lightweight pass record to `task-<N>-review.log.md`, and append one `inter_review task <N>:` line to `manifest.md` (tier, workers, rounds, verdict, backlog paths) before Step 1.4; the line is required at the cap-stop and at the timeout stop too, recording verdict `failed-relaunch-exhausted` when the round cap or the recovery budget was exhausted, regardless of the last worker verdict. The Step 1.4 light boundary does not run while Hard Gate 25 blocks it.
 
 **Timeout:** intermediate panels inherit the 20-minute timeout and the focused-relaunch path defined under Sub-Agent Launch Rules; The panel timeout applies to the worker sessions as a whole.
 
@@ -1004,7 +1004,7 @@ Triages provisional findings between rounds. Phase 3 exit depends on unresolved 
 Phase 3 evaluates the trigger mechanically at Step 3.2 with the `recurrence_groups` manifest line as its witness and invokes reconciliation in-loop at Step 3.5 before the next panel. It receives the review history and mutation scope, but the execute-plan parent owns the subsequent fresh panel and digest gate.
 
 ### Related: `review-loop` skill (standalone)
-For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest, except that both may re-bind through verified comment-only corrections rows per the graded Phase 3 exit (review-loop's Exit criteria own the standalone form of the exception), and execute-plan can also exit through the Residual-acceptance exit when a recorded residual policy is satisfied (see the Review end condition table's Residual-acceptance exit row).
+For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest, except that both may re-bind through verified comment-only corrections rows per the graded Phase 3 exit (review-loop's Exit criteria own the standalone form of the exception); execute-plan's additional exit shapes live in the Review end condition table.
 
 ### Consumes `review-staging` skill
 Phase 3 staging docs (and plan-review artifacts when present) must follow `review-staging` hierarchy and `## Review Statistics`, including the mutator failure-mode matrix when applicable. Clear-round quality bar treats incomplete staging as not clear.

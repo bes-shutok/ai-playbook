@@ -72,7 +72,7 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 - If a command is interrupted or aborted, verify partial side effects first, report the current state, then continue.
 - A value quoted from conversation context is not evidence: before any precision-critical step (commit, landing, lock handling, digest verification), re-derive every digest, path, flag, or identifier from disk, and stop on a cross-check mismatch until it is resolved.
 - When a public site's search requires an interactive challenge and the user offers to solve it, open the supplied link in the live browser and resume the lookup afterward (see `projects/.ai-playbook/development_lessons.md` #465).
-- Run the done boundary setup as the first worktree action before editing any owned file; registry-row shape and ceremony-record digest requirements are pinned in docs/maintenance/development_lessons.md #80-#82.
+- A worktree run begins with its own Phase 0 setup and closeout-baseline capture before editing any owned file; done setup is reserved for the final closeout. Registry-row shape and ceremony-record digest requirements are pinned in docs/maintenance/development_lessons.md #80-#82.
 - Shell tool calls reset cwd to the primary checkout between calls: in ad-hoc-worktree phases re-enter the worktree in every command and verify toplevel before writes or commits (see docs/maintenance/development_lessons.md #43).
 
 ## Machinery admission protocol

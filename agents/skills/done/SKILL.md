@@ -79,7 +79,7 @@ On success setup prints one status line plus eval-able exports (`DONE_LOCK_DIR`,
 
 ## Step 1: Run Learn
 
-Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing. Learn may commit its own artifacts during this step (its Step 1.8 skills-repo backlog items and skill-placement edits, plus any Step 1.9 off-tree backlog row commits and their investigate entry commits); that is expected and does not double-commit, because the commit run's side-repo walk sees only non-learn leftovers. This learn run is invoked once per run at the final closeout.
+Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing. Learn may commit its own artifacts during this step (its Step 1.8 skills-repo backlog items and skill-placement edits, plus any Step 1.9 off-tree backlog row commits and their investigate entry commits); that is expected and does not double-commit, because the commit run's side-repo walk sees only non-learn leftovers.
 
 Learn-owned commits are recorded by receipt: immediately after learn, write the `committed: <sha> <subject>` receipt lines learn printed to `<tmp_dir>/done-session/learn-receipts-<run_id>.txt`, and pass that file to the commit run as `--learn-receipts-from <file>`; the commit subcommand resolves each reported sha in the run repository and appends only same-repository receipts to the run's owned-commits ledger, skipping an unresolvable cross-repo sha with a one-line note, so the landing sweep's doc-registry gate observes them.
 

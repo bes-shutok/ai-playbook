@@ -179,7 +179,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 7. **Commits:** the light boundary commits: one iteration -> one commit when fixes ran, with learn's skills-repo commits and the investigate entry commit as sanctioned rider commits recorded on the boundary row.
 8. **Push:** requires explicit user instruction.
 9. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
-10. **Exit closeout (standalone loops):** when the loop runs standalone (not under execute-plan), reaching the exit criteria includes running the `done` skill's full sequence one time before the exit report, exactly as the Consumes `done` entry prescribes (the landing sweep, the docs-branch sync that publishes this loop's gitignored staging docs, the side-repo walk, and finalize), with learn reading the run's review and address records; under execute-plan the Phase 5 final closeout owns this and the loop takes no separate action.
+10. **Exit closeout (standalone loops):** when the loop runs standalone (not under execute-plan), reaching the exit criteria includes running the `done` skill's full sequence one time before the exit report, exactly as the Consumes `done` entry prescribes, with learn reading the run's review and address records; under execute-plan the Phase 5 final closeout owns this and the loop takes no separate action.
 
 Review findings are evidence to assess, not authorization to broaden the loop's scope; findings outside the accepted scope become backlog items (per receiving-review Backlog capture) unless the user explicitly expands scope.
 

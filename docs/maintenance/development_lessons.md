@@ -2112,7 +2112,12 @@ from the mechanism, not the summary, discipline).
 
 ## 81. Run the Done Boundary Setup Before Any Production Edit
 
-**Rule:** a worktree run that will commit through the done boundary runs
+**Superseded (2026-10-29):** the landed workflow starts a worktree run
+with its own Phase 0 setup and closeout-baseline capture, and done setup
+now runs once at the final closeout. The ordering rule below is retained
+as historical evidence of the start-dirt refusals it witnessed.
+
+**Rule (historical):** a worktree run that will commit through the done boundary runs
 the boundary setup (marker, manifest, owned-set registration) as its first
 worktree action, before editing any file the run will own. Edits made
 before setup are read as start-dirt by the foreign-staging gate and the
@@ -4046,7 +4051,7 @@ Second witness 2026-10-28 (playbook repo, interactive exec run): the receipt was
 
 **Rule:** write the contract over the whole record: every embedded path, command string, and captured output uses the ledger's placeholder tokens (`<primary-checkout>`, `<source-worktree>`) or a repo-relative form, and the producer step says so. When some receipts already mask and others do not, fix the contract sentence, not only the receipts; the next writer reads the header, not the history.
 
-**Why:** witnessed 2026-10-26 (playbook repo): the certification-seal landing diagnostic ledger's contract named only `plan_path` as repo-relative. Receipts written from the procedure's placeholder commands resolved `git -C <primary-checkout>` to real sibling-worktree paths in six of eleven receipts while five kept the token, and the release privacy gate refused the whole publish until the six were masked.
+**Why:** witnessed 2026-10-26 (playbook repo): the certification-seal landing diagnostic ledger's contract named only `plan_path` as repo-relative. Receipts written from the procedure's placeholder commands resolved `git -C <primary-checkout>` to real sibling-worktree paths in six of eleven receipts while five kept the token, and the release privacy gate refused the whole publish until the six were masked. Second witness 2026-11-01 (playbook repo, release of 656 commits): receipts minted after the masking contract landed still carried resolved sibling-worktree paths in seven entries; the header-contract fix bound writers who read the header, not the producer steps minting later legs, so the contract sentence alone did not stop recurrence and the publish gate remained the only working detector.
 
 **See also:** #237 (the commit-time scan that never read the ledger), #148 (a stated shape contract binds the scan to the type level).
 
@@ -5427,3 +5432,7 @@ and validation set. See also #341 (verify the diff surface after delegated revie
 **Why:** witnessed 2026-11-01 (playbook repo, an authoring run's closeout): the preflight ran ahead of the landing leg and refused with the plan missing at the primary; the remedy was reordering the legs (land, then preflight), after which the identical preflight invocation passed unchanged.
 
 **See also:** #359 (post-landing facts: a landing citation is certified by the landed history, not the worktree), #43 (the per-call shell that makes each closeout leg its own cwd context).
+
+## 361. A Scripted Whole-File Transform Verifies Its Anchor Matches Before Writing
+
+A checkbox-marking edit run as a python `str.partition` transform silently corrupted a plan file: the anchor substring failed to match (unstable on-disk state), `partition` returned empties, and the script still wrote `head + separators` over the file, truncating the Tasks section. `str.partition` never signals a missed match, so a whole-file rewrite built from partitioned parts must abort when any expected anchor is absent or any replacement count is zero, and the written result must be re-grepped for its expected markers before the step reports success. Prefer one deliberate file edit per checkbox over a scripted sweep; a scripted sweep that finds nothing to change must fail loudly, not pass through. (Witness: gate-removal-inherited-manifest-rows Task 1 checkbox marking, 2026-11-01, restored from HEAD.)
