@@ -62,6 +62,10 @@ try:
     from plan_shape import CHARTER_FILENAME
 except ImportError:  # deployment gap: fails closed only when a directory hint needs it
     CHARTER_FILENAME = None  # type: ignore[assignment]
+try:
+    from runtime_capabilities import load_inventory
+except ImportError:  # deployment gap: legacy claims remain shared unknown
+    load_inventory = None  # type: ignore[assignment]
 
 OUTCOME_PASS = "OUTCOME: pass"
 OUTCOME_FAIL = "OUTCOME: fail"
@@ -74,6 +78,7 @@ DEFAULT_CADENCE_MINUTES = 120
 
 DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 UPDATED_LINE_RE = re.compile(r"^updated:\s*(.+)\s*$", re.MULTILINE)
+RUNTIME_ID_LINE_RE = re.compile(r"^runtime_id:\s*(\S+)\s*$", re.MULTILINE)
 
 # The plans root's archive state subdirectories: never enumerated, as file
 # candidates or as directory hints.
@@ -123,11 +128,19 @@ class OutcomeArgumentParser(argparse.ArgumentParser):
 class Claim:
     """One parsed claim file; ``updated`` is None when unparseable."""
 
-    def __init__(self, name: str, text: str, updated: datetime | None, iso_raw: str | None):
+    def __init__(
+        self,
+        name: str,
+        text: str,
+        updated: datetime | None,
+        iso_raw: str | None,
+        runtime_id: str,
+    ):
         self.name = name
         self.text = text
         self.updated = updated
         self.iso_raw = iso_raw
+        self.runtime_id = runtime_id
 
 
 def git_toplevel(repo_arg: str) -> Path:
@@ -267,6 +280,14 @@ def load_claims(claims_dir: Path) -> tuple[list[Claim], list[str]]:
     """Parse every ``.md`` claim; unparseable claims are skipped with a warning."""
     claims: list[Claim] = []
     warnings: list[str] = []
+    try:
+        canonical_ids = (
+            set(load_inventory()["inventory"]["canonical_ids"])
+            if load_inventory
+            else set()
+        )
+    except Exception:
+        canonical_ids = set()
     if not claims_dir.exists():
         return claims, warnings  # no claims directory: the empty-claims state
     if not claims_dir.is_dir():
@@ -299,7 +320,11 @@ def load_claims(claims_dir: Path) -> tuple[list[Claim], list[str]]:
                 f"warning: claim {name}: no parseable updated: timestamp; skipped"
             )
             continue
-        claims.append(Claim(name, text, updated, iso_raw))
+        runtime_match = RUNTIME_ID_LINE_RE.search(text)
+        runtime_id = runtime_match.group(1) if runtime_match else "unknown"
+        if runtime_id not in canonical_ids:
+            runtime_id = "unknown"
+        claims.append(Claim(name, text, updated, iso_raw, runtime_id))
     return claims, warnings
 
 
@@ -361,7 +386,10 @@ def main(argv: list[str] | None = None) -> int:
             if namers:
                 live_count += 1
                 newest = max(namers, key=lambda c: c.updated)
-                print(f"live: {cand.path} (claim {newest.name} updated {newest.iso_raw})")
+                print(
+                    f"live: {cand.path} (claim {newest.name} updated "
+                    f"{newest.iso_raw}, runtime_id={newest.runtime_id})"
+                )
             else:
                 stranded_paths.append(cand.path)
                 print(f"stranded: {cand.path} (no fresh claim names it)")

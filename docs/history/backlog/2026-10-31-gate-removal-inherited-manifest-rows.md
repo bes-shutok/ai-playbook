@@ -3,7 +3,7 @@
 - **Cluster:** docs/history/backlog/completed/2026-10-30-execute-plan-teardown-staging-record-mirror.md (the gate-removal machinery this row extends), docs/history/plans/completed/2026-10-28-pending-receipt-removal-audit-promotion.md (the witness run), docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md (same gate-removal surface; that row owns branch-only completion, this row owns manifest-row scoping)
 - **Cluster:** docs/history/backlog/2026-10-31-gate-removal-shared-slug-second-witness.md (second witnessed instance, 2026-10-31 exec run session-status-facts-parse-shape-gap; same mechanism, worktree-plus-branch pair held then released under operator direction)
 - **Filed:** 2026-10-31, learn Step 1.9 over the pending-receipt-removal-audit-promotion completion-pass session (session zcode-exec-20261031-praudit)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-01-gate-removal-inherited-manifest-rows.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Origin class:** execution-run finding
@@ -16,3 +16,7 @@
 ## Expected
 
 The gate's missing-destination check scopes to the rows of the branch record it adjudicates (the manifest's last element, per the resolver's own authoritative-binding rule), or provides a sanctioned way for a later run to supersede drained-destination rows (for example a migrate operation that re-verifies and retires rows whose destinations were legitimately removed by the documented tmp-sweep lifecycle), so a prior run's drained scratch can never permanently block a later run's worktree removal. Any repair keeps the fail-closed posture for genuinely missing migrations.
+
+## Partial arm landed
+
+The 2026-10-31 closeout-gates exec run (landing eebc930c0) applied the scoping arm for one destination class: expired done-session gate-report destinations (adjacent `gate-reports/run-` components, `-full.txt`, target-relative; `_is_done_session_gate_report` in `scripts/worktree_closeout_migrate.py`) are now excluded from the hold and recorded as report-only owner-run dispositions in the foreign notes, with a regression test (`test_expired_gate_report_destination_reports_only_and_passes`). Fail-closed posture retained for every other destination shape; the row stays open for the remaining breadth (non-gate-report drained destinations, and the sanctioned supersede/retire migrate operation).

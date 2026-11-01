@@ -1,7 +1,7 @@
 # execute-plan closeout proof families are retained without bound or drain
 
 - **Filed:** 2026-10-30, operator-directed docs/tmp accumulation survey
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md)
 - **Workflow:** backlog
 - **Priority:** moderate
 - **Cluster:** docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md; docs/history/backlog/2026-10-30-remaining-run-era-tmp-dirs-drain.md; docs/history/backlog/2026-10-31-gate-removal-stranded-drained-migration-destination.md (same surface: docs/tmp drain of done-session artifacts vs downstream consumers; distinct defect class: stranded gate-removal teardown accounting)

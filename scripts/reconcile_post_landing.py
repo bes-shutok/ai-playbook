@@ -25,7 +25,7 @@ recognition line; remediation is still per path.
 
 Every landing-changed path is classified from its byte states at the two tips
 and in the checkout, per the stale-checkout discriminator's gating rule in the
-Worktree-first standard section of agents/skills/execute-plan/SKILL.md: an
+Worktree-first standard (agents/skills/execute-plan/worktree-first.md): an
 ancestor-blob match (the pre-landing tip's blob or any older ancestor, walked
 with ``git rev-parse <commit>:<path>`` over ``git log --format=%H -- <path>``
 while skipping commits where the path does not exist, a deletion or

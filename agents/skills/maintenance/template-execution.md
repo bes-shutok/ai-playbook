@@ -21,7 +21,7 @@ EFFORT DIRECTIVE: this session runs at {EFFORT_DIRECTIVE} effort, the level the 
 turn paired for this dispatch under the Child model and effort policy; keep that level
 for the whole run.
 
-EXECUTION CLAIM, the claim file this session writes before any plan work, in gate-before-write order: before any plan work the claim file docs/tmp/execution-claims/<plan-slug>.md is created in the primary checkout (explicit-rooted form) by scripts/execution_claim.sh, the creation procedure of record (the atomic take invocation the PER-EXECUTION WORKTREE paragraph below pins creates the claim create-or-refuse as its first half; the same script's claim mode serves the authorized primary-placement lane; the file carries exactly four frontmatter lines at creation, session: <this session's id>, plan: <the target plan path>, created: <iso timestamp at creation>, updated: <iso timestamp at the latest refresh>, plus the line branch: <the run's recorded branch, written when the invocation passes --branch> and the line start-commit: <the run's start commit, written when the invocation passes --start-commit and recorded as resolved through `git rev-parse --verify`>, and gains the base line, base: <the run_base value recorded at worktree creation, verified at swap time by the parentage gate's `--expected-base` leg when the caller passes it>, at the take itself when the take passes --base, otherwise at the first refresh that passes it); a fresh foreign claim (a claim naming a session id other than this session's whose updated: is fresher than one cadence period, 2 hours) refuses the start: stand down writing nothing; a stale foreign claim is taken over (re-read the file immediately before the unlink and unlink it only while it still names the same foreign session id with a stale updated: line, recording the takeover, then create this session's claim); refresh updated: at every phase boundary, at every task completion inside the implementation loop, and at every review-round iteration (a refresh recreates the claim file when a takeover unlinked it); delete the claim at closeout and on an owned stand-down; a claim left behind by a session that died decays by freshness, never by trust.
+EXECUTION CLAIM, the claim file this session writes before any plan work, in gate-before-write order: before any plan work the claim file docs/tmp/execution-claims/<plan-slug>.md is created in the primary checkout (explicit-rooted form) by scripts/execution_claim.sh, the creation procedure of record (the atomic take invocation the PER-EXECUTION WORKTREE paragraph below pins creates the claim create-or-refuse as its first half; the same script's claim mode serves the authorized primary-placement lane; the file carries five frontmatter fields: session, plan, created, updated, and runtime_id (the active canonical inventory ID or `unknown`, never inferred), plus the line branch: <the run's recorded branch, written when the invocation passes --branch> and the line start-commit: <the run's start commit, written when the invocation passes --start-commit and recorded as resolved through `git rev-parse --verify`>, and gains the base line, base: <the run_base value recorded at worktree creation, verified at swap time by the parentage gate's `--expected-base` leg when the caller passes it>, at the take itself when the take passes --base, otherwise at the first refresh that passes it); a fresh foreign claim (a claim naming a session id other than this session's whose updated: is fresher than one cadence period, 2 hours) refuses the start: stand down writing nothing; a stale foreign claim is taken over (re-read the file immediately before the unlink and unlink it only while it still names the same foreign session id with a stale updated: line, recording the takeover, then create this session's claim); refresh updated: at every phase boundary, at every task completion inside the implementation loop, and at every review-round iteration (a refresh recreates the claim file when a takeover unlinked it); delete the claim at closeout and on an owned stand-down; a claim left behind by a session that died decays by freshness, never by trust.
 
 PER-EXECUTION WORKTREE, created before any plan work: this run creates its
 own ad-hoc worktree on its own branch per the Worktree-first standard
@@ -29,7 +29,7 @@ section in agents/skills/execute-plan/SKILL.md, the worktree's branch name
 deriving per the execute-plan Phase 0 branch-naming convention, and all plan work, task
 commits, the archive commit, and the review loop run inside that worktree on
 the worktree's own branch. The creation itself runs through the single pinned take invocation, the procedure of record:
-`bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]`,
+`bash scripts/execution_claim.sh take <plan-path> --session <id> --runtime <canonical-runtime-id> --branch <name> --worktree-parent <dir> [--base <ref>]`,
 which takes the execution claim create-or-refuse (the EXECUTION CLAIM duty above) and creates this worktree in one atomic step, a refusal leaving no worktree; complete the standard's full Transfer-in implementation in the
 worktree before the PRE-STEP readiness gate, and capture the closeout baseline (the
 execute-plan session bootstrap's closeout-baseline capture) as part of the
@@ -205,10 +205,11 @@ default branch), and the primary checkout receives only the final squash commit,
 its index and working tree never written, staging (git add) in the primary
 checkout staying a landing-gate violation. Before the invocation the run's own
 duties hold as policy: the pre-landing gate set (the PII check + hygiene scan
-(exit 0 required), the peer-byte guard, and the gmail-author check) and any
-rebase onto a moved default tip run per the landing step's implementations in
-the Worktree-first standard section of agents/skills/execute-plan/SKILL.md, and
-a sanctioned rebase ends by refreshing the recorded base pin per the standard's
+(exit 0 required), the peer-byte guard, and the gmail-author check) runs here
+as this blueprint's own pre-landing duty, and any rebase onto a moved default
+tip runs per the landing step's implementations in the Worktree-first standard
+(agents/skills/execute-plan/worktree-first.md), and a sanctioned rebase ends by
+refreshing the recorded base pin per the standard's
 refresh duty (the manifest's run_base and the claim's `base:` line) so the
 helper's parentage base arguments find no mismatch; every landing shell pipeline
 checks and propagates rebase and merge exit codes, and a masked failure aborts
@@ -239,7 +240,7 @@ The `--message` text's subject line follows the landing-claim grammar pinned
 by the Worktree-first standard's landing step, in both landing modes' helper
 invocations. On a landing kept after the helper's outcome contract, the post-landing sweep
 runs per the landing closeout's post-landing sweep implementation in the
-Worktree-first standard section of agents/skills/execute-plan/SKILL.md; on the
+Worktree-first standard (agents/skills/execute-plan/worktree-first.md); on the
 rollback arm the sweep does not run and the deferred-landing record carries the
 finding duty. On the deferred-landing path
 the run worktree stays on the run branch and both branch and worktree are kept;
@@ -279,7 +280,7 @@ below) before releasing the lock via `merge-release-repo` with the acquired
 exports, keep the branch and any worktree, and end the session chaining
 nothing; on the pass path, the branch deletion; any gate failure releases via
 merge-release-repo with the acquired exports, keeps the branch, and reports;
-release the lock only after the branch is deleted. After the release, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record); the landing closeout ends only when that reconciliation is verified or a named block is recorded. The closeout records the reconcile receipt (the invocation's exit code and its row summary in the run's session notes); a skipped or failed reconcile fails the closeout. If any release
+release the lock only after the branch is deleted. After the release, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md) (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record); the landing closeout ends only when that reconciliation is verified or a named block is recorded. The closeout records the reconcile receipt (the invocation's exit code and its row summary in the run's session notes); a skipped or failed reconcile fails the closeout. If any release
 attempt itself fails (the gate-failure release included, not only the final
 post-deletion release; read through the outcome contract: `OUTCOME: fail` and
 `OUTCOME: tool_error` both take this fallback, and a release run with no

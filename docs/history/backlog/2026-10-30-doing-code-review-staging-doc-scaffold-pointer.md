@@ -3,6 +3,7 @@ Priority: high
 Cluster: docs/history/backlog/EXEC-PROMPTS.md EXEC-PROMPTS-PRUNE receipt receipt-runner-summary-witness-and-dispatch-failed-pin
 Cluster: docs/history/backlog/2026-10-22-review-staging-scaffold-simplification-residuals.md
 Origin class: self-serving
+Quarantine: 2026-11-01
 Class: fix-class
 
 # doing-code-review's staging-doc gate lacks the scaffold-first cross-reference

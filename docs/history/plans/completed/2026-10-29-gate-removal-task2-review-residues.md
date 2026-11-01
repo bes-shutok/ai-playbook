@@ -115,10 +115,10 @@ Evidence:
 - Branch-only mode has no linked worktree. The helper already receives `branch_only` and emits the same proven branch OID and ancestry result.
 
 Acceptance:
-- [ ] Given a branch-only closeout with an ancestry-accounted tip, expect the report to name the branch, proven OID, and ancestry result without claiming a live worktree or migrated artifacts. Given an ancestry-accounted closeout with a linked worktree, expect the report to state only verified branch facts. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given either closeout mode, expect the structured disposition, existing guard results, and removal instructions to remain intact. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add focused regression coverage: given ancestry-accounted branch-only and linked-worktree closeouts, expect each report to preserve the proven OID and avoid claims unsupported by that mode. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: report gate-removal ancestry accurately` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a branch-only closeout with an ancestry-accounted tip, expect the report to name the branch, proven OID, and ancestry result without claiming a live worktree or migrated artifacts. Given an ancestry-accounted closeout with a linked worktree, expect the report to state only verified branch facts. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given either closeout mode, expect the structured disposition, existing guard results, and removal instructions to remain intact. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add focused regression coverage: given ancestry-accounted branch-only and linked-worktree closeouts, expect each report to preserve the proven OID and avoid claims unsupported by that mode. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: report gate-removal ancestry accurately` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Preserve retained-branch evidence in setup output
 
@@ -141,10 +141,10 @@ Evidence:
 - The sweep must resolve the candidate branch OID when available and report an explicit unknown OID otherwise; the setup wrapper relays that observation without reclassifying it.
 
 Acceptance:
-- [ ] Given a branch-backed candidate skipped before gate adjudication, expect sweep output to include its branch name, resolved branch OID or `unknown`, and skip reason; expect setup's summary to preserve those fields. Given a candidate with no branch identity, expect the path and skip reason without invented branch data. Given accounted-branch output, expect its existing summary behavior to remain stable. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a missing sweep helper or a sweep command failure, expect setup to continue through its fail-open path and preserve the existing `OUTCOME` classification. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add focused regression coverage: given dirty, post-landing, live-session, and missing-completed-twin skips on branch-backed candidates, expect sweep and setup output to include the branch, OID or `unknown`, and skip reason; given a candidate without a branch identity, expect no invented branch or OID. Given retained and accounted output, expect existing disposition and summary behavior to remain stable. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: retain branch details in setup reports` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a branch-backed candidate skipped before gate adjudication, expect sweep output to include its branch name, resolved branch OID or `unknown`, and skip reason; expect setup's summary to preserve those fields. Given a candidate with no branch identity, expect the path and skip reason without invented branch data. Given accounted-branch output, expect its existing summary behavior to remain stable. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a missing sweep helper or a sweep command failure, expect setup to continue through its fail-open path and preserve the existing `OUTCOME` classification. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add focused regression coverage: given dirty, post-landing, live-session, and missing-completed-twin skips on branch-backed candidates, expect sweep and setup output to include the branch, OID or `unknown`, and skip reason; given a candidate without a branch identity, expect no invented branch or OID. Given retained and accounted output, expect existing disposition and summary behavior to remain stable. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: retain branch details in setup reports` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Preserve the deferred formal residues
 
@@ -155,6 +155,11 @@ Files:
 - `docs/history/backlog/`
 
 Acceptance:
-- [ ] Given the selected origin's in-scope report defects and its unrelated formal-only findings, expect a separate open backlog item to preserve every deferred finding's evidence and formal-hardening deferral before the origin is closed. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the separate record is created but Tasks 1 and 2 are incomplete, expect the selected origin to remain open; close it only after the split and both tasks are complete. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `docs: preserve deferred gate-removal residues` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the selected origin's in-scope report defects and its unrelated formal-only findings, expect a separate open backlog item to preserve every deferred finding's evidence and formal-hardening deferral before the origin is closed. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the separate record is created but Tasks 1 and 2 are incomplete, expect the selected origin to remain open; close it only after the split and both tasks are complete. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `docs: preserve deferred gate-removal residues` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of covered origin
+
+Origin row docs/history/backlog/2026-10-21-gate-removal-task2-review-deferred.md is deleted at this archive transition; its in-scope report defects are fixed by Tasks 1-2 (commits 25cef1315, d17fd8f1f; pre-fixed Risk F2 at 1af769c59) and every deferred formal-only finding is preserved in the open split row docs/history/backlog/2026-11-01-gate-removal-formal-residues.md (with exec r1's two Low additions).

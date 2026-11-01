@@ -1,4 +1,5 @@
 # Backlog: record the account-mismatch quota-wall stop as a false stop signal
+Cluster: docs/history/backlog/2026-11-01-quota-governor-cross-runtime-evidence.md (related false quota-stop attribution; runtime source versus account source are separate arms)
 
 - **Filed:** 2026-10-10, operator correction on resume
 - **Status:** open

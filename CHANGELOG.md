@@ -1,3 +1,27 @@
+## 2026-11-01
+
+This release lands one week of maintenance-loop work (2026-10-26 to 2026-11-01): closeout and landing mechanics are harder to fool, release tooling reports its failures more clearly, and the record corpus grew by a large batch of lessons and investigation entries.
+
+### Planning and reviews
+- Review staging, seal anchors, and plan delta classification gained fixes that keep receipts, checkpoints, and new-plan baselines honest across squash landings.
+- Plan authoring gains a pre-review text-policy gate and the review SOP target lifecycle now handles Step 4.2 promotion.
+- Stacked PR execution and execute-plan handoff drift are documented and covered by plan landings.
+
+### Execution and closeout
+- The done closeout gates trio (expired gate reports, cross-run claims, registry repair) landed, and gate-removal now handles empty owned sets and inherited manifest rows with actionable remedies.
+- Closeout migrate refuses silently on zero-delta runs no more: it reports, guards tracked-file clobbers, and verifies cited landing SHAs by ancestry.
+- Done finalize refuses foreign manifest bindings loudly, rescans the primary corpus for missing records, and names the owning incident on dead-root interrupted runs.
+- Ad-hoc worktrees, strand drains, and tmp sweeps gained lifecycle owners, rider-carry duties, and fail-closed destination resolution so evidence is not swept away.
+
+### Release and hygiene
+- Release privacy failures are now actionable with opt-in diagnostics, and the hygiene scanner defaults to scope parity with the release gate plus a frozen-mode fail-closed arm.
+- The quota doctrine was corrected and narrowed, quota governor runtime evidence landed, and maintenance runs are scoped per runtime with explicit capacity stops.
+
+### Skills and docs
+- Self-heal gained a caller map trigger-shape restoration and an invocation order clarified across review loops.
+- The docs/tmp retention redesign drained hundreds of megabytes of dead residue while keeping claims intact, and vendored skill twins plus the runtime scripts home were reconciled and retired where due.
+- Lessons 237 through 360 plus many witnesses and investigation entries were captured across the run corpus.
+
 ## 2026-10-26
 
 This release lands one week of maintenance-loop work (2026-10-18 to 2026-10-26): plan reviews, executions, and closeouts now carry stronger evidence, clearer recovery paths, and more machine-checked gates.

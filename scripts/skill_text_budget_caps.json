@@ -94,6 +94,8 @@
     "agents/skills/maintenance/duties-core.md": 16599,
     "agents/skills/maintenance/template-authoring.md": 42066,
     "agents/skills/maintenance/template-execution.md": 49915,
-    "agents/skills/maintenance/template-unblock.md": 17339
+    "agents/skills/maintenance/template-unblock.md": 17339,
+    "agents/skills/execute-plan/worktree-first.md": 95458,
+    "agents/skills/plans/validation-authoring-rules.md": 52172
   }
 }

@@ -77,7 +77,8 @@ Decision points requiring a grill: active identity comes from the invoking agent
 
 **Tests:**
 - `scripts/test_execution_claim.py` and `scripts/test_authoring_plans_liveness.py` (Task 1)
-- `scripts/check_maintenance_pins.sh` and focused maintenance regression coverage chosen from repository evidence (Task 3)
+- `scripts/check_maintenance_pins.sh`, `scripts/execution_claim.sh`, `scripts/test_execution_claim.py`, and focused maintenance regression coverage chosen from repository evidence (Task 3)
+- `scripts/test_maintenance_runtime_scope.py` (Task 3)
 
 **Plan-related extension:** implementation and review may change files not listed above when the change implements a task, fixes its regression, closes implied wiring, or contradicts a changed contract. Otherwise reject as out of scope with a reason.
 
@@ -91,6 +92,7 @@ Decision points requiring a grill: active identity comes from the invoking agent
 bash scripts/check_maintenance_pins.sh
 PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_execution_claim.py'
 PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_authoring_plans_liveness.py'
+PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_maintenance_runtime_scope.py'
 ```
 
 ### Task 1: Record runtime identity on child and claim witnesses
@@ -114,14 +116,14 @@ Primary class anchors:
 - `AUTHORING CLAIM` in `agents/skills/maintenance/template-authoring.md`
 - `children` in `agents/skills/maintenance/state-file.md`
 
-- [ ] The execution-claim interface accepts `--runtime <canonical-id>` and validates it through the runtime inventory: given a recognized ID, expects it to reach each writer; given missing or invalid identity, expects shared-unknown behavior without inference. [class: IMPLEMENTATION_REQUIRED]
-- [ ] `create_claim_noclobber()` and `write_claim_stamped()` record or preserve runtime identity on claim, take, takeover, refresh, and refresh-recreate paths. [class: IMPLEMENTATION_REQUIRED]
-- [ ] `try_dead_run_conversion()` writes the resumer runtime identity on its replacement claim while preserving the verified prior optional fields. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The execution-claim outcome contract documents `--runtime`, the persisted `runtime_id`, and the shared-unknown fallback. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Authoring claim writers record `runtime_id`, and `load_claims()` classifies legacy or invalid values as shared unknown. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Child entries carry `runtime_id`, and state rewrites preserve it; legacy entries remain readable as shared unknown. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run focused checks for initial claim, take, takeover, refresh, refresh-recreate, dead-run conversion, authoring claims, and unknown legacy forms. [class: REPOSITORY_TEST]
-- [ ] Commit: `maintenance: record child runtime identity` [class: IMPLEMENTATION_REQUIRED]
+- [x] The execution-claim interface accepts `--runtime <canonical-id>` and validates it through the runtime inventory: given a recognized ID, expects it to reach each writer; given missing or invalid identity, expects shared-unknown behavior without inference. [class: IMPLEMENTATION_REQUIRED]
+- [x] `create_claim_noclobber()` and `write_claim_stamped()` record or preserve runtime identity on claim, take, takeover, refresh, and refresh-recreate paths. [class: IMPLEMENTATION_REQUIRED]
+- [x] `try_dead_run_conversion()` writes the resumer runtime identity on its replacement claim while preserving the verified prior optional fields. [class: IMPLEMENTATION_REQUIRED]
+- [x] The execution-claim outcome contract documents `--runtime`, the persisted `runtime_id`, and the shared-unknown fallback. [class: IMPLEMENTATION_REQUIRED]
+- [x] Authoring claim writers record `runtime_id`, and `load_claims()` classifies legacy or invalid values as shared unknown. [class: IMPLEMENTATION_REQUIRED]
+- [x] Child entries carry `runtime_id`, and state rewrites preserve it; legacy entries remain readable as shared unknown. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run focused checks for initial claim, take, takeover, refresh, refresh-recreate, dead-run conversion, authoring claims, and unknown legacy forms. [class: REPOSITORY_TEST]
+- [x] Commit: `maintenance: record child runtime identity` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Scope the existing fleet cap and lane reasons by runtime
 
@@ -136,16 +138,16 @@ Primary class anchors:
 - `G1e` in `agents/skills/maintenance/guards.md`
 - `G1a` in `agents/skills/maintenance/guards.md`
 
-- [ ] Every ordinary G1e/G1a occupancy arm and the fleet cap scope known occupants to the active runtime: given one fresh ZCode execution claim and a Codex session, expects G1e free and D1 eligible when all other guards pass. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Three same-runtime children still fill the existing cap: given three live Codex children, expects both lanes to hold for capacity. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Unknown occupant or active identity remains conservative: given an unknown peer, expects it to count for all runtimes; given unknown active identity, expects the original shared lane holds and cap. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Same-target claims still hold across runtimes and audit/re-triage exclusivity stays global: given a matching target or occupied exclusive lane, expects the relevant lane to hold despite free fleet capacity. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Decision reasons report active runtime, count, and excluded known cross-runtime work; exhausted quota independently holds both lanes. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `maintenance: scope fleet capacity by runtime` [class: IMPLEMENTATION_REQUIRED]
+- [x] Every ordinary G1e/G1a occupancy arm and the fleet cap scope known occupants to the active runtime: given one fresh ZCode execution claim on a distinct target and a Codex session, expects G1e free and D1 eligible when all other guards pass. [class: IMPLEMENTATION_REQUIRED]
+- [x] Three same-runtime children still fill the existing cap: given three live Codex children, expects both lanes to hold for capacity. [class: IMPLEMENTATION_REQUIRED]
+- [x] Unknown occupant or active identity remains conservative: given an unknown peer, expects it to count for all runtimes; given unknown active identity, expects the original shared lane holds and cap. [class: IMPLEMENTATION_REQUIRED]
+- [x] Same-target claims still hold across runtimes and audit/re-triage exclusivity stays global: given a matching target or occupied exclusive lane, expects the relevant lane to hold despite free fleet capacity. [class: IMPLEMENTATION_REQUIRED]
+- [x] Decision reasons report active runtime, count, and excluded known cross-runtime work; exhausted quota independently holds both lanes. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `maintenance: scope fleet capacity by runtime` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Align payloads and add regression coverage
 
-Context surface: the plan's Terms, this task, and `## Standing constraints`.
+Context surface: the plan's Terms, this task, and `## Standing constraints`. The required pin suite also covers the cycle-gate advisory wording drift tracked in `docs/history/backlog/2026-10-31-pins-cycle-gate-gist-drift.md`; Task 3 re-aims those stale pins to the current text.
 
 Files:
 - `agents/skills/execute-plan/SKILL.md`
@@ -158,16 +160,20 @@ Files:
 - `agents/skills/maintenance/CHANGELOG.md`
 - `agents/skills/maintenance/templates-CHANGELOG.md`
 - `scripts/check_maintenance_pins.sh`
+- `scripts/execution_claim.sh`
+- `scripts/test_execution_claim.py`
+- `scripts/test_maintenance_runtime_scope.py`
 
 Primary class anchors:
 - `pin()` in `scripts/check_maintenance_pins.sh`
 
-- [ ] Every maintained claim-creation invocation supplies its own canonical `--runtime` value: given Codex or ZCode execution, expects the matching `runtime_id` on new claims and child records without name inference. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Execute-plan, stack, runtime-contract, worktree, and maintenance payload instructions agree on the claim runtime argument and preserve unknown fallback. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Focused regressions cover a fresh foreign-runtime execution claim, a fresh foreign-runtime authoring claim, same-runtime saturation, unknown identity, same-target holds, audit/re-triage exclusivity, and account quota holds. [class: REPOSITORY_TEST]
-- [ ] Maintenance pin coverage checks claim call-site and overlay identity wiring without adding a new blocker class. [class: REPOSITORY_TEST]
-- [ ] Changelog records the capacity change and the isolation, landing, and quota invariants it preserves. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `test: cover runtime-scoped maintenance capacity` [class: IMPLEMENTATION_REQUIRED]
+- [x] Every maintained claim-creation invocation supplies its own canonical `--runtime` value: given Codex or ZCode execution, expects the matching `runtime_id` on new claims and child records without name inference. [class: IMPLEMENTATION_REQUIRED]
+- [x] Execute-plan, stack, runtime-contract, worktree, and maintenance payload instructions agree on the claim runtime argument and preserve unknown fallback. [class: IMPLEMENTATION_REQUIRED]
+- [x] Focused regressions exercise state-file and armed/fired/widened evidence for fresh foreign execution and authoring claims; cross-runtime same-target collisions still hold. [class: REPOSITORY_TEST]
+- [x] Focused regressions distinguish unknown peer from unknown active identity, and cover same-runtime saturation, audit/re-triage exclusivity, and account quota holds. [class: REPOSITORY_TEST]
+- [x] Maintenance pin coverage checks claim call-site and overlay identity wiring without adding a new blocker class; the full pins suite passes after re-aiming the cycle-gate advisory pins to current wording. [class: REPOSITORY_TEST]
+- [x] Changelog records the capacity change and the isolation, landing, and quota invariants it preserves. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `test: cover runtime-scoped maintenance capacity` [class: IMPLEMENTATION_REQUIRED]
 
 ## Design Invariants
 
@@ -178,3 +184,8 @@ Primary class anchors:
 - Every execution-claim creation and conversion path receives `runtime_id` from the invoking agent; refresh preserves the existing identity.
 - All maintained execution-claim callers pass the canonical runtime ID explicitly; an unknown or absent value stays a shared unknown occupant.
 - This plan adds no lock, ledger, account-quota exemption, or new blocking guard class.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-10-31-maintenance-runtime-scoped-capacity.md: covered by this plan's completed implementation of runtime-scoped lane occupancy and fleet counting; the origin file is deleted in this archive transition.
+- docs/history/backlog/2026-10-31-pins-cycle-gate-gist-drift.md: covered by Task 3's correction of the maintenance pin assertions after their wording drift; the origin file is deleted in this archive transition.

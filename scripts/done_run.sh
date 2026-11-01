@@ -609,7 +609,11 @@ cmd_setup() {
   #    and every branch ref stay operator-controlled, so the setup report
   #    carries every retained branch name, its disposition, the proven OID,
   #    and the retention reasons through the final closeout (plan
-  #    2026-10-19-gate-removal-closeout-accounting Task 2).
+  #    2026-10-19-gate-removal-closeout-accounting Task 2). A candidate
+  #    skipped before gate adjudication rides the same prefix with the
+  #    sweep-resolved tip OID or the explicit unknown and the skip reason;
+  #    this wrapper relays that line verbatim without reclassifying it
+  #    (plan 2026-10-29-gate-removal-task2-review-residues Task 2).
   SWEEP="$(resolve_helper worktree_closeout_migrate.py)"
   if [ -n "$SWEEP" ]; then
     PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
@@ -1006,13 +1010,21 @@ captured_tree_landing() {
       git cat-file -e "$tree_accepted:$ut_path" 2>/dev/null && \
         landing_die 1 "captured-tree landing: an untrack target re-entered the captured tree after the preflight: $ut_path; refusing before the ref update; nothing committed"
     done
-    ut_head="$(git rev-parse --verify HEAD)" || \
-      landing_die 3 "captured-tree landing: cannot resolve HEAD"
-    while IFS= read -r ut_changed; do
+    # The baseline is the head identity captured once at preflight
+    # (UNTRACK_HEAD), never a fresh HEAD read here: a concurrent backward
+    # HEAD move inside the capture window cannot swap the baseline under
+    # this scan (backlog untrack-ignore-scan robustness residuals,
+    # residual 3).
+    ut_head="$UNTRACK_HEAD"
+    while IFS= read -r -d '' ut_changed; do
       [ -n "$ut_changed" ] || continue
-      git check-ignore --no-index -q "$ut_changed" && \
+      ig_rc=0
+      git check-ignore --no-index -q -- "$ut_changed" || ig_rc=$?
+      [ "$ig_rc" -le 1 ] || \
+        landing_die 3 "captured-tree landing: the ignore check failed (git check-ignore rc=$ig_rc) for: $ut_changed; refusing before the ref update; nothing committed"
+      [ "$ig_rc" -eq 0 ] && \
         landing_die 1 "captured-tree landing: the captured tree carries an ignored blob among entries changed from HEAD: $ut_changed; refusing before the ref update; nothing committed"
-    done < <(git diff --no-renames --name-only --diff-filter=d "$ut_head" "$tree_accepted")
+    done < <(git diff --no-renames --name-only -z --diff-filter=d "$ut_head" "$tree_accepted")
   fi
   # 2. The dirt regression gate, exactly once, against the captured tree:
   #    done commits classify the immutable tree (--tree mode), never the
@@ -1265,7 +1277,10 @@ side_facts_value() { # key -> value from the user facts markdown table
 }
 
 cmd_commit() {
-  local subject="" receipts_file="" path row
+  local subject="" receipts_file="" path row ig_rc=0
+  # UNTRACK_HEAD is deliberately NOT local: cmd_commit captures the head
+  # identity once at the untrack preflight and captured_tree_landing reads
+  # the same OID as its 1c scan baseline (one capture, two consumers).
   STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=(); GUARD_FIRINGS=()
   UNTRACK_ARGS=()
   DECLARED=()
@@ -1401,6 +1416,14 @@ cmd_commit() {
         *) commit_die 3 "rolling-log mode stages only the rolling prompt logs ($PLAN_PROMPTS_REL, $EXEC_PROMPTS_REL): $path";;
       esac
     done
+    # The declared-deletion combination refusal (backlog untrack-minor
+    # usage-and-expectedref residuals): an --untrack declaration beside
+    # --expected-ref would stage its deletion outside the owned log set and
+    # misfire the foreign guard's generic message; refuse here, named, with
+    # state preserved.
+    if [ "${#UNTRACK_ARGS[@]}" -gt 0 ]; then
+      commit_die 3 "rolling-log mode does not combine --expected-ref with --untrack: the declared index-only deletions stage outside the owned log set ($PLAN_PROMPTS_REL, $EXEC_PROMPTS_REL); run the untrack declaration as its own landing without --expected-ref/--expected-oid; nothing staged, no ref update"
+    fi
     rl_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"
     [ "$rl_ref" = "$EXPECTED_REF" ] || \
       commit_die 1 "rolling-log ref precondition: HEAD's symbolic target (${rl_ref:-detached}) does not match the expected ref ($EXPECTED_REF); recover under the done lock (reselect the intended ref), then retry; nothing staged, no ref update"
@@ -1444,16 +1467,32 @@ cmd_commit() {
         commit_die 3 "--untrack path is still in the index: $path; stage the index-only deletion first (git rm --cached -- $path), then re-run"
       [ -e "$path" ] || \
         commit_die 3 "--untrack path is absent from the working tree: $path; an untrack declaration keeps the local ignored copy in place"
-      git check-ignore --no-index -q "$path" || \
+      [ -f "$path" ] || \
+        commit_die 3 "--untrack path is not a regular file: $path; an untrack declaration removes one tracked file, never a directory"
+      ig_rc=0
+      git check-ignore --no-index -q -- "$path" || ig_rc=$?
+      [ "$ig_rc" -le 1 ] || \
+        commit_die 3 "--untrack ignore check failed (git check-ignore rc=$ig_rc) for: $path; resolve the check failure, then re-run"
+      [ "$ig_rc" -eq 0 ] || \
         commit_die 3 "--untrack path does not match an ignore rule: $path; only an ignored path needs the untrack declaration"
       DECLARED+=("$path")
       echo "done_run commit: untrack preflight: accepted index-only deletion: $path"
     done
-    while IFS= read -r row; do
+    # Head identity captured ONCE here (backlog untrack-ignore-scan
+    # robustness residuals, residual 3): the 1c captured-tree scan
+    # reuses this OID as its baseline, so a concurrent backward HEAD move
+    # inside the capture window cannot swap the baseline under the scan.
+    UNTRACK_HEAD="$(git rev-parse --verify HEAD)" || \
+      commit_die 3 "--untrack preflight: cannot resolve HEAD"
+    while IFS= read -r -d '' row; do
       [ -n "$row" ] || continue
-      git check-ignore --no-index -q "$row" && \
+      ig_rc=0
+      git check-ignore --no-index -q -- "$row" || ig_rc=$?
+      [ "$ig_rc" -le 1 ] || \
+        commit_die 3 "--untrack preflight ignore check failed (git check-ignore rc=$ig_rc) for: $row; resolve the check failure, then re-run"
+      [ "$ig_rc" -eq 0 ] && \
         commit_die 1 "--untrack preflight: a staged index entry changed from HEAD carries an ignored blob; unstage that content (git restore --staged -- $row) and retry; nothing committed: $row"
-    done < <(git diff --cached --name-only --diff-filter=d HEAD)
+    done < <(git diff --cached --name-only -z --diff-filter=d HEAD)
   fi
 
   # 0c. Guard-firing appends: the advisory rows supplied for this landing are
@@ -2628,15 +2667,20 @@ primary = next((line[len("worktree "):] for line in primary.splitlines()
                 if line.startswith("worktree ")), repo_top)
 
 
-def facts_rooted(value):
+def facts_rooted(value, root=None):
     if not value:
         return ""
-    return value if os.path.isabs(value) else os.path.join(repo_top, value)
+    return value if os.path.isabs(value) else os.path.join(root or repo_top, value)
 
 
 plans_completed = facts_rooted(facts_toml_value("plans_completed_dir")) \
     or os.path.join(repo_top, "docs/history/plans/completed")
-reviews_dir = facts_rooted(facts_toml_value("reviews_dir")) \
+# A relative reviews corpus resolves from the primary checkout: that shared
+# gitignored reviews home is canonical while a worktree transfer-in copy can
+# be partial (development lesson 74). Absolute values keep the configured
+# path; plans_completed_dir stays rooted at the running checkout because its
+# tracked files are present in every worktree.
+reviews_dir = facts_rooted(facts_toml_value("reviews_dir"), primary) \
     or os.path.join(primary, ".ai-playbook/reviews")
 
 record_re = re.compile(r"[A-Za-z0-9._/-]*(?:plan-review|code-review)[A-Za-z0-9._/-]*-r\d+\.md")
@@ -2663,7 +2707,7 @@ for name in plan_files:
 
 for citing, record in missing:
     print(f"missing-review-record: {record} cited by {citing} (reconstruction duty: report with a witness note; never fabricate, never block, never delete)")
-print(f"missing-review-record scan: {len(missing)} missing record(s)")
+print(f"missing-review-record scan: {len(missing)} missing record(s) corpus_root={reviews_dir}")
 PYEOF
 
   # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:
@@ -2766,7 +2810,7 @@ except Exception:
 
 main() {
   if [ $# -lt 1 ]; then
-    sed -n '2,195p' "${BASH_SOURCE[0]}" >&2
+    sed -n '2,196p' "${BASH_SOURCE[0]}" >&2
     exit 3
   fi
   case "$1" in

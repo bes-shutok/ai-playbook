@@ -6,4 +6,4 @@
 
 **Why-not-fixed-now:** the session was mid-landing; the guidance edit is a docs-scale follow-up that belongs to the next authoring cycle, and the refusal messages themselves already name each constraint at fire time (fail-loud contract worked as designed).
 
-`Cluster:` none (standalone mint-pair mechanics note).
+`Cluster:` docs/history/backlog/2026-11-01-producer-egress-digest-mint-gap.md (same script: `scripts/produce_exec_review_record.py` mint-contract family).

@@ -50,7 +50,7 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 
 - Inventing panel composition inline. Use the full or focused panel rules in `review-panel-selection.md`.
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
-- Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the selected panel can.
+- Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X."
 - Writing diff/review capture files to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below; canonical rule in `agent_workflow_guidelines.md` §50.3.2).
 - Silently inferring the diff base for a branch review, or proceeding when the basis is ambiguous: ask the user for the comparison base instead. Leaving `<base>` as a literal placeholder in a branch review is this anti-pattern.
 
@@ -300,6 +300,7 @@ Drop or reword findings that assume something not true in context:
 - **Author-documented intentional scope in existing PR threads or in-diff docs:** before keeping a Medium+ finding about authorization, RBAC, or feature completeness, read existing PR review comments (including author replies) **and** in-diff TODO/Javadoc/Layer 2 notes that mark a later-story deferral. If the author states an MVP decision ("for now", "no endpoints yet", "configure per route when added", "TODO: wire client in later story", "returns null until that client is implemented"), drop or downgrade unless head code contradicts that stated intent. Fail-closed stubs with an explicit follow-up story are intentional scope, not High merge blockers. After dropping one such finding, scan remaining staged findings for the same intentional-deferral pattern.
 - **Story scope vs domain seed data:** roles, enums, or fixtures in seed SQL or domain docs do not by themselves prove the current PR must support that behavior. Verify PR description, changed routes, integration tests, and author threads before staging a High finding that a role or caller type is "blocked incorrectly".
 - **Preflight vs later-store failure:** a review comment that asks to run cheap checks before the first write is not a request to abort that write after it has committed if a later independent store fails. Keep those as two findings (or two options) unless product docs explicitly want shared rollback. If code commits the first store first, a docs finding that still describes rollback is the remaining defect, not a missing in-transaction hook.
+- **Cited procedure preconditions vs target lifecycle:** before a cited SOP or runbook supports a blocking or severity-bearing finding, compare its preconditions with the task's requested lifecycle and the target's actual state, using available issue, PR, author-thread, and repository-configuration evidence; an uncheckable source is recorded as unavailable, not inferred. Distinguish adopting an existing live resource from creating a new target: an adoption-only procedure does not support a blocker by topic similarity. On mismatch, drop or reframe the procedure-based finding and keep any independently supported concern; on match, assess normally.
 
 **Verification methodology**: before **keeping** a finding about a potential runtime failure (duplicate keys, null values, missing constraints), confirm the failure is reachable. Prefer evidence the sub-agent already cited; if missing, one targeted read of the enforcement layer (DB schema, framework validation, upstream guards); not a full re-analysis. If the sub-agent did not cite enforcement-layer evidence and a spot-check is inconclusive, relaunch that agent to verify rather than expanding inline.
 
@@ -309,9 +310,9 @@ Drop or reword findings that assume something not true in context:
 3. If post-TTL: the eviction targets already-expired keys; it is a defensive no-op, not a bug
 4. Do not suggest "add DB fallback" for a no-op path without calculating the cost (e.g. N extra DB reads per tick) and confirming the scenario where the fallback would be needed is actually reachable given the lifecycle timing
 
-Before criticizing error-handling strategy (throw vs return-default, fail-open vs fail-closed), trace what the caller does with each outcome. Returning a "safe" default (e.g. `false`) can mask infrastructure failures as normal business conditions; throwing may be intentional to let failures propagate to a handler that can log/alert/retry appropriately. When catch-and-continue clearly protects an existing production path (place order, MQ emit, payment) and the PR already fail-opens, do **not** recommend fail-closed. Prefer a Low metrics ask: one shared counter tagged by field or step so ops can see error rates without relying on rarely watched warn logs.
+Before criticizing error-handling strategy (throw vs return-default, fail-open vs fail-closed), trace what the caller does with each outcome. When catch-and-continue clearly protects an existing production path (place order, MQ emit, payment) and the PR already fail-opens, do **not** recommend fail-closed. Prefer a Low metrics ask: one shared counter tagged by field or step so ops can see error rates without relying on rarely watched warn logs.
 
-Before claiming a timing or performance issue (lock TTL too short, timeout too tight, queue overflow), verify what the actual I/O operation does. Read the implementation of the slow-path method rather than assuming its transport (e.g. synchronous HTTP vs MQ enqueue vs in-memory call). Overstated severity based on wrong I/O assumptions undermines review credibility.
+Before claiming a timing or performance issue (lock TTL too short, timeout too tight, queue overflow), verify what the actual I/O operation does. Read the implementation of the slow-path method rather than assuming its transport (e.g. synchronous HTTP vs MQ enqueue vs in-memory call).
 
 If the assumption is structurally impossible, drop the finding.
 
@@ -346,7 +347,7 @@ When a finding's evidence is in a file that IS in the diff but the recommended f
 
 ### 4.8 Tone Check
 - Always use suggestion tone, never directive/ordering tone. This applies to all comments regardless of severity, including comment **titles and headings** (bold text at the start of a comment). Severity controls whether the review requests changes or approves with comments, not the tone of individual comments. Use phrases like "Please consider ...", "we could", "we should", "one option might be", "what about", or a direct question ("could you add X?") instead of direct orders ("Drop line 68", "Remove X", "Add Y"). Avoid bare imperatives even in chat summaries to the reviewer when describing staged findings; the staging **Comment** text and any paraphrase shown in conversation should use the same mild suggestion tone. Avoid "Consider doing X" as well: although it sounds soft, it still reads as an instruction that the reader is expected to comply with. Bad title: "Dead branch: both paths are identical". Good title: "This conditional could probably be simplified". Bad body: "Wrap the post-send steps in try/finally", "Drop line 68 from the README". Good body: "We should probably wrap the post-send steps in try/finally here", "Please consider dropping line 68 from the README. What do you think?" This applies equally to findings about documentation and comments: propose removing, relocating, or rewriting a doc as a suggestion (for example "Please consider removing this section, or moving it to frozen docs if it still has historical value"), never as an order. Before posting or revising a batch, please audit every comment for courteous suggestion tone, enough local context to stand alone, no internal finding labels, and consistency between each comment's severity and the overall review state.
-- **No meta praise or prohibition of what the PR already does.** If head code already implements the preferred approach (for example fail-open enrichment, a named guard, or skipping a bad mapping), do not spend Comment text saying "this is intentional" or "please do not make it fail-closed." Post only the remaining actionable gap (for example add a metric). Lecturing the author about a choice they already made is noise.
+- **No meta praise or prohibition of what the PR already does.** If head code already implements the preferred approach (for example fail-open enrichment, a named guard, or skipping a bad mapping), do not spend Comment text saying "this is intentional" or "please do not make it fail-closed." Post only the remaining actionable gap (for example add a metric).
 - No em dashes (the U+2014 character) anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. Scan every comment body for U+2014 before posting and replace any occurrence.
 - Comment prose follows the canonical writing contract (`agent_workflow_guidelines.md` §45, 45.10); the remaining bullets here are surface-specific constraints only.
 - When suggesting integration-test changes, say what happens in plain steps, not Maven jargon alone. Bad: "gate ITs off the default test run". Good: "do not run these tests in normal `mvn test`; run them only when someone starts RocketMQ first" or "start RocketMQ automatically in the test (Testcontainers)".
@@ -403,7 +404,7 @@ When a finding presents multiple actionable fix options, include a concrete exam
 **Test and review-comment snippets:** In suggested test bodies, assert against values already held in a fixture or builder variable (for example `outbox.getCampaignId()`), not a second copy of the same literal. Duplicated literals in setup and asserts can both pass when the mapping is wrong.
 
 ### 4.9.1 No References To Gitignored Local Docs In Posted Comments
-Posted PR comments are public and must not cite documents that do not exist on the PR's base branch. The author and external reviewers cannot read them, and citing them either looks like a broken reference or projects private rules onto someone else's code.
+Posted PR comments are public and must not cite documents that do not exist on the PR's base branch.
 
 Before posting each comment, scan the body for references to any of the following and rewrite or drop:
 - Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `.ai-playbook/facts.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`, and post-migration equivalents under `docs/maintenance/` (`project-guidelines.md`, `company-guidelines.md`, `glossary.md`)
@@ -433,7 +434,7 @@ A doc file's status governs whether to comment on it in the PR.
 Treat it like any other reviewable artifact. Wording accuracy, doc/code consistency, missing provenance on claims that drive downstream work (migrations, capacity decisions), and structural issues are all fair PR comments. The author opened the doc for review by including it in the diff.
 
 **Doc is NOT in the PR's changed files:**
-Do not comment on it in the PR, even if you noticed an issue while reviewing. The author has not opened that doc for review.
+Do not comment on it in the PR, even if you noticed an issue while reviewing.
 - If the doc is tracked and lives elsewhere in the repo, fix it in a separate PR or hand off to the doc owner; do not raise it on this PR.
 - If the doc is gitignored (a local instruction file, a personal review/scratch doc, a shadow-branch doc), fix it in place and commit to the orphan docs branch (or your local docs preservation workflow). Never reference gitignored docs in posted PR comments (see § 4.9.1).
 
@@ -472,7 +473,7 @@ When reporting issues that involve file/module size or structural concerns (god 
 - **NEW issues**: Introduced by this PR (new files, new functions, significant structural changes); report at full severity
 - **EXISTING debt**: Pre-existing problems this PR only contributed to (adding lines to already-large files); downgrade to Low or omit
 
-**Rationale:** A PR should not be punished for technical debt that existed before it started. Only report EXISTING debt when the PR significantly compounds the problem.
+**Rationale:** Only report EXISTING debt when the PR significantly compounds the problem.
 
 **How to detect:**
 - Use `git diff <base>...<head> --name-status` to identify new (A) vs modified (M) files

@@ -683,7 +683,16 @@ _FINALIZE_LANDING_SUMMARY = (
     "<TMP>/done-fixture-repo/docs/tmp/done-session/"
     "owned-commits-<RUN_ID>.txt commits=1 landing_commit=<HEX>\n"
 )
-_FINALIZE_SCAN_TAIL = "missing-review-record scan: 0 missing record(s)\n"
+# Stdout re-baseline (plan
+# 2026-10-29-done-finalize-missing-record-scan-primary-corpus-root): the
+# missing-review-record scan summary now reports the resolved reviews
+# corpus root; the fixture's relative reviews_dir resolves from the
+# primary checkout (the fixture root itself), which normalize_done_output
+# already masks as <TMP>, so the pinned tail stays fixture-stable.
+_FINALIZE_SCAN_TAIL = (
+    "missing-review-record scan: 0 missing record(s)"
+    " corpus_root=<TMP>/done-fixture-repo/.ai-playbook/reviews/\n"
+)
 _FINALIZE_FALLBACK_CREATE_STDERR = (
     "created: checkpoint-manifest run <RUN_ID> at"
     " <TMP>/done-fixture-repo/docs/tmp/done-session/"

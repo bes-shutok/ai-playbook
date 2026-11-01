@@ -67,6 +67,7 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 ## Agent-Specific Runtime Safety
 - Before host-level changes (package installs, shell profile edits), state execution context (host vs sandbox), expected impact, and rollback plan.
 - Prefer isolated environments for Python dependencies used by commands or skills (for example, `$HOME/.agents/venvs/codex-tools`) before system-level overrides.
+- Run repo-local trusted Python scripts with plain `python3`; reserve `-I` for untrusted-content reads (see `projects/.ai-playbook/python_guidelines.md` #40).
 - Verify package availability in the selected package manager before proposing an install path.
 - If a command is interrupted or aborted, verify partial side effects first, report the current state, then continue.
 - A value quoted from conversation context is not evidence: before any precision-critical step (commit, landing, lock handling, digest verification), re-derive every digest, path, flag, or identifier from disk, and stop on a cross-check mismatch until it is resolved.

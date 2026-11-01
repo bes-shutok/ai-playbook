@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -368,6 +369,222 @@ class DoneRunSetupTest(FixtureMixin, unittest.TestCase):
         self.assertIn(f"export DONE_RUN_ID={run_id}", second.stdout)
         manifests = list(self.done_session().glob("run-manifest-*.json"))
         self.assertEqual(len(manifests), 1)
+
+
+class DoneRunSetupResidueSweepTest(FixtureMixin, unittest.TestCase):
+    """Task 2 witnesses (plan
+    2026-10-29-gate-removal-task2-review-residues): the fail-open residue
+    sweep's retained-branch evidence survives the setup summary filter for
+    every skip class, a no-branch-identity candidate invents no branch
+    data, and a missing or failing sweep helper leaves the setup boundary
+    and its own classification unchanged."""
+
+    def add_adhoc_worktree(self, slug: str, branch: str) -> Path:
+        path = self.tmp / f"repo-wt-{slug}"
+        self.git("worktree", "add", "-q", "-b", branch, str(path))
+        return path
+
+    def git_at(self, date: str, *args: str, repo: Path | None = None):
+        """A fixture git call with both commit dates pinned, so the
+        sweep's introduction-versus-branch comparison is deterministic."""
+        proc = subprocess.run(
+            ["git", "-C", str(repo or self.fixture), *args],
+            capture_output=True, text=True, timeout=60,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": date,
+                "GIT_COMMITTER_DATE": date,
+            },
+        )
+        if proc.returncode != 0:
+            raise AssertionError(f"git {args} failed: {proc.stderr}")
+        return proc
+
+    def branch_oid(self, branch: str) -> str:
+        return self.git("rev-parse", branch).stdout.strip()
+
+    def land_twin(self, basename: str, date: str) -> None:
+        """The twin's introduction commit: the plans-root vintage and the
+        completed twin land in one dated commit, so the sweep's arm-6
+        touched set carries the plans-root path a candidate branch
+        re-commits."""
+        plans = self.fixture / "docs/history/plans"
+        (plans / "completed").mkdir(parents=True, exist_ok=True)
+        (plans / basename).write_text("# Plan\n\n")
+        (plans / "completed" / basename).write_text("# Plan\n\n")
+        self.git_at(date, "add", "docs/history/plans")
+        self.git_at(date, "commit", "-qm", f"plan: land {basename} with its twin")
+
+    def commit_plan_in_worktree(self, path: Path, basename: str, date: str) -> None:
+        plan = path / "docs/history/plans" / basename
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text("# Plan worktree copy\n\n")
+        self.git_at(date, "add", "docs/history/plans", repo=path)
+        self.git_at(date, "commit", "-qm", f"plan: candidate {basename}", repo=path)
+
+    def assert_summary_relays_skip(self, proc, branch: str, reason: str) -> None:
+        """The summary line cmd_setup prints relays the branch-report skip
+        evidence verbatim, and the sweep's final OUTCOME rides the same
+        relayed block as its last line (the sweep prints it last and the
+        filter preserves order)."""
+        self.assertIn(
+            f"done_run setup: residue sweep (fail-open): branch-report: "
+            f"branch {branch}: skipped at {self.branch_oid(branch)}; "
+            f"reason: {reason}\nOUTCOME: pass\n",
+            proc.stdout,
+        )
+
+    def test_residue_sweep_relays_dirty_branch_backed_skip_evidence(self) -> None:
+        self.init_fixture_repo()
+        path = self.add_adhoc_worktree("dirty", "wt-dirty")
+        (path / "scratch-untracked.md").write_text("untracked\n")
+        proc, exports = self.setup_session("--label", "fixture-run")
+        self.assert_summary_relays_skip(proc, "wt-dirty", "dirty worktree")
+        # fail-open continuation: the boundary was still written
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+        # the skipped candidate's registration and tree survive the run
+        self.assertTrue(path.is_dir())
+
+    def test_residue_sweep_relays_post_landing_branch_backed_skip_evidence(self) -> None:
+        self.init_fixture_repo()
+        basename = "2026-01-01-alpha.md"
+        self.land_twin(basename, "2026-01-01T00:00:00Z")
+        path = self.add_adhoc_worktree("post", "wt-post")
+        self.commit_plan_in_worktree(path, basename, "2026-01-02T00:00:00Z")
+        proc, exports = self.setup_session("--label", "fixture-run")
+        self.assert_summary_relays_skip(
+            proc, "wt-post", "post-landing commits on branch"
+        )
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+        self.assertTrue(path.is_dir())
+
+    def test_residue_sweep_relays_live_session_branch_backed_skip_evidence(self) -> None:
+        self.init_fixture_repo()
+        basename = "2026-01-01-alpha.md"
+        # the twin's introduction postdates the branch's plan commit, so
+        # the post-landing arm passes and the live-session witness decides
+        self.land_twin(basename, "2026-01-02T00:00:00Z")
+        path = self.add_adhoc_worktree("live", "wt-live")
+        self.commit_plan_in_worktree(path, basename, "2026-01-01T00:00:00Z")
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        claims = self.fixture / "docs/tmp/execution-claims"
+        claims.mkdir(parents=True, exist_ok=True)
+        (claims / basename).write_text(
+            "session: sess-setup-sweep\n"
+            f"plan: docs/history/plans/{basename}\n"
+            f"created: {stamp}\n"
+            f"updated: {stamp}\n"
+        )
+        proc, exports = self.setup_session("--label", "fixture-run")
+        self.assert_summary_relays_skip(
+            proc, "wt-live",
+            f"live-session evidence: execution-claims claim {basename}",
+        )
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+        self.assertTrue(path.is_dir())
+
+    def test_residue_sweep_relays_missing_completed_twin_skip_evidence(self) -> None:
+        self.init_fixture_repo()
+        path = self.add_adhoc_worktree("twinless", "wt-twinless")
+        self.commit_plan_in_worktree(
+            path, "2026-01-01-beta.md", "2026-01-01T00:00:00Z"
+        )
+        proc, exports = self.setup_session("--label", "fixture-run")
+        self.assert_summary_relays_skip(
+            proc, "wt-twinless", "no completed twin in the primary HEAD tree"
+        )
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+        self.assertTrue(path.is_dir())
+
+    def test_residue_sweep_keeps_no_branch_identity_skip_anonymous(self) -> None:
+        self.init_fixture_repo()
+        path = self.tmp / "repo-wt-loose"
+        self.git("worktree", "add", "-q", "--detach", str(path))
+        shutil.rmtree(path)
+        proc, exports = self.setup_session("--label", "fixture-run")
+        # the summary relays the sweep's pass but invents no branch data
+        # for the branchless stale detached registration
+        self.assertIn(
+            "done_run setup: residue sweep (fail-open): OUTCOME: pass",
+            proc.stdout,
+        )
+        self.assertNotIn("branch-report:", proc.stdout)
+        self.assertNotIn("skipped at", proc.stdout)
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+
+    def runner_dir_with_helpers(
+        self, name: str, doctored: dict[str, str]
+    ) -> tuple[Path, Path]:
+        """A private runner copy whose resolve_helper sees this directory
+        first: every repo helper is symlinked in except the doctored
+        names, which are written with the given bodies; the returned home
+        is empty so the deployed-home fallback arm resolves nothing."""
+        runner_dir = self.tmp / name
+        runner_dir.mkdir()
+        shutil.copy2(RUNNER, runner_dir / "done_run.sh")
+        for helper in REPO_ROOT.joinpath("scripts").iterdir():
+            if (helper.suffix in (".py", ".sh", ".json")
+                    and helper.name not in ("done_run.sh", *doctored)
+                    and not helper.name.startswith("test_")):
+                os.symlink(helper, runner_dir / helper.name)
+        for helper_name, body in doctored.items():
+            # an empty body omits the helper entirely, so neither
+            # resolve_helper arm can resolve it
+            if body:
+                (runner_dir / helper_name).write_text(body)
+        home = self.tmp / f"{name}-home"
+        (home / ".ai-playbook").mkdir(parents=True)
+        return runner_dir, home
+
+    def run_via_runner_dir(self, runner_dir: Path, home: Path) -> subprocess.CompletedProcess:
+        env = self.runner_env()
+        env["HOME"] = str(home)
+        return subprocess.run(
+            ["bash", str(runner_dir / "done_run.sh"), "setup", "--label", "fixture-run"],
+            cwd=str(self.fixture),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    def test_missing_sweep_helper_keeps_setup_boundary(self) -> None:
+        self.init_fixture_repo()
+        runner_dir, home = self.runner_dir_with_helpers(
+            "runner-no-sweep",
+            {"worktree_closeout_migrate.py": ""},
+        )
+        proc = self.run_via_runner_dir(runner_dir, home)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # the sweep step is skipped whole and setup still writes its
+        # boundary: the existing classification is unchanged
+        self.assertNotIn("residue sweep", proc.stdout)
+        exports = self.eval_exports(proc.stdout)
+        self.assertTrue(exports.get("DONE_RUN_ID"))
+
+    def test_failing_sweep_keeps_setup_boundary_and_relays_outcome(self) -> None:
+        self.init_fixture_repo()
+        runner_dir, home = self.runner_dir_with_helpers(
+            "runner-bad-sweep",
+            {
+                "worktree_closeout_migrate.py": (
+                    "import sys\n"
+                    "print('sweep stub: simulated command failure')\n"
+                    "print('OUTCOME: tool_error')\n"
+                    "sys.exit(9)\n"
+                )
+            },
+        )
+        proc = self.run_via_runner_dir(runner_dir, home)
+        # fail-open: the sweep's failure OUTCOME is relayed verbatim and
+        # the setup classification is unchanged (rc 0 boundary written)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            "done_run setup: residue sweep (fail-open): OUTCOME: tool_error",
+            proc.stdout,
+        )
+        exports = self.eval_exports(proc.stdout)
+        self.assertTrue(exports.get("DONE_RUN_ID"))
 
 
 class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
@@ -2090,7 +2307,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
     preflight changed-blob scan; and two separate late-race cases exercise
     the two captured-tree invariants (a re-added untrack target; a
     force-added ignored non-target --stage path injected after preflight
-    but before stage-operand processing and tree capture) with no commit
+    but during stage-operand processing and before tree capture) with no commit
     or ref update and the injected caller index state preserved."""
 
     TARGET_REL = "local-home/local.properties"
@@ -2420,7 +2637,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "seed.txt").write_text("seed\nrace edit\n")
         count_before = self.commit_count()
         head_before = self.git("rev-parse", "HEAD").stdout.strip()
-        # the injection fires before stage-operand processing: the force-add
+        # the injection fires during stage-operand processing: the force-add
         # of the ignored non-target's modified blob lands while the --stage
         # loop is between its first declared path and late.conf, so ordinary
         # matching declares late.conf and the captured-tree changed-blob
@@ -2463,6 +2680,90 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(
             (self.fixture / "late.conf").read_text(), "forced conf bytes\n"
         )
+
+    # ---- coverage residuals (backlog 2026-10-31
+    # untrack-wrapper-test-coverage-residuals, landed with the trio): the
+    # repeatable-operand shape, the parser usage guards, and the
+    # --guard-firing ordering pin.
+
+    def test_repeatable_distinct_untrack_operands_both_land(self) -> None:
+        """[class: REPOSITORY_TEST] Two distinct --untrack operands in one
+        invocation both pass the preflight and both land their index-only
+        deletions: a mutation accepting only the first operand fails here."""
+        second = "other.conf"
+        self.untrack_fixture(second)
+        self.stage_target_deletion()
+        self.git("rm", "--cached", "--quiet", second)
+        setup_proc, exports = self.setup_session(
+            "--owned-path", self.TARGET_REL, "--owned-path", second,
+        )
+        count_before = self.commit_count()
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", self.TARGET_REL, "--untrack", second,
+            "--subject", "untrack two ignored tracked files",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        for rel in (self.TARGET_REL, second):
+            self.assertIn(f"accepted index-only deletion: {rel}", combined)
+            self.assertNotIn(rel, self.git("ls-files", "-s").stdout)
+            self.assertTrue((self.fixture / rel).exists(), rel)
+        self.assertEqual(self.commit_count(), count_before + 1)
+
+    def test_untrack_parser_usage_guards_exit_3(self) -> None:
+        """[class: REPOSITORY_TEST] The --untrack parser usage guards refuse
+        with exit 3 and no state change: a missing value, a `--`-prefixed
+        value, and a duplicate same-path operand."""
+        self.untrack_fixture()
+        snap = self.snapshot_state([self.TARGET_REL])
+        count_before = self.commit_count()
+        env = self.commit_env()
+        missing = self.run_commit("--untrack", "--subject", "s", env=env)
+        self.assertEqual(missing.returncode, 3, missing.stderr)
+        self.assertIn("--untrack needs <repo-relative-path>", missing.stderr)
+        dash = self.run_commit(
+            "--untrack", "--dash.conf", "--subject", "s", env=env
+        )
+        self.assertEqual(dash.returncode, 3, dash.stderr)
+        self.assertIn("--untrack needs <repo-relative-path>", dash.stderr)
+        duplicate = self.run_commit(
+            "--untrack", self.TARGET_REL, "--untrack", self.TARGET_REL,
+            env=env,
+        )
+        self.assertEqual(duplicate.returncode, 3, duplicate.stderr)
+        self.assertIn("more than once for path", duplicate.stderr)
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+
+    def test_untrack_with_guard_firing_preflight_precedes_ledger_append(self) -> None:
+        """[class: REPOSITORY_TEST] The --untrack + --guard-firing
+        combination keeps the ordering: an invalid untrack operand refuses
+        at the read-only preflight before any ledger append runs, so the
+        advisory row is not written for a landing that never stages."""
+        self.untrack_fixture()
+        snap = self.snapshot_state([self.TARGET_REL])
+        count_before = self.commit_count()
+        ledger = self.fixture / "scripts" / "gate_liveness_ledger.json"
+        if ledger.exists():
+            ledger_before = ledger.read_bytes()
+        else:
+            ledger_before = None
+        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        proc = self.commit_session(
+            setup_proc, exports,
+            "--untrack", "never-tracked.conf",
+            "--guard-firing", "pin-guard:unit:evidence-untrack-ordering:ordering pin",
+            "--subject", "must refuse before the ledger append",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not tracked by HEAD: never-tracked.conf", proc.stderr)
+        self.assert_state_unchanged(snap)
+        self.assertEqual(self.commit_count(), count_before)
+        if ledger_before is None:
+            self.assertFalse(ledger.exists(), "no ledger appended on preflight refusal")
+        else:
+            self.assertEqual(ledger.read_bytes(), ledger_before)
 
 
 class DoneRunDeclaredStageRecoveryReplayTest(FixtureMixin, unittest.TestCase):
@@ -4236,6 +4537,150 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertIn("never fabricate, never block, never delete", proc.stdout)
         # The landing-cost telemetry stays advisory-absent when nothing landed.
         self.assertNotIn("landing-cost telemetry appended", proc.stdout)
+
+    # ---- reviews-corpus rooting (plan
+    #      docs/history/plans/2026-10-29-done-finalize-missing-record-scan-
+    #      primary-corpus-root.md): a relative reviews_dir resolves from the
+    #      primary checkout, an absolute reviews_dir keeps its configured
+    #      path, and plans_completed_dir stays rooted at the running
+    #      checkout; the scan summary names the corpus root it used and the
+    #      scan stays report-only. --------------------------------------- #
+
+    def add_scan_worktree(self, branch: str) -> Path:
+        """A linked worktree becomes the fixture root (the scan's running
+        checkout); the caller seeds the primary before calling this when the
+        worktree must inherit the seed."""
+        worktree = self.tmp / "worktree"
+        self.git("worktree", "add", "-qb", branch, str(worktree))
+        self.fixture = worktree
+        return worktree
+
+    def git_reported_primary(self) -> Path:
+        """The primary checkout exactly as the scan derives it: the first
+        worktree line of git worktree list --porcelain (git itself prints the
+        realpath; Path() here performs no symlink resolution)."""
+        return Path(
+            self.git("worktree", "list", "--porcelain").stdout.splitlines()[0]
+            [len("worktree "):]
+        )
+
+    def finalize_from_fixture(
+        self, label: str, *setup_args: str,
+    ) -> subprocess.CompletedProcess:
+        setup_proc, exports = self.setup_session("--label", label, *setup_args)
+        env = self.runner_env()
+        env.update(exports)
+        return self.run_finalize(env=env)
+
+    def test_finalize_scan_in_worktree_resolves_reviews_corpus_at_primary(self) -> None:
+        # The cited record exists only in the primary corpus; the worktree's
+        # transfer-in copy is partial (development lesson 74), so a
+        # running-checkout resolution would over-report it missing.
+        primary = self.init_fixture_repo()
+        plans_completed = primary / "docs" / "history" / "plans" / "completed"
+        plans_completed.mkdir(parents=True)
+        (plans_completed / "2026-10-11-cited-plan.md").write_text(
+            "# Plan\n\nreview record: 2026-10-11-primary-home-plan-review-fixture-exec-r1.md\n",
+            encoding="utf-8",
+        )
+        reviews = primary / ".ai-playbook" / "reviews"
+        reviews.mkdir()
+        (reviews / "2026-10-11-primary-home-plan-review-fixture-exec-r1.md").write_text(
+            "# review record\n", encoding="utf-8",
+        )
+        self.git("add", "docs/history/plans/completed")
+        self.git("commit", "-qm", "cite the primary-only review record")
+        self.add_scan_worktree("feature/scan-primary-corpus")
+        primary = self.git_reported_primary()
+        wt_reviews = self.fixture / ".ai-playbook" / "reviews"
+        wt_reviews.mkdir(parents=True)
+        (wt_reviews / "2026-10-11-worktree-side-code-review-fixture-r2.md").write_text(
+            "# worktree-side record\n", encoding="utf-8",
+        )
+        # The run owns no staging doc, so the partial copy's worktree-side
+        # record bulk-answers foreign at Step 0 and the scan stays the
+        # behavior under test.
+        proc = self.finalize_from_fixture("scan-worktree", "--claim-none")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn(
+            "missing-review-record: 2026-10-11-primary-home-plan-review-fixture-exec-r1.md",
+            proc.stdout,
+        )
+        self.assertIn(
+            f"missing-review-record scan: 0 missing record(s)"
+            f" corpus_root={primary}/.ai-playbook/reviews/",
+            proc.stdout,
+        )
+
+    def test_finalize_scan_keeps_absolute_reviews_dir_at_its_configured_root(self) -> None:
+        primary = self.init_fixture_repo()
+        alternate = self.tmp / "alternate-reviews"
+        alternate.mkdir()
+        record = "2026-10-11-alt-home-plan-review-fixture-exec-r1.md"
+        (alternate / record).write_text("# alternate-corpus record\n", encoding="utf-8")
+        (primary / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'backlog_dir = "docs/history/backlog/"\n'
+            f'reviews_dir = "{alternate}"\n'
+            'tmp_dir = "docs/tmp/"\n'
+            'metrics_dir = "docs/tmp/metrics/"\n'
+            'review_certs_dir = ".ai-playbook/review-certs/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        plans_completed = primary / "docs" / "history" / "plans" / "completed"
+        plans_completed.mkdir(parents=True)
+        (plans_completed / "2026-10-11-alt-cited-plan.md").write_text(
+            f"# Plan\n\nreview record: {record}\n", encoding="utf-8",
+        )
+        proc = self.finalize_from_fixture("scan-absolute")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn(f"missing-review-record: {record}", proc.stdout)
+        self.assertIn(
+            f"missing-review-record scan: 0 missing record(s) corpus_root={alternate}",
+            proc.stdout,
+        )
+
+    def test_finalize_scan_scans_completed_plans_at_the_running_checkout(self) -> None:
+        # The citing plan exists only under the running checkout (the linked
+        # worktree), so the scanned citation proves plans_completed_dir stayed
+        # rooted there; the missing record stays a report-only warning.
+        primary = self.init_fixture_repo()
+        worktree = self.add_scan_worktree("feature/scan-running-checkout")
+        primary = self.git_reported_primary()
+        # Pin the facts-backed arm: the shared template leaves
+        # plans_completed_dir unset, but the real repo sets it, so production
+        # resolves this value through facts_rooted; exercise that path.
+        # The scan reads facts from the RUNNING checkout (repo_top), which
+        # for this fixture is the linked worktree, not the primary.
+        facts = worktree / ".ai-playbook" / "facts.md"
+        facts.write_text(
+            facts.read_text(encoding="utf-8").replace(
+                'tmp_dir = "docs/tmp/"',
+                'plans_completed_dir = "docs/history/plans/completed/"\n'
+                'tmp_dir = "docs/tmp/"',
+            ),
+            encoding="utf-8",
+        )
+        plans_completed = worktree / "docs" / "history" / "plans" / "completed"
+        plans_completed.mkdir(parents=True)
+        (plans_completed / "2026-10-11-worktree-only-plan.md").write_text(
+            "# Plan\n\nreview record: 2026-10-11-never-copied-plan-review-fixture-exec-r1.md\n",
+            encoding="utf-8",
+        )
+        proc = self.finalize_from_fixture("scan-running")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn(
+            "missing-review-record: 2026-10-11-never-copied-plan-review-fixture-exec-r1.md",
+            proc.stdout,
+        )
+        self.assertIn("never fabricate, never block, never delete", proc.stdout)
+        self.assertIn(
+            f"missing-review-record scan: 1 missing record(s)"
+            f" corpus_root={primary}/.ai-playbook/reviews/",
+            proc.stdout,
+        )
 
     # ---- guard-firing placement (plan docs/history/plans/2026-10-24-done-
     #      run-lock-span-and-append-ordering): landing-carried rows are never

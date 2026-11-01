@@ -115,7 +115,7 @@ Exit codes: 0 clean, 1 refusal with named evidence, 2 tool failure.
   failure over resolved inputs, a missing --base/--head, or an
   unresolvable primary checkout); every other subcommand keeps the
   family convention above.
-  Stale-checkout adjudication: a refused or suspect entry whose blob equals the path's blob at an ancestor commit is a stale witness per the stale-checkout discriminator in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md; restore-and-record, never commit.
+  Stale-checkout adjudication: a refused or suspect entry whose blob equals the path's blob at an ancestor commit is a stale witness per the stale-checkout discriminator in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md); restore-and-record, never commit.
 """
 
 import hashlib

@@ -5238,6 +5238,14 @@ class SweepTest(unittest.TestCase):
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(f"report {registered}: dirty worktree", proc.stdout)
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: the
+        # branch-backed skip also reports the branch-report line carrying
+        # the branch, the resolved tip OID, and the skip reason.
+        self.assertIn(
+            f"branch-report: branch wt-alpha: skipped at "
+            f"{self.branch_oid('wt-alpha')}; reason: dirty worktree",
+            proc.stdout,
+        )
         # Fold r1 F8: the verdict line alone cannot witness survival (a
         # mutant deleting the candidate in report mode would pass), so the
         # registration and the on-disk tree are asserted after the run.
@@ -5308,6 +5316,28 @@ class SweepTest(unittest.TestCase):
         self.assertIn(registered, self._registered_paths())
         self.assertTrue(Path(path).is_dir(), "report mode removed the locked candidate")
 
+    def test_sweep_locked_stale_deleted_branch_reports_unknown_oid(self):
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: the
+        # locked arm stops before the branch resolution, so a stale locked
+        # registration whose branch ref was deleted out-of-band still
+        # reports the branch name with the explicit unknown OID; the
+        # unresolvable ref is an observation, never a tool error or an
+        # invented OID.
+        path = self.eligible_candidate()
+        registered = self._porcelain_path(path)
+        self._git(self.primary, "worktree", "lock", str(path))
+        shutil.rmtree(path)
+        self._git(self.primary, "update-ref", "-d", "refs/heads/wt-alpha")
+        proc = self.run_sweep()
+        self.assertOutcome(proc, 0, "pass")
+        self.assertIn(f"report {registered}: locked registration", proc.stdout)
+        self.assertIn(
+            "branch-report: branch wt-alpha: skipped at unknown; "
+            "reason: locked registration",
+            proc.stdout,
+        )
+        self.assertIn(registered, self._registered_paths())
+
     def test_sweep_stale_detached_registration_skip(self):
         path = self.add_worktree("loose", detach=True)
         registered = self._porcelain_path(path)
@@ -5315,6 +5345,10 @@ class SweepTest(unittest.TestCase):
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(f"report {registered}: stale detached registration", proc.stdout)
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: no
+        # branch identity, so no branch-report line and no invented branch
+        # or OID.
+        self.assertNotIn("branch-report:", proc.stdout)
 
     def test_sweep_detached_on_disk_worktree_skip(self):
         self.seed_twin("2026-10-01-alpha.md")
@@ -5323,6 +5357,10 @@ class SweepTest(unittest.TestCase):
         proc = self.run_sweep()
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(f"report {self._porcelain_path(path)}: detached HEAD worktree", proc.stdout)
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: no
+        # branch identity, so no branch-report line and no invented branch
+        # or OID.
+        self.assertNotIn("branch-report:", proc.stdout)
 
     def test_sweep_zero_plan_files_on_branch_skip(self):
         self.seed_twin("2026-10-01-alpha.md")
@@ -5354,6 +5392,15 @@ class SweepTest(unittest.TestCase):
             f"report {self._porcelain_path(path)}: no completed twin in the primary HEAD tree",
             proc.stdout,
         )
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: the
+        # branch-backed skip also reports the branch-report line carrying
+        # the branch, the resolved tip OID, and the skip reason.
+        self.assertIn(
+            f"branch-report: branch wt-other: skipped at "
+            f"{self.branch_oid('wt-other')}; reason: no completed twin in "
+            "the primary HEAD tree",
+            proc.stdout,
+        )
 
     def test_sweep_live_session_execution_claim_skip(self):
         path = self.eligible_candidate()
@@ -5373,6 +5420,15 @@ class SweepTest(unittest.TestCase):
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(
             f"report {self._porcelain_path(path)}: live-session evidence: execution-claims claim 2026-10-01-alpha.md",
+            proc.stdout,
+        )
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: the
+        # branch-backed skip also reports the branch-report line carrying
+        # the branch, the resolved tip OID, and the skip reason.
+        self.assertIn(
+            f"branch-report: branch wt-alpha: skipped at "
+            f"{self.branch_oid('wt-alpha')}; reason: live-session evidence: "
+            "execution-claims claim 2026-10-01-alpha.md",
             proc.stdout,
         )
         # Fold r1 F8: the skip verdict must witness the candidate's
@@ -5411,6 +5467,15 @@ class SweepTest(unittest.TestCase):
         self.assertOutcome(proc, 0, "pass")
         self.assertIn(
             f"report {registered}: post-landing commits on branch",
+            proc.stdout,
+        )
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: the
+        # branch-backed skip also reports the branch-report line carrying
+        # the branch, the resolved tip OID, and the skip reason.
+        self.assertIn(
+            f"branch-report: branch wt-alpha: skipped at "
+            f"{self.branch_oid('wt-alpha')}; reason: post-landing commits "
+            "on branch",
             proc.stdout,
         )
         # Fold r1 F8: the skip verdict must witness the candidate's
@@ -6224,6 +6289,32 @@ class GateRemovalBranchCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
         )
         self.assertNotIn("git branch -D", out)
 
+    def test_accounted_worktree_report_states_only_branch_evidence(self):
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 1: the
+        # ancestry statement carries only verified branch facts (branch,
+        # proven OID, ancestry result) in linked-worktree mode too - the
+        # guard checks report the worktree and artifact facts themselves,
+        # so the verdict sentence claims neither. The removal instruction
+        # and the structured disposition stay intact.
+        self._seed_migration_manifest(landed=True)
+        self._git(self.primary, "merge", "-q", "--no-edit", "wt-run")
+        expected = self._branch_oid("wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch wt-run ancestry-accounted at {expected}", out)
+        self.assertNotIn("worktree binds", out)
+        self.assertNotIn("migrated artifacts verified", out)
+        self.assertIn(
+            f"branch: operator closeout may delete branch wt-run at "
+            f"expected OID {expected}",
+            out,
+        )
+        self.assertIn(
+            f"branch-disposition: branch=wt-run disposition=ancestry-accounted oid={expected}",
+            out,
+        )
+
     def test_exact_tree_branch_accounted_without_twin_or_ancestry(self):
         # Plan gate-removal-closeout-accounting Task 2: a tip whose complete
         # tree equals a destination-history commit's tree is landed WITHOUT
@@ -6596,6 +6687,33 @@ class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
         self.assertEqual(
             self._git(self.primary, "rev-parse", "--verify", branch, check=False).returncode,
             0,
+        )
+
+    def test_accounted_branch_only_report_states_only_branch_evidence(self):
+        # Plan 2026-10-29-gate-removal-task2-review-residues Task 1: in
+        # branch-only mode (no linked worktree) the ancestry-accounted
+        # report names the branch, the proven OID, and the ancestry result
+        # only - it claims neither a live worktree nor migrated artifacts.
+        # The removal instruction and the structured disposition stay
+        # intact.
+        branch = "wt-done"
+        self._git(self.primary, "branch", branch, "HEAD")
+        expected = self._branch_oid(branch)
+        manifest = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(f"branch-closeout: branch {branch} ancestry-accounted at {expected}", out)
+        self.assertNotIn("worktree binds", out)
+        self.assertNotIn("migrated artifacts verified", out)
+        self.assertIn(
+            f"branch: operator closeout may delete branch {branch} at "
+            f"expected OID {expected}",
+            out,
+        )
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=ancestry-accounted oid={expected}",
+            out,
         )
 
     def test_exact_tree_only_branch_reported_and_retained(self):

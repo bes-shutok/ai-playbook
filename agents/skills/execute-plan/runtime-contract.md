@@ -52,11 +52,7 @@ Append to existing logs; never overwrite a prior pass.
 
 ## Run-level ownership and repository placement
 
-The run-level execution claim remains separate from task execution. Use
-`scripts/execution_claim.sh` and the repository's execution-claim procedure to
-prevent conflicting plan runs. Keep the claim current at the documented phase,
-task, and review boundaries, and remove it at closeout or an owned stand-down.
-A claim conflict stops the run without modifying another run's state.
+Every execution-claim `take`, `claim`, and `refresh` passes `--runtime` with the invoking runtime's canonical ID from `projects/.ai-playbook/execute-plan-runtime-inventory.toml` (for example, `codex` or `zcode`); absent or invalid IDs use `unknown` (never infer). The claim persists `runtime_id`, and refresh preserves it; unknown and legacy claims remain shared.
 
 Dead-run conversion contract (recovery routing lives in the sole recovery
 procedure, agents/skills/maintenance/template-execution.md): the Phase 0

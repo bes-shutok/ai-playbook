@@ -52,6 +52,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent / "execution_claim.sh"
 
@@ -99,8 +100,42 @@ class TestExecutionClaim(unittest.TestCase):
         (facts_dir / "facts.md").write_text(
             'tmp_dir = "docs/tmp"\n', encoding="utf-8"
         )
+        inventory_dir = self.repo / "projects" / ".ai-playbook"
+        inventory_dir.mkdir(parents=True)
+        inventory_source = SCRIPT.parents[1] / "projects" / ".ai-playbook" / "execute-plan-runtime-inventory.toml"
+        self.runtime_inventory = inventory_dir / "execute-plan-runtime-inventory.toml"
+        shutil.copyfile(inventory_source, self.runtime_inventory)
 
     # -- helpers -------------------------------------------------------- #
+
+    def _fixture_env(self):
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        home = self.scratch / "home"
+        xdg_config = home / "config"
+        xdg_config.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(home)
+        env["XDG_CONFIG_HOME"] = str(xdg_config)
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
+        env["TZ"] = "UTC"
+        return env
+
+    def _install_ambient_git_overrides(self):
+        names = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        prior = {name: os.environ.get(name) for name in names}
+
+        def restore():
+            for name, value in prior.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        self.addCleanup(restore)
+        os.environ["GIT_DIR"] = str(self.scratch / "ambient-missing.git")
+        os.environ["GIT_WORK_TREE"] = str(self.scratch / "ambient-worktree")
+        os.environ["GIT_INDEX_FILE"] = str(self.scratch / "ambient-index")
 
     def _git(self, *args):
         subprocess.run(
@@ -108,10 +143,12 @@ class TestExecutionClaim(unittest.TestCase):
             check=True,
             capture_output=True,
             timeout=60,
+            env=self._fixture_env(),
         )
 
     def _run(self, *args, cwd=None, path_prepend=None, extra_env=None):
-        env = os.environ.copy()
+        env = self._fixture_env()
+        env["EXECUTE_PLAN_RUNTIME_INVENTORY"] = str(self.runtime_inventory)
         if path_prepend is not None:
             env["PATH"] = str(path_prepend) + os.pathsep + env["PATH"]
         if extra_env:
@@ -132,6 +169,7 @@ class TestExecutionClaim(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=60,
+            env=self._fixture_env(),
         ).stdout.strip()
 
     def _git_ok(self, *args) -> bool:
@@ -140,6 +178,7 @@ class TestExecutionClaim(unittest.TestCase):
                 ["git", "-C", str(self.repo), *args],
                 capture_output=True,
                 timeout=60,
+                env=self._fixture_env(),
             ).returncode
             == 0
         )
@@ -301,7 +340,7 @@ class TestExecutionClaim(unittest.TestCase):
         return bin_dir
 
     def _take_popen(self, session, unblock: Path) -> subprocess.Popen:
-        env = os.environ.copy()
+        env = self._fixture_env()
         registered = self.scratch / "git-add-registered"
         env["PATH"] = str(self._git_worktree_add_parker(registered, unblock)) + os.pathsep + env["PATH"]
         # start_new_session puts the script and its in-flight git child in
@@ -369,6 +408,7 @@ class TestExecutionClaim(unittest.TestCase):
         registered_list = subprocess.run(
             ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"],
             check=True, capture_output=True, text=True, timeout=60,
+            env=self._fixture_env(),
         ).stdout
         self.assertNotIn(
             str(self.wt_parent / self.branch), registered_list,
@@ -458,7 +498,7 @@ class TestExecutionClaim(unittest.TestCase):
         claim_text = self.claim.read_text(encoding="utf-8")
         self.assertIn("session: session-a", claim_text)
         # The take requires --branch, so the claim records the branch line
-        # beside the four frontmatter lines (the recorded identity the
+        # beside the five frontmatter lines (including runtime_id; the recorded identity the
         # takeover and recreate paths must carry).
         self.assertIn(f"branch: {self.branch}", claim_text)
         self.assertTrue(
@@ -656,7 +696,7 @@ class TestExecutionClaim(unittest.TestCase):
         return wt, manifest
 
     def _conversion_take(self, session, branch=None, plan=None, parent=None,
-                         extra_env=None):
+                         extra_env=None, runtime=None):
         env = {
             "CLAUDE_CODE_SESSION_ID": session,
             "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
@@ -669,6 +709,7 @@ class TestExecutionClaim(unittest.TestCase):
             "--session", session,
             "--branch", branch or self.branch,
             "--worktree-parent", str(parent or self.wt_parent),
+            *( ["--runtime", runtime] if runtime is not None else [] ),
             extra_env=env,
         )
 
@@ -685,12 +726,13 @@ class TestExecutionClaim(unittest.TestCase):
             line for line in self.claim.read_text(encoding="utf-8").splitlines()
             if line.startswith("created: ")
         )
-        proc = self._conversion_take("session-b")
+        proc = self._conversion_take("session-b", runtime="codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
         self.assertIn("conversion: claim", proc.stdout)
         self.assertEqual(self._claim_session(), "session-b")
         claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("runtime_id: codex", claim_text)
         # The replacement shape: prior created preserved, branch preserved,
         # updated refreshed; nothing synthesized.
         self.assertIn(prior_created, claim_text)
@@ -1420,16 +1462,20 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(list(decoy.iterdir()), [], "caller HOME was used as the lock root")
 
     def test_merge_lock_contention_refuses_claim_commands_once(self):
+        self._install_ambient_git_overrides()
         # With a live merge-lock held by another session, each claim
         # command refuses once naming the holder and preserves the claim
         # (the one-shot contention refusal; no second acquire attempt).
         wt = self._seed_worktree(self.branch, os.path.join("wt", self.branch))
         lock_home = self.scratch / "lock-home"
         holder_dir = lock_home / ".ai-playbook" / "locks" / "merge"
+        acquire_env = self._fixture_env()
+        acquire_env["MERGE_LOCK_ROOT"] = str(holder_dir)
         acq = subprocess.run(
-            ["env", f"MERGE_LOCK_ROOT={holder_dir}", "bash",
-             str(SCRIPT.parent / "done-lock.sh"), "merge-acquire", "--label", "external-holder"],
-            cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+            ["bash", str(SCRIPT.parent / "done-lock.sh"), "merge-acquire",
+             "--label", "external-holder"],
+            cwd=str(self.repo), env=acquire_env,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(acq.returncode, 0, acq.stderr)
         lock_dir = ""
@@ -1461,11 +1507,16 @@ class TestExecutionClaim(unittest.TestCase):
                     self.assertIn("merge-lock is held", proc.stdout + proc.stderr)
             self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
         finally:
+            release_env = self._fixture_env()
+            release_env.update({
+                "MERGE_LOCK_ROOT": str(holder_dir),
+                "MERGE_LOCK_DIR": lock_dir,
+                "MERGE_LOCK_TOKEN": token,
+            })
             subprocess.run(
-                ["env", f"MERGE_LOCK_ROOT={holder_dir}",
-                 f"MERGE_LOCK_DIR={lock_dir}", f"MERGE_LOCK_TOKEN={token}",
-                 "bash", str(SCRIPT.parent / "done-lock.sh"), "merge-release"],
-                cwd=str(self.repo), capture_output=True, text=True, timeout=60,
+                ["bash", str(SCRIPT.parent / "done-lock.sh"), "merge-release"],
+                cwd=str(self.repo), env=release_env,
+                capture_output=True, text=True, timeout=60,
             )
 
     def test_restored_worktree_claim_mutation_serialized(self):
@@ -1802,6 +1853,7 @@ class TestExecutionClaim(unittest.TestCase):
         registered_list = subprocess.run(
             ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"],
             check=True, capture_output=True, text=True, timeout=60,
+            env=self._fixture_env(),
         ).stdout
         self.assertNotIn(
             str(self.wt_parent / self.branch), registered_list,
@@ -2355,6 +2407,65 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertIn(f"branch: {self.branch}", claim_text)
         # The recorded value is the resolved sha, not the operand form.
         self.assertIn(f"start-commit: {expected_sha}", claim_text)
+
+    def test_runtime_identity_on_claim_refresh_takeover_and_recreate(self):
+        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+    def test_refresh_preserves_the_claims_recorded_runtime(self):
+        proc = self._run(
+            "claim", str(self.plan), "--session", "session-b", "--runtime", "zcode"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        proc = self._run(
+            "refresh", str(self.plan), "--session", "session-b", "--runtime", "codex"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: zcode", self.claim.read_text(encoding="utf-8"))
+
+    def test_git_helpers_ignore_ambient_repository_overrides(self):
+        self._install_ambient_git_overrides()
+        self._git("status", "--short")
+        proc = self._run(
+            "claim", str(self.plan), "--session", "session-b", "--runtime", "codex"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+        with patch.object(subprocess, "Popen") as popen:
+            self._take_popen("session-popen", self.scratch / "unblock")
+        child_env = popen.call_args.kwargs["env"]
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.assertNotIn(name, child_env, f"ambient Git variable {name} escaped the fixture")
+
+    def test_missing_or_invalid_runtime_is_shared_unknown(self):
+        for args in ([], ["--runtime", "not-a-runtime"]):
+            self.claim.unlink(missing_ok=True)
+            proc = self._run("claim", str(self.plan), "--session", "session-b", *args)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("runtime_id: unknown", self.claim.read_text(encoding="utf-8"))
+
+    def test_take_records_runtime_identity(self):
+        proc = self._run(
+            "take", str(self.plan), "--session", "session-b", "--runtime", "codex",
+            "--branch", self.branch, "--worktree-parent", str(self.wt_parent),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
 
     def test_claim_unresolvable_start_commit_is_usage_refusal_writing_nothing(self):
         proc = self._run(

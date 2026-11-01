@@ -8124,7 +8124,9 @@ def _cmd_write_manifest(argv: list[str]) -> int:
                 f"{_manifest_path(ctx.done_session_dir, orphan.run_id).name} "
                 "(complete=false, never finalized; the recorded repo_root "
                 "matches no checkout here, so adoption refuses this "
-                "boundary); close it once with disposition-manifest --run-id "
+                "boundary); close it once with python3 "
+                "scripts/done_sweep_gates_lib.py disposition-manifest "
+                "--run-id "
                 f"{orphan.run_id} (the done skill's Manifest disposition "
                 "(dead-boundary close) paragraph is the procedure of record)"
             )

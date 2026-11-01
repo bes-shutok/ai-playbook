@@ -2704,6 +2704,8 @@ The `${arr[@]+...}` conditional expansion yields nothing when the array is empty
 
 **Example (2026-07-03, ai-playbook lessons-recall adapters):** The Claude/Codex/agy hook adapters build an `args` array for `session_channel.py` and expand it as `"${args[@]}"`. The empty-CLAUDE_CODE_SESSION_ID echo-pipe test (which leaves the array empty) aborted the adapters on macOS bash 3.2. Switched all three adapters to `${args[@]+"${args[@]}"}`.
 
+**Second witness (2026-11-01, ai-playbook scan-public-hygiene.sh cleanup trap):** the failure surfaced in an EXIT trap - the unguarded `"${CLEANUP_FILES[@]}"` expansion fired during teardown and its `unbound variable` error silently replaced the run's exit code, turning a passing selftest verdict into rc=1 and failing every strict-verdict arm. A teardown trap must guard before expanding: `[ ${#arr[@]} -eq 0 ] || rm -f "${arr[@]}"` short-circuits on the empty array and preserves the real exit status; a guard written only for the happy path corrupts verdicts rather than crashing visibly.
+
 **See also:** coding_guidelines.md #25 (Family H parent: verify the real deployment target, not the dev-machine abstraction).
 
 ## 130. A Selftest That Asserts "No U+2014 in Output" Must Reference the Byte via `chr(0x2014)` or a Language Escape, Never a Literal U+2014, Because the File-Level `check-no-em-dash.sh` Scan Flags Any Source File Containing the Byte
@@ -8907,6 +8909,10 @@ Same-day second witness: a certification trio in another authoring cycle still r
 **Rule:** after a helper prints eval-able exports, retain the values in session context and re-export them verbatim at the start of every later shell that calls a dependent helper; never reconstruct them by sourcing a session fence file, and never assume env names transfer across lock families - verify each helper's required variables from its own usage text before the call.
 
 **Why:** witnessed 2026-10-13 in a worktree landing: the landing helper refused because the merge-lock exports printed by the acquire step had stayed in the earlier shell; re-exporting the recorded values before the helper call landed on the retry. The same session used a sibling lock family whose release requires differently named variables, confirming env names do not transfer across families.
+
+Re-witnessed 2026-11-01: setup printed lock exports from a child process, but
+the parent shell did not receive them; explicitly importing the named exports
+preserved the lock context for closeout.
 
 **See also:** #548 (never hold an acquired merge lock across a long bounded wait), #547 (derive precision strings from tool output, not echo).
 

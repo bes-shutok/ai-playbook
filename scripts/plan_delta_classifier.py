@@ -54,7 +54,17 @@ each hunk header decorated with the file's operand-relative path, and
 the corrections chain records one row per changed file. A manifest-level
 add or remove of a task file (the file set at the ``--since`` commit
 disagrees with the resolver's file list) is a structural delta, never
-exempt. The single-file operand path is unchanged.
+exempt.
+
+New-plan baseline (single-file CLI): a plan path absent from the
+``--since`` commit reuses the first checkpoint commit after ``--since``
+that adds the path (the earliest ``--diff-filter=A`` commit in
+``since..HEAD``) as the exact before side, reporting the selected
+baseline commit; a successful lookup finding no such commit through
+``HEAD`` emits the named absent-baseline refusal (unclassified, the
+fresh-review route, no corrections row, no operator acknowledgement);
+a lookup or blob-read failure keeps the indeterminate and tool-error
+outcomes and is never reported as an absent checkpoint.
 """
 
 import argparse
@@ -767,6 +777,36 @@ def load_receipt(path):
     return doc
 
 
+# First-draft checkpoint lookup statuses for a plan path absent from the
+# --since commit: a failed git plumbing step is never reported as an
+# absent checkpoint.
+FIRST_CHECKPOINT_FOUND = "found"
+FIRST_CHECKPOINT_ABSENT = "absent"
+FIRST_CHECKPOINT_FAILED = "failed"
+
+
+def first_checkpoint_bytes(root, since, rel):
+    """The plan's first-draft checkpoint after ``since``: the earliest
+    commit in ``since..HEAD`` that adds ``rel`` (``git log
+    --diff-filter=A --reverse``), returned as (status, commit, blob
+    bytes). Status is FIRST_CHECKPOINT_FOUND with that commit's exact
+    blob, FIRST_CHECKPOINT_ABSENT when the successful lookup found no
+    such commit, or FIRST_CHECKPOINT_FAILED when a git plumbing step
+    failed over resolved inputs."""
+    text = cr.git_text(root, "log", "--format=%H", "--diff-filter=A",
+                       "--reverse", "%s..HEAD" % since, "--", rel)
+    if text is None:
+        return FIRST_CHECKPOINT_FAILED, None, None
+    commit = next((ln.strip() for ln in text.splitlines() if ln.strip()),
+                  None)
+    if commit is None:
+        return FIRST_CHECKPOINT_ABSENT, None, None
+    blob = cr.blob_bytes(root, commit, rel)
+    if blob is None:
+        return FIRST_CHECKPOINT_FAILED, commit, None
+    return FIRST_CHECKPOINT_FOUND, commit, blob
+
+
 def main(argv=None):
     parser = OutcomeArgumentParser(
         prog="plan_delta_classifier.py",
@@ -819,25 +859,58 @@ def main(argv=None):
         return tool_error("the --since ref %r does not resolve to a "
                           "commit" % args.since)
     old_bytes = cr.blob_bytes(root, since, rel)
+    baseline_commit = None
     if old_bytes is None:
         listing = cr.git_text(root, "ls-tree", since, "--", rel)
         if listing is None:
             return indeterminate(
                 "git ls-tree failed over the resolved commit %s" % since)
         if not listing.strip():
-            return tool_error("the plan path %s is not tracked at the "
-                              "--since commit %s" % (rel, since))
-        return indeterminate(
-            "the plan blob %s:%s is unreadable: git plumbing failed over "
-            "resolved inputs" % (since, rel))
+            # The path is absent at --since: reuse the first-draft
+            # checkpoint as the exact before side, or name the absent
+            # baseline when the successful lookup found none; a lookup
+            # failure keeps the indeterminate outcome and is never
+            # reported as an absent checkpoint.
+            status, checkpoint_commit, checkpoint_bytes = \
+                first_checkpoint_bytes(root, since, rel)
+            if status == FIRST_CHECKPOINT_FAILED:
+                step = ("blob read from checkpoint %s" % checkpoint_commit
+                        if checkpoint_commit else
+                        "history lookup between %s and HEAD" % since)
+                return indeterminate(
+                    "the checkpoint recovery for %s failed at the %s: "
+                    "git plumbing failed over resolved "
+                    "inputs" % (rel, step))
+            if status == FIRST_CHECKPOINT_ABSENT:
+                print("plan: %s" % rel)
+                print("since: %s" % since)
+                print("refusal: %s" % cr.leg_reason(
+                    "classify",
+                    "absent baseline: the plan path %s is not tracked at "
+                    "the --since commit %s and the checkpoint history "
+                    "lookup through HEAD found no commit adding it; the "
+                    "delta has no before side and is unclassified, so "
+                    "the fold takes the fresh-review path"
+                    % (rel, since)))
+                emit_outcome(1)
+                return 1
+            baseline_commit = checkpoint_commit
+            old_bytes = checkpoint_bytes
+        else:
+            return indeterminate(
+                "the plan blob %s:%s is unreadable: git plumbing failed over "
+                "resolved inputs" % (since, rel))
     try:
         old_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         return tool_error("the plan blob %s:%s is not decodable UTF-8 "
-                          "text: %s" % (since, rel, exc))
+                          "text: %s"
+                          % (baseline_commit or since, rel, exc))
     hunks, ok, message = classify_delta(old_bytes, new_bytes)
     print("plan: %s" % rel)
     print("since: %s" % since)
+    if baseline_commit is not None:
+        print("baseline commit: %s" % baseline_commit)
     print("before digest: %s" % cr.sha256_hex(old_bytes))
     print("after digest: %s" % cr.sha256_hex(new_bytes))
     for index, hunk in enumerate(hunks, 1):

@@ -3963,11 +3963,15 @@ def _gate_branch_closeout(
             "after the documented quiesce-and-reconcile sequence while "
             "writers stay stopped",
         ] + foreign_notes, _disposition("exact-tree-accounted", proven_oid, [])
+    # The ancestry statement carries only the branch evidence the gate
+    # itself proves (branch, proven OID, ancestry result): branch-only mode
+    # has no linked worktree, and worktree/artifact facts stay with the
+    # guard checks' own lines (plan 2026-10-29-gate-removal-task2-review-
+    # residues Task 1).
     return None, [
         f"branch-closeout: branch {recorded} ancestry-accounted at "
-        f"{proven_oid} (single live worktree binds it; migrated artifacts "
-        "verified under the target; the branch tip is an ancestor of "
-        "destination history)",
+        f"{proven_oid} (the branch tip is an ancestor of destination "
+        "history)",
         f"branch: operator closeout may delete branch {recorded} at "
         f"expected OID {proven_oid} after the documented quiesce-and-"
         "reconcile sequence (plain git branch -d must print deletable; "
@@ -4811,6 +4815,33 @@ def _sweep_branch_report_line(disposition: dict | None) -> str | None:
     return line
 
 
+def _sweep_branch_tip_oid(target: Path, branch: str) -> str | None:
+    """The candidate branch's tip OID as the sweep resolves it (one
+    rev-parse, the gate's capture form); None when the ref does not
+    resolve, so the report can name the explicit unknown instead. Never
+    raises: an unresolvable ref is an observation, never a tool error,
+    because a skip verdict must always render (plan
+    2026-10-29-gate-removal-task2-review-residues Task 2)."""
+    proc = _sweep_git(target, "rev-parse", "--verify", branch)
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _sweep_skip_branch_line(branch: str, oid: str | None, reason: str) -> str:
+    """The sweep's branch-report line for a candidate skipped before gate
+    adjudication: the branch identity, the resolved tip OID or the
+    explicit `unknown`, and the skip reason, on the same prefix the setup
+    filter relays. `skipped` is a sweep-side observation word, not a gate
+    disposition: the setup wrapper relays it without reclassifying the
+    candidate (plan 2026-10-29-gate-removal-task2-review-residues
+    Task 2)."""
+    return (
+        f"branch-report: branch {branch}: skipped at {oid or 'unknown'}; "
+        f"reason: {reason}"
+    )
+
+
 def cmd_sweep(args: argparse.Namespace) -> int:
     """Mechanical ad-hoc worktree residue sweep. Report-only by default;
     --apply requires the invoking run's authentic hold of the target's done
@@ -4871,6 +4902,15 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             continue
         if skip is not None:
             print(f"report {path}: {skip}")
+            # Plan 2026-10-29-gate-removal-task2-review-residues Task 2: a
+            # branch-backed skip is retained-branch evidence, so it also
+            # rides the branch-report prefix the setup filter relays; a
+            # candidate with no branch identity invents no branch data.
+            branch = cand["branch"]
+            if branch:
+                print(_sweep_skip_branch_line(
+                    branch, _sweep_branch_tip_oid(target, branch), skip
+                ))
             continue
         # A gate fail whose branch disposition is retained is the held
         # removal shape in the gate's own worktree mode: for an on-disk

@@ -2644,7 +2644,7 @@ pin "zcode.md re-triage child recognition literal" grep -qF 'deferred re-triage 
 # fleet membership following the execution lane a child occupies; the pin
 # had keyed on the re-triage-kind literal since the origin-class provenance
 # plan's Task 4)
-pin "zcode.md fleet-cap enumeration widened to the ad-hoc kind" grep -qF 'authoring, audit, re-triage, ad-hoc, and execution children are fleet members' "$Z"
+pin "zcode.md fleet-cap enumeration widened to the ad-hoc kind" grep -qF 'three per known runtime across authoring, audit, re-triage, ad-hoc, and execution children' "$Z"
 pin "SKILL.md Step 2 fleet-cap enumeration widened to the re-triage kind" grep -qF 'like the authoring, audit, and re-triage kinds' "$GU"
 pin "prompt-templates retriage pointer stub present" grep -qF 'deferred re-triage lane' "$P"
 # 2026-10-03 amnesia incident record (a deferred row carried two conflicting
@@ -3048,9 +3048,16 @@ pin "maintenance survey never opts into receipt repair" bash -c "! grep -qF -- '
 # continuation paragraph routes through the pinned invocation by reference
 # and must not grow a third literal copy).
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): split-count re-aim - the take invocation's site 1 (lifecycle step 1) moved verbatim to agents/skills/execute-plan/worktree-first.md and site 2 (claim registration) stays in agents/skills/execute-plan/SKILL.md; the pre-extraction total 2 is preserved as 1+1 across the two legs.
-pin "execution-claim take gateway invocation in execute-plan lifecycle step 1" test $(( $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ') + $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$E" | wc -l | tr -d ' ') )) -eq 2
-pin "execution-claim take invocation in the blueprint's per-execution worktree paragraph" test "$(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$TE" | wc -l | tr -d ' ')" -eq 1
+pin "execution-claim take gateway invocation in execute-plan lifecycle step 1" test $(( $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --runtime <canonical-runtime-id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ') + $(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --runtime <canonical-runtime-id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$E" | wc -l | tr -d ' ') )) -eq 2
+pin "execution-claim take invocation in the blueprint's per-execution worktree paragraph" test "$(grep -oF 'bash scripts/execution_claim.sh take <plan-path> --session <id> --runtime <canonical-runtime-id> --branch <name> --worktree-parent <dir> [--base <ref>]' "$TE" | wc -l | tr -d ' ')" -eq 1
 pin "execution-claim script named as the claim-creation procedure of record in the blueprint" grep -qF 'by scripts/execution_claim.sh, the creation procedure of record' "$TE"
+pin "execution-claim take runtime argument in primary lifecycle" grep -qF 'take <plan-path> --session <id> --runtime <canonical-runtime-id>' "$E"
+pin "execution-claim primary placement carries runtime argument" grep -qF 'claim <plan-path> --session <id> --runtime <canonical-runtime-id>' "$E"
+pin "execution-claim stack refresh carries runtime argument" grep -qF 'refresh <plan-path> --session <id> --runtime <canonical-runtime-id>' "$repo/agents/skills/execute-plan-stack/SKILL.md"
+pin "execution-claim runtime contract preserves unknown fallback" grep -qF 'canonical ID from `projects/.ai-playbook/execute-plan-runtime-inventory.toml`' "$repo/agents/skills/execute-plan/runtime-contract.md" && grep -qF 'absent or invalid IDs use `unknown` (never infer)' "$repo/agents/skills/execute-plan/runtime-contract.md"
+pin "execution claim persists runtime field" grep -qF 'runtime_id (the active canonical inventory ID or `unknown`' "$TE"
+pin "ZCode execution claim uses canonical runtime id" grep -qF 'ZCode passes `--runtime zcode`' "$Z"
+
 # --- primary-resolution stand-down pins (plan
 # docs/history/plans/completed/2026-10-10-execute-plan-primary-placement-resolution.md,
 # Task 1; re-keyed by the placement-closing-doctrine-enforcement plan Task 1)
@@ -3685,7 +3692,7 @@ if "Repeat the gist and budget in readiness, final, and in-session closeout repo
 for label, phrase in (
     ("final report includes the gist and budget", "Include that same gist and budget in the final report."),
     ("Cycle gate readiness and final reports include the gist and budget", "When reporting Cycle gate readiness, include the plan title, the five-line gist (Title, TLDR, Before, After, Edge cases), and the declared execution budget for the authored plan"),
-    ("Cycle gate gist and budget are advisory", "This content is advisory only and never blocks a lane or stops the loop (directive D-6 remains intact)."),
+    ("Cycle gate gist and budget are advisory", "This content is advisory only and never blocks a lane or stops the loop."),
     ("Cycle gate points to the canonical gist and budget mapping", "follow the source mapping and budget rules in `agents/skills/plans/SKILL.md`."),
 ):
     if phrase not in cycle:
@@ -3696,7 +3703,7 @@ for label, phrase in (
     ("scheduled authoring emits gist before first review", "Before launching the plan's first `review-plan` round"),
     ("scheduled authoring includes title and five gist fields", "five-line gist (Title, TLDR, Before, After, Edge cases)"),
     ("scheduled authoring repeats the gist and budget in its final report", "Include the same gist and budget in the final report."),
-    ("scheduled authoring gist is advisory", "it never blocks a lane or stops the loop (directive D-6 remains intact)."),
+    ("scheduled authoring gist is advisory", "This report content is advisory only: it never blocks a lane or stops the loop."),
 ):
     if phrase not in author:
         print(f"PIN FAIL: {label}")

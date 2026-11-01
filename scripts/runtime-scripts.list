@@ -118,3 +118,16 @@ check-no-em-dash.sh
 check-instruction-size.sh
 check_skill_description_length.py
 skill_text_budget.py
+#
+# Runtime-resolved quota and post-landing helpers joined by the
+# 2026-10-28-runtime-scripts-home-reconcile-and-retire plan (the maintenance
+# blueprint and survey arms run quota_governor.py repo-local first then the
+# deployed home copy, and the execute-plan worktree step falls back to the
+# deployed home reconcile_post_landing.py; the quota pair shares a plain
+# sibling import, quota_governor.py importing quota_pressure_stats.py and
+# quota_pressure_stats.py importing quota_governor.py, so the canonical home
+# path needs both entries; quota_governor.py's other sibling import,
+# quota_window_probe.py, is admitted above):
+reconcile_post_landing.py
+quota_governor.py
+quota_pressure_stats.py

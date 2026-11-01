@@ -2,7 +2,7 @@
 
 - **Filed:** 2026-10-31, self-heal recovery during plan authoring closeout
 - **Status:** open
-Cluster: docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md (shared `gate-removal` closeout surface; the branch-only terminal-state defect remains distinct)
+Cluster: docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md (shared `gate-removal` closeout surface; the branch-only terminal-state defect remains distinct); docs/history/backlog/2026-11-01-adhoc-planless-worktree-closeout-arm.md (same gate-removal surface; the plan-less ad-hoc invocation gap remains distinct)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving
@@ -24,13 +24,15 @@ When the landing helper refuses an empty-diff landing, the workflow can determin
 
 ## Suggested direction
 
-Trace the plans landing handoff and the existing `gate-removal` ancestry-accounted branch disposition. Decide whether the passing ancestry and artifact proofs can serve as the no-op landing evidence for this exact empty-diff case, without adding a new validator, retry loop, or weaker deletion gate. Preserve retention for every other landing refusal.
+Trace the plans landing handoff and the existing `gate-removal` ancestry-accounted and exact-tree-accounted branch dispositions. Decide whether those passing content and artifact proofs can serve as no-op landing evidence when a completed plan leaves a superseded draft on a non-ancestor branch, provided the draft is preserved before removal. Do not add a validator, retry loop, or weaker deletion gate. Preserve retention for every other landing refusal.
 
 ## Evidence
 
 - **Severity/source:** medium; observed during the 2026-10-31 plan authoring closeout. After the stale source branch was fast-forwarded to the verified current base, `land-worktree` refused because its candidate commit was tree-identical to its parent. The worktree removal gate then passed with `disposition=ancestry-accounted`, verified the review record, and named the exact source branch OID; the tracked plan and review artifacts were present at the primary checkout.
+- **Second witness (2026-11-01):** the completed maintenance-capacity plan still existed as an active draft on its authoring branch. After its exact bytes were preserved in the primary checkout and the stale draft was removed from the branch, the branch was not an ancestor of current `main`, but its tree matched reachable `main` history commit `7179bc995a2ae1a021fc2cf15b3ad71d5b2a776a`. The unchanged gate passed as `exact-tree-accounted` after scoped artifact migration, allowing worktree and ref removal at the gate's proven OID. This confirms the closeout route must handle both ancestry and exact-tree proofs and include conservation of a superseded draft; it does not require new deletion authority (`docs/history/plans/completed/2026-10-31-maintenance-runtime-scoped-capacity.md`; `docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md`).
 - The plans skill requires the helper and retains the worktree on landing refusal (`agents/skills/plans/SKILL.md`, Final Step).
 - The gate already supports ancestry-accounted closeout when artifact identity checks pass (`agents/skills/done/SKILL.md`, Operator branch closeout; `scripts/worktree_closeout_migrate.py`, `gate-removal`).
+- **Priority reaffirmed (2026-11-01):** high; a second completed authoring closeout needed operator recovery despite the existing exact-tree gate.
 - **Capture hygiene:** `scan-public-hygiene.sh --files` and `check-no-em-dash.sh file` passed before commit.
 
 ## Why not fixed now

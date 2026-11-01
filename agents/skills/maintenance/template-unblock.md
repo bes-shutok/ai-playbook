@@ -81,7 +81,7 @@ blocked ref is <blocked_on>, the bare ref name from the entry's blocked_on field
    the branch tip's copy of landed_path; a record fill whose landed-commit plus
    content-equality test can pass without the landing is forbidden, so teardown of the
    recorded branch and worktree stays gated on a verified dependency-branch landing.
-7. On a verified landing: after the landing's critical section, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record), then record the landing's squash commit sha as the entry's
+7. On a verified landing: after the landing's critical section, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md) (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record), then record the landing's squash commit sha as the entry's
    "landed_as" in its own targeted edit FIRST (the sha must be durably observable before
    any clear, so the survey arm's ancestry resolution can fire when the later clear write
    is lost), then clear the ledger entry in a second targeted edit, and queue-prepend the

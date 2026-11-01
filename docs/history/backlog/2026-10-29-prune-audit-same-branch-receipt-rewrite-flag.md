@@ -7,6 +7,7 @@
 - **Cluster:** the landing prune-audit leg (`scripts/check_prompt_log_origins.py --prune-audit`), the pure receipt-line-removal class and its same-commit retoken excusal
 - **Cluster:** docs/history/plans/completed/2026-10-28-landing-gate-prune-audit-leg.md (the leg's own landing plan; the removal classes and their excusals live there)
 - **Cluster:** docs/history/backlog/2026-10-24-collateral-served-nul-origin-uncaught-valueerror.md (same checker surface scripts/check_prompt_log_origins.py; distinct defect: that row's uncaught ValueError in --collateral-served vs this row's receipt-line flag semantics)
+- **Cluster:** docs/history/backlog/2026-11-01-prune-audit-standing-flags-unowned-accumulation.md (same checker; distinct class: that row owns the standing true-positive flag accumulation and its missing repair route, this row owns the net-add rewrite false positive)
 - **Skill/step:** `scripts/check_prompt_log_origins.py`, the receipt-line-removal audit class
 - **Class:** diagnostic-class
 - **Origin class:** session witness (interactive exec run, ad-hoc landing, 2026-10-29)

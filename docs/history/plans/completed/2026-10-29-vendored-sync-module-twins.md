@@ -114,12 +114,12 @@ Files:
 
 Primary class anchors: `main` in `scripts/skill_text_budget.py` (CLI behavior) and `skill_files` (file selection), if those anchors remain present at execution time.
 
-- [ ] Confirm current ratchet file-selection and symlink-path semantics from source before constructing the scoped input tree. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Create a temporary directory directly under the repository root with a `skills` subdirectory and symlinks to only the two modules; verify the resolved skills directory's parent-parent is the repository root. [class: REPOSITORY_TEST]
-- [ ] Run the ratchet against that scoped tree, verify exactly the two intended repository-relative keys, then remove the exact temporary directory and confirm it is absent. [class: REPOSITORY_TEST]
-- [ ] Verify the cap JSON diff adds exactly those two keys and changes no existing value. [class: REPOSITORY_TEST]
-- [ ] Confirm `--check` remains advisory and adds no blocker. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: add caps for extracted skill modules` [class: IMPLEMENTATION_REQUIRED]
+- [x] Confirm current ratchet file-selection and symlink-path semantics from source before constructing the scoped input tree. [class: IMPLEMENTATION_REQUIRED]
+- [x] Create a temporary directory directly under the repository root with a `skills` subdirectory and symlinks to only the two modules; verify the resolved skills directory's parent-parent is the repository root. [class: REPOSITORY_TEST]
+- [x] Run the ratchet against that scoped tree, verify exactly the two intended repository-relative keys, then remove the exact temporary directory and confirm it is absent. [class: REPOSITORY_TEST]
+- [x] Verify the cap JSON diff adds exactly those two keys and changes no existing value. [class: REPOSITORY_TEST]
+- [x] Confirm `--check` remains advisory and adds no blocker. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: add caps for extracted skill modules` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Re-aim verified references and prepare the post-landing receipt
 
@@ -142,11 +142,15 @@ Files:
 
 Primary class anchors: none, this task edits references and a tracked backlog receipt.
 
-- [ ] Re-scan the corpus for the origin's named sites and new matches; verify each candidate's actual claim before editing. [class: REPOSITORY_TEST]
-- [ ] Re-aim only stale moved-content claims to `agents/skills/execute-plan/worktree-first.md`; preserve valid hub pointers and unrelated references. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Update the origin row with the post-landing trigger, leaving status changes and origin deletion to normal Plan Lifecycle. Create `docs/history/2026-10-29-vendored-sync-module-twins-runtime-receipt.md` in `pending` state as the tracked post-landing handoff; include only the path-safe fields named in Ship when. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Resolve `public_hygiene_patterns_file` from user facts; record its `$HOME`-relative path and SHA-256. Re-derive the untracked-inclusive `git status --short` path set, inspect every entry, and record it in the pending receipt. [class: REPOSITORY_TEST]
-- [ ] Scan every existing repo-relative changed path with `scripts/scan-public-hygiene.sh --files`, setting `PUBLIC_HYGIENE_REPO_ROOT="$PWD"` and `PUBLIC_HYGIENE_PATTERNS_FILE="$patterns_file"`; record the path set and patterns digest in the receipt. Keep deletions in the receipt without passing missing paths. [class: REPOSITORY_TEST]
-- [ ] After the scan passes, record `source hygiene: pass` in the receipt, re-derive the final changed set, and rerun the scan over every existing path including the updated receipt. Require exit 0 and make no further source or receipt edits before commit. If either scan fails, correct the source or receipt, rerun, then record the result and repeat the final check. [class: REPOSITORY_TEST]
-- [ ] Run maintenance pins with `PINS_RECORDED_RED_REGISTER` set to `scripts/gate_liveness_ledger.json`, `PINS_RECORDED_RED_AS_OF` set to the captured execution date, and `PINS_DUPLICATE_ROOT` set to the repository root; capture the command output, record the exact date and exit result, and verify it reports the captured `TMPDIR` removed. [class: REPOSITORY_TEST]
-- [ ] Commit the reference changes and pending sync receipt as `docs: re-aim extracted module references`. [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-scan the corpus for the origin's named sites and new matches; verify each candidate's actual claim before editing. [class: REPOSITORY_TEST]
+- [x] Re-aim only stale moved-content claims to `agents/skills/execute-plan/worktree-first.md`; preserve valid hub pointers and unrelated references. [class: IMPLEMENTATION_REQUIRED]
+- [x] Update the origin row with the post-landing trigger, leaving status changes and origin deletion to normal Plan Lifecycle. Create `docs/history/2026-10-29-vendored-sync-module-twins-runtime-receipt.md` in `pending` state as the tracked post-landing handoff; include only the path-safe fields named in Ship when. [class: IMPLEMENTATION_REQUIRED]
+- [x] Resolve `public_hygiene_patterns_file` from user facts; record its `$HOME`-relative path and SHA-256. Re-derive the untracked-inclusive `git status --short` path set, inspect every entry, and record it in the pending receipt. [class: REPOSITORY_TEST]
+- [x] Scan every existing repo-relative changed path with `scripts/scan-public-hygiene.sh --files`, setting `PUBLIC_HYGIENE_REPO_ROOT="$PWD"` and `PUBLIC_HYGIENE_PATTERNS_FILE="$patterns_file"`; record the path set and patterns digest in the receipt. Keep deletions in the receipt without passing missing paths. [class: REPOSITORY_TEST]
+- [x] After the scan passes, record `source hygiene: pass` in the receipt, re-derive the final changed set, and rerun the scan over every existing path including the updated receipt. Require exit 0 and make no further source or receipt edits before commit. If either scan fails, correct the source or receipt, rerun, then record the result and repeat the final check. [class: REPOSITORY_TEST]
+- [x] Run maintenance pins with `PINS_RECORDED_RED_REGISTER` set to `scripts/gate_liveness_ledger.json`, `PINS_RECORDED_RED_AS_OF` set to the captured execution date, and `PINS_DUPLICATE_ROOT` set to the repository root; capture the command output, record the exact date and exit result, and verify it reports the captured `TMPDIR` removed. [class: REPOSITORY_TEST]
+- [x] Commit the reference changes and pending sync receipt as `docs: re-aim extracted module references`. [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+Origin row docs/history/backlog/2026-10-14-vendored-sync-module-twins.md: covered by this plan (Status flipped by the authoring pass); deleted by this completion pass per Plan Lifecycle, its durable home being this archived plan. The runtime sync handoff this row carried lives on in docs/history/2026-10-29-vendored-sync-module-twins-runtime-receipt.md (pending until the post-landing gate completes). The review-residue rows captured during execution (docs/history/backlog/2026-11-01-skill-text-caps-key-ordering.md, docs/history/backlog/2026-11-01-worktree-first-reaim-residual-sites.md) are new follow-up items, not migrations; they remain open by design.

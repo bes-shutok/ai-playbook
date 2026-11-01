@@ -8,7 +8,7 @@
 - **Class:** fix-class
 - **Driving force:** correctness
 - **Skill/step:** `agents/skills/plans/SKILL.md`, Plan Quality Gate rule 2
-- **Cluster:** docs/history/backlog/completed/2026-10-10-plan-delta-classifier-excluded-region-gap.md; docs/history/backlog/completed/2026-10-16-corrections-chain-unclassified-mechanical-hops.md (both covered by docs/history/plans/completed/2026-10-18-corrections-chain-operator-ack-end-to-end.md); docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md
+- **Cluster:** docs/history/backlog/completed/2026-10-10-plan-delta-classifier-excluded-region-gap.md; docs/history/backlog/completed/2026-10-16-corrections-chain-unclassified-mechanical-hops.md (both covered by docs/history/plans/completed/2026-10-18-corrections-chain-operator-ack-end-to-end.md); docs/history/plans/completed/2026-10-29-plan-delta-classifier-new-plan-baseline.md (covered; origin row deleted with the covering plan archive); docs/history/backlog/2026-11-01-plan-delta-checkpoint-merge-commit-visibility.md (same classifier surface, different defect class)
 - **Dedup probe:** compared the two clustered classifier rows; this row records the required authorization for a semantic plan fold and its fresh-review route, while the clustered rows concern mechanical edit classification and post-certification correction verification.
 
 ## Problem

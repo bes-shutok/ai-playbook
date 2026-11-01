@@ -372,13 +372,14 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
     import quota_window_probe
     import quota_pressure_stats
     unusable = None
+    runtime = None
     if probe_report is None:
         try:
             runtime = quota_window_probe.detect_runtime()
         except Exception as exc:  # transport/detection failures fail open
             runtime = None
             unusable = "runtime detection failed: {}".format(exc)
-        if runtime in (None, "none", "unknown"):
+        if runtime not in ("codex", "zcode"):
             unusable = unusable or "runtime detection degraded ({}); refresh unknown".format(runtime)
             probe_report = None
         else:
@@ -387,8 +388,18 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
             except Exception as exc:
                 probe_report = None
                 unusable = "probe transport failed: {}".format(exc)
+    elif isinstance(probe_report, dict):
+        runtime = probe_report.get("runtime")
     log_dir = os.path.expanduser(log_dir or DEFAULT_LOG_DIR)
-    mining = _mine_merge(log_dir, now)
+    if runtime == "zcode":
+        mining = _mine_merge(log_dir, now)
+    else:
+        mining = {
+            "usable": False,
+            "episode_timestamps": [],
+            "exhaustion_ts_list": [],
+            "days": {},
+        }
     klass, reasons = evaluate_pressure(probe_report, mining, now)
 
     primary = _primary_limit(probe_report) if _probe_usable(probe_report) else None
@@ -459,8 +470,32 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
         else:
             wrote = False  # lock timeout: skip the write without blocking
 
-    report = consult(state_path, now)
-    report["refresh_wrote_state"] = wrote
+    if not acquired or not stored_newer:
+        # The shared cache may already contain a result produced from another
+        # runtime's evidence, including after this refresh releases the lock.
+        # Return this refresh's local evaluation instead of an unlocked read.
+        pressure = {
+            "class": klass,
+            "inputs": {"primary_used_percent": used},
+            "reset_at_epoch": reset_epoch,
+        }
+        report = {
+            "class": klass,
+            "computed_at_epoch": now,
+            "dispatch": policy_verdicts(pressure, now),
+            "reset_at_epoch": reset_epoch,
+            "reset_at_iso": (datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
+                             if reset_epoch is not None else None),
+            "reserve_percent": RESERVE_PERCENT,
+            "state_path": os.path.expanduser(str(state_path)),
+            "status": "ok",
+            "refresh_wrote_state": wrote if acquired else False,
+        }
+    else:
+        # Preserve the fail-closed refusal report when a newer schema prevents
+        # this refresh from writing state.
+        report = consult(state_path, now)
+        report["refresh_wrote_state"] = False
     if klass == "unknown" and unusable:
         report["reason"] = unusable
     return report

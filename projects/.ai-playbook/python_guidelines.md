@@ -952,3 +952,10 @@ Witness: a selftest arm drove `main(["--pre-round", plan])` through a redirect-o
 - **Trigger:** naming a helper or attribute inside a `unittest.TestCase` subclass; generic names like `_outcome`, `_result`, or `_errors` are the collisions.
 - **Rule:** `unittest.TestCase` reserves internal attributes (`_outcome`, `_outcomeForcedErrors`, and siblings), and their types change across Python versions (3.11+ wraps the teardown state in a private class). Assigning over one of them fails far from the cause (`TypeError: '_Outcome' object is not callable`). Give test helpers distinctive names (`_outcome_line`, not `_outcome`).
 - **Witness:** a selftest helper named `_outcome` (asserting a script's final `OUTCOME:` line) collided with the internal attribute on Python 3.11 and broke the suite with the `'_Outcome' object is not callable` error; renaming the helper to `_outcome_line` fixed it with no unittest API change.
+
+## 40. Repo-Local Scripts Run Without `python3 -I`
+
+- **Trigger:** running a repo-local script that imports sibling modules while an environment directive says to run Python that reads untrusted files with `-I`.
+- **Rule:** `-I` also removes the script's own directory from `sys.path`, so a trusted repo-local script doing plain sibling imports fails with `ModuleNotFoundError` before its own code runs. Apply `-I` only to untrusted content; run the repository's own trusted scripts with plain `python3` (`-E -s` when only environment and user-site isolation is wanted).
+- **Why:** isolated mode bundles env-ignore, user-site-ignore, and the safe-path strip of the script directory; that entry is the load mechanism for flat sibling-import layouts, so stripping it is the feature, not a quirk.
+- **Witness:** `python3 -I scripts/execute_plan_runtime.py` failed with `ModuleNotFoundError: No module named 'runtime_capabilities'` (a sibling of the script's directory); re-running without `-I` worked unchanged in the same shell.

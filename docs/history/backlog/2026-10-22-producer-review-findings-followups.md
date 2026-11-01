@@ -3,10 +3,12 @@
 Status: open
 Priority: high
 Origin class: self-serving
+Quarantine: 2026-11-01
 
 Added: 2026-10-22, execute-plan Phase 3 r1 fresh-adversarial panel over the branch delta (plan exec-review-records-at-round-close); valid non-blocking findings folded forward as durable backlog capture.
 Cluster: docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md (same script: `scripts/produce_exec_review_record.py` follow-up family)
 Cluster: docs/history/backlog/2026-10-27-verify-digest-recompute-head-vs-expect-head.md (same defect family: `scripts/review_record_selection.py verify-digest` refusals forcing manual work; additive digest-domain rows docs/history/backlog/2026-10-18-plan-delta-classifier-scope-fold.md and docs/history/backlog/2026-10-21-seal-landing-survival-review-residuals.md)
+Cluster: docs/history/backlog/2026-11-01-producer-egress-digest-mint-gap.md (same script: `scripts/produce_exec_review_record.py` follow-up family)
 
 Driving force: maintainability and test-surface completeness for `scripts/produce_exec_review_record.py` and its skill-text consumers; none of these block the plan's Outcome (all fail safe at the validator's hard-mode arbitration).
 

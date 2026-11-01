@@ -885,5 +885,120 @@ class DirectoryPlanClassifierTest(unittest.TestCase):
         self.assertIn("not-a-plan", proc.stderr)
 
 
+class NewPlanBaselineCliTest(unittest.TestCase):
+    """A single-file plan absent from the ``--since`` commit (new-plan
+    baseline plan, Task 1): the classifier reuses the first checkpoint
+    commit after ``--since`` that adds the path as the exact before side
+    and reports the selected baseline commit and digest; when a
+    successful history lookup finds no such commit through HEAD the
+    named absent-baseline refusal keeps the unclassified fresh-review
+    route with no corrections row and no operator acknowledgement; a
+    checkpoint history-read failure keeps the indeterminate outcome; a
+    plan tracked at ``--since`` keeps the existing comparison."""
+
+    DRAFT = b"# plan\n\nalpha %s bravo.\n" % EM
+    FOLD = b"# plan\n\nalpha, bravo.\n"
+    FOLD_COMMIT = b"# plan\n\nalpha delta bravo.\n"
+
+    def run_cli(self, *args):
+        return subprocess.run(
+            [sys.executable, str(CLASSIFIER)] + list(args),
+            capture_output=True, text=True, env=cr.hermetic_git_env())
+
+    def last_outcome(self, proc):
+        return proc.stdout.splitlines()[-1]
+
+    def test_first_checkpoint_is_the_before_side(self):
+        # The plan is added by a checkpoint commit after --since and
+        # modified by a later one: the before side is the adding
+        # commit's exact blob, and the selected baseline commit and
+        # digest are reported; the row's before_digest re-binds it.
+        repo = cr.build_scratch_repo(self, name="new-plan-checkpoint")
+        seed = repo.commit_file("README.md", b"seed\n", "seed readme")
+        added = repo.commit_file(PLAN_REL, self.DRAFT, "plan first draft")
+        repo.commit_file(PLAN_REL, self.FOLD_COMMIT, "plan fold")
+        repo.write_file(PLAN_REL, self.FOLD)
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", seed, "--emit-row")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: pass")
+        self.assertIn(pdc.CLASS_TYPOGRAPHY, proc.stdout)
+        self.assertIn("baseline commit: %s" % added, proc.stdout)
+        self.assertIn("before digest: %s" % cr.sha256_hex(self.DRAFT),
+                      proc.stdout)
+        self.assertNotIn(
+            "before digest: %s" % cr.sha256_hex(self.FOLD_COMMIT),
+            proc.stdout)
+        rows = [json.loads(line.split(": ", 1)[1])
+                for line in proc.stdout.splitlines()
+                if line.startswith("corrections-row-json: ")]
+        self.assertEqual(len(rows), 1, proc.stdout)
+        self.assertEqual(rows[0]["before_digest"],
+                         cr.sha256_hex(self.DRAFT))
+        self.assertEqual(rows[0]["evidence_commit"], repo.head())
+
+    def test_absent_baseline_refusal_names_the_outcome_without_a_row(self):
+        # The plan was never committed: after a successful history
+        # lookup through HEAD finds no checkpoint adding the path, the
+        # named absent-baseline refusal keeps the unclassified
+        # fresh-review route; no corrections row is emitted even under
+        # the operator-acked emission pressure, and no acknowledgement
+        # is demanded.
+        repo = cr.build_scratch_repo(self, name="new-plan-absent")
+        seed = repo.commit_file("README.md", b"seed\n", "seed readme")
+        repo.write_file(PLAN_REL, self.DRAFT)
+        receipt_path = repo.root / "receipt.json"
+        receipt_path.write_text(json.dumps({
+            "directive": "re-bind the delta",
+            "authorization_witness":
+                ".ai-playbook/scheduler-state.json#correction_authorizations",
+            "classifier_gap_row":
+                "docs/history/backlog/absent-baseline-gap.md",
+        }))
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", seed, "--emit-row",
+                            "--kind", "operator-acked",
+                            "--receipt", str(receipt_path))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
+        self.assertIn("refusal:", proc.stdout)
+        self.assertIn("absent baseline", proc.stdout)
+        self.assertIn("fresh-review", proc.stdout)
+        self.assertNotIn("corrections-row-json:", proc.stdout)
+        self.assertEqual(proc.stderr, "", proc.stderr)
+
+    def test_history_lookup_failure_stays_indeterminate(self):
+        # The adding commit's tree object is unreadable, so the
+        # checkpoint history lookup fails over resolved inputs: the run
+        # stays indeterminate (exit 2) instead of being reported as an
+        # absent checkpoint.
+        repo = cr.build_scratch_repo(self, name="new-plan-lookup-fail")
+        seed = repo.commit_file("README.md", b"seed\n", "seed readme")
+        added = repo.commit_file(PLAN_REL, self.DRAFT, "plan first draft")
+        tree = repo.git("rev-parse", "--verify",
+                        "%s^{tree}" % added).stdout.strip()
+        (repo.root / ".git" / "objects" / tree[:2] / tree[2:]).unlink()
+        repo.write_file(PLAN_REL, self.FOLD)
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", seed)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: indeterminate")
+
+    def test_tracked_plan_keeps_the_existing_comparison(self):
+        # The plan exists at --since: the existing comparison runs with
+        # no baseline-commit reporting and no checkpoint lookup.
+        repo = cr.build_scratch_repo(self, name="new-plan-tracked")
+        start = repo.commit_file(PLAN_REL, self.DRAFT, "seed plan")
+        repo.write_file(PLAN_REL, self.FOLD)
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", start)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: pass")
+        self.assertIn(pdc.CLASS_TYPOGRAPHY, proc.stdout)
+        self.assertIn("before digest: %s" % cr.sha256_hex(self.DRAFT),
+                      proc.stdout)
+        self.assertNotIn("baseline commit:", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

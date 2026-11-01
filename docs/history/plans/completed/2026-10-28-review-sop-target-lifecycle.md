@@ -80,13 +80,17 @@ Files:
 Primary class anchors:
 - `Step 4.2 Check Assumptions` in `agents/skills/doing-code-review/SKILL.md`
 
-- [ ] Given a review concerns adopting an existing live resource, expects the reviewer to compare the cited procedure's preconditions with task intent and target state using available issue, PR, author-thread, and repository-configuration evidence; unavailable sources are recorded as unavailable, not inferred. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a review concerns creating a new target and the cited procedure only applies to adopting an existing resource, expects the reviewer to reject that procedure as support for a blocker based on topic similarity alone; given a procedure whose preconditions match new-target creation, expects the reviewer to assess it normally. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a cited procedure's preconditions do not match the requested lifecycle or target state, expects the reviewer to drop or reframe the procedure-based finding and retain any independently supported concern. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a procedure's preconditions do match the requested lifecycle and target state, expects the existing finding assessment to continue unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Rewrite Step 4.2 with the smallest generic wording change; do not add an automated gate, production execution prerequisite, or database-only exception. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pay for any operative text growth in `agents/skills/doing-code-review/SKILL.md` by deleting equivalent operative bytes in the same change while preserving the existing assumption protections; record the comparison in the review. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the existing review-plan panel for the skill diff and resolve blocking findings. [class: REPOSITORY_TEST]
-- [ ] Run the updated review skill with anonymized sample contexts for existing-resource adoption and new-target creation, including matching and mismatched procedure preconditions; verify the applicable procedure remains usable, the inapplicable procedure is dropped or reframed, and missing target-state evidence is not inferred. [class: REPOSITORY_TEST]
-- [ ] Run `git diff --check`. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: check review procedure applicability` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a review concerns adopting an existing live resource, expects the reviewer to compare the cited procedure's preconditions with task intent and target state using available issue, PR, author-thread, and repository-configuration evidence; unavailable sources are recorded as unavailable, not inferred. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a review concerns creating a new target and the cited procedure only applies to adopting an existing resource, expects the reviewer to reject that procedure as support for a blocker based on topic similarity alone; given a procedure whose preconditions match new-target creation, expects the reviewer to assess it normally. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a cited procedure's preconditions do not match the requested lifecycle or target state, expects the reviewer to drop or reframe the procedure-based finding and retain any independently supported concern. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a procedure's preconditions do match the requested lifecycle and target state, expects the existing finding assessment to continue unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] Rewrite Step 4.2 with the smallest generic wording change; do not add an automated gate, production execution prerequisite, or database-only exception. [class: IMPLEMENTATION_REQUIRED]
+- [x] Pay for any operative text growth in `agents/skills/doing-code-review/SKILL.md` by deleting equivalent operative bytes in the same change while preserving the existing assumption protections; record the comparison in the review. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the existing review-plan panel for the skill diff and resolve blocking findings. [class: REPOSITORY_TEST]
+- [x] Run the updated review skill with anonymized sample contexts for existing-resource adoption and new-target creation, including matching and mismatched procedure preconditions; verify the applicable procedure remains usable, the inapplicable procedure is dropped or reframed, and missing target-state evidence is not inferred. [class: REPOSITORY_TEST]
+- [x] Run `git diff --check`. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: check review procedure applicability` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of covered origin
+
+Origin row docs/history/backlog/2026-10-28-review-sop-applicability.md (Status: covered by this plan at authoring closeout) is deleted at the archive transition; its problem/expected/suggested-direction content is carried by this plan's Why, Gist, Outcome, and Assumptions sections, and the landed wording lives in agents/skills/doing-code-review/SKILL.md Step 4.2 (commit 47941d13a). Exec r1 residuals: two Low pay-trim observations backlogged as docs/history/backlog/2026-11-01-applicability-pay-trim-guidance-thinning.md.

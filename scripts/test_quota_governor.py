@@ -271,6 +271,73 @@ def test_refresh_lock_timeout_skips_write(tmp_path, monkeypatch):
         os.close(lock_fd)
 
 
+def test_refresh_lock_timeout_uses_local_runtime_result(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    import quota_window_probe as probe
+
+    state_path = tmp_path / "s.json"
+    cached = g.new_state(NOW)
+    cached["pressure"]["class"] = "exhausted"
+    cached["reset_at_epoch"] = int(NOW) + 3600
+    assert g.write_state(state_path, cached)
+
+    @contextmanager
+    def timed_out_lock(*args, **kwargs):
+        yield False
+
+    monkeypatch.setattr(g, "governor_lock", timed_out_lock)
+    monkeypatch.setattr(probe, "detect_runtime", lambda *a, **k: "codex")
+    monkeypatch.setattr(probe, "run_probe", lambda runtime: {
+        "runtime": runtime, "limits": [], "binding": None,
+        "pause_decision": "continue", "status": "ok"})
+
+    report = g.refresh(str(state_path), log_dir=str(tmp_path), updated_by="t",
+                       now=NOW + 1)
+
+    assert report["class"] == "abundant"
+    assert report["refresh_wrote_state"] is False
+    assert report["dispatch"]["execution"]["verdict"] == "allow"
+    assert report["dispatch"]["authoring"]["verdict"] == "allow"
+    assert g.read_state(state_path)["pressure"]["class"] == "exhausted"
+
+
+def test_refresh_response_survives_other_runtime_overwrite_after_lock_release(
+        tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    state_path = tmp_path / "s.json"
+    original_refresh = g.refresh
+    interleaved = False
+
+    @contextmanager
+    def interleaving_lock(*args, **kwargs):
+        nonlocal interleaved
+        yield True
+        if not interleaved:
+            interleaved = True
+            zcode = probe_report(96.0, decision="pause", now=NOW + 1)
+            zcode["runtime"] = "zcode"
+            original_refresh(str(state_path), log_dir=str(tmp_path),
+                             updated_by="zcode", now=NOW + 1,
+                             probe_report=zcode)
+
+    monkeypatch.setattr(g, "governor_lock", interleaving_lock)
+    codex = probe_report(10.0, now=NOW)
+    codex["runtime"] = "codex"
+
+    report = original_refresh(str(state_path), log_dir=str(tmp_path),
+                              updated_by="codex", now=NOW,
+                              probe_report=codex)
+
+    assert interleaved
+    assert g.read_state(state_path)["pressure"]["class"] == "exhausted"
+    assert report["class"] == "abundant"
+    assert report["refresh_wrote_state"] is True
+    assert report["dispatch"]["execution"]["verdict"] == "allow"
+    assert report["dispatch"]["authoring"]["verdict"] == "allow"
+
+
 def test_two_refresh_interlock(tmp_path):
     state_path = tmp_path / "s.json"
     r1 = g.refresh(str(state_path), log_dir=str(tmp_path), updated_by="a",
@@ -300,6 +367,90 @@ def test_refresh_probe_transport_failure_fails_open(tmp_path, monkeypatch):
                        updated_by="t", now=NOW)
     assert report["class"] == "unknown"
     assert "probe transport failed" in report.get("reason", "")
+
+
+def _write_current_zcode_exhaustion(log_dir):
+    day = datetime.fromtimestamp(NOW).strftime("%Y-%m-%d")
+    timestamp = datetime.fromtimestamp(NOW).astimezone().isoformat()
+    (log_dir / "zcode-{}.jsonl".format(day)).write_text(json.dumps({
+        "timestamp": timestamp,
+        "event": "model.request.failed",
+        "sessionId": "s1",
+        "turnId": "t1",
+        "context": {"statusCode": 429, "reason": "rate_limited",
+                    "statusMessage": "[1308][Usage limit reached][tok1308]"},
+    }) + "\n")
+
+
+def test_refresh_codex_ignores_zcode_exhaustion_log(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    _write_current_zcode_exhaustion(log_dir)
+    monkeypatch.setattr(probe, "detect_runtime", lambda *a, **k: "codex")
+    monkeypatch.setattr(probe, "run_probe", lambda runtime: {
+        "runtime": runtime, "limits": [], "binding": None,
+        "pause_decision": "continue", "status": "ok"})
+
+    report = g.refresh(str(tmp_path / "s.json"), log_dir=str(log_dir),
+                       updated_by="t", now=NOW)
+
+    assert report["class"] == "abundant"
+    assert report["dispatch"]["execution"]["verdict"] == "allow"
+    assert report["dispatch"]["authoring"]["verdict"] == "allow"
+
+
+def test_refresh_zcode_uses_its_own_exhaustion_log(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    _write_current_zcode_exhaustion(log_dir)
+    monkeypatch.setattr(probe, "detect_runtime", lambda *a, **k: "zcode")
+    monkeypatch.setattr(probe, "run_probe", lambda runtime: probe_report(10.0, now=NOW))
+
+    report = g.refresh(str(tmp_path / "s.json"), log_dir=str(log_dir),
+                       updated_by="t", now=NOW)
+
+    assert report["class"] == "exhausted"
+    assert report["dispatch"]["execution"]["verdict"] == "defer"
+    assert report["dispatch"]["authoring"]["verdict"] == "defer"
+
+
+def test_refresh_primary_exhaustion_still_pauses_codex(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    monkeypatch.setattr(probe, "detect_runtime", lambda *a, **k: "codex")
+    probed_runtimes = []
+
+    def run_probe(runtime):
+        probed_runtimes.append(runtime)
+        return {**probe_report(96.0, now=NOW), "runtime": runtime}
+
+    monkeypatch.setattr(probe, "run_probe", run_probe)
+
+    report = g.refresh(str(tmp_path / "s.json"), log_dir=str(log_dir),
+                       updated_by="t", now=NOW)
+
+    assert probed_runtimes == ["codex"]
+    assert report["class"] == "exhausted"
+    assert report["dispatch"]["execution"]["verdict"] == "defer"
+    assert report["dispatch"]["authoring"]["verdict"] == "defer"
+
+
+def test_refresh_unrecognized_runtime_ignores_zcode_exhaustion_log(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    _write_current_zcode_exhaustion(log_dir)
+    monkeypatch.setattr(probe, "detect_runtime", lambda *a, **k: "unrecognized")
+
+    report = g.refresh(str(tmp_path / "s.json"), log_dir=str(log_dir),
+                       updated_by="t", now=NOW)
+
+    assert report["class"] == "unknown"
+    assert report["dispatch"]["execution"]["verdict"] == "allow"
+    assert report["dispatch"]["authoring"]["verdict"] == "allow"
 
 
 # --- consult CLI contract ----------------------------------------------------

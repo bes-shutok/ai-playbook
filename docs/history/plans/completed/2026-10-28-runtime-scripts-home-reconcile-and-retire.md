@@ -107,10 +107,14 @@ Evidence:
 - The current manifest omits the three confirmed runtime-resolved helpers even though runtime-home callers rely on them.
 - The quota helper pair shares an import dependency, so the manifest must include both files for the canonical runtime path to resolve.
 
-- [ ] Given the current manifest and runtime consumer references, add the three confirmed runtime-resolved helpers and quota import dependency; expects the manifest to list each once and resolve every declared repository source. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the updated manifest and repository-selected tests, record exact test results and the known home-only delta paths in the existing task log; expects the log to provide the operational follow-up's evidence list without running runtime-home mutations. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: reconcile runtime script deployment inventory` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the current manifest and runtime consumer references, add the three confirmed runtime-resolved helpers and quota import dependency; expects the manifest to list each once and resolve every declared repository source. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the updated manifest and repository-selected tests, record exact test results and the known home-only delta paths in the existing task log; expects the log to provide the operational follow-up's evidence list without running runtime-home mutations. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: reconcile runtime script deployment inventory` [class: IMPLEMENTATION_REQUIRED]
 
 ## Documentation Impact Assessment
 
 No new operator guide or skill is needed. The plan updates the existing deployment inventory, and the run report records the remaining non-deployment data and no-twin helper without introducing a new maintenance surface.
+
+## Disposition of migrated backlog items
+
+Origin row docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md: NOT covered by this landing — the plan's Ship when (class OPERATIONS_FOLLOW_UP) keeps the origin open until the separately tracked runtime-home operation meets its acceptance (no real files beside repository symlinks, no dangling links, every removed or migrated entry accounted for). The repository half of the plan is complete; the operational half (runtime-home reconcile, per-entry delta dispositions, whole-manifest sync, deployment check) remains a tracked follow-up owned by the runtime-home operator, with the evidence list recorded in the execution run's task log. No backlog rows were migrated by this plan.

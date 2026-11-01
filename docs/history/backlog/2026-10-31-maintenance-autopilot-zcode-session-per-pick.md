@@ -1,9 +1,12 @@
 # Backlog: ZCode maintenance picks continue in fresh sessions
+Cluster: docs/history/backlog/2026-11-01-codex-maintenance-quota-reset-wake.md (same D-17 continuation surface; different runtime wake capability)
 
 Filed: 2026-10-31
 Status: open
 Priority: high
 Required agent type: zcode
+Cluster: docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md (same D-17 continuation surface; separate runtime-specific continuation mechanism)
+Cluster: docs/history/backlog/2026-10-31-maintenance-cycle-gate-scenario-test.md (same D-17 continuation surface; separate regression-test gap)
 
 - **Class:** fix-class
 - **Origin class:** runtime-specific follow-up to the D-17 maintenance autopilot directive

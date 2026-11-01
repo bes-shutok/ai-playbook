@@ -1,7 +1,7 @@
 # Backlog: quota-wall byte-level witness accepts any committed record rewrite permanently
 
 - **Filed:** 2026-10-30 during the phase2-baseline-repair Phase 3 review-fix round (r1)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md)
 - **Workflow:** backlog
 - **Priority:** normal
 - **Skill-step:** `scripts/test_quota_wall_doctrine.py` `test_witness_every_preexisting_record_is_textually_unchanged_against_baseline` (the directives-file byte-level witness, records D-1..D-12 in `docs/maintenance/operator-directives.md`)

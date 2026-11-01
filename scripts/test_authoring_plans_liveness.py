@@ -14,6 +14,7 @@ Two test groups (the authoring-round-liveness-gap plan, Task 1):
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROBE = REPO_ROOT / "scripts" / "check_authoring_plans_liveness.py"
@@ -40,7 +42,6 @@ DONE_SWEEP_GATES = REPO_ROOT / "scripts" / "done_sweep_gates_lib.py"
 
 PLANS_DIR = "docs/history/plans"
 CLAIMS_DIR = "docs/tmp/authoring-claims"
-
 SLUG = "demo-plan"
 PLAN_BASENAME = "2026-10-05-" + SLUG + ".md"
 
@@ -50,8 +51,15 @@ def iso_minutes_ago(minutes: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
 
 
-def write_claim(repo: Path, name: str, updated: str, naming_line: str, session: str = "sess-fixture-1") -> None:
-    """Write one authoring claim file in the duty's four-frontmatter-line shape.
+def write_claim(
+    repo: Path,
+    name: str,
+    updated: str,
+    naming_line: str,
+    session: str = "sess-fixture-1",
+    runtime_id: str | None = None,
+) -> None:
+    """Write one authoring claim file in the duty's metadata-line shape.
 
     ``naming_line`` is a body line carrying the plan reference (the text the
     probe's slug-or-basename containment matching reads).
@@ -63,7 +71,8 @@ def write_claim(repo: Path, name: str, updated: str, naming_line: str, session: 
         "item: docs/history/backlog/demo-item.md\n"
         f"created: {updated}\n"
         f"updated: {updated}\n"
-        f"{naming_line}\n"
+        + (f"runtime_id: {runtime_id}\n" if runtime_id is not None else "")
+        + f"{naming_line}\n"
     )
     (claims / name).write_text(body, encoding="utf-8")
 
@@ -77,13 +86,36 @@ class PlansLivenessProbeTest(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.base, ignore_errors=False)
 
+    def fixture_env(self) -> dict[str, str]:
+        """Give fixture Git and probe commands a controlled host environment."""
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        home = self.base / "home"
+        home.mkdir(exist_ok=True)
+        env["HOME"] = str(home)
+        xdg_config = home / "config"
+        xdg_config.mkdir(exist_ok=True)
+        env["XDG_CONFIG_HOME"] = str(xdg_config)
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
+        env["TZ"] = "UTC"
+        return env
+
     def make_repo(self, name: str) -> Path:
         repo = self.base / name
         repo.mkdir()
         subprocess.run(
-            ["git", "init", "-q", str(repo)], capture_output=True, text=True, check=True
+            ["git", "init", "-q", str(repo)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=self.fixture_env(),
         )
         (repo / PLANS_DIR).mkdir(parents=True)
+        shutil.copy2(
+            REPO_ROOT / "projects/.ai-playbook/execute-plan-runtime-inventory.toml",
+            repo / "runtime-inventory.toml",
+        )
         return repo
 
     def add_plan(self, repo: Path, basename: str = PLAN_BASENAME) -> Path:
@@ -94,11 +126,14 @@ class PlansLivenessProbeTest(unittest.TestCase):
     def run_probe(self, repo: Path) -> subprocess.CompletedProcess:
         if not PROBE.exists():
             raise FileNotFoundError(f"probe script missing: {PROBE}")
+        env = self.fixture_env()
+        env["EXECUTE_PLAN_RUNTIME_INVENTORY"] = str(repo / "runtime-inventory.toml")
         return subprocess.run(
             [sys.executable, str(PROBE), "--repo", str(repo)],
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
 
     def test_fresh_claim_classifies_live(self) -> None:
@@ -118,6 +153,58 @@ class PlansLivenessProbeTest(unittest.TestCase):
         self.assertIn(f"{PLANS_DIR}/{PLAN_BASENAME}", live[0])
         self.assertIn("demo-item.md", live[0])
         self.assertEqual(lines[-1], "OUTCOME: pass", proc.stdout)
+
+    def test_runtime_identity_is_reported_and_legacy_or_invalid_is_unknown(self) -> None:
+        for name, runtime_id, expected in (
+            ("known.md", "codex", "runtime_id=codex"),
+            ("legacy.md", None, "runtime_id=unknown"),
+            ("invalid.md", "not-a-runtime", "runtime_id=unknown"),
+        ):
+            repo = self.make_repo(name.replace(".md", ""))
+            self.add_plan(repo)
+            write_claim(
+                repo, name, iso_minutes_ago(5), f"plan: {PLANS_DIR}/{PLAN_BASENAME}",
+                runtime_id=runtime_id,
+            )
+            with patch.dict(
+                os.environ,
+                {"EXECUTE_PLAN_RUNTIME_INVENTORY": str(self.base / "missing-inventory.toml")},
+            ):
+                proc = self.run_probe(repo)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            live = next(line for line in proc.stdout.splitlines() if line.startswith("live:"))
+            self.assertIn(expected, live)
+
+    def test_fixture_git_probe_ignores_ambient_repository_overrides(self) -> None:
+        overrides = {
+            "GIT_DIR": str(self.base / "missing.git"),
+            "GIT_WORK_TREE": str(self.base / "wrong-worktree"),
+            "GIT_INDEX_FILE": str(self.base / "wrong-index"),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.worktree",
+            "GIT_CONFIG_VALUE_0": str(self.base / "wrong-config-worktree"),
+            "XDG_CONFIG_HOME": str(self.base / "ambient-xdg"),
+        }
+        with patch.dict(os.environ, overrides):
+            hostile_git_config = self.base / "ambient-xdg" / "git"
+            hostile_git_config.mkdir(parents=True)
+            (hostile_git_config / "config").write_text(
+                "[core]\n\texcludesFile = " + str(self.base / "hide-fixtures") + "\n",
+                encoding="utf-8",
+            )
+            (self.base / "hide-fixtures").write_text("*.md\n", encoding="utf-8")
+            repo = self.make_repo("isolated-git")
+            self.add_plan(repo)
+            write_claim(
+                repo,
+                "demo-item.md",
+                iso_minutes_ago(5),
+                f"plan: {PLANS_DIR}/{PLAN_BASENAME}",
+            )
+            proc = self.run_probe(repo)
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.splitlines()[-1], "OUTCOME: pass", proc.stdout)
 
     def test_no_claim_classifies_stranded(self) -> None:
         repo = self.make_repo("noclaim")

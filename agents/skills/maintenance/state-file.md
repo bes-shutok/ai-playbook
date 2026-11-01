@@ -52,7 +52,7 @@ Scoping note:
   "turn_error": null,
   "rearm_note": null,
   "children": [
-    {"automation_id": "<id or null for idle-time or in-session>", "kind": "execute|author|audit|retriage|adhoc",
+    {"automation_id": "<id or null for idle-time or in-session>", "runtime_id": "<canonical runtime id or unknown>", "kind": "execute|author|audit|retriage|adhoc",
      "target": "<path or <path> (idle) or <path> (in-session)>", "created_at": "<iso>", "requested_at": "<iso or null>", "fire_at": "<iso or null>",
      "quota_status": "ok|unknown|deferred-peak|skipped-unsupported-harness", "outcome": "pending|progress|in_progress|failed",
      "outcome_checked_at": "<iso|null>", "progress_mark": null, "resume_count": 0,
@@ -64,6 +64,8 @@ Scoping note:
   "alert": null
 }
 ```
+
+New `children[]` entries write `runtime_id` from the authoritative runtime inventory; an omitted or unrecognized identity is `unknown`, never inferred. State rewrites carry an existing entry's value unchanged, and legacy entries without a valid canonical ID remain readable as shared unknown.
 
 `alert` is `null` or an object `{"tripped_at": "<iso>", "reason": "<short reason>"}`.
 

@@ -97,8 +97,10 @@ Modes:
                           report-only scope: a match emits a
                           `PUBLIC_HYGIENE_REPORT: path=...` record and never
                           fails the run; enumeration failure emits
-                          `PUBLIC_HYGIENE_REPORT: enumeration-unavailable`
-                          and skips only that scope. A missing or unreadable
+                          `PUBLIC_HYGIENE_REPORT: enumeration-unavailable`,
+                          an rg scan failure after successful enumeration
+                          emits `PUBLIC_HYGIENE_REPORT: scan-unavailable`,
+                          and either skips only that scope. A missing or unreadable
                           patterns file fails the scan (tool error); the
                           report arm's patterns-unavailable record exists
                           only for direct programmatic invocation.
@@ -150,8 +152,15 @@ run_scan() {
   local paths_kind="$1"; shift
 
   local rg_paths=()
+  local p
   if [ "$paths_kind" = "SCAN_STRICT" ]; then
-    rg_paths=("${SCAN_STRICT[@]}")
+    # Only existing roots are passed: rg exits 2 on a missing named path,
+    # and since the fail-closed arm (2026-10-31) that exit is fatal, so a
+    # repo without one of the declared roots must skip it here rather than
+    # fail the whole scan.
+    for p in "${SCAN_STRICT[@]}"; do
+      [ -e "$p" ] && rg_paths+=("$p")
+    done
   else
     # paths_kind already holds the file list as a single string; split on newlines.
     while IFS= read -r p; do
@@ -201,11 +210,7 @@ report_hits_for_paths() {
     # "-" cannot be parsed as options either (r3 F4); and an rg failure with
     # exit > 1 (for example an invalid regex line in the shared patterns
     # file) is fatal (a tool error, exit 3 under the outcome contract),
-    # never a silent pass. The frozen full-tree and changed modes keep their
-    # argv and swallow-to-pass behavior untouched; named residual: a dash-led
-    # active patterns line is silently unapplied there and an rg exit > 1 is
-    # swallowed, an asymmetry observable against files mode on identical input
-    # (review r2 comment; follow-up backlog row owns the fail-closed arm).
+    # never a silent pass.
     hits="$(rg -n --hidden -e "$pattern" "${GLOB_EXCLUDES[@]}" -- "$@" 2>/dev/null)" || rg_rc=$?
     if [ "$rg_rc" -gt 1 ]; then
       echo "FATAL: rg failed (exit $rg_rc) in files mode; check the patterns file" >&2
@@ -213,7 +218,17 @@ report_hits_for_paths() {
       exit 3
     fi
   else
-    hits="$(rg -n --hidden "$pattern" "$@" "${GLOB_EXCLUDES[@]}" 2>/dev/null)" || rg_rc=$?
+    # r2 comment residual, closed 2026-10-31: the frozen full-tree and changed
+    # modes now mirror the files branch's fail-closed shape. Previously they
+    # passed the pattern as a positional rg argument and swallowed exit > 1,
+    # so a dash-led active patterns line was silently unapplied to the
+    # blocking roots and an invalid regex degraded to pass.
+    hits="$(rg -n --hidden -e "$pattern" "${GLOB_EXCLUDES[@]}" -- "$@" 2>/dev/null)" || rg_rc=$?
+    if [ "$rg_rc" -gt 1 ]; then
+      echo "FATAL: rg failed (exit $rg_rc) in $label mode; check the patterns file" >&2
+      emit_outcome tool_error
+      exit 3
+    fi
   fi
   if [ -n "$hits" ]; then
     echo "FAIL: $label"
@@ -245,6 +260,7 @@ changed_files_in_scope() {
   tmp_untracked="$(mktemp)"
   tmp_all="$(mktemp)"
   tmp_err="$(mktemp)"
+  register_tmp "$tmp_tracked" "$tmp_untracked" "$tmp_all" "$tmp_err"
 
   # Tracked changes: working tree vs <ref>. This catches staged + unstaged
   # modifications (added/modified/deleted) relative to the ref. We compare the
@@ -379,6 +395,7 @@ collect_report_scope_paths() {
   REPORT_SCOPE_PATHS=()
   local tmp_enum rec meta mode path
   tmp_enum="$(mktemp "${TMPDIR:-/tmp}/pubhyg-enum.XXXXXX")" || return 1
+  register_tmp "$tmp_enum"
   if ! git_enumerate >"$tmp_enum"; then
     rm -f "$tmp_enum"
     return 1
@@ -432,13 +449,16 @@ json_quote_path() {
 # blocking scan (BUILTIN_PATTERNS plus the shared patterns file through the
 # one shared reader) and emit one `PUBLIC_HYGIENE_REPORT: path=...` record
 # per matching file, paths after `--` so option-shaped names stay paths.
-# Never touches FAILS or the exit code: an enumeration or scan failure emits
-# the fixed enumeration-unavailable record and a missing-or-unreadable
+# Never touches FAILS or the exit code: an enumeration failure emits the
+# fixed enumeration-unavailable record, an rg scan failure after successful
+# enumeration emits the fixed scan-unavailable record (r2 F4a: no longer
+# mislabeled enumeration-unavailable; same prefix grammar, so the done
+# gate's verbatim forwarding is unchanged), and a missing-or-unreadable
 # shared patterns file emits the fixed patterns-unavailable record
 # (r3 F1), each skipping only this scope, and matched file content never
 # reaches the output (plan 2026-10-26-hygiene-scanner-default-scope-parity).
 run_report_scan() {
-  local failed=0 rc=0 pattern p
+  local rc=0 pattern p
   # r3 F1: same read gate as the blocking consumer, for the same reason: a
   # file that exists but is unreadable must never silently degrade this
   # scope to builtin-only pattern membership. The fixed record keeps the
@@ -453,27 +473,22 @@ run_report_scan() {
     echo "PUBLIC_HYGIENE_REPORT: enumeration-unavailable"
     return 0
   }
+  register_tmp "$tmp_matches"
+  # r2 design-simplicity c1: the builtin and shared-file patterns ride one
+  # rg pass as repeated -e flags (the previous shape ran one rg per pattern
+  # over the same scope), removing the duplicated loop and the per-pattern
+  # process churn without changing the record grammar.
+  local -a pattern_args=()
   for pattern in "${BUILTIN_PATTERNS[@]}"; do
-    rc=0
-    rg -l --null --hidden -e "$pattern" -- "${REPORT_SCOPE_PATHS[@]}" >>"$tmp_matches" 2>/dev/null || rc=$?
-    if [ "$rc" -gt 1 ]; then
-      failed=1
-      break
-    fi
+    pattern_args+=(-e "$pattern")
   done
-  if [ "$failed" -eq 0 ]; then
-    while IFS= read -r pattern; do
-      rc=0
-      rg -l --null --hidden -e "$pattern" -- "${REPORT_SCOPE_PATHS[@]}" >>"$tmp_matches" 2>/dev/null || rc=$?
-      if [ "$rc" -gt 1 ]; then
-        failed=1
-        break
-      fi
-    done < <(_patterns_from_file)
-  fi
-  if [ "$failed" -eq 1 ]; then
-    rm -f "$tmp_matches"
-    echo "PUBLIC_HYGIENE_REPORT: enumeration-unavailable"
+  while IFS= read -r pattern; do
+    pattern_args+=(-e "$pattern")
+  done < <(_patterns_from_file)
+  rc=0
+  rg -l --null --hidden "${pattern_args[@]}" -- "${REPORT_SCOPE_PATHS[@]}" >>"$tmp_matches" 2>/dev/null || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "PUBLIC_HYGIENE_REPORT: scan-unavailable"
     return 0
   fi
   if [ -s "$tmp_matches" ]; then
@@ -703,18 +718,23 @@ EOF
   # needle pins output text, so a case cannot satisfy a rc/message
   # expectation via the wrong arm (r2 overflow T4). An optional --outcome
   # label (batch 2 Task 5, scripts/OUTCOME_CONTRACT.md) pins exactly one
-  # final `OUTCOME: <label>` row on the run's output. Arguments after --
-  # are passed to the scanner verbatim.
+  # final `OUTCOME: <label>` row on the run's output. An optional
+  # --patterns <file> overrides the child's deny-patterns file, so an arm
+  # can pin a hostile patterns-line shape (dash-led, invalid regex) without
+  # disturbing the shared file. Arguments after -- are passed to the
+  # scanner verbatim.
   selftest_check_files() {
     local name="$1"
     local expect="$2"   # pass | fail | rc=<N>
     shift 2
     local needle=""
     local want_outcome=""
+    local patterns_file="$patterns"
     while :; do
       case "$1" in
         --contains) needle="$2"; shift 2 ;;
         --outcome) want_outcome="$2"; shift 2 ;;
+        --patterns) patterns_file="$2"; shift 2 ;;
         *) break ;;
       esac
     done
@@ -725,7 +745,7 @@ EOF
     local actual_rc
     set +e
     actual_out="$(PUBLIC_HYGIENE_REPO_ROOT="$repo" \
-                  PUBLIC_HYGIENE_PATTERNS_FILE="$patterns" \
+                  PUBLIC_HYGIENE_PATTERNS_FILE="$patterns_file" \
                   bash "$0" "$@" 2>&1)"
     actual_rc=$?
     set -e
@@ -923,6 +943,32 @@ EOF
   selftest_check_files "files-dotdot-into-excluded-prefix-skipped" pass \
     --contains "skipped excluded path" -- \
     --files "docs/./reviews/hit.md"
+
+  # 2026-10-31 (frozen-full-tree-rg-fail-closed-arm row): the frozen
+  # full-tree and changed modes are fail-closed on hostile patterns lines,
+  # mirroring the files branch. A dash-led active patterns line was
+  # previously parsed as an rg option and silently unapplied to the
+  # blocking roots - the hit file below passed under the old shape; now
+  # the pattern rides -e and matches.
+  local dash_patterns="$tmp/patterns-dash"
+  printf '%s\n' '-dashboard' > "$dash_patterns"
+  printf 'see -dashboard config here\n' > "$repo/agents/skills/clean/SKILL.md"
+  selftest_check_files "changed-dash-led-patterns-line-applies" fail \
+    --contains "dashboard" --patterns "$dash_patterns" -- \
+    --changed-from "$baseline_sha"
+
+  # An invalid regex in the shared patterns file is a tool error (exit 3)
+  # in the frozen modes too, never a silent degrade to pass; each mode's
+  # message names its own label, so a case cannot pass via the wrong arm.
+  local badre_patterns="$tmp/patterns-badre"
+  printf '%s\n' '([unclosed' > "$badre_patterns"
+  selftest_check_files "changed-invalid-regex-fails-closed" rc=3 \
+    --outcome tool_error --contains "rg failed (exit 2) in changed (vs" \
+    --patterns "$badre_patterns" -- \
+    --changed-from "$baseline_sha"
+  selftest_check_files "full-tree-invalid-regex-fails-closed" rc=3 \
+    --outcome tool_error --contains "rg failed (exit 2) in full-tree mode" \
+    --patterns "$badre_patterns" --
 
   # Single-sourcing agreement arms: the scan modes must return the same
   # verdict for each allowlisted fixture shape (every fixture carries a deny
@@ -1316,6 +1362,25 @@ EOF
     --require 'PUBLIC_HYGIENE_REPORT: enumeration-unavailable' \
     --forbid 'path=docs/report-newroot-hit.md' --
 
+  # 2026-10-31 (report-scope-degradation row, r2 F4a): an rg scan failure
+  # after successful enumeration emits the fixed scan-unavailable record -
+  # no longer mislabeled enumeration-unavailable. An rg shim that fails
+  # only the report scope's -l invocations keeps the blocking scan (rg -n)
+  # real, so the run still fails on the baseline hit and the record rides
+  # the warnings channel.
+  local rg_shim="$tmp/rg-shim"
+  mkdir -p "$rg_shim"
+  {
+    printf '#!/bin/sh\n'
+    printf 'if [ "$1" = "-l" ]; then exit 42; fi\n'
+    printf 'exec "%s" "$@"\n' "$(command -v rg)"
+  } > "$rg_shim/rg"
+  chmod +x "$rg_shim/rg"
+  selftest_check_report "report-scan-unavailable-not-mislabeled" expect=fail \
+    --env "PATH=$rg_shim:$PATH" \
+    --require 'PUBLIC_HYGIENE_REPORT: scan-unavailable' \
+    --forbid 'enumeration-unavailable' --
+
   # The recorded enumeration child environment pins the scrub itself: the
   # pinned GIT_CONFIG_NOSYSTEM=1 export is present, and every var on the
   # git_enumerate scrub list is absent, so each injected decoy (the repo
@@ -1361,6 +1426,19 @@ EOF
 }
 
 # --- entry point ------------------------------------------------------------
+
+# r2 F4b: production scratch files (changed-mode diff lists, the report
+# enumeration list, report matches) are registered here and trap-cleaned at
+# exit, so an interrupted run leaves no residue in $TMPDIR, matching the
+# selftest's trapped temp dir. The selftest replaces this trap with its own
+# temp-dir cleanup, which is fine: the selftest arms run the scanner as
+# child processes, and the two direct in-process run_report_scan calls
+# inline-rm their tmp_matches on their exercised paths.
+CLEANUP_FILES=()
+register_tmp() {
+  CLEANUP_FILES+=("$1")
+}
+trap '[ ${#CLEANUP_FILES[@]} -eq 0 ] || rm -f "${CLEANUP_FILES[@]}"' EXIT
 
 main() {
   local mode="full-tree"

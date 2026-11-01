@@ -18,9 +18,9 @@
 # the scan itself always ends pass.
 #
 # Claim file: docs/tmp/execution-claims/<artifact-slug>.md in the PRIMARY
-# checkout (the first `git worktree list --porcelain` worktree entry); four
-# frontmatter lines at creation (session, plan, created, updated) plus the
-# branch line when --branch is passed (required for take; occupancy
+# checkout (the first `git worktree list --porcelain` worktree entry); five
+# frontmatter lines at creation (session, plan, created, updated, runtime_id)
+# plus the branch line when --branch is passed (required for take; occupancy
 # evidence and the recorded run branch elsewhere), the start-commit line
 # when --start-commit is passed (the value resolved through
 # `git rev-parse --verify <sha>^{commit}` first; an unresolvable value is
@@ -91,6 +91,8 @@ BRANCH=""
 WT_PARENT=""
 BASE=""
 START_COMMIT=""
+RUNTIME_ID="unknown"
+RUNTIME_ARG=""
 OPERAND_SOURCE=""
 OPERAND_SCRATCH=""
 
@@ -161,6 +163,8 @@ Modes:
 
 Options:
   --session <id>           This session's id (required in every mode).
+  --runtime <canonical-id> Runtime identity from the execute-plan inventory;
+                           omitted or unrecognized values are shared unknown.
   --branch <name>          The run branch (required for take; occupancy
                            evidence elsewhere); recorded as the claim's
                            branch line when passed.
@@ -411,7 +415,7 @@ derive_slug() {
 }
 
 create_claim_noclobber() {
-  # The create-if-absent noclobber write: four frontmatter lines at
+  # The create-if-absent noclobber write: five frontmatter lines at
   # creation, plus the branch and start-commit lines this invocation holds
   # (the takeover and recreate rebuild paths carry the recorded identity,
   # never silently dropping it); refuses (nonzero) when the file already
@@ -421,8 +425,8 @@ create_claim_noclobber() {
   (
     set -o noclobber
     {
-      printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\n' \
-        "$session" "$plan" "$stamp" "$stamp"
+      printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\nruntime_id: %s\n' \
+        "$session" "$plan" "$stamp" "$stamp" "$RUNTIME_ID"
       if [[ -n "$BRANCH" ]]; then
         printf 'branch: %s\n' "$BRANCH"
       fi
@@ -435,14 +439,14 @@ create_claim_noclobber() {
 
 write_claim_stamped() {
   # Atomic rewrite (temp plus rename): session, plan, created, updated,
-  # the branch and start-commit lines when non-empty, and the base line
-  # only when non-empty.
+  # runtime identity, the branch and start-commit lines when non-empty, and
+  # the base line only when non-empty.
   local path="$1" session="$2" plan="$3" created="$4" updated="$5" base="$6" \
-    branch="$7" start_commit="$8" tmp
+    branch="$7" start_commit="$8" runtime_id="${9:-$RUNTIME_ID}" tmp
   tmp="$(mktemp "${path}.rewrite.XXXXXX")"
   {
-    printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\n' \
-      "$session" "$plan" "$created" "$updated"
+    printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\nruntime_id: %s\n' \
+      "$session" "$plan" "$created" "$updated" "$runtime_id"
     if [[ -n "$branch" ]]; then
       printf 'branch: %s\n' "$branch"
     fi
@@ -474,13 +478,14 @@ restamp_claim() {
   # existing one otherwise; the branch and start-commit lines follow the
   # same rule (replaced when an argument is passed, kept otherwise).
   local path="$1" base="${2:-}" branch="${3:-}" start_commit="${4:-}"
-  local session plan created existing_base existing_branch existing_start_commit
+  local session plan created existing_base existing_branch existing_start_commit existing_runtime
   session="$(claim_field "$path" session)"
   plan="$(claim_field "$path" plan)"
   created="$(claim_field "$path" created)"
   existing_base="$(claim_field "$path" base)"
   existing_branch="$(claim_field "$path" branch)"
   existing_start_commit="$(claim_field "$path" start-commit)"
+  existing_runtime="$(claim_field "$path" runtime_id)"
   if [[ -n "$base" ]]; then
     existing_base="$base"
   fi
@@ -491,7 +496,8 @@ restamp_claim() {
     existing_start_commit="$start_commit"
   fi
   if ! write_claim_stamped "$path" "$session" "$plan" "${created:-$(iso_now)}" \
-      "$(iso_now)" "$existing_base" "$existing_branch" "$existing_start_commit"; then
+      "$(iso_now)" "$existing_base" "$existing_branch" "$existing_start_commit" \
+      "${existing_runtime:-unknown}"; then
     refuse "refresh refused: claim $path changed under this restamp (racing holder: $(claim_field "$path" session 2>/dev/null || echo unattributed))"
     refuse "  the stamped write lost its compare-and-delete; the claim is left untouched"
     die_fail
@@ -1399,8 +1405,8 @@ try_dead_run_conversion() {
   fi
   local tmp_claim="$CLAIM_PATH.conversion.$$"
   {
-    printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\n' \
-      "$SESSION" "$PLAN_ARG" "${prior_created:-$(iso_now)}" "$(iso_now)"
+    printf 'session: %s\nplan: %s\ncreated: %s\nupdated: %s\nruntime_id: %s\n' \
+      "$SESSION" "$PLAN_ARG" "${prior_created:-$(iso_now)}" "$(iso_now)" "$RUNTIME_ID"
     [[ -n "$prior_branch" ]] && printf 'branch: %s\n' "$prior_branch"
     [[ -n "$prior_start" ]] && printf 'start-commit: %s\n' "$prior_start"
     [[ -n "$prior_base" ]] && printf 'base: %s\n' "$prior_base"
@@ -2136,6 +2142,11 @@ while (("$#" > 0)); do
       SESSION="$2"
       shift 2
       ;;
+    --runtime)
+      [[ $# -ge 2 ]] || usage_error "--runtime requires a value"
+      RUNTIME_ARG="$2"
+      shift 2
+      ;;
     --branch)
       [[ $# -ge 2 ]] || usage_error "--branch requires a value"
       BRANCH="$2"
@@ -2170,6 +2181,27 @@ while (("$#" > 0)); do
       ;;
   esac
 done
+
+# Runtime IDs are metadata only. Resolve them through the authoritative
+# inventory; an omitted, unknown, or inventory-invalid value stays in the
+# shared-unknown class and is never inferred from the session or host.
+if [[ -n "$RUNTIME_ARG" ]]; then
+  if ! RUNTIME_ID="$($PYTHON - "$SCRIPT_DIR" "$RUNTIME_ARG" <<'PYRUNTIME'
+import sys
+sys.path.insert(0, sys.argv[1])
+try:
+    from runtime_capabilities import load_inventory
+    inventory = load_inventory()
+    candidate = sys.argv[2]
+    known = inventory["inventory"]["canonical_ids"]
+    print(candidate if candidate in known else "unknown")
+except Exception:
+    print("unknown")
+PYRUNTIME
+)"; then
+    RUNTIME_ID="unknown"
+  fi
+fi
 
 if [[ -n "$OPERAND_SOURCE" && "$MODE" != "release" ]]; then
   usage_error "--operand-source applies to release only (offending mode: $MODE)"

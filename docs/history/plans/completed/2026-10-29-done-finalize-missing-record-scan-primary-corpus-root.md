@@ -70,7 +70,7 @@ Decision points requiring a grill: none remain. Maintenance-selected receipt: ac
 **Tests:**
 - `scripts/test_done_run_wrapper.py` (Task 1)
 
-**Plan-related extension:** implementation and review may adjust the fixture setup needed to represent a linked worktree and a partial transfer-in copy, while retaining the same assertions about report-only behavior.
+**Plan-related extension:** implementation and review may adjust the fixture setup needed to represent a linked worktree and a partial transfer-in copy, while retaining the same assertions about report-only behavior. The run scope also includes `scripts/test_invocation_telemetry.py` for the `_FINALIZE_SCAN_TAIL` re-baseline the summary-suffix change requires (lesson 343 scope record).
 
 **Out of scope; reject unless plan-related:**
 - `docs/maintenance/development_lessons.md`; reason: lesson 74 already states the canonical-home rule used by this change.
@@ -104,9 +104,13 @@ Evidence:
 - The primary checkout's reviews home is canonical for a shared gitignored corpus, while a worktree transfer-in can be partial (development lesson 74).
 - The existing wrapper fixture asserts that a missing-record report does not block or fabricate records (`scripts/test_done_run_wrapper.py`).
 
-- [ ] Resolve a relative `reviews_dir` from the primary checkout; preserve the existing handling of an absolute value and keep `plans_completed_dir` rooted at the running checkout. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Include the resolved reviews corpus root in the scan summary while preserving the report-only warning and no-fabrication behavior. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add a linked-worktree fixture where a cited review exists only in the primary corpus; assert no missing-record warning and print the primary root. [class: REPOSITORY_TEST]
-- [ ] Add an absolute `reviews_dir` fixture where the cited review exists only in the configured alternate corpus; assert no missing-record warning and print that root. [class: REPOSITORY_TEST]
-- [ ] Add a completed-plan fixture where the cited plan exists only under the running checkout; assert its citation is scanned and the warning remains report-only. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: root finalize review scan at primary checkout` [class: IMPLEMENTATION_REQUIRED]
+- [x] Resolve a relative `reviews_dir` from the primary checkout; preserve the existing handling of an absolute value and keep `plans_completed_dir` rooted at the running checkout. [class: IMPLEMENTATION_REQUIRED]
+- [x] Include the resolved reviews corpus root in the scan summary while preserving the report-only warning and no-fabrication behavior. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add a linked-worktree fixture where a cited review exists only in the primary corpus; assert no missing-record warning and print the primary root. [class: REPOSITORY_TEST]
+- [x] Add an absolute `reviews_dir` fixture where the cited review exists only in the configured alternate corpus; assert no missing-record warning and print that root. [class: REPOSITORY_TEST]
+- [x] Add a completed-plan fixture where the cited plan exists only under the running checkout; assert its citation is scanned and the warning remains report-only. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: root finalize review scan at primary checkout` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of the origin row
+
+Origin row docs/history/backlog/2026-10-29-done-finalize-missing-record-scan-primary-corpus-root.md deleted per the covered-row rule when this plan archived (2026-11-01, landing of this completed twin). Both scope arms landed: the relative reviews corpus roots at the primary checkout with the corpus root printed in the summary; absolute values and the running-checkout-rooted plans_completed_dir kept their behavior; no name-exclusion arm added (report-only noise, no witnessed harm). Residuals: watchlist notes on the telemetry pin's format-only protection and pre-existing facts_rooted spelling/tilde classes (see the r2 review record).

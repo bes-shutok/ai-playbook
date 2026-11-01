@@ -104,12 +104,16 @@ Evidence:
 - The plans skill commits every plan-file write, so a first-draft checkpoint may contain the exact bytes without a new checkpoint ceremony (`agents/skills/plans/SKILL.md`, Authoring checkpoint duty).
 - The review sidecar stores a digest, not source bytes; it cannot reconstruct an unavailable checkpoint (`agents/skills/review-staging/SKILL.md`).
 
-- [ ] Given a readable first commit after `--since` that adds the single-file plan path, use that commit's exact blob as the before side and report the selected baseline commit and digest. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the plan path is absent from `--since` and a successful history lookup finds no checkpoint adding that path through `HEAD`, report a named absent-baseline unclassified outcome so review-loop rule 2 starts a fresh full review; emit no correction row and require no operator acknowledgement. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the plan path exists at `--since`, preserve current classifier results; given the checkpoint history lookup fails, preserve the existing indeterminate or tool-error distinction instead of treating the failure as an absent checkpoint. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given first-checkpoint, no-checkpoint, history-read-failure, and tracked-plan fixtures, assert each result and keep directory-plan structural classification unchanged. [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: classify new plans from first checkpoint` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a readable first commit after `--since` that adds the single-file plan path, use that commit's exact blob as the before side and report the selected baseline commit and digest. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the plan path is absent from `--since` and a successful history lookup finds no checkpoint adding that path through `HEAD`, report a named absent-baseline unclassified outcome so review-loop rule 2 starts a fresh full review; emit no correction row and require no operator acknowledgement. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the plan path exists at `--since`, preserve current classifier results; given the checkpoint history lookup fails, preserve the existing indeterminate or tool-error distinction instead of treating the failure as an absent checkpoint. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given first-checkpoint, no-checkpoint, history-read-failure, and tracked-plan fixtures, assert each result and keep directory-plan structural classification unchanged. [class: REPOSITORY_TEST]
+- [x] Commit: `fix: classify new plans from first checkpoint` [class: IMPLEMENTATION_REQUIRED]
 
 ## Documentation Impact Assessment
 
 No workflow prose change is needed: the plans skill already checkpoints every plan-file write and routes unclassified folds to fresh review. The classifier's result and its regression fixtures carry the behavior.
+
+## Disposition of the origin row
+
+Origin row docs/history/backlog/2026-10-28-plan-delta-classifier-new-plan-baseline.md deleted per the covered-row rule when this plan archived (2026-11-01, landing of this completed twin). Landed: the classifier reuses the earliest commit adding the plan path as the exact before side (baseline commit + digest reported), reports the named absent-baseline unclassified outcome (fresh-review route, no correction row, no acknowledgement) when a successful lookup finds nothing, and keeps indeterminate/tool-error for Git read failures. Residual: follow-up row 2026-11-01-plan-delta-checkpoint-merge-commit-visibility.md (merge-commit-authored checkpoints stay invisible to the lookup; safe-direction). The PLAN-PROMPTS entry was already pruned with its receipt line (existing PLAN-PROMPTS-PRUNE pointer to this plan).
