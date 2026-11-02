@@ -3389,3 +3389,395 @@ class TestReceiptRepairSafety:
         assert "kept changing" in out.getvalue()
         # The repair inserted nothing: the receipt line is still absent.
         assert line not in log_path.read_text(encoding="utf-8")
+
+
+class TestTipRecognition:
+    """The tip-recognition classification class (the
+    prune-audit-standing-flags plan): the audited tip's committed log
+    image witnessing what a removal commit's own images lack. A tip-side
+    ledger line naming the removed slug with a token resolvable at the
+    tip re-classifies an entry removal ``PRUNE-OK`` (tip receipt); an
+    eaten receipt line's exact committed bytes back at the committed tip
+    image re-classify the pure receipt-line deletion ``PRUNE-OK`` (tip
+    restoration), one draw per byte-identical copy. Negatives stay
+    flagged: a token resolving through neither probe (prose, the
+    in-commit ``landing`` literal, a dead digest) never fires the tip
+    receipt, and a fresh non-byte-identical line never restores an eaten
+    line."""
+
+    def git(self, repo: Path, *args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, f"git {args}: {proc.stderr}"
+        return proc.stdout
+
+    def write(self, repo: Path, rel: str, text: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def commit(self, repo: Path, message: str) -> str:
+        self.git(repo, "add", "-A")
+        self.git(
+            repo,
+            "-c",
+            "user.name=Prune Audit Fixture",
+            "-c",
+            "user.email=prune-audit-fixture@example.test",
+            "commit",
+            "-m",
+            message,
+        )
+        return self.git(repo, "rev-parse", "HEAD").strip()
+
+    def audit(
+        self, log_path: Path, base: str, head: str | None = None
+    ) -> subprocess.CompletedProcess:
+        args = [sys.executable, str(SCRIPT), "--prune-audit", "--base", base]
+        if head is not None:
+            args += ["--head", head]
+        args.append(str(log_path))
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+
+    def final_line(self, proc: subprocess.CompletedProcess) -> str:
+        lines = proc.stdout.strip().splitlines()
+        assert lines, proc.stdout + proc.stderr
+        return lines[-1]
+
+    def init_repo_with_log(
+        self, repo: Path, sections: list[str], message: str
+    ) -> str:
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        self.write(repo, LOG_REL, log_text(sections))
+        return self.commit(repo, message)
+
+    def seed_ledger(self, repo: Path, receipts: list[str]) -> str:
+        """A committed log carrying a kept entry and the given receipt
+        ledger lines: the base for the eaten-line recognition tests."""
+        self.git(repo, "-c", "init.defaultBranch=main", "init")
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("kept-entry", ["2026-10-01-kept.md"])], receipts
+            ),
+        )
+        return self.commit(
+            repo, "seed the log with an entry and its receipt ledger"
+        )
+
+    def strip_line(self, repo: Path, line: str, message: str) -> str:
+        """One commit deleting the exact receipt-ledger line (the ledger
+        rewrite's eat shape); the kept entry stays."""
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(line + "\n", ""),
+        )
+        return self.commit(repo, message)
+
+    def test_tip_receipt_witnesses_receiptless_removal(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("backfilled-prune", ["2026-10-01-backfilled-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # The subclass A receipt-less shape: the removal commit carries no
+        # receipt at all, so the flag stands while the tip lacks a line.
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune backfilled-prune without any receipt")
+        removal = self.git(repo, "rev-parse", "HEAD").strip()
+        before = self.audit(repo / LOG_REL, base)
+        assert before.returncode == 1, before.stdout + before.stderr
+        assert "REMOVED-WITHOUT-WITNESS: backfilled-prune" in before.stdout
+        # The backfilled tip line names the removal commit's full digest,
+        # resolved by git in the fixture's own command (resolve-at-use),
+        # with the trailing rationale prose the ledger grammar tolerates.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                [
+                    f"EXEC-PROMPTS-PRUNE: backfilled-prune -> {removal}"
+                    " (backfilled: fixture rationale prose after the token)"
+                ],
+            ),
+        )
+        self.commit(repo, "backfill the receipt line at the tip")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: backfilled-prune -> {removal} (tip receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert "1 removals (1 by log ledger)" in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_tip_receipt_path_token_resolves_through_tip_tree(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("path-tip-prune", ["2026-10-01-path-tip-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune path-tip-prune without any receipt")
+        # The tip line's token is an in-tree path that exists at the
+        # audited tip but not at the removal commit's tree: the path probe
+        # is the tip's tree. The basename carries none of the slug's
+        # hyphen-bounded segments, so the plan-file witness never decides.
+        witness_rel = "docs/history/plans/2026-11-01-tip-path-unrelated.md"
+        self.write(repo, witness_rel, "# fixture tip witness surface\n")
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                [f"PLAN-PROMPTS-PRUNE: path-tip-prune -> {witness_rel}"],
+            ),
+        )
+        self.commit(repo, "backfill the path-token receipt at the tip")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            f"PRUNE-OK: path-tip-prune -> {witness_rel} (tip receipt)"
+            in proc.stdout
+        )
+        assert "REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+
+    def test_committed_restoration_reads_the_committed_tip_image(self, tmp_path):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: restored-once -> 0f39e725c"
+        base = self.seed_ledger(repo, [line])
+        # The ledger rewrite eats the line (a pure receipt-line deletion).
+        self.strip_line(repo, line, "rewrite the ledger without the line")
+        first = self.audit(repo / LOG_REL, base)
+        assert first.returncode == 1, first.stdout + first.stderr
+        assert (
+            "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: restored-once" in first.stdout
+        )
+        # The committed byte-exact restoration: recognition survives the
+        # restore being committed.
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}") + line + "\n",
+        )
+        self.commit(repo, "restore the eaten receipt line byte-exact")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.count("(tip restoration)") == 1
+        assert "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: pass"
+        # A later uncommitted working-tree mutation of the restored line
+        # never changes the committed classification: the recognition
+        # reads the committed tip image, and the uncommitted deletion is
+        # the pending layer's own finding.
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}").replace(
+                line, line + " (drifted)"
+            ),
+        )
+        reproc = self.audit(repo / LOG_REL, base)
+        assert reproc.stdout.count("(tip restoration)") == 1
+        assert "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS" not in reproc.stdout
+        assert "1 pending receipt flag(s)" in reproc.stdout
+        assert self.final_line(reproc) == "OUTCOME: fail"
+
+    def test_unresolvable_tip_token_and_drifted_restoration_stay_flagged(
+        self, tmp_path
+    ):
+        repo = tmp_path
+        # (a) A later tip line whose token is prose (the subclass C
+        # defect's `landed <abbrev>` shape) resolves through neither
+        # probe, so the receipt-less removal stays flagged.
+        self.init_repo_with_log(
+            repo,
+            [entry("prose-prune", ["2026-10-01-prose-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune prose-prune without any receipt")
+        short = self.git(repo, "rev-parse", "--short", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [],
+                [
+                    "EXEC-PROMPTS-PRUNE: prose-prune -> landed 5fd2cd482"
+                    " (prose rationale, no resolvable token)"
+                ],
+            ),
+        )
+        self.commit(repo, "backfill a prose-token receipt line at the tip")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert (
+            "REMOVED-WITHOUT-WITNESS: prose-prune"
+            f" (commit {short} prune prose-prune without any receipt)"
+            in proc.stdout
+        )
+        assert "(tip receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"
+        # (b) A ledger rewrite's fresh, non-byte-identical re-add naming
+        # the eaten slug with a RESOLVABLE token never restores the eaten
+        # line: byte identity is the only restoration criterion, and the
+        # slug-token disjunct never clears an eaten-line flag.
+        other = tmp_path / "drift"
+        other.mkdir()
+        eaten = "PLAN-PROMPTS-PRUNE: drift-prune -> 0f39e725c"
+        base_b = self.seed_ledger(other, [eaten])
+        self.strip_line(other, eaten, "rewrite the ledger without the line")
+        self.write(
+            other,
+            LOG_REL,
+            self.git(other, "show", f"HEAD:{LOG_REL}")
+            + f"PLAN-PROMPTS-PRUNE: drift-prune -> {base_b}"
+            " (fresh rewritten rationale)\n",
+        )
+        self.commit(other, "re-add a fresh drifted line for the eaten slug")
+        drift = self.audit(other / LOG_REL, base_b)
+        assert drift.returncode == 1, drift.stdout + drift.stderr
+        assert (
+            "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: drift-prune" in drift.stdout
+        )
+        assert "(tip restoration)" not in drift.stdout
+        assert self.final_line(drift) == "OUTCOME: fail"
+
+    def test_two_removals_of_one_line_reconcile_one_draw_per_tip_copy(
+        self, tmp_path
+    ):
+        repo = tmp_path
+        line = "PLAN-PROMPTS-PRUNE: twice-removed -> 0f39e725c"
+        base = self.seed_ledger(repo, [line])
+        # Two committed removals of the same line, each followed by a
+        # byte-exact re-add; the tip carries exactly one copy.
+        self.strip_line(repo, line, "first removal of the receipt line")
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}") + line + "\n",
+        )
+        self.commit(repo, "first byte-exact restoration")
+        self.strip_line(repo, line, "second removal of the receipt line")
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}") + line + "\n",
+        )
+        self.commit(repo, "second byte-exact restoration")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        # One draw per byte-identical tip copy: exactly one removal
+        # reconciles, the other stays named.
+        assert proc.stdout.count("(tip restoration)") == 1
+        assert (
+            proc.stdout.count(
+                "RECEIPT-LINE-REMOVED-WITHOUT-WITNESS: twice-removed"
+            )
+            == 1
+        )
+        assert self.final_line(proc) == "OUTCOME: fail"
+
+    def test_head_pinned_tip_image_never_reads_working_tree(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [entry("pinned-prune", ["2026-10-01-pinned-origin.md"])],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(repo, LOG_REL, log_text([]))
+        self.commit(repo, "prune pinned-prune without any receipt")
+        removal = self.git(repo, "rev-parse", "HEAD").strip()
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [], [f"EXEC-PROMPTS-PRUNE: pinned-prune -> {removal}"]
+            ),
+        )
+        self.commit(repo, "backfill the receipt line at the tip")
+        # (a) An explicit --head pins the tip image to that commit: the
+        # pre-backfill tip carries no line, so the flag stands even
+        # though the real tip's committed image would clear it.
+        pinned = self.audit(repo / LOG_REL, base, head=removal)
+        assert pinned.returncode == 1, pinned.stdout + pinned.stderr
+        assert "REMOVED-WITHOUT-WITNESS: pinned-prune" in pinned.stdout
+        assert "(tip receipt)" not in pinned.stdout
+        # (b) Uncommitted working-tree drift at the real tip never
+        # feeds the recognition: an UNCOMMITTED ledger-line addition
+        # drifts the working-tree image without touching the committed
+        # tip, and the committed-tip audit still classifies from HEAD's
+        # image (a pure addition draws no pending budget).
+        self.write(
+            repo,
+            LOG_REL,
+            self.git(repo, "show", f"HEAD:{LOG_REL}")
+            + "PLAN-PROMPTS-PRUNE: unrelated-drift -> docs\n",
+        )
+        drift = self.audit(repo / LOG_REL, base)
+        assert drift.returncode == 0, drift.stdout + drift.stderr
+        assert f"PRUNE-OK: pinned-prune -> {removal} (tip receipt)" in (
+            drift.stdout
+        )
+        assert self.final_line(drift) == "OUTCOME: pass"
+
+    def test_mismatched_slug_tip_line_never_witnesses(self, tmp_path):
+        repo = tmp_path
+        self.init_repo_with_log(
+            repo,
+            [
+                entry("solo-prune", ["2026-10-01-solo-origin.md"]),
+                entry("other-kept", ["2026-10-01-other-origin.md"]),
+            ],
+            "seed the log",
+        )
+        base = self.git(repo, "rev-parse", "HEAD").strip()
+        # Remove solo-prune without any receipt, keeping other-kept.
+        self.write(repo, LOG_REL, log_text([entry("other-kept", [
+            "2026-10-01-other-origin.md",
+        ])]))
+        self.commit(repo, "prune solo-prune without any receipt")
+        removal = self.git(repo, "rev-parse", "HEAD").strip()
+        before = self.audit(repo / LOG_REL, base)
+        assert before.returncode == 1, before.stdout + before.stderr
+        assert "REMOVED-WITHOUT-WITNESS: solo-prune" in before.stdout
+        # A tip line naming a DIFFERENT slug, even with a resolvable
+        # token, never witnesses solo-prune's removal.
+        self.write(
+            repo,
+            LOG_REL,
+            log_text_with_ledger(
+                [entry("other-kept", ["2026-10-01-other-origin.md"])],
+                [f"EXEC-PROMPTS-PRUNE: other-kept -> {removal}"],
+            ),
+        )
+        self.commit(repo, "backfill a receipt line for a different slug")
+        proc = self.audit(repo / LOG_REL, base)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REMOVED-WITHOUT-WITNESS: solo-prune" in proc.stdout
+        assert "(tip receipt)" not in proc.stdout
+        assert self.final_line(proc) == "OUTCOME: fail"

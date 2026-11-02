@@ -17,14 +17,19 @@ parent once the record lands). This plan's record is anchored by identity,
 its recorded D-id cross-checked by its distinguishing witness literal, so a
 later record (a future D-14) cannot false-red the suite; its scope names the
 execution and maintenance lanes, its witness names the superseded
-conversational restart direction, and every pre-existing record is
-textually unchanged against the baseline.
+conversational restart direction. The committed-revision acceptance is
+anchored per record: each record's alternative to the baseline is its
+record anchor (the newest commit among its introducing commit and the
+named sanctioned landings whose committed blob changed that record), so an
+unsanctioned committed rewrite goes red naming the record instead of
+becoming the inherited standard.
 
 Fixtures are in-memory manifest free-text line lists; no network; the Task 3
 witnesses read the directives file's git history baseline bytes.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -791,43 +796,344 @@ def _committed_records() -> dict[str, str]:
     return _directive_records(_committed_text())
 
 
-def test_witness_every_preexisting_record_is_textually_unchanged_against_baseline():
-    """Byte-level pin of every pre-existing record against the baseline.
+# The named sanctioned landings (plan
+# 2026-11-01-quota-doctrine-committed-rewrite-narrowing): commits that
+# legitimately rewrote directive records because an operator-directed
+# record update landed through them. Seeds are the two witnessed landings:
+# the em-dash formatting pass over D-3..D-6, and the D-6 superseded flip
+# plus the D-17 introduction. The plan text names the peer-lineage commit
+# ids for the same record rewrites; the ids below are the main-ancestry
+# landings whose committed record bytes are byte-identical for every
+# shared record, which is what this witness's HEAD-anchored history
+# actually walks. A future sanctioned landing extends this constant by one
+# entry and the suite stays green.
+SANCTIONED_LANDING_SHAS = (
+    "b00c0b7d4b2a56c2c57ba6ec7f19e6b76f295fb2",
+    "843cc9709e12aa1255a24d483cd4a092e5d8dd26",
+)
 
-    A sanctioned post-record commit may edit a pre-existing record (the
-    2026-10-27 em-dash formatting pass over D-3..D-6 landed after this
-    plan's record): such a record is held byte-identically to the newest
-    committed (HEAD) revision instead, so any uncommitted drift from both
-    revisions stays red with the record id named, and a working-tree
-    deletion of a committed record is a named red too, never a bare
-    KeyError. The preamble carries the same two-revision acceptance: it
-    must equal the baseline preamble, or the newest committed (HEAD)
-    preamble when a sanctioned commit edited the preamble.
+
+def _record_anchor_revision(record_id, entries, sanctioned):
+    """Pure: resolve one record's anchor revision from the file history.
+
+    ``entries`` is the commit history oldest -> newest, each entry a
+    ``(commit, records, parent_records)`` triple where ``records`` maps
+    record id to section text for the commit's blob and ``parent_records``
+    the same for the commit's first parent. ``sanctioned`` is the set of
+    sanctioned-landing commit ids. The anchor is the newest commit among
+    the record's introducing commit (the oldest entry whose blob carries
+    the record) and the sanctioned landings whose committed blob changed
+    that record. Returns None when no entry carries the record.
+    """
+    anchor = None
+    for commit, records, parent_records in entries:
+        if record_id not in records:
+            continue
+        if anchor is None:
+            anchor = commit
+        if (
+            commit in sanctioned
+            and records[record_id] != parent_records.get(record_id)
+        ):
+            anchor = commit
+    return anchor
+
+
+def _committed_class_finding(
+    tree_section, baseline_section, anchor_section, record_id
+):
+    """Pure: the committed-class acceptance decision for one record.
+
+    Returns None when the tree state passes (equal to the baseline
+    revision, or equal to the record's anchor revision), otherwise the
+    red line naming the rewritten record id. The uncommitted drift arm's
+    red-with-id shape is unchanged: any tree state equal to neither the
+    baseline nor the anchor is a finding.
+    """
+    if baseline_section is not None and tree_section == baseline_section:
+        return None
+    if anchor_section is not None and tree_section == anchor_section:
+        return None
+    return (
+        f"record {record_id} drifted from both the baseline and its "
+        "record anchor (the newest sanctioned revision)"
+    )
+
+
+def _record_entries():
+    """The directives file's commit history oldest -> newest, each entry a
+    ``(commit, records, parent_records)`` triple over HEAD's ancestry."""
+    commits = _git_line(
+        ["rev-list", "--reverse", "HEAD", "--", DIRECTIVES_HEAD_PATH]
+    ).split()
+    entries = []
+    for commit in commits:
+        # The revision walk lists commits where the path changed shape
+        # (a deletion or rename side): a commit without the path's blob
+        # carries no records and is skipped, its absence never failing
+        # the walk.
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "cat-file", "-e",
+             f"{commit}:{DIRECTIVES_HEAD_PATH}"],
+            capture_output=True,
+        ).returncode != 0:
+            continue
+        records = _directive_records(
+            _git_bytes(["show", f"{commit}:{DIRECTIVES_HEAD_PATH}"]).decode(
+                "utf-8"
+            )
+        )
+        parents = _git_line(["rev-list", "--parents", "-n", "1", commit]).split()[
+            1:
+        ]
+        parent_records = (
+            _directive_records(
+                _git_bytes(
+                    ["show", f"{parents[0]}:{DIRECTIVES_HEAD_PATH}"]
+                ).decode("utf-8")
+            )
+            if parents
+            and subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "cat-file", "-e",
+                 f"{parents[0]}:{DIRECTIVES_HEAD_PATH}"],
+                capture_output=True,
+            ).returncode == 0
+            else {}
+        )
+        entries.append((commit, records, parent_records))
+    return entries
+
+
+def _anchor_sections(anchors):
+    """Map record id -> its anchor revision's section bytes."""
+    sections: dict[str, str] = {}
+    for record_id, sha in anchors.items():
+        if sha is None:
+            continue
+        records = _directive_records(
+            _git_bytes(["show", f"{sha}:{DIRECTIVES_HEAD_PATH}"]).decode(
+                "utf-8"
+            )
+        )
+        sections[record_id] = records.get(record_id)
+    return sections
+
+
+def test_witness_every_record_is_textually_unchanged_against_baseline_or_anchor():
+    """Byte-level pin of every record against its baseline or record anchor.
+
+    The record universe is derived from the file's own headings, never a
+    pinned range, so the next record lands inside the fence automatically.
+    A record equal to its baseline revision passes; a record a sanctioned
+    landing rewrote is held byte-identically to its record anchor (the
+    newest commit among its introducing commit and the sanctioned landings
+    that changed it), so an unsanctioned committed rewrite goes red
+    naming the rewritten record id instead of silently becoming the
+    inherited standard, and any uncommitted drift from both revisions
+    keeps today's red-with-id behavior. A working-tree deletion of a
+    committed record is a named red too, never a bare KeyError. The
+    preamble carries the unchanged two-revision acceptance: it must equal
+    the baseline preamble, or the newest committed (HEAD) preamble when a
+    sanctioned commit edited the preamble.
     """
     tree_text = DIRECTIVES_FILE.read_text(encoding="utf-8")
     head_text = _baseline_directives_text()
-    committed_text = _committed_text()
     tree_records = _directive_records(tree_text)
     head_records = _directive_records(head_text)
-    committed_records = _directive_records(committed_text)
-    for record_id, head_section in head_records.items():
+    for record_id in head_records:
         assert record_id in tree_records, (
             f"committed record {record_id} deleted from the working tree"
         )
-        if tree_records[record_id] == head_section:
+    sanctioned = set(SANCTIONED_LANDING_SHAS)
+    entries = _record_entries()
+    anchors = {
+        record_id: _record_anchor_revision(record_id, entries, sanctioned)
+        for record_id in tree_records
+    }
+    anchor_secs = _anchor_sections(anchors)
+    for record_id, tree_section in tree_records.items():
+        if record_id not in head_records and anchors[record_id] is None:
+            # Tree-only record (a drafted record not yet committed): no
+            # baseline and no anchor exists, so the uncommitted addition
+            # class keeps today's silent treatment (plan invariant: the
+            # uncommitted drift arm is unchanged).
             continue
-        committed_section = committed_records.get(record_id)
-        assert tree_records[record_id] == committed_section, (
-            f"record {record_id} drifted from both the baseline and the "
-            "committed (HEAD) revision"
+        finding = _committed_class_finding(
+            tree_section,
+            head_records.get(record_id),
+            anchor_secs.get(record_id),
+            record_id,
         )
+        assert finding is None, finding
     tree_preamble = tree_text[: RECORD_HEAD_RX.search(tree_text).start()]
     head_preamble = head_text[: RECORD_HEAD_RX.search(head_text).start()]
     if tree_preamble != head_preamble:
-        committed_preamble = committed_text[
-            : RECORD_HEAD_RX.search(committed_text).start()
+        committed_preamble = _committed_text()[
+            : RECORD_HEAD_RX.search(_committed_text()).start()
         ]
         assert tree_preamble == committed_preamble, (
             "working-tree preamble drifted from both the baseline and the "
             "committed (HEAD) preamble"
         )
+
+
+def test_record_anchor_revision_takes_the_newest_sanctioned_landing():
+    """Direct partition coverage of the pure anchor resolution: among
+    multiple sanctioned landings that changed the same record, the newest
+    wins (not the first); a sanctioned landing that did not change the
+    record never moves the anchor; a record absent from every entry
+    resolves to None."""
+    entries = [
+        ("intro", {"D-1": "v1"}, {}),
+        ("first", {"D-1": "v2"}, {"D-1": "v1"}),
+        ("noop", {"D-1": "v2"}, {"D-1": "v2"}),
+        ("second", {"D-1": "v3"}, {"D-1": "v2"}),
+    ]
+    sanctioned = {"first", "second", "noop"}
+    assert _record_anchor_revision("D-1", entries, sanctioned) == "second"
+    assert _record_anchor_revision("D-9", entries, sanctioned) is None
+    assert _record_anchor_revision("D-1", entries, {"noop"}) == "intro"
+
+
+def _fixture_git(repo, *args):
+    """Run git in the fixture repo with the ambient git env scrubbed.
+
+    GIT_DIR-class variables are dropped and global/system config pointed
+    at os.devnull so the fixture's history is hermetic; identity rides
+    ``-c`` flags.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@invalid",
+            *args,
+        ],
+        capture_output=True,
+        check=True,
+        env=env,
+    )
+    return proc.stdout.decode("utf-8").strip()
+
+
+def _fixture_records(text):
+    return _directive_records(text)
+
+
+def test_witness_committed_rewrite_of_a_sanctioned_record_is_rejected_in_fixture(
+    tmp_path,
+):
+    """Durable fixture: the committed class is fenced, not pre-commit-only.
+
+    A temp-repo directives file gains two records (the introducing
+    commit), one record is sanctionedly rewritten (the test-local
+    sanctioned set records the landing), and a second unsanctioned
+    rewrite of the same record lands. The pure helpers must resolve the
+    record anchor to the sanctioned commit (not the newest commit), pass
+    the sanctioned state, and reject the unsanctioned state naming the
+    rewritten record id.
+    """
+    preamble = "directive home preamble\n\n"
+    record_1_v1 = (
+        "## D-1: first record\n\n- status: active\n- directive: keep one\n"
+    )
+    record_2 = (
+        "## D-2: second record\n\n- status: active\n- directive: keep two\n"
+    )
+    file = tmp_path / "operator-directives.md"
+    file.write_text(preamble + record_1_v1 + record_2, encoding="utf-8")
+    _fixture_git(tmp_path, "init", "-q")
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "introduce records")
+    introducing = _fixture_git(tmp_path, "rev-parse", "HEAD")
+
+    # Sanctioned rewrite of D-1: an operator-directed record update.
+    record_1_sanctioned = (
+        "## D-1: first record\n\n- status: active\n- directive: keep one "
+        "revised\n"
+    )
+    file.write_text(
+        preamble + record_1_sanctioned + record_2, encoding="utf-8"
+    )
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "sanctioned D-1 rewrite")
+    sanctioned_landing = _fixture_git(tmp_path, "rev-parse", "HEAD")
+    sanctioned = {sanctioned_landing}
+
+    # Unsanctioned committed rewrite of the same record.
+    record_1_unsanctioned = (
+        "## D-1: first record\n\n- status: active\n- directive: silently "
+        "replaced\n"
+    )
+    file.write_text(
+        preamble + record_1_unsanctioned + record_2, encoding="utf-8"
+    )
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "unsanctioned D-1 rewrite")
+    newest = _fixture_git(tmp_path, "rev-parse", "HEAD")
+
+    commits = _fixture_git(
+        tmp_path, "rev-list", "--reverse", "HEAD", "--", file.name
+    ).split()
+    entries = []
+    for commit in commits:
+        records = _fixture_records(
+            _fixture_git(tmp_path, "show", f"{commit}:{file.name}")
+        )
+        parents = _fixture_git(
+            tmp_path, "rev-list", "--parents", "-n", "1", commit
+        ).split()[1:]
+        parent_records = (
+            _fixture_records(
+                _fixture_git(tmp_path, "show", f"{parents[0]}:{file.name}")
+            )
+            if parents
+            else {}
+        )
+        entries.append((commit, records, parent_records))
+
+    # The anchor resolves to the sanctioned landing, never the newest
+    # commit; the untouched record anchors at its introducing commit.
+    assert _record_anchor_revision("D-1", entries, sanctioned) == sanctioned_landing
+    assert sanctioned_landing != newest
+    assert _record_anchor_revision("D-2", entries, sanctioned) == introducing
+
+    tree_records = _fixture_records(file.read_text(encoding="utf-8"))
+    anchor_records = _fixture_records(
+        _fixture_git(tmp_path, "show", f"{sanctioned_landing}:{file.name}")
+    )
+    introducing_records = _fixture_records(
+        _fixture_git(tmp_path, "show", f"{introducing}:{file.name}")
+    )
+
+    # The sanctioned state passes.
+    assert (
+        _committed_class_finding(
+            anchor_records["D-1"], introducing_records["D-1"], anchor_records["D-1"], "D-1"
+        )
+        is None
+    )
+    # The unsanctioned committed rewrite is rejected naming the record id.
+    finding = _committed_class_finding(
+        tree_records["D-1"], introducing_records["D-1"], anchor_records["D-1"], "D-1"
+    )
+    assert finding is not None
+    assert "D-1" in finding
+    # The untouched record still passes against its introducing commit.
+    assert (
+        _committed_class_finding(
+            tree_records["D-2"], introducing_records["D-2"], introducing_records["D-2"], "D-2"
+        )
+        is None
+    )

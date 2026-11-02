@@ -8,7 +8,7 @@
 - **Origin class:** Codex-specific follow-up to the shared maintenance continuation contract
 - **Class:** fix-class
 - **Driving force:** automation
-- **Cluster:** docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md (same D-17 continuation surface; this row covers the quota-reset wake, while the sibling covers safe-boundary context compaction)
+- **Cluster:** docs/history/plans/completed/2026-11-02-maintenance-codex-continuation.md (same D-17 continuation surface; this row covers the quota-reset wake, while the completed plan covers safe-boundary context continuation)
 - **Cluster:** docs/history/backlog/2026-10-31-maintenance-autopilot-zcode-session-per-pick.md (same D-17 continuation surface; separate runtime-specific continuation mechanism)
 - **Cluster:** docs/history/backlog/2026-10-31-maintenance-cycle-gate-scenario-test.md (same D-17 continuation surface; separate regression-test gap)
 
@@ -20,7 +20,7 @@ Expected: when Codex's own five-hour primary window genuinely reaches the stop t
 
 ## Work scope
 
-Investigate Codex's current task and automation capabilities, then add the smallest runtime-specific continuation path that can wake at the active primary reset. Reuse the existing pending-dispatch and reset-time contract; keep same-session safe-boundary compaction in `2026-10-31-maintenance-autopilot-codex-same-session-compaction.md`. If no timed Codex wake primitive exists, record the verified capability limit and the supported fallback in the Codex runtime-specific plan before claiming unattended reset resumption.
+Investigate Codex's current task and automation capabilities, then add the smallest runtime-specific continuation path that can wake at the active primary reset. Reuse the existing pending-dispatch and reset-time contract; keep same-session safe-boundary continuation in `docs/history/plans/completed/2026-11-02-maintenance-codex-continuation.md`. If no timed Codex wake primitive exists, record the verified capability limit and the supported fallback in the Codex runtime-specific plan before claiming unattended reset resumption.
 
 ## Acceptance criteria
 

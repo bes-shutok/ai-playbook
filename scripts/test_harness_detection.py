@@ -57,12 +57,12 @@ class HarnessDetectionTest(unittest.TestCase):
             (None, "none"),
         )
 
-    def test_env_signal_precedence_over_ancestry(self) -> None:
-        # Documented precedence: environment first.
+    def test_conflicting_env_and_ancestry_signals_are_unknown(self) -> None:
         self.assertEqual(
             harness_detection.detect_harness({"ZCODE_APP_VERSION": "3.12.3"}, ancestry=codex_chain),
-            ("zcode", "env"),
+            (None, "conflict"),
         )
+        self.assertIn("conflicting", harness_detection._evidence("conflict"))
 
     def test_codex_ancestry_when_env_foreign(self) -> None:
         self.assertEqual(

@@ -722,25 +722,22 @@ disarm_rolling_log_cleanup() { # kill the owner; the captured ref has advanced
 }
 
 # The one cleanup owner for every refusal before the captured-ref
-# compare-and-swap succeeds: unstage only this writer's declared owned log
-# deltas, verify that delta is empty again, and leave every unrelated staged
-# and worktree byte unchanged. An unverifiable cleanup reports blocked
-# recovery; the two-path pre-stage guard then refuses the next primary log
-# writer until the residue is resolved. The trap preserves the refusal's
-# original exit status.
+# compare-and-swap succeeds: it mutates nothing. The staged index and every
+# worktree byte are left exactly as they stand at cleanup entry; any owned
+# staged residue is reported through the existing blocked-recovery path so
+# the operator resolves it before the next primary log write (the two-path
+# pre-stage guard then refuses either rolling log while it stands). The trap
+# preserves the refusal's original exit status.
 rolling_log_cleanup() {
   trap - EXIT
   ROLLING_CLEANUP_ARMED=0
-  local path owned_delta
-  for path in ${DECLARED+"${DECLARED[@]}"}; do
-    git reset -q -- "$path" 2>/dev/null || true
-  done
+  local owned_delta
   owned_delta="$(git diff --cached --name-only HEAD -- \
     ${DECLARED+"${DECLARED[@]}"} 2>/dev/null || true)"
   if [ -n "$owned_delta" ]; then
-    echo "done_run commit: rolling-log cleanup: BLOCKED RECOVERY: the owned log delta could not be unstaged cleanly: $(printf '%s' "$owned_delta" | tr '\n' ' '); resolve the residue before the next primary log write (the two-path pre-stage guard refuses either rolling log while it stands)" >&2
+    echo "done_run commit: rolling-log cleanup: BLOCKED RECOVERY: owned staged residue stands after the refusal (index and worktree bytes left untouched): $(printf '%s' "$owned_delta" | tr '\n' ' '); resolve the residue before the next primary log write (the two-path pre-stage guard refuses either rolling log while it stands)" >&2
   else
-    echo "done_run commit: rolling-log cleanup: owned log delta unstaged and verified empty; unrelated staged and worktree bytes unchanged" >&2
+    echo "done_run commit: rolling-log cleanup: no owned staged residue; index and worktree bytes left untouched" >&2
   fi
 }
 
@@ -792,23 +789,106 @@ manifest_scalar() { # manifest field -> the scalar value or empty
 print(json.load(open(sys.argv[1])).get(sys.argv[2]) or "")' "$1" "$2" 2>/dev/null
 }
 
-resolve_manifest_path() { # explicit arg, then the setup export, then newest
-  if [ -n "${COMMIT_MANIFEST:-}" ] && [ -f "$COMMIT_MANIFEST" ]; then
+canonical_manifest_payload() { # path -> "run_id marker" or empty on parse failure
+  python3 -c 'import json,sys
+try:
+    record = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(0)
+if not isinstance(record, dict):
+    raise SystemExit(0)
+print(record.get("run_id") or "")
+print(record.get("marker") or "")' "$1" 2>/dev/null
+}
+
+resolve_manifest_path() { # explicit --manifest is binding; otherwise the
+  # active confirmed marker selects exactly one canonical manifest; the
+  # DONE_RUN_MANIFEST setup export is an implicit hint only and never
+  # selects (a stale export must not shadow the live run). Selection
+  # failures print the diagnostic on stderr and return non-zero; the
+  # commit path's foreign-dirty ladder treats that as fatal.
+  local session newest_marker marker_base f payload rid mid fmid match="" count=0
+  if [ -n "${COMMIT_MANIFEST:-}" ]; then
+    if [ ! -f "$COMMIT_MANIFEST" ] || [ ! -r "$COMMIT_MANIFEST" ]; then
+      echo "done_run commit: run manifest selection: explicit --manifest $COMMIT_MANIFEST is missing or unreadable; nothing committed (remedy: pass the canonical run-manifest-<run_id>.json bound to the active confirmed marker)" >&2
+      return 1
+    fi
+    canonical_id="$(basename "$COMMIT_MANIFEST")"
+    case "$canonical_id" in
+      run-manifest-*.json) ;;
+      *)
+        echo "done_run commit: run manifest selection: explicit --manifest $COMMIT_MANIFEST is a noncanonical shadow name; nothing committed (remedy: pass the canonical run-manifest-<run_id>.json)" >&2
+        return 1 ;;
+    esac
+    canonical_id="${canonical_id#run-manifest-}"
+    canonical_id="${canonical_id%.json}"
+    case "$canonical_id" in
+      *.*|"")
+        echo "done_run commit: run manifest selection: explicit --manifest $COMMIT_MANIFEST is a noncanonical shadow name; nothing committed (remedy: pass the canonical run-manifest-<run_id>.json)" >&2
+        return 1 ;;
+    esac
     printf '%s\n' "$COMMIT_MANIFEST"
     return 0
   fi
-  if [ -n "${DONE_RUN_MANIFEST:-}" ] && [ -f "$DONE_RUN_MANIFEST" ]; then
-    printf '%s\n' "$DONE_RUN_MANIFEST"
+  session="$(session_dir)" || return 1
+  newest_marker="$(newest_confirmed_marker)" || return 3
+  if [ -z "$newest_marker" ]; then
+    # nothing confirmed to bind to; preserve the empty resolution the
+    # tolerant callers (finalize) already handle
     return 0
   fi
-  local session newest=""
-  session="$(session_dir)" || return 1
+  marker_base="$(basename "$newest_marker")"
   for f in "$session"/run-manifest-*.json; do
     [ -f "$f" ] || continue
-    if [ -z "$newest" ] || [ "$f" \> "$newest" ]; then newest="$f"; fi
+    fmid="${f##*run-manifest-}"
+    fmid="${fmid%.json}"
+    case "$fmid" in
+      *.*|"") continue ;;  # a shadow copy is never a canonical candidate
+    esac
+    payload="$(canonical_manifest_payload "$f")"
+    rid="$(printf '%s\n' "$payload" | sed -n '1p')"
+    mid="$(printf '%s\n' "$payload" | sed -n '2p')"
+    if [ -z "$rid" ] && [ -z "$mid" ]; then
+      echo "done_run commit: run manifest selection: canonical candidate $(basename "$f") is unparseable; nothing committed (remedy: repair or remove the manifest record, then re-enter)" >&2
+      return 2
+    fi
+    if [ "$mid" = "$marker_base" ] && [ "$rid" = "$fmid" ]; then
+      match="$f"
+      count=$((count + 1))
+    fi
   done
-  [ -n "$newest" ] && printf '%s\n' "$newest"
-  return 0
+  if [ "$count" -eq 1 ]; then
+    # a canonical-named, parseable export that disagrees with the active
+    # selection is a conflicting signal, not a stale hint: refuse named
+    if [ -n "${DONE_RUN_MANIFEST:-}" ] && [ -f "$DONE_RUN_MANIFEST" ] \
+       && [ "$DONE_RUN_MANIFEST" != "$match" ]; then
+      export_base="$(basename "$DONE_RUN_MANIFEST")"
+      case "$export_base" in
+        run-manifest-*.json)
+          export_id="${export_base#run-manifest-}"
+          export_id="${export_id%.json}"
+          case "$export_id" in
+            *.*) ;;  # shadow-named: a stale hint, skipped
+            *)
+              export_payload="$(canonical_manifest_payload "$DONE_RUN_MANIFEST")"
+              export_rid="$(printf '%s\n' "$export_payload" | sed -n '1p')"
+              export_mid="$(printf '%s\n' "$export_payload" | sed -n '2p')"
+              if [ -n "$export_rid" ]; then
+                echo "done_run commit: run manifest selection: the DONE_RUN_MANIFEST export names a canonical record (run_id=$export_rid, marker=${export_mid:-<empty>}) that conflicts with the active confirmed marker $marker_base selection; nothing committed (remedy: refresh the setup exports for the live run or drop the stale export)" >&2
+                return 1
+              fi ;;
+          esac ;;
+      esac
+    fi
+    printf '%s\n' "$match"
+    return 0
+  fi
+  if [ "$count" -gt 1 ]; then
+    echo "done_run commit: run manifest selection: $count canonical manifests claim the active confirmed marker $marker_base; nothing committed (remedy: finalize or remove the stale duplicates, then re-enter)" >&2
+    return 1
+  fi
+  echo "done_run commit: run manifest selection: no canonical manifest payload carries the active confirmed marker $marker_base; nothing committed (remedy: re-enter setup for the live run or pass --manifest with the canonical run-manifest-<run_id>.json bound to marker $marker_base)" >&2
+  return 1
 }
 
 resolve_run_id() { # --run-id arg, then the manifest, then the setup export
@@ -871,13 +951,17 @@ resolve_authorized_run_tuple() {
     landing_die 1 "authorized restoration: the selected DONE_RUN_MARKER export is not the newest root-confirmed marker; nothing committed"
   fi
   manifest="$(resolve_manifest_path)" || \
-    landing_die 3 "authorized restoration: cannot resolve the repo root"
+    landing_die 1 "authorized restoration: run manifest selection failed; nothing committed (the specific diagnostic is above)"
   if [ -z "$manifest" ] || [ ! -f "$manifest" ]; then
     landing_die 1 "authorized restoration: no run manifest resolved for the current run; nothing committed"
   fi
   marker_field="$(manifest_scalar "$manifest" marker)"
-  [ "$marker_field" = "$(basename "$newest_marker")" ] || \
+  if [ "$marker_field" != "$(basename "$newest_marker")" ]; then
+    if [ -n "${COMMIT_MANIFEST:-}" ]; then
+      landing_die 1 "authorized restoration: explicit --manifest $manifest records marker ${marker_field:-<empty>}, not the active confirmed marker $(basename "$newest_marker"); nothing committed (remedy: pass the canonical run-manifest-<run_id>.json bound to marker $(basename "$newest_marker"))"
+    fi
     landing_die 1 "authorized restoration: the selected run manifest is not bound to the newest root-confirmed marker; nothing committed"
+  fi
   lib="$(resolve_helper done_sweep_gates_lib.py)"
   [ -n "$lib" ] || \
     landing_die 3 "authorized restoration: no done_sweep_gates_lib.py resolved (repo-local scripts/ or deployed home)"
@@ -1763,7 +1847,25 @@ cmd_commit() {
   #    other unclaimed dirt is reported and left unstaged.
   trace_stage foreign-dirt-ladder
   FOREIGN_CLAIMS="$(mktemp)" || commit_die 3 "no scratch file available"
-  RUN_MANIFEST="$(resolve_manifest_path)" || RUN_MANIFEST=""
+  RUN_MANIFEST="$(resolve_manifest_path)" || \
+    commit_die 1 "run manifest selection failed; nothing committed (the specific diagnostic is above)"
+  # an explicit selection is binding on the ordinary commit path too: the
+  # chosen canonical file must carry the active confirmed marker, and an
+  # explicit --run-id must agree with the chosen manifest's run id
+  if [ -n "${COMMIT_MANIFEST:-}" ]; then
+    active_marker="$(newest_confirmed_marker)" || \
+      commit_die 3 "run manifest selection: cannot resolve the repo root"
+    mfield="$(manifest_scalar "$RUN_MANIFEST" marker)"
+    if [ "$mfield" != "$(basename "$active_marker")" ]; then
+      commit_die 1 "run manifest selection: explicit --manifest $RUN_MANIFEST records marker ${mfield:-<empty>}, not the active confirmed marker $(basename "$active_marker"); nothing committed (remedy: pass the canonical run-manifest-<run_id>.json bound to marker $(basename "$active_marker"))"
+    fi
+  fi
+  if [ -n "${RUN_ID_ARG:-}" ]; then
+    mrun_id="$(manifest_scalar "$RUN_MANIFEST" run_id)"
+    if [ "$RUN_ID_ARG" != "$mrun_id" ]; then
+      commit_die 1 "run manifest selection: --run-id $RUN_ID_ARG does not match the run manifest run_id=$mrun_id; nothing committed (remedy: re-enter with the manifest's own run id or drop --run-id)"
+    fi
+  fi
   if [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
     manifest_field "$RUN_MANIFEST" foreign_review_paths >> "$FOREIGN_CLAIMS"
   fi
@@ -2342,7 +2444,18 @@ cmd_finalize() {
   LIB="$(resolve_helper done_sweep_gates_lib.py)"
   [ -n "$LIB" ] || finalize_die 3 "no done_sweep_gates_lib.py resolved (repo-local scripts/ or deployed home)"
 
-  RUN_MANIFEST="$(resolve_manifest_path)" || RUN_MANIFEST=""
+  RUN_MANIFEST="$(resolve_manifest_path)" || {
+    # the finalize's own identity-refusal disposition owns a broken or
+    # ambiguous manifest record: fall back to the newest canonical record
+    # so the classifier (not the selector) refuses it named
+    RUN_MANIFEST=""
+    local fb f_newest=""
+    for fb in "$(session_dir)"/run-manifest-*.json; do
+      [ -f "$fb" ] || continue
+      if [ -z "$f_newest" ] || [ "$fb" \> "$f_newest" ]; then f_newest="$fb"; fi
+    done
+    [ -n "$f_newest" ] && RUN_MANIFEST="$f_newest"
+  }
   RUN_ID="$(resolve_run_id)"
   local finalize_rc=0 release_rc=0 marking_withheld=0 FM_OUT=""
 

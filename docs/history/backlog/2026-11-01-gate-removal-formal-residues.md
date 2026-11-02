@@ -1,4 +1,5 @@
 # Gate-removal task 2 review deferred formal residues
+Cluster: docs/history/backlog/2026-11-01-gate-removal-multi-record-gate-report-conjunction-test.md; docs/history/backlog/2026-11-01-gate-removal-note-newline-sanitization.md; docs/history/backlog/2026-11-01-gate-removal-record-index-bool-stamp-exclusion-untested.md; docs/history/backlog/2026-11-01-gate-removal-resolver-verified-destinations-derivation.md (same-day review family)
 
 - **Filed:** 2026-11-01 during the gate-removal-task2-review-residues execution (Task 3 formal split)
 - **Status:** open

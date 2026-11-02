@@ -1641,6 +1641,41 @@ done
 pin "execute-plan company placement arm's per-run task-branch choice clause" test "$(grep -oF 'gains the per-run operator choice beside that base-branch-only rule' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
 pin "execute-plan company task-branch arm's PR-pairing consequence clause" test "$(grep -oF 'names the PR pairing (the task branch as source, the confirmed base as target)' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
 
+# --- done-pending handoff reconciliation flow pins (plan
+# docs/history/plans/2026-10-29-execute-plan-plan-digest-handoff-drift.md, Task 2) ---
+# Section-scoped presence pins over the documented done-pending recovery arm.
+# The SKILL.md section sits in the Phase 1 loop between Step 1.2b and Step 1.3
+# (the region's end anchor); the runtime-contract section sits between its own
+# heading and the Run-level ownership section (its end anchor); the Step 1.2
+# region pin keys the pre-prompt task-scope digest record the flow binds
+# receipts to. Region scoping (the same awk region mechanism the P57 S9 stance
+# pins use) keeps a stray prose copy elsewhere in either file from satisfying
+# a flow pin, and the distinctness pins freeze the separation between the
+# done-pending reconciliation arm and the existing prelaunch remedies (the
+# reviewed task-scope change Active-plan referral and the Step 0.5
+# fresh-review path; the retired prelaunch recover-task-scope operation has
+# no documented home) inside the documented flow sections themselves.
+pin "done-pending reconciliation section anchored in execute-plan SKILL.md" grep -qF '### Done-pending handoff reconciliation (receipt-backed recovery arm)' "$E"
+pin "done-pending reconciliation section anchored in runtime-contract.md" grep -qF '## Done-pending handoff reconciliation' "$RC"
+pin "Step 1.2 pre-prompt task-scope digest record (region-scoped)" bash -c "awk '/^### Step 1.2: Launch implement sub-agent/{f=1; next} /^### Step 1.2b:/{f=0} f' \"$E\" | grep -qF 'before a new worker receives its prompt, the parent records that task'"
+pin "done-pending flow names the helper invocation (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'scripts/reconcile_execute_plan_handoff.py reconcile'"
+pin "done-pending flow names the per-task receipt field (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'tasks[task_id].handoff_reconciliation'"
+pin "done-pending flow names the per-task scope-digest field (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'tasks[task_id].task_scope_digest'"
+pin "done-pending flow names the same-replacement write (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'replacement for that task only: the receipt lands in'"
+pin "done-pending flow names other-task preservation (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'every other task record and terminal receipt is preserved verbatim by the same replacement'"
+pin "done-pending flow names the exact already-reconciled retry response (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'the exact retry response: the stored receipt equals the freshly derived receipt on every identity field'"
+pin "done-pending flow requires preflight and the done commit gate after either success (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'rerun ordinary preflight (Step 0.5) and run the existing done commit gate'"
+pin "done-pending flow names the legacy launch-scope refusal (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'launch-scope-unverified'"
+pin "done-pending flow keeps prelaunch scope/digest mismatches with their existing prelaunch remedies (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'a reviewed task-scope change routes through the Active-plan referral'"
+pin "runtime contract names the same-replacement write (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'A successful reconciliation is ONE atomic'"
+pin "runtime contract names the per-task receipt field (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'handoff_reconciliation'"
+pin "runtime contract names the per-task scope-digest field (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'task_scope_digest'"
+pin "runtime contract names other-task preservation (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'preserved verbatim by the same'"
+pin "runtime contract names the exact already-reconciled retry response (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'the unchanged generation, the stored receipt echoed,'"
+pin "runtime contract requires preflight and the done commit gate after either success (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'ordinary preflight and the existing done commit gate to pass before the run'"
+pin "runtime contract keeps prelaunch scope/digest mismatches with their existing prelaunch remedies (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'route to their existing prelaunch remedies'"
+[ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
+
 # Removed 2026-10-14, arm remove-beside-provenance (mirror coherence): this
 # passing mirror cross-referenced the canonical resume-fit and resume-pricing
 # spans adjudicated away above (deliberately removed by the certified landing

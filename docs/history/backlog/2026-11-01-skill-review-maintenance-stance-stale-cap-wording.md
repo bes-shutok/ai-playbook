@@ -1,4 +1,5 @@
 # Backlog: maintenance SKILL.md sanctioned-overlap stance still names the retired repo-wide cap of three
+Cluster: docs/history/backlog/2026-11-01-skill-review-cross-skill-repetition-debt.md; docs/history/backlog/2026-11-01-skill-review-review-agents-portability-markers.md; docs/history/backlog/2026-11-01-skill-review-systematic-debugging-broken-references.md (same-day review family)
 
 - **Filed:** 2026-11-01, weekly skill-review lane run 1 (batch unit: agents/skills/maintenance/)
 - **Status:** open

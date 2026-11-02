@@ -1,0 +1,11 @@
+# Backlog: drain r2 residual - docs-branch-query-duplication
+Cluster: docs/history/backlog/2026-11-02-drain-r2-dead-code-tidy.md; docs/history/backlog/2026-11-02-drain-r2-dead-root-recheck-root-field.md; docs/history/backlog/2026-11-02-drain-r2-duplicate-manifest-read.md; docs/history/backlog/2026-11-02-drain-r2-duplicate-primary-resolution.md; docs/history/backlog/2026-11-02-drain-r2-legacy-manifest-name-blindspot.md; docs/history/backlog/2026-11-02-drain-r2-marker-grammar-third-copy.md; docs/history/backlog/2026-11-02-drain-r2-off-posture-undocumented.md; docs/history/backlog/2026-11-02-drain-r2-partial-drain-reporting-gap.md; docs/history/backlog/2026-11-02-drain-r2-partial-row-arm-token.md; docs/history/backlog/2026-11-02-drain-r2-report-only-witness-birth-mock.md; docs/history/backlog/2026-11-02-drain-r2-stale-row-partial-drain-note.md; docs/history/backlog/2026-11-02-drain-r2-window-overclaim-arm3.md (same-day review family)
+
+Status: open
+Priority: Low (non-blocking r2 residual; lands as a follow-up tidy)
+Severity: Low
+Origin: code review r2 of plan `docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md` (simplification#docs-branch-query-duplication).
+
+## Direction
+
+_docs_sync_state (per-path ls-tree) and _batched_docs_branch_hits (batched ls-tree) encode the same docs-branch presence question with different failure conventions. Express the per-path helper as a one-element batch so the ref/flag knowledge lives once.

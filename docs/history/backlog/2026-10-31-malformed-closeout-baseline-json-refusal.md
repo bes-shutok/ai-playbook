@@ -8,7 +8,7 @@
 - **Origin class:** self-serving
 - **Severity:** Low
 - **Driving force:** observability
-- **Cluster:** docs/history/backlog/2026-11-01-closeout-migrate-baseline-tracked-clobber.md, docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md
+- **Cluster:** docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md (the clobber-guard cluster's 2026-11-01 row was deleted at its ad-hoc landing)
 - **Source reference:** `docs/history/plans/completed/2026-10-27-plan-closeout-missing-phase0-baseline.md` and `docs/tmp/execute-plan/plan-closeout-missing-phase0-baseline/task-1-implement.log.md` (malformed-baseline case, exit 1 with `JSONDecodeError` traceback and no target copy)
 - **Capture hygiene:** `scan-public-hygiene --files` pass
 

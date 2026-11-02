@@ -959,3 +959,11 @@ Witness: a selftest arm drove `main(["--pre-round", plan])` through a redirect-o
 - **Rule:** `-I` also removes the script's own directory from `sys.path`, so a trusted repo-local script doing plain sibling imports fails with `ModuleNotFoundError` before its own code runs. Apply `-I` only to untrusted content; run the repository's own trusted scripts with plain `python3` (`-E -s` when only environment and user-site isolation is wanted).
 - **Why:** isolated mode bundles env-ignore, user-site-ignore, and the safe-path strip of the script directory; that entry is the load mechanism for flat sibling-import layouts, so stripping it is the feature, not a quirk.
 - **Witness:** `python3 -I scripts/execute_plan_runtime.py` failed with `ModuleNotFoundError: No module named 'runtime_capabilities'` (a sibling of the script's directory); re-running without `-I` worked unchanged in the same shell.
+
+## 41. Validate Numeric Values Against Their Target Representation
+
+This adds the missing Python-specific home for numeric representability: existing clauses cover library and test idioms, but none checks whether a value fits the operation that consumes it.
+
+**Principle:** Family H (verify the real thing, not the abstraction; see `coding_guidelines.md` #25).
+
+Python numeric types and `math.isfinite()` do not prove a value is safe for downstream arithmetic or conversion. An oversized integer can overflow during float conversion, and a finite epoch can exceed the platform's datetime range. Before using external or persisted numbers in comparisons, ordering, arithmetic, or datetime conversion, validate the value against the actual operation's supported range and catch its conversion errors. For epoch values, exercise the real platform conversion (such as `datetime.fromtimestamp`) before using them for freshness or ordering decisions.

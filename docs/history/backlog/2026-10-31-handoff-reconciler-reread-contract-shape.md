@@ -1,0 +1,3 @@
+# Backlog: Wrap handoff reconciler pre-replacement re-read paths in the outcome contract
+
+Driving force: code-quality. Two refusal paths in `scripts/reconcile_execute_plan_handoff.py` escape the contract with no JSON result and no OUTCOME line: an unguarded OSError on the second plan re-read (raw traceback), and a latent KeyError when `RECEIPT_IDENTITY_FIELDS` grows beyond `DRIFT_REASON_BY_FIELD`'s coverage. Fails safe (no mutation) but an exit-keying parent cannot distinguish the crash from a modeled refusal. Wrap the re-reads, map unknown fields to a fallback drift reason, add a contract-shape regression. Found by the Task 1 intermediate review (risk lens, 2026-10-31).

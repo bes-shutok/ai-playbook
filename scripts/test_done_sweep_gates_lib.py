@@ -3803,41 +3803,392 @@ def test_write_manifest_foreign_by_default_owned_arm_unchanged(
     assert list(done_session.glob("run-manifest-*.json")) == []
 
 
-def test_write_manifest_foreign_by_default_linked_worktree_still_refuses(
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-11-01-done-setup-staging-doc-foreign-arrival-default.md
+# Task 1: the linked-worktree foreign-by-arrival arms. The former universal
+# linked-worktree refuse pin (the foreign-by-default split never fires outside
+# the primary checkout) is updated in place to the arrival-arm expectations:
+# pre-marker transferred staging docs classify foreign-by-arrival, and every
+# fail-closed arm below keeps its refusal.
+# --------------------------------------------------------------------------- #
+def test_write_manifest_foreign_by_arrival_worktree_pre_marker_classified(
     tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
 ):
     """[class: REPOSITORY_TEST] Given a run-owned linked worktree (not the
-    primary checkout) whose own gitignored reviews home holds an unclaimed
-    candidate, expects the refuse arm to survive unchanged: the foreign-by-
-    default split never fires outside the primary checkout, so the writer
-    exits non-zero naming the candidate and no manifest is written."""
-    root = mktemp_repo("fbworktree")
+    primary checkout) whose transferred reviews home holds unclaimed
+    gitignored staging candidates whose mtimes strictly predate the bound
+    run-start marker's recorded epoch (the witnessed provisioning shape),
+    expects those candidates classified into the auto-foreign set
+    (foreign-by-arrival), not the refuse set: the write succeeds, the output
+    names the arrival classification, and the manifest records both
+    candidates under the foreign-review list. (Updates the former universal
+    linked-worktree refuse pin; the flip is owned by this plan's arrival-arm
+    checkboxes.)"""
+    root = mktemp_repo("fbarrive")
     git(root, "add", "-A")
     with open(root / ".gitignore", "a", encoding="utf-8") as handle:
         handle.write(".ai-playbook/reviews/\n")
     git(root, "add", ".gitignore")
     git(root, "commit", "-m", "ignore reviews home", "-q")
-    linked = Path(tempfile.mkdtemp(prefix="fbworktree-linked-")) / "wt"
-    git(root, "worktree", "add", str(linked), "-b", "fb-side")
-    make_marker(linked, time.time(), os.getpid())
+    linked = Path(tempfile.mkdtemp(prefix="fbarrive-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-arrive-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
     (linked / ".ai-playbook" / "facts.md").parent.mkdir(
         parents=True, exist_ok=True
     )
     shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
-    home_rel = ".ai-playbook/reviews/2026-10-23-worktree-review-r1.md"
-    (linked / home_rel).parent.mkdir(parents=True, exist_ok=True)
-    (linked / home_rel).write_text("historical record\n", encoding="utf-8")
+    home_a = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+    home_b = ".ai-playbook/reviews/2026-11-01-transferred-review-r2.md"
+    old_t = float(marker_epoch - 120)
+    for rel in (home_a, home_b):
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("transferred staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (old_t, old_t))
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
     done_session = linked / "docs" / "tmp" / "done-session"
 
     rc = lib.main(
-        ["write-manifest", "--owned-plan", "docs/history/plans/2026-10-23-x.md"]
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "foreign-by-arrival" in out
+    # Report-line shape pinned beyond the loose substring: the count and the
+    # bounded sample listing (the existing report-emission limit).
+    assert (
+        "write-manifest: foreign-by-arrival: 2 gitignored staging "
+        "candidate(s)" in out
+    )
+    assert f"{home_a}, {home_b}" in out
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["foreign_review_paths"] == [home_a, home_b]
+    assert payload["owned_review_paths"] == []
+
+
+def test_write_manifest_foreign_by_arrival_post_marker_sibling_refuses(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given the same run-owned linked-worktree shape
+    with two pre-marker transferred candidates and one candidate whose mtime
+    strictly postdates the bound marker's epoch (a mid-run, unclaimed staging
+    write), expects only the post-marker candidate in the refuse set while its
+    pre-marker siblings classify foreign-by-arrival: the writer exits non-zero
+    naming the post-marker candidate alone, and no manifest is written."""
+    root = mktemp_repo("fbpost")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbpost-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-post-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    pre_a = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+    pre_b = ".ai-playbook/reviews/2026-11-01-transferred-review-r2.md"
+    post_rel = ".ai-playbook/reviews/2026-11-01-midrun-review-r1.md"
+    old_t = float(marker_epoch - 120)
+    new_t = float(marker_epoch + 120)
+    for rel, mtime in ((pre_a, old_t), (pre_b, old_t), (post_rel, new_t)):
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (mtime, mtime))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
     )
     assert rc != 0
     err = capsys.readouterr().err
     assert "claim-or-foreign" in err
-    assert home_rel in err
+    assert post_rel in err
+    assert pre_a not in err
+    assert pre_b not in err
     assert list(done_session.glob("run-manifest-*.json")) == []
+    assert list(done_session.glob("*.tmp*")) == []
+
+
+def test_write_manifest_foreign_by_arrival_mtime_equal_marker_refuses(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a linked-worktree candidate whose mtime
+    equals the bound run-start marker's recorded epoch exactly, expects it in
+    the refuse set (the boundary is strictly-older: only candidates older than
+    the epoch classify foreign-by-arrival), with no manifest written."""
+    root = mktemp_repo("fbeq")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbeq-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-eq-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    eq_rel = ".ai-playbook/reviews/2026-11-01-equal-epoch-review-r1.md"
+    (linked / eq_rel).parent.mkdir(parents=True, exist_ok=True)
+    (linked / eq_rel).write_text("staging record\n", encoding="utf-8")
+    equal_t = float(marker_epoch)
+    os.utime(linked / eq_rel, (equal_t, equal_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert eq_rel in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_unparseable_marker_epoch_fails_closed(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] The arrival arm's fail-closed epoch arms in the
+    linked-worktree shape. Arm 1: a bound, content-confirmed run-start marker
+    whose first content line carries no parseable integer epoch (a ``nan``
+    first token over an otherwise confirming root record) refuses the whole
+    uncovered set with a named reason line - no silent auto-foreign. Arm 2: a
+    marker record missing the epoch token is not content-confirmed at all, so
+    the writer refuses upstream naming the absent marker; neither arm writes a
+    manifest."""
+    def provision(slug: str, branch: str) -> tuple[Path, Path, Path, str]:
+        base = mktemp_repo(slug)
+        git(base, "add", "-A")
+        with open(base / ".gitignore", "a", encoding="utf-8") as handle:
+            handle.write(".ai-playbook/reviews/\n")
+        git(base, "add", ".gitignore")
+        git(base, "commit", "-m", "ignore reviews home", "-q")
+        linked = Path(tempfile.mkdtemp(prefix=f"{slug}-linked-")) / "wt"
+        git(base, "worktree", "add", str(linked), "-b", branch)
+        (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        shutil.copy(
+            base / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md"
+        )
+        rel = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+        old_t = float(int(time.time()) - 7200)
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("transferred staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (old_t, old_t))
+        done_session = linked / "docs" / "tmp" / "done-session"
+        return linked, done_session, done_session / "run-start-20261101T000000Z", rel
+
+    # Arm 1: the epoch token parses as a float but never as an integer, so the
+    # marker still confirms the repo root while carrying no usable epoch.
+    linked, done_session, marker, rel = provision("fbnan", "fb-nan-side")
+    done_session.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"nan {linked} {os.getpid()}\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "epoch" in err.lower()
+    assert rel in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+    # Arm 2: the epoch token is missing entirely, so no content-confirmed
+    # marker exists and the write refuses before any classification.
+    linked2, done_session2, marker2, rel2 = provision("fbnoepoch", "fb-noepoch-side")
+    done_session2.mkdir(parents=True, exist_ok=True)
+    marker2.write_text(f"{linked2} {os.getpid()}\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked2))
+
+    rc2 = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc2 != 0
+    err2 = capsys.readouterr().err
+    assert "no content-confirmed run-start marker" in err2
+    assert list(done_session2.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_tracked_unclaimed_refuses(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a tracked-but-unclaimed candidate (a
+    force-staged staging doc under the linked worktree's reviews home, so a
+    porcelain ordinary row, not an ignored row) even with a pre-marker mtime,
+    expects it refused exactly as today: the arrival arm's gitignored conjunct
+    keeps the tracked refusal, and no manifest is written."""
+    root = mktemp_repo("fbtrack")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbtrack-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-track-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    tracked_rel = ".ai-playbook/reviews/2026-11-01-tracked-review-r1.md"
+    old_t = float(marker_epoch - 120)
+    (linked / tracked_rel).parent.mkdir(parents=True, exist_ok=True)
+    (linked / tracked_rel).write_text("tracked staging record\n", encoding="utf-8")
+    os.utime(linked / tracked_rel, (old_t, old_t))
+    git(linked, "add", "-f", tracked_rel)
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert tracked_rel in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_owned_arm_no_auto_foreign(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a linked-worktree run that staged its own
+    review record in the worktree's reviews home (--owned-review) with a
+    pre-marker unclaimed sibling on disk, expects the owned arm kept and no
+    auto-foreign classification: the writer refuses naming the unclaimed
+    sibling alone, the own staged record stays owned (never named by the
+    refusal), and no manifest is written."""
+    root = mktemp_repo("fbown")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbown-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-own-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    own_rel = ".ai-playbook/reviews/2026-11-01-own-run-review-r1.md"
+    pre_rel = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+    old_t = float(marker_epoch - 120)
+    for rel in (own_rel, pre_rel):
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        [
+            "write-manifest",
+            "--owned-plan",
+            "docs/history/plans/2026-11-01-x.md",
+            "--owned-review",
+            own_rel,
+        ]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert pre_rel in err
+    assert own_rel not in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_adopted_markings_untouched(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given an adopted manifest (an interrupted
+    orphan in the linked worktree) carrying foreign markings plus one
+    uncovered pre-marker staging doc on disk, expects the arrival arm to
+    never engage on the adopted boundary: the uncovered doc stays in the
+    refuse set (the claim-or-foreign refusal names it alone, no
+    foreign-by-arrival line fires, and no manifest is written - a wrongly
+    engaged arrival arm would classify the doc and flip this pin green),
+    and once the uncovered doc is removed the same adoption write succeeds
+    with the carried foreign and owned claims verbatim, the carried foreign
+    list gaining no duplicates or reclassifications."""
+    root = mktemp_repo("fbadopt")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbadopt-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-adopt-side")
+    prev = make_marker(linked, time.time() - 7200, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    orphan_id = "run-adopt-arrival"
+    own_rel = ".ai-playbook/reviews/2026-11-01-adopted-own-review-r1.md"
+    foreign_rel = ".ai-playbook/reviews/2026-11-01-adopted-peer-review-r1.md"
+    uncovered_rel = ".ai-playbook/reviews/2026-11-01-adopted-unclaimed-review-r1.md"
+    old_t = float(int(time.time()) - 3600)
+    for rel in (own_rel, foreign_rel, uncovered_rel):
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("adopted run's staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (old_t, old_t))
+    _seed_run_manifest(
+        linked,
+        orphan_id,
+        prev.name,
+        str(linked),
+        time.time() - 10,
+        owned_review_paths=[own_rel],
+        foreign_review_paths=[foreign_rel],
+    )
+    make_marker(linked, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    _hold_done_lock(monkeypatch, tmp_path, linked)
+
+    # Stage 1 (the failing-capable pin): the adopted boundary never engages
+    # the arrival arm, so the uncovered pre-marker doc is refused, not
+    # silently classified foreign by the resume's fresh marker.
+    rc = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "foreign-by-arrival" not in captured.out
+    assert "claim-or-foreign" in captured.err
+    assert uncovered_rel in captured.err
+    assert own_rel not in captured.err
+    assert foreign_rel not in captured.err
+    manifests = list((linked / "docs" / "tmp" / "done-session").glob(
+        "run-manifest-*.json"
+    ))
+    assert [manifest.name for manifest in manifests] == [
+        f"run-manifest-{orphan_id}.json"
+    ]
+
+    # Stage 2 (the markings-untouched pin): with the uncovered doc removed,
+    # the same adoption write succeeds and carries the boundary verbatim.
+    (linked / uncovered_rel).unlink()
+    rc = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "foreign-by-arrival" not in out
+    payload = _newest_manifest_payload(linked, exclude_run_id=orphan_id)
+    assert payload["adopted_from"] == orphan_id
+    assert payload["owned_review_paths"] == [own_rel]
+    assert payload["foreign_review_paths"] == [foreign_rel]
 
 
 def test_write_manifest_run_ids_unique(
@@ -17912,3 +18263,774 @@ def test_final_closeout_refuses_foreign_staged_entry(
     out = capsys.readouterr().out
     assert rc == 1
     assert "foreign_peer.txt" in out
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: docs/tmp drain arms Task 1 never-synced scratch age bound
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+DOCS_TMP_HORIZON_S = int(lib.DOCS_TMP_DELETION_HORIZON_DAYS * 86400)
+
+
+def _write_facts_with_knob(root: Path, knob_line: str) -> None:
+    facts = root / ".ai-playbook" / "facts.md"
+    body = facts.read_text(encoding="utf-8")
+    facts.write_text(
+        body.replace("```toml\n", "```toml\n" + knob_line + "\n"),
+        encoding="utf-8",
+    )
+
+
+def _seed_never_synced_window(root: Path) -> float:
+    """Anchor the session window with the marker trio and return now."""
+    now = time.time()
+    make_marker(root, now - 7200, os.getpid())
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    return now
+
+
+def _seed_stale_survivor(root: Path, name: str, age_s: float) -> Path:
+    entry = root / "docs" / "tmp" / name
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("scratch\n", encoding="utf-8")
+    stamp = time.time() - age_s
+    os.utime(entry, (stamp, stamp))
+    return entry
+
+
+def test_docs_tmp_never_synced_drain_on_posture_drains(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] Witness: docs branch holding zero docs/tmp
+    paths plus a stale uncited survivor drains in the ``on`` posture with the
+    named reason."""
+    root = make_repo(tmp_path, "drain-on", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "scratch-notes.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not survivor.exists(), "stale uncited survivor must drain in the on posture"
+    assert lib.DOCS_TMP_NEVER_SYNCED_DRAIN_REASON in result.message, result.message
+
+
+def test_docs_tmp_never_synced_report_only_would_drain(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Default (report-only) posture prints the same
+    survivor as a would-drain row and unlinks nothing."""
+    root = make_repo(tmp_path, "drain-report", gitignore_docs=True)
+    write_facts(root)
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "scratch-notes.txt", DOCS_TMP_HORIZON_S + 86400)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "report-only posture must never unlink"
+    assert "posture report-only" in result.message, result.message
+    assert "would-drain" in result.message, result.message
+    assert lib.DOCS_TMP_NEVER_SYNCED_DRAIN_REASON in result.message, result.message
+
+
+def test_docs_tmp_never_synced_fresh_cited_dir_kept(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A fresh file, a manifest-cited file, and a
+    directory each stay kept with their named reasons (on posture)."""
+    root = make_repo(tmp_path, "drain-kept", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    tmp_dir = root / "docs" / "tmp"
+    fresh = tmp_dir / "fresh-notes.txt"
+    fresh.write_text("new\n", encoding="utf-8")
+    aged_dir = tmp_dir / "aged-dir"
+    aged_dir.mkdir()
+    (aged_dir / "inner.txt").write_text("x\n", encoding="utf-8")
+    os.utime(aged_dir, (time.time() - DOCS_TMP_HORIZON_S - 60,) * 2)
+    cited = _seed_stale_survivor(root, "cited-report.txt", DOCS_TMP_HORIZON_S + 86400)
+    _add_linked_worktree(root, tmp_path / "drain-kept-wt", "drain-wt")
+    _write_migration_manifest(
+        tmp_dir
+        / "done-session"
+        / "worktree-migrate-baseline-20261102T000000Z-drainfix-manifest.json",
+        branch="drain-wt",
+        source=str(tmp_path / "drain-kept-wt" / "drain-source"),
+        destinations=[str(cited.resolve())],
+    )
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert fresh.exists(), "fresh file must stay kept"
+    assert aged_dir.is_dir(), "directories stay outside the drain arm"
+    assert cited.exists(), "manifest-cited survivor must stay kept"
+    assert "cited by a live closeout manifest" in result.message, result.message
+
+
+def test_docs_tmp_never_synced_birth_fresh_kept(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A fresh arrival with a preserved 40-day-old
+    mtime but a recent birth time stays kept (the birth guard never guesses)."""
+    root = make_repo(tmp_path, "drain-birth", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "recreated.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: time.time())
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "a fresh birth time must keep the entry"
+
+
+def test_docs_tmp_never_synced_window_unanchorable_kept(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] Without any run-start marker the window is
+    unanchorable and the arm keeps, never guessing."""
+    root = make_repo(tmp_path, "drain-noanchor", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "orphan.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "an unanchorable window must keep the entry"
+    assert "unanchorable" in result.message, result.message
+
+
+def test_docs_tmp_never_synced_uncertain_docs_branch_kept(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A repo without a docs branch leaves the sync
+    state uncertain and the arm keeps every survivor."""
+    root = make_repo(tmp_path, "drain-uncertain", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    survivor = _seed_stale_survivor(root, "maybe-synced.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "an uncertain docs-branch state must keep the entry"
+    assert "docs-branch listing failed" in result.message, result.message
+
+
+def test_docs_tmp_never_synced_boundary_kept(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] mtime and birth time exactly at the horizon
+    keep (strictly older required, mirroring the strict-anchor semantics)."""
+    root = make_repo(tmp_path, "drain-boundary", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    frozen = time.time()
+    monkeypatch.setattr(lib.time, "time", lambda: frozen)
+    make_marker(root, frozen - 7200, os.getpid())
+    make_marker(root, frozen - 3600, os.getpid())
+    make_marker(root, frozen, os.getpid())
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "boundary.txt", DOCS_TMP_HORIZON_S)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "a boundary entry keeps"
+
+
+def test_docs_tmp_never_synced_lock_held_kept(tmp_path, sweep_env, mktemp_repo, monkeypatch):
+    """[class: REPOSITORY_TEST] With the citation-hold merge lock held by a
+    stub publisher the arm drains nothing and reports the hold-unverified
+    keep reason."""
+    root = mktemp_repo("drain-lock-held")
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "held.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+    lock_dir, token = acquire_merge_lock_for_gate(
+        root, Path(os.environ["MERGE_LOCK_ROOT"])
+    )
+    try:
+        result = run_gate("docs-tmp-sweep", ctx_for(root))
+    finally:
+        _release_merge_lock(lock_dir, token)
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "no drain without a verified citation hold"
+    assert "closeout-reference hold unverified" in result.message, result.message
+
+
+def test_docs_tmp_never_synced_off_posture_silent_keep(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] With the posture knob at ``off`` the arm
+    prints no drain rows and keeps everything."""
+    root = make_repo(tmp_path, "drain-off", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "off"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(root, "kept-off.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "the off posture keeps the entry"
+    assert "would-drain" not in result.message, result.message
+    assert "drain arms off" in result.message, result.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: docs/tmp drain arms Task 2 dead-root marker drain
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def _write_foreign_marker(root: Path, epoch: float, recorded_root: str) -> Path:
+    marker = root / "docs" / "tmp" / "done-session" / (marker_name(epoch) + "-dead")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{int(epoch)} {recorded_root} 424242\n", encoding="utf-8")
+    return marker
+
+
+def test_done_session_dead_root_marker_drains_on_posture(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] Witness: a fixture marker whose synthesized
+    digest matches no candidate and whose epoch precedes the anchor drains in
+    the ``on`` posture; the census rows report the counts."""
+    root = make_repo(tmp_path, "deadroot-on", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    now = _seed_never_synced_window(root)
+    anchor = now - 3600
+    dead = _write_foreign_marker(root, anchor - 3600, "f" * 64)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not dead.exists(), "a dead-root pre-window marker must drain in on posture"
+    assert "dead-root-drained=1" in result.message, result.message
+    assert "dead-root marker (root absent, pre-window)" in result.message, result.message
+
+
+def test_done_session_dead_root_marker_report_only(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The same dead-root marker in the default
+    report-only posture prints a would-drain row and unlinks nothing."""
+    root = make_repo(tmp_path, "deadroot-report", gitignore_docs=True)
+    write_facts(root)
+    now = _seed_never_synced_window(root)
+    anchor = now - 3600
+    dead = _write_foreign_marker(root, anchor - 3600, "f" * 64)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert dead.exists(), "report-only posture must never unlink"
+    assert "would-drain: dead-root marker (root absent, pre-window)" in result.message, (
+        result.message
+    )
+    assert "dead-root-kept=1" in result.message, result.message
+
+
+def test_done_session_live_root_marker_fenced(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A marker recording a fixture worktree's digest
+    (registered via the linked-worktree helper) stays kept with a fence
+    reason; its legacy raw-path twin resolves to the same candidate and stays
+    fenced too."""
+    root = make_repo(tmp_path, "deadroot-live", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    now = _seed_never_synced_window(root)
+    anchor = now - 3600
+    wt = _add_linked_worktree(root, tmp_path / "deadroot-live-wt", "deadroot-live-branch")
+    digest_marker = _write_foreign_marker(
+        root, anchor - 3600, lib._repo_root_digest(wt)
+    )
+    raw_marker = _write_foreign_marker(root, anchor - 3600, str(wt))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert digest_marker.exists(), "a live-root digest marker must stay fenced"
+    assert raw_marker.exists(), "a live-root legacy raw-path marker must stay fenced"
+    assert "live-root cross-repo marker" in result.message, result.message
+    assert "dead-root-drained=0" in result.message, result.message
+
+
+def test_done_session_dead_root_keeps_fail_closed(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A fresh cross-repo marker, a malformed marker,
+    and a boundary marker with its epoch exactly at the anchor each stay kept
+    with fail-closed reasons."""
+    root = make_repo(tmp_path, "deadroot-keep", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    now = _seed_never_synced_window(root)
+    anchor = now - 3600
+    fresh = _write_foreign_marker(root, now - 60, "a" * 64)
+    boundary = _write_foreign_marker(root, anchor, "b" * 64)
+    malformed = root / "docs" / "tmp" / "done-session" / "run-start-garbage"
+    malformed.write_text("not a marker at all\n", encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert fresh.exists(), "a fresh cross-repo marker stays kept"
+    assert boundary.exists(), "a boundary marker keeps (strictly older required)"
+    assert malformed.exists(), "a malformed marker is never pruned"
+    assert "cross-repo marker inside the session window; immune" in result.message
+    assert "content not confirmable as this repo" in result.message
+    assert "dead-root-drained=0" in result.message, result.message
+
+
+def test_done_session_dead_root_enumeration_failure_keeps(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] With the worktree registration unreadable the
+    snapshot is unverified and the dead-root arm prunes nothing that pass."""
+    root = make_repo(tmp_path, "deadroot-unverified", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    now = _seed_never_synced_window(root)
+    anchor = now - 3600
+    dead = _write_foreign_marker(root, anchor - 3600, "c" * 64)
+
+    import worktree_closeout_migrate as migrate_mod
+
+    def raise_unreadable(_target):
+        raise RuntimeError("registration unreadable fixture")
+
+    monkeypatch.setattr(
+        migrate_mod, "_parse_worktree_entries", raise_unreadable
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert dead.exists(), "an unverified snapshot prunes nothing"
+    assert "candidate-root snapshot unverified" in result.message, result.message
+    assert "dead-root-drained=0" in result.message, result.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: docs/tmp drain arms Task 3 proof-family terminal-state bound
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+PROOF_DRAIN_REASON = (
+    "consuming closeout terminal; proof family drained (retry reads a "
+    "fresh setup baseline)"
+)
+
+
+def _seed_proof_session(
+    root: Path,
+    slug: str,
+    *,
+    state: Optional[dict] = None,
+    state_raw: Optional[str] = None,
+    migration_branch: Optional[str] = "gone-branch",
+    migration_source: Optional[str] = "/nonexistent/worktree",
+) -> Path:
+    session = root / "docs" / "tmp" / "execute-plan" / slug
+    session.mkdir(parents=True, exist_ok=True)
+    if state is not None:
+        (session / "runtime_state.json").write_text(
+            json.dumps(state), encoding="utf-8"
+        )
+    elif state_raw is not None:
+        (session / "runtime_state.json").write_text(state_raw, encoding="utf-8")
+    if migration_branch is not None:
+        (session / "closeout-migration.json").write_text(
+            json.dumps(
+                {
+                    "branch": [{"branch": migration_branch, "source": migration_source}],
+                }
+            ),
+            encoding="utf-8",
+        )
+    (session / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    (session / "manifest.md").write_text("run manifest\n", encoding="utf-8")
+    return session
+
+
+def _terminal_state(worktree: str) -> dict:
+    return {
+        "plan_slug": "fixture",
+        "workflow_state": "complete",
+        "worktree": worktree,
+    }
+
+
+def test_proof_family_terminal_drains_on(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] Witness: a terminal_receipt state file, an
+    unregistered worktree, and a gone branch ref drain the whole session
+    directory in the ``on`` posture (multi-file proof family)."""
+    root = make_repo(tmp_path, "proof-on", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    session = _seed_proof_session(
+        root,
+        "2026-09-30-proof-drain",
+        state={
+            "plan_slug": "fixture",
+            "terminal_receipt": {"recorded_at": "2026-10-01T00:00:00+0000"},
+            "worktree": "/nonexistent/worktree",
+        },
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not session.exists(), "a terminal session with a gone branch must drain"
+    assert PROOF_DRAIN_REASON in result.message, result.message
+
+
+def test_proof_family_terminal_report_only(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The same fixture in the default report-only
+    posture prints a would-drain row and removes nothing."""
+    root = make_repo(tmp_path, "proof-report", gitignore_docs=True)
+    write_facts(root)
+    session = _seed_proof_session(
+        root,
+        "2026-09-30-proof-report",
+        state=_terminal_state("/nonexistent/worktree"),
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert session.exists(), "report-only posture must never unlink"
+    assert f"would-drain: {PROOF_DRAIN_REASON}" in result.message, result.message
+
+
+def test_proof_family_primary_rooted_terminal_drains(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A terminal session whose recorded worktree is
+    the primary checkout itself and whose branch is gone drains (the
+    witnessed 60M residue is a primary session)."""
+    root = make_repo(tmp_path, "proof-primary", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    session = _seed_proof_session(
+        root,
+        "2026-09-30-proof-primary",
+        state=_terminal_state(str(root)),
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not session.exists(), "a primary-rooted terminal session must drain"
+    assert PROOF_DRAIN_REASON in result.message, result.message
+
+
+def test_proof_family_fail_closed_keeps(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A non-terminal session, an unparseable state
+    file, a session whose worktree is still registered, and a session with a
+    cited byte each stay kept with their named reasons."""
+    root = make_repo(tmp_path, "proof-keep", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    non_terminal = _seed_proof_session(
+        root, "2026-09-30-proof-running",
+        state={"plan_slug": "x", "workflow_state": "running",
+               "worktree": "/nonexistent/worktree"},
+    )
+    unparseable = _seed_proof_session(
+        root, "2026-09-30-proof-broken", state_raw="{not json",
+    )
+    wt = _add_linked_worktree(root, tmp_path / "proof-keep-wt", "proof-keep-branch")
+    registered = _seed_proof_session(
+        root, "2026-09-30-proof-live-wt", state=_terminal_state(str(wt)),
+    )
+    cited = _seed_proof_session(
+        root, "2026-09-30-proof-cited", state=_terminal_state("/nonexistent/worktree"),
+    )
+    _write_migration_manifest(
+        root / "docs" / "tmp" / "done-session"
+        / "worktree-migrate-baseline-20261102T010000Z-proofcite-manifest.json",
+        branch="proof-keep-branch",
+        source=str(wt / "src"),
+        destinations=[str((cited / "closeout-baseline.json").resolve())],
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert non_terminal.exists(), "a non-terminal session keeps"
+    assert "not terminal" in result.message, result.message
+    assert unparseable.exists(), "an unparseable state file keeps"
+    assert "never guessing" in result.message, result.message
+    assert registered.exists(), "a still-registered worktree session keeps"
+    assert "still registered" in result.message, result.message
+    assert cited.exists(), "a session with a cited byte keeps whole"
+    assert "cited by a live closeout manifest" in result.message, result.message
+
+
+def test_proof_family_partial_branch_resolving(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A terminal session whose migration branch
+    still resolves keeps its migration manifests and drains its baseline and
+    other artifacts."""
+    root = make_repo(tmp_path, "proof-partial", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    git(root, "branch", "alive-branch", "-q")
+    session = _seed_proof_session(
+        root, "2026-09-30-proof-partial",
+        state=_terminal_state("/nonexistent/worktree"),
+        migration_branch="alive-branch",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert session.exists(), "the session directory stays for its manifests"
+    assert (session / "closeout-migration.json").is_file(), "manifest retained"
+    assert not (session / "closeout-baseline.json").exists(), "baseline drained"
+    assert "branch still resolves" in result.message, result.message
+
+
+def test_proof_family_receipt_less_keeps(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A receipt-less session whose migration branch
+    still resolves, or whose source worktree still exists (registered), stays
+    kept."""
+    root = make_repo(tmp_path, "proof-rl-keep", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    git(root, "branch", "alive-branch-2", "-q")
+    resolves = _seed_proof_session(
+        root, "2026-09-30-proof-rl-resolves",
+        migration_branch="alive-branch-2",
+    )
+    wt = _add_linked_worktree(root, tmp_path / "proof-rl-wt", "proof-rl-branch")
+    source_exists = _seed_proof_session(
+        root, "2026-09-30-proof-rl-source",
+        migration_branch="gone-branch-2", migration_source=str(wt),
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert resolves.exists(), "a resolving branch keeps the receipt-less session"
+    assert source_exists.exists(), "an existing source worktree keeps the session"
+
+
+def test_proof_family_receipt_less_drains(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The receipt-less legacy drain case (no state
+    file, gone branch ref, unregistered source worktree) drains in ``on`` and
+    prints a would-drain row in ``report-only``."""
+    root = make_repo(tmp_path, "proof-rl-drain", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    session = _seed_proof_session(
+        root, "2026-09-30-proof-rl-drain",
+        migration_branch="gone-branch-3",
+        migration_source="/nonexistent/source-worktree",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not session.exists(), "a qualifying receipt-less session drains"
+    assert PROOF_DRAIN_REASON in result.message, result.message
+
+    report_root = make_repo(tmp_path, "proof-rl-report", gitignore_docs=True)
+    write_facts(report_root)
+    report_session = _seed_proof_session(
+        report_root, "2026-09-30-proof-rl-report",
+        migration_branch="gone-branch-4",
+        migration_source="/nonexistent/source-worktree",
+    )
+    report_result = run_gate("docs-tmp-sweep", ctx_for(report_root))
+    assert report_result.rc == 0, report_result.message
+    assert report_session.exists(), "report-only removes nothing"
+    assert f"would-drain: {PROOF_DRAIN_REASON}" in report_result.message, (
+        report_result.message
+    )
+
+
+def test_proof_family_lock_held_keeps(tmp_path, sweep_env, mktemp_repo):
+    """[class: REPOSITORY_TEST] With the citation-hold merge lock held by a
+    stub publisher nothing drains and the hold-unverified reason prints."""
+    root = mktemp_repo("proof-lock")
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    session = _seed_proof_session(
+        root, "2026-09-30-proof-lock",
+        state=_terminal_state("/nonexistent/worktree"),
+    )
+    lock_dir, token = acquire_merge_lock_for_gate(
+        root, Path(os.environ["MERGE_LOCK_ROOT"])
+    )
+    try:
+        result = run_gate("docs-tmp-sweep", ctx_for(root))
+    finally:
+        _release_merge_lock(lock_dir, token)
+
+    assert result.rc == 0, result.message
+    assert session.exists(), "nothing drains without a verified citation hold"
+    assert "closeout reference hold unverified" in result.message, result.message
+
+
+# --------------------------------------------------------------------------- #
+# Review r1 fold: off-posture pins for arms 2 and 3, receipt-less fence,
+# docs-branch-hit keep, horizon knob pins, snapshot family leg, manifest-less
+# terminal drain.
+# --------------------------------------------------------------------------- #
+def test_review_fold_deadroot_off_posture_keeps(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The off posture keeps the dead-root marker:
+    no arm unlinks when the knob is off."""
+    root = make_repo(tmp_path, "fold-deadroot-off", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "off"')
+    now = _seed_never_synced_window(root)
+    dead = _write_foreign_marker(root, now - 7200 - 1, "d" * 64)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert dead.exists(), "the off posture must keep the dead-root marker"
+    assert "drain arms off; dead-root marker kept" in result.message, result.message
+    assert "dead-root-drained=0" in result.message, result.message
+
+
+def test_review_fold_proof_family_off_posture_keeps(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The off posture keeps the terminal
+    proof-family session whole: no arm unlinks when the knob is off."""
+    root = make_repo(tmp_path, "fold-proof-off", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "off"')
+    session = _seed_proof_session(
+        root, "2026-09-30-fold-off",
+        state=_terminal_state("/nonexistent/worktree"),
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert session.exists(), "the off posture must keep the proof family"
+    assert (session / "closeout-baseline.json").is_file()
+    assert "drain arms off; proof family kept" in result.message, result.message
+
+
+def test_review_fold_receipt_less_resolving_branch_keeps_whole(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A receipt-less session whose migration branch
+    still resolves keeps every member (no partial drain without terminal
+    evidence)."""
+    root = make_repo(tmp_path, "fold-rl-partial", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    git(root, "branch", "fold-alive-branch", "-q")
+    session = _seed_proof_session(
+        root, "2026-09-30-fold-rl",
+        migration_branch="fold-alive-branch",
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert (session / "closeout-baseline.json").is_file(), "baseline must survive"
+    assert (session / "manifest.md").is_file(), "run manifest must survive"
+    assert (session / "closeout-migration.json").is_file()
+    assert "migration branch still resolves" in result.message, result.message
+
+
+def test_review_fold_docs_branch_hit_keeps(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] A stale survivor whose rel is present on the
+    docs branch keeps with the stale-classification reason (the batched
+    hits gate)."""
+    root = make_repo(tmp_path, "fold-docs-hit", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(
+        root,
+        {
+            "docs-readme.md": "docs body\\n",
+            "docs/tmp/scratch-notes.txt": "synced bytes\\n",
+        },
+    )
+    survivor = _seed_stale_survivor(root, "scratch-notes.txt", DOCS_TMP_HORIZON_S + 86400)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert survivor.exists(), "a docs-branch-present survivor must keep"
+    assert "now present on the docs branch" in result.message, result.message
+
+
+def test_review_fold_horizon_knob(tmp_path, sweep_env, monkeypatch):
+    """[class: REPOSITORY_TEST] The horizon knob overrides the constant (a
+    1-day horizon drains a 2-day-old file); a garbage value falls back to the
+    30-day constant (the same survivor keeps)."""
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+    short = make_repo(tmp_path, "fold-horizon-short", gitignore_docs=True)
+    write_facts(short)
+    _write_facts_with_knob(short, 'docs_tmp_drain_arms = "on"')
+    _write_facts_with_knob(short, 'docs_tmp_deletion_horizon_days = "1"')
+    _seed_never_synced_window(short)
+    _add_docs_branch_files(short, {"docs-readme.md": "docs body\\n"})
+    survivor = _seed_stale_survivor(short, "two-days.txt", 2 * 86400)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(short))
+
+    assert result.rc == 0, result.message
+    assert not survivor.exists(), "a 1-day horizon drains a 2-day-old file"
+
+    garbage = make_repo(tmp_path, "fold-horizon-garbage", gitignore_docs=True)
+    write_facts(garbage)
+    _write_facts_with_knob(garbage, 'docs_tmp_drain_arms = "on"')
+    _write_facts_with_knob(garbage, 'docs_tmp_deletion_horizon_days = "bogus"')
+    _seed_never_synced_window(garbage)
+    _add_docs_branch_files(garbage, {"docs-readme.md": "docs body\\n"})
+    kept_survivor = _seed_stale_survivor(
+        garbage, "twentynine.txt", DOCS_TMP_HORIZON_S - 86400
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(garbage))
+
+    assert result.rc == 0, result.message
+    assert kept_survivor.exists(), "a garbage knob falls back to the constant"
+
+
+def test_review_fold_snapshot_family_leg(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A marker whose recorded root sits under the
+    sibling worktree-root family stays fenced even without a registration
+    entry (the family scan leg)."""
+    root = make_repo(tmp_path, "fold-family", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    now = _seed_never_synced_window(root)
+    family_member = root.parent / (root.name + "-worktrees") / "fold-fam-wt"
+    family_member.mkdir(parents=True)
+    marker = _write_foreign_marker(
+        root, now - 7200 - 1, str(family_member)
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert marker.exists(), "a sibling-family root must stay fenced"
+    assert "live-root cross-repo marker" in result.message, result.message
+
+
+def test_review_fold_manifest_less_terminal_drains(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A terminal state file with no migration
+    manifest and an unregistered worktree drains (no manifest family to
+    keep)."""
+    root = make_repo(tmp_path, "fold-manifest-less", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    session = root / "docs" / "tmp" / "execute-plan" / "2026-09-30-fold-ml"
+    session.mkdir(parents=True)
+    (session / "runtime_state.json").write_text(
+        json.dumps(_terminal_state("/nonexistent/worktree")), encoding="utf-8"
+    )
+    (session / "closeout-baseline.json").write_text("{}\\n", encoding="utf-8")
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not session.exists(), "a manifest-less terminal session drains"
+    assert PROOF_DRAIN_REASON in result.message, result.message

@@ -370,6 +370,59 @@ class DoneRunSetupTest(FixtureMixin, unittest.TestCase):
         manifests = list(self.done_session().glob("run-manifest-*.json"))
         self.assertEqual(len(manifests), 1)
 
+    def test_setup_provisioned_worktree_transferred_reviews_arrival(self) -> None:
+        """Wrapper witness for the foreign-by-arrival default (plan
+        docs/history/plans/2026-11-01-done-setup-staging-doc-foreign-arrival-default.md
+        Task 1): setup over a provisioned linked worktree whose transferred
+        reviews home carries pre-marker staging docs, with NO foreign list,
+        succeeds and classifies the pre-marker docs foreign-by-arrival into
+        the manifest's foreign-review list. A mid-session untracked scratch
+        file keeps the residue sweep's dirty-worktree skip arm engaged so the
+        provisioned worktree survives the setup's own fail-open sweep."""
+        self.init_fixture_repo()
+        gitignore = self.fixture / ".gitignore"
+        gitignore.write_text(gitignore.read_text() + ".ai-playbook/reviews/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "ignore the reviews home")
+        review_rel = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+        (self.fixture / review_rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.fixture / review_rel).write_text("staged review record\n")
+        (self.fixture / ".ai-playbook/reviews/"
+         "2026-11-01-transferred-review-r1.stats.json").write_text("{}\n")
+        wt = self.tmp / "repo-wt-provisioned"
+        self.git("worktree", "add", "-q", "-b", "wt-provisioned", str(wt))
+        # The provisioning transfer: the checked-out facts copy is already in
+        # the worktree; the transfer copies the whole gitignored reviews home.
+        shutil.copytree(
+            self.fixture / ".ai-playbook" / "reviews",
+            wt / ".ai-playbook" / "reviews",
+        )
+        doc_mtime = time.time() - 3600.0
+        os.utime(wt / review_rel, (doc_mtime, doc_mtime))
+        (wt / "scratch-untracked.md").write_text("untracked\n")
+        env = self.runner_env()
+        env["DONE_SWEEP_REPO_ROOT"] = str(wt)
+
+        proc = self.run_setup("--label", "fixture-run", cwd=wt, env=env)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("foreign-by-arrival", proc.stdout)
+        # Report-line shape pinned beyond the loose substring: the count and
+        # the bounded sample listing (the existing report-emission limit).
+        self.assertIn(
+            "write-manifest: foreign-by-arrival: 1 gitignored staging "
+            "candidate(s)",
+            proc.stdout,
+        )
+        self.assertIn(review_rel, proc.stdout)
+        exports = self.eval_exports(proc.stdout)
+        marker_epoch = int(Path(exports["DONE_RUN_MARKER"]).read_text().split()[0])
+        self.assertGreater(marker_epoch, doc_mtime)
+        record = json.loads(Path(exports["DONE_RUN_MANIFEST"]).read_text())
+        self.assertEqual(record["foreign_review_paths"], [review_rel])
+        self.assertEqual(record["owned_review_paths"], [])
+        self.assertFalse(record.get("complete", True))
+
 
 class DoneRunSetupResidueSweepTest(FixtureMixin, unittest.TestCase):
     """Task 2 witnesses (plan
@@ -3373,9 +3426,14 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
 
     def test_mismatched_manifest_export_refuses(self) -> None:
         exports, ancestor_blob, prior_head = self.restoration_fixture()
-        crafted = self.tmp / "crafted-manifest.json"
-        record = json.loads(Path(exports["DONE_RUN_MANIFEST"]).read_text())
+        # the export names a CANONICAL record bound to a foreign marker: a
+        # conflicting signal, not a stale hint (a shadow-named or missing
+        # export is only a hint and never selects; the selection itself
+        # binds to the active confirmed marker)
+        template = Path(exports["DONE_RUN_MANIFEST"])
+        record = json.loads(template.read_text())
         record["marker"] = "run-start-00000000-dead"
+        crafted = self.done_session() / "run-manifest-20991231T000000Z-foreign1.json"
         crafted.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
         proc = self.run_commit(
             "--stage", "work.txt",
@@ -3384,7 +3442,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
             env=self.authorized_env(exports, DONE_RUN_MANIFEST=str(crafted)),
         )
         self.assert_refused(proc, exports, prior_head,
-                            "not bound to the newest root-confirmed marker")
+                            "conflicts with the active confirmed marker")
 
     def test_root_mismatch_refuses(self) -> None:
         exports, ancestor_blob, prior_head = self.restoration_fixture()
@@ -6998,9 +7056,10 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
     docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md):
     the expected symbolic-ref/starting-OID pair binds a primary rolling-log
     write to the caller-selected branch through staging and the captured-
-    tree compare-and-swap; one cleanup owner restores only the writer-owned
-    delta on every refusal before the captured-ref swap; ordinary pair-less
-    calls and worktree log commits keep their existing paths."""
+    tree compare-and-swap; one cleanup owner mutates nothing on every
+    refusal before the captured-ref swap and reports owned staged residue
+    through blocked recovery; ordinary pair-less calls and worktree log
+    commits keep their existing paths."""
 
     PLAN_LOG = "docs/history/backlog/PLAN-PROMPTS.md"
     EXEC_LOG = "docs/history/backlog/EXEC-PROMPTS.md"
@@ -7056,7 +7115,12 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
 
     def worktree_dirty(self, rel: str) -> bool:
         status = self.git("status", "--porcelain", "--", rel).stdout
-        return status.startswith(" M ")
+        # since the cleanup owner no longer unstages the owned delta, a
+        # refused declared path carries its edit in BOTH the index and the
+        # worktree; the surviving byte is any M in either status column
+        return any(
+            "M" in line[:2] for line in status.splitlines() if line.strip()
+        )
 
     def assert_no_rolling_cleanup(
         self, proc: subprocess.CompletedProcess,
@@ -7069,7 +7133,16 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         self, proc: subprocess.CompletedProcess,
     ) -> None:
         self.assertIn(
-            "owned log delta unstaged and verified empty",
+            "no owned staged residue; index and worktree bytes left untouched",
+            proc.stdout + proc.stderr,
+        )
+
+    def assert_cleanup_blocks_on_residue(
+        self, proc: subprocess.CompletedProcess,
+    ) -> None:
+        self.assertIn("BLOCKED RECOVERY", proc.stdout + proc.stderr)
+        self.assertIn(
+            "index and worktree bytes left untouched",
             proc.stdout + proc.stderr,
         )
 
@@ -7115,23 +7188,6 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
             f"'{ref}', '{target}'], check=True)\n"
             "print('OUTCOME: pass')\n"
         )
-
-    def write_git_reset_shim(self) -> Path:
-        """A PATH shim whose git fails every `git reset` (the one mutating
-        call the cleanup owner makes) and passes everything else through."""
-        shim_dir = self.tmp / "git-shim"
-        shim_dir.mkdir()
-        real_git = shutil.which("git")
-        shim = shim_dir / "git"
-        shim.write_text(
-            "#!/bin/sh\n"
-            'if [ "$1" = "reset" ]; then\n'
-            "  exit 1\n"
-            "fi\n"
-            f'exec "{real_git}" "$@"\n'
-        )
-        shim.chmod(0o755)
-        return shim_dir
 
     # ---- the pair lifecycle ----------------------------------------------- #
 
@@ -7333,10 +7389,15 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
             "capture: stranger-window.txt",
             proc.stdout + proc.stderr,
         )
-        self.assertEqual(self.staged_paths(), ["stranger-window.txt"])
+        # the cleanup owner mutates nothing: the writer-owned delta stays
+        # staged beside the foreign bytes and is reported for recovery
+        self.assertEqual(
+            self.staged_paths(),
+            [self.PLAN_LOG, "stranger-window.txt"],
+        )
         self.assertEqual(self.head(), oid)
         self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
-        self.assert_cleanup_verified(proc)
+        self.assert_cleanup_blocks_on_residue(proc)
 
     # ---- done-lock consumers against an active primary log write ---------- #
 
@@ -7505,12 +7566,14 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         # the landing the ref-only mode advanced stays standing; the writer
         # moved nothing itself
         self.assertEqual(self.head(), moved_tip)
-        # the owned delta is cleaned; the writer's log edit stays an
-        # unstaged worktree byte; unrelated staged bytes stay untouched
-        self.assertEqual(self.staged_paths(), [])
+        # the cleanup owner mutates nothing: the owned delta stays staged
+        # and is reported through blocked recovery
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
         self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
-        self.assert_cleanup_verified(proc)
+        self.assert_cleanup_blocks_on_residue(proc)
+        # the operator resolves the residue (the sanctioned remedy), then
         # the writer reselects the new tip and retries through the pair
+        self.git("reset", "-q", "--", self.PLAN_LOG)
         retry = self.run_commit(
             "--stage", self.PLAN_LOG,
             "--subject", "log: append after reselecting the moved tip",
@@ -7540,8 +7603,10 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
             "the landing sweep refused the staged set", proc.stderr,
         )
         self.assertEqual(self.head(), oid)
-        self.assertEqual(self.staged_paths(), [])
-        self.assert_cleanup_verified(proc)
+        # the cleanup owner mutates nothing: the owned delta stays staged
+        # and is reported through blocked recovery
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
+        self.assert_cleanup_blocks_on_residue(proc)
         # the peer log's unstaged worktree bytes stay untouched
         self.assertTrue(self.worktree_dirty(self.EXEC_LOG))
 
@@ -7569,22 +7634,27 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
             "compare-and-swap", proc.stderr,
         )
         self.assertEqual(self.head(), oid)
-        self.assertEqual(self.staged_paths(), [])
+        # the cleanup owner mutates nothing: the owned delta stays staged
+        # and is reported through blocked recovery
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
         self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
-        self.assert_cleanup_verified(proc)
+        self.assert_cleanup_blocks_on_residue(proc)
 
     # ---- a post-CAS failure never rolls the landed commit back ------------ #
 
     def test_ledger_append_failure_after_cas_keeps_commit_and_cleanup_disarmed(self) -> None:
         exports, ref, oid = self.log_fixture()
         # the fused ledger append cannot write: its path is a directory
-        blocked = self.done_session() / "owned-commits-blockme.txt"
+        # (the run's own canonical ledger path; --run-id redirection would
+        # now refuse pre-CAS under the explicit run-id binding check)
+        blocked = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
         blocked.mkdir()
         (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
         proc = self.run_commit(
             "--stage", self.PLAN_LOG,
             "--subject", "log: append whose ledger append fails",
-            "--run-id", "blockme",
             "--expected-ref", ref, "--expected-oid", oid,
             env=self.rolling_env(exports),
         )
@@ -7600,30 +7670,27 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(self.staged_paths(), [])
         self.assert_no_rolling_cleanup(proc)
 
-    # ---- unverifiable cleanup reports blocked recovery -------------------- #
+    # ---- pre-CAS refusal residue blocks later writers ---------------------- #
 
     def _unverifiable_cleanup_case(self, writer_log: str) -> None:
         exports, ref, oid = self.log_fixture()
         other_log = (
             self.EXEC_LOG if writer_log == self.PLAN_LOG else self.PLAN_LOG
         )
-        shim_dir = self.write_git_reset_shim()
-        env = self.rolling_env(exports)
-        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
         # the writer's refusal driver: an em dash fails the landing sweep
-        # before the CAS, and the shim fails the cleanup's git reset, so
-        # the owned delta cannot be verified empty
+        # before the CAS; the cleanup owner mutates nothing, so the owned
+        # delta stays staged and is reported through blocked recovery
         (self.fixture / writer_log).write_text(
             f"# log\n- entry with an em dash {self.EM_DASH} here\n"
         )
         proc = self.run_commit(
             "--stage", writer_log,
-            "--subject", "log: append whose cleanup cannot verify",
+            "--subject", "log: append whose refusal leaves residue",
             "--expected-ref", ref, "--expected-oid", oid,
-            env=env,
+            env=self.rolling_env(exports),
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
-        self.assertIn("BLOCKED RECOVERY", proc.stderr)
+        self.assert_cleanup_blocks_on_residue(proc)
         self.assertEqual(self.staged_paths(), [writer_log])
         residue_blob = self.git("ls-files", "-s", writer_log).stdout.split()[1]
         # a later writer of the same log refuses before git add, leaving
@@ -7661,11 +7728,324 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         )
         self.assert_no_rolling_cleanup(peer)
 
+    # ---- the refusal preserves declared bytes and index state (Task 2) ---- #
+
+    def staging_race_helper(self, log_path: str) -> str:
+        """A doctored helper that, in the runner's own pre-landing window,
+        stages a second blob and then a mode-only update to the already
+        staged declared path, plus an unrelated staged path (the origin
+        edit-loss reproduction window; the pre-stage guard refuses any
+        earlier unrelated staging, so it enters mid-run instead)."""
+        return (
+            "import subprocess\n"
+            f"with open({log_path!r}, 'a') as handle:\n"
+            "    handle.write('- second blob\\n')\n"
+            "subprocess.run(['git', 'add', " + repr(log_path) + "], check=True)\n"
+            "subprocess.run(['chmod', '+x', " + repr(log_path) + "], check=True)\n"
+            "subprocess.run(['git', 'add', " + repr(log_path) + "], check=True)\n"
+            "with open('unrelated.txt', 'w') as handle:\n"
+            "    handle.write('unrelated staged\\n')\n"
+            "subprocess.run(['git', 'add', 'unrelated.txt'], check=True)\n"
+            "print('OUTCOME: pass')\n"
+        )
+
+    def test_pre_cas_refusal_preserves_staged_and_worktree_declared_bytes(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        (self.fixture / "unrelated-wt.txt").write_text("untracked bytes\n")
+        # the refusal driver: the doctored helper mutates the declared path
+        # mid-run (second blob + mode-only update) and stages an unrelated
+        # path, so the capture-window fence refuses pre-CAS
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": self.staging_race_helper(self.PLAN_LOG),
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under a declared-path staging race",
+            "--expected-ref", ref, "--expected-oid", oid,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "entered the staged index before the tree capture",
+            proc.stdout + proc.stderr,
+        )
+        # the ref never advanced
+        self.assertEqual(self.head(), oid)
+        # the last staged blob (second content) and the mode change both
+        # survive in the index and the worktree
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        staged_entry = self.git("ls-files", "-s", self.PLAN_LOG).stdout.strip()
+        self.assertTrue(staged_entry.startswith("100755"), staged_entry)
+        self.assertIn(
+            "- second blob",
+            self.git("show", f":{self.PLAN_LOG}").stdout,
+        )
+        self.assertIn(
+            "- second blob",
+            (self.fixture / self.PLAN_LOG).read_text(),
+        )
+        # unrelated staged and unstaged state is untouched
+        self.assertEqual(
+            self.staged_paths(),
+            [self.PLAN_LOG, "unrelated.txt"],
+        )
+        self.assertTrue((self.fixture / "unrelated-wt.txt").exists())
+        # blocked recovery names the owned residue
+        self.assert_cleanup_blocks_on_residue(proc)
+
+    def test_pre_cas_refusal_leaves_unrelated_staged_bytes_staged(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        # the refusal driver: the capture-window fence (foreign paths
+        # staged mid-run) refuses pre-CAS; the earlier unrelated staging
+        # enters inside the same mid-run window
+        helper = (
+            "import subprocess\n"
+            "with open('stranger-window.txt', 'w') as handle:\n"
+            "    handle.write('staged in the capture window\\n')\n"
+            "subprocess.run(['git', 'add', 'stranger-window.txt'], check=True)\n"
+            "with open('unrelated.txt', 'w') as handle:\n"
+            "    handle.write('unrelated staged\\n')\n"
+            "subprocess.run(['git', 'add', 'unrelated.txt'], check=True)\n"
+            "print('OUTCOME: pass')\n"
+        )
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": helper,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append beside unrelated staged bytes",
+            "--expected-ref", ref, "--expected-oid", oid,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(self.head(), oid)
+        self.assertIn("unrelated.txt", self.staged_paths())
+        self.assert_cleanup_blocks_on_residue(proc)
+
     def test_unverifiable_plan_log_cleanup_blocks_later_writers(self) -> None:
         self._unverifiable_cleanup_case(self.PLAN_LOG)
 
     def test_unverifiable_exec_log_cleanup_blocks_later_writers(self) -> None:
         self._unverifiable_cleanup_case(self.EXEC_LOG)
+
+
+class DoneRunManifestSelectionTest(FixtureMixin, unittest.TestCase):
+    """Manifest selection binds to the active confirmed marker: implicit
+    selection matches the marker basename to exactly one canonical
+    run-manifest-<run_id>.json payload whose run id agrees with its
+    filename (a stale DONE_RUN_MANIFEST export is only a hint and never
+    selects), an explicit --manifest is binding and missing, unreadable,
+    marker-mismatched, run-id-mismatched, or noncanonical shadow paths
+    refuse closed without fallthrough."""
+
+    PLAN_LOG = "docs/history/backlog/PLAN-PROMPTS.md"
+    EXEC_LOG = "docs/history/backlog/EXEC-PROMPTS.md"
+    ENTRY = "\n- appended prompt entry\n"
+    PEER_ID = "20991231T235959Z-peer00000001"
+
+    def selection_fixture(self) -> tuple[dict, str, str, Path]:
+        self.init_fixture_repo()
+        log_dir = self.fixture / "docs" / "history" / "backlog"
+        log_dir.mkdir(parents=True)
+        (log_dir / "PLAN-PROMPTS.md").write_text("# PLAN prompts\n")
+        (log_dir / "EXEC-PROMPTS.md").write_text("# EXEC prompts\n")
+        self.git("add", self.PLAN_LOG, self.EXEC_LOG)
+        self.git("commit", "-qm", "seed the rolling prompt logs")
+        setup_proc, exports = self.setup_session("--owned-path", self.PLAN_LOG)
+        branch = self.git("branch", "--show-current").stdout.strip()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        return exports, "refs/heads/" + branch, head, manifest
+
+    def craft_from(self, template: Path, run_id: str, **changes: object) -> Path:
+        return self.craft_manifest_file(template, run_id, **changes)
+
+    def head(self) -> str:
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def commit_with(self, exports: dict, *args: str) -> subprocess.CompletedProcess:
+        env = self.commit_env()
+        env.update(exports)
+        return self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: manifest selection append",
+            *args, env=env,
+        )
+
+    def test_implicit_selection_ignores_stale_export_peer_and_shadow(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        marker = json.loads(manifest.read_text())["marker"]
+        # a finalized peer manifest under its own marker
+        self.craft_from(
+            manifest, self.PEER_ID, marker=f"{marker}-peer", complete=True,
+        )
+        # a divergent same-run shadow sharing the active marker
+        shadow = self.done_session() / (
+            f"run-manifest-{exports['DONE_RUN_ID']}.worktree.json"
+        )
+        shadow.write_text(manifest.read_text())
+        # the setup export points at the shadow (stale hint)
+        exports["DONE_RUN_MANIFEST"] = str(shadow)
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--expected-ref", ref,
+                                "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            self.ENTRY.strip(),
+            self.git("show", f"HEAD:{self.PLAN_LOG}").stdout,
+        )
+        ledger = self.done_session() / (
+            f"owned-commits-{exports['DONE_RUN_ID']}.txt"
+        )
+        self.assertEqual(ledger.read_text().splitlines()[-1], self.head())
+
+    def test_explicit_missing_manifest_refuses_without_fallthrough(self) -> None:
+        exports, ref, oid, _ = self.selection_fixture()
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        missing = str(self.tmp / "no-such-manifest.json")
+        proc = self.commit_with(exports, "--manifest", missing,
+                                "--expected-ref", ref, "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("is missing or unreadable", proc.stderr)
+        self.assertIn(missing, proc.stderr)
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
+
+    def staged_paths(self) -> list[str]:
+        out = self.git("diff", "--cached", "--name-only", "HEAD").stdout
+        return [line for line in out.splitlines() if line.strip()]
+
+    def test_explicit_shadow_manifest_refuses_without_fallthrough(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        shadow = self.done_session() / (
+            f"run-manifest-{exports['DONE_RUN_ID']}.worktree.json"
+        )
+        shadow.write_text(manifest.read_text())
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--manifest", str(shadow),
+                                "--expected-ref", ref, "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("noncanonical shadow name", proc.stderr)
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
+
+    def test_matching_shadow_explicit_with_broken_canonical_still_refuses(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        shadow = self.done_session() / (
+            f"run-manifest-{exports['DONE_RUN_ID']}.worktree.json"
+        )
+        shadow.write_text(manifest.read_text())
+        manifest.write_text("{ not json")  # the canonical record is broken
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--manifest", str(shadow),
+                                "--expected-ref", ref, "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("noncanonical shadow name", proc.stderr)
+        self.assertEqual(self.head(), oid)
+
+    def test_explicit_marker_mismatched_manifest_refuses(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        marker = json.loads(manifest.read_text())["marker"]
+        foreign = self.craft_from(
+            manifest, self.PEER_ID, marker=f"{marker}-foreign",
+        )
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--manifest", str(foreign),
+                                "--expected-ref", ref, "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("records marker", proc.stderr)
+        self.assertIn(
+            json.loads(manifest.read_text())["marker"], proc.stderr,
+        )
+        self.assertEqual(self.head(), oid)
+
+    def test_explicit_run_id_mismatch_refuses_distinctly(self) -> None:
+        exports, ref, oid, _ = self.selection_fixture()
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--run-id", "20991231T000000Z-wrong00",
+                                "--expected-ref", ref, "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("--run-id 20991231T000000Z-wrong00 does not match",
+                      proc.stderr)
+        self.assertIn(exports["DONE_RUN_ID"], proc.stderr)
+        self.assertEqual(self.head(), oid)
+
+    def test_payload_run_id_disagreeing_with_filename_refuses_no_fallback(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        record = json.loads(manifest.read_text())
+        record["run_id"] = "20991231T111111Z-mismatch0001"
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--expected-ref", ref,
+                                "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("no canonical manifest payload carries", proc.stderr)
+        self.assertIn(record["marker"], proc.stderr)
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
+
+    def test_two_canonical_manifests_claiming_the_marker_refuse(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        marker = json.loads(manifest.read_text())["marker"]
+        # a second canonical record claiming the SAME active marker
+        self.craft_from(manifest, self.PEER_ID, marker=marker)
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--expected-ref", ref,
+                                "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("2 canonical manifests claim the active confirmed",
+                      proc.stderr)
+        self.assertEqual(self.head(), oid)
+
+    def test_unparseable_canonical_candidate_refuses(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        manifest.write_text("{ not json")
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--expected-ref", ref,
+                                "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("is unparseable", proc.stderr)
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.staged_paths(), [self.PLAN_LOG])
+
+    def test_implicit_selection_skips_shadow_copies_silently(self) -> None:
+        exports, ref, oid, manifest = self.selection_fixture()
+        # an unparseable SHADOW copy is not a canonical candidate and never
+        # refuses the implicit selection
+        shadow = self.done_session() / (
+            f"run-manifest-{exports['DONE_RUN_ID']}.worktree.json"
+        )
+        shadow.write_text("{ not json")
+        (self.fixture / self.PLAN_LOG).write_text(
+            "# PLAN prompts\n" + self.ENTRY,
+        )
+        proc = self.commit_with(exports, "--expected-ref", ref,
+                                "--expected-oid", oid)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            self.ENTRY.strip(),
+            self.git("show", f"HEAD:{self.PLAN_LOG}").stdout,
+        )
 
 
 if __name__ == "__main__":

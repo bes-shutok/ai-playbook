@@ -1,0 +1,3 @@
+# Backlog: Prune unreachable DRIFT_REASON_BY_FIELD entries in the handoff reconciler
+
+Driving force: simplification. Four mappings in scripts/reconcile_execute_plan_handoff.py's DRIFT_REASON_BY_FIELD cannot fire: plan-identity-drift and plan-bytes-changed are pre-empted by earlier plan-identity-mismatch/plan-digest-stale refusals in _derive_receipt; task-identity-drift and task-scope-changed are unreachable because task identity fields are CLI constants and identical bytes yield identical scope. Prune the dead entries or fold into the reread-contract-shape row. Found by plan-review r9 (2026-10-31).

@@ -96,7 +96,22 @@ classes keep that fixed precedence: plan-file witness, then
 commit-message receipt, then the
 log's own ledger line; a removal classified by an earlier class never
 consults later ones, and each log's removals consult only that log's
-post-image. The audit classifies mechanically; the
+post-image. Beside the removal-commit-side classes, the audit
+recognizes the audited tip's committed log image (never working-tree
+bytes; the uncommitted reconcile budget stays responsible for pending
+restores): an otherwise-unwitnessed removal classifies ``PRUNE-OK``
+through the tip receipt when the tip image carries a ledger line
+naming the removed slug with a token resolvable at the tip (any
+commit-ish the resolution probe accepts, or a path in the tip
+commit's tree; the in-commit ``landing`` literal is excluded by the
+token-equality guard before the probes run, and stays owned by the
+in-commit class), and an otherwise-flagged receipt-line deletion
+classifies ``PRUNE-OK`` through the tip restoration when the tip
+image carries that line's exact committed bytes, consumed one draw
+per occurrence by full-line identity across the walk. The slug-token
+disjunct never clears an eaten-line flag, and a fresh
+non-byte-identical line never restores one. The audit classifies
+mechanically; the
 consultative leg adjudicates: ranges are expected to start after the
 pNNN-to-dispatch-log transition, and the landing leg never spans the
 pre-plan-era wave commits. An optional ``--head <commit>`` pins the
@@ -926,6 +941,8 @@ def walk_audit_commits(
     out: TextIO,
     unwitnessed: list[dict] | None = None,
     reconcile: dict[str, Counter] | None = None,
+    tip_texts: dict[str, str] | None = None,
+    tip_commit: str | None = None,
 ) -> tuple[int, int, int, int]:
     """Print one classification line per removal, oldest commit first,
     and return (removals, ledger_receipts, flagged, warnings). Raises
@@ -944,11 +961,39 @@ def walk_audit_commits(
     flagging. ``unwitnessed`` collects one record per flagged removal
     (slug, log, exact removed lines, and whether the exact source bytes
     could be established from the removal commit's pre-image) for the
-    landing repair's restore worklist."""
+    landing repair's restore worklist.
+
+    Tip-recognition extensions (the prune-audit-standing-flags plan):
+    ``tip_texts`` maps each log to the audited tip's committed log image
+    (never working-tree bytes) and ``tip_commit`` is that tip's commit
+    id. An otherwise-unwitnessed removal classifies
+    ``PRUNE-OK: <slug> -> <token> (tip receipt)`` when the tip image
+    carries a ledger line naming the slug with a token resolvable at
+    the tip (any commit-ish the resolution probe accepts, or a path in
+    the tip commit's tree); an
+    otherwise-flagged eaten line classifies
+    ``PRUNE-OK: <slug> -> landing (tip restoration)`` when the tip
+    image carries its exact bytes, one draw per occurrence by full-line
+    identity across the walk. The slug-token disjunct never clears an
+    eaten-line flag, and a fresh non-byte-identical line never restores
+    one."""
     removals = 0
     ledger_receipts = 0
     flagged = 0
     warnings = 0
+    # The tip restoration budget (the tip-recognition class): the
+    # audited tip's committed image's exact receipt-ledger lines, one
+    # draw per occurrence, consumed by the oldest-first walk so two
+    # committed removals of one line reconcile one draw per
+    # byte-identical tip copy.
+    tip_restores: dict[str, Counter] = {
+        rel: Counter(
+            RECEIPT_FULL_LINE_RE.findall(
+                tip_texts.get(rel, "") if tip_texts else ""
+            )
+        )
+        for rel in log_rels
+    }
     for sha in commits:
         meta = run_git(repo_root, "show", "-s", "--format=%h%x00%s%x00%B", sha)
         if meta.returncode != 0:
@@ -1104,6 +1149,37 @@ def walk_audit_commits(
                             " (repair reconciliation)\n"
                         )
                         continue
+                # Tip recognition (the tip-recognition class): the
+                # audited tip's committed image naming the removed slug
+                # with a token resolvable at the tip (a commit digest, or
+                # a path in the tip commit's tree). Consulted only after
+                # every removal-commit-side class failed, so the removal
+                # commit's own images carry no resolvable witness, and
+                # each log's removals consult only that log's tip image.
+                # The in-commit ``landing`` literal resolves through
+                # neither probe and stays owned by the in-commit class.
+                tip_receipt = None
+                if tip_texts and tip_commit is not None:
+                    tip_receipt = next(
+                        (
+                            token
+                            for rslug, token in LEDGER_RECEIPT_LINE_RE.findall(
+                                tip_texts.get(log_rel, "")
+                            )
+                            if rslug == receipt_compare_slug(slug)
+                            and token != "landing"
+                            and ledger_token_resolves(
+                                repo_root, tip_commit, token
+                            )
+                        ),
+                        None,
+                    )
+                if tip_receipt is not None:
+                    ledger_receipts += 1
+                    out.write(
+                        f"PRUNE-OK: {slug} -> {tip_receipt} (tip receipt)\n"
+                    )
+                    continue
                 flagged += 1
                 out.write(
                     f"REMOVED-WITHOUT-WITNESS: {slug} (commit {short} {subject})\n"
@@ -1152,6 +1228,19 @@ def walk_audit_commits(
                     out.write(
                         f"PRUNE-OK: {line_slug} -> landing"
                         f" (repair reconciliation, commit {short})\n"
+                    )
+                    continue
+                # Tip restoration (the tip-recognition class): the exact
+                # removed bytes present in the audited tip's committed
+                # image, one draw per occurrence by full-line identity.
+                # Byte identity only: the slug-token disjunct never
+                # clears an eaten-line flag, and a fresh
+                # non-byte-identical line never restores one.
+                if tip_restores[log_rel].get(line, 0) > 0:
+                    tip_restores[log_rel][line] -= 1
+                    ledger_receipts += 1
+                    out.write(
+                        f"PRUNE-OK: {line_slug} -> landing (tip restoration)\n"
                     )
                     continue
                 flagged += 1
@@ -1240,6 +1329,11 @@ def prune_audit(
     # matching committed deletion by line identity and multiplicity and
     # unmatched deletions stay flagged.
     reconcile: dict[str, Counter] = {}
+    # The audited tip's committed log image per log (the
+    # tip-recognition class): the same endpoint read the pending budget
+    # consumes, pinned to ``head_commit`` so an explicit --head audits
+    # that exact tip's image and never the working-tree bytes.
+    tip_texts: dict[str, str] = {}
     for rel in log_rels:
         try:
             endpoint_proc = run_git(repo_root, "show", f"{head_commit}:{rel}")
@@ -1252,6 +1346,7 @@ def prune_audit(
             # An undecodable endpoint image contributes no budget; the
             # committed walk reports the blob on its own terms.
             endpoint_text = ""
+        tip_texts[rel] = endpoint_text
         try:
             worktree_text = (repo_root / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -1267,6 +1362,8 @@ def prune_audit(
             out,
             unwitnessed=unwitnessed,
             reconcile=reconcile,
+            tip_texts=tip_texts,
+            tip_commit=head_commit,
         )
     except AuditToolError as exc:
         return write_tool_error(out, str(exc))
@@ -2125,8 +2222,11 @@ def main(argv: list[str] | None = None) -> int:
             "or against the touched log's own receipt ledger line naming "
             "the removed slug with a resolvable digest or in-tree path "
             "token, and the in-commit receipt: a ledger line with the "
-            "literal landing token newly added by the same commit "
-            "(PRUNE-OK, SUPERSEDED-IN-COMMIT, "
+            "literal landing token newly added by the same commit, and "
+            "the tip recognition against the audited tip's committed log "
+            "image: a tip receipt naming the slug with a tip-resolvable "
+            "token, or a tip restoration carrying an eaten line's exact "
+            "bytes (PRUNE-OK, SUPERSEDED-IN-COMMIT, "
             "REMOVED-WITHOUT-WITNESS); an optional --head <commit> pins "
             "the audited range's upper endpoint (default HEAD); exit 1 "
             "when a removal lacks its witness, 3 for a tool error"

@@ -113,7 +113,7 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 
 ### Other patterns (assign best-fit tag)
 
-- **Unbalanced operative-text growth:** when a skill edit adds operative text without deleting equivalent text, record a `shrink:` finding; keep this class here instead of adding a panel duty.
+- **Unbalanced operative-text growth:** a skill, guideline, or plan edit adding operative text without equivalent deletion gets a `shrink:` finding; keep the class here, not in a panel duty.
 
 **False redundancy (do not flag):** validation guarantees set membership, not list order; a sort after uniqueness validation is not redundant.
 

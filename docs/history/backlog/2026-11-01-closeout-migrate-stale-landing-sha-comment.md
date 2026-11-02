@@ -1,4 +1,5 @@
 # Stale pre-rewrite landing sha in the worktree_closeout_migrate gate-removal comment
+Cluster: docs/history/backlog/2026-11-02-closeout-migrate-manifest-flag-kind-ambiguity.md (same-day review family)
 
 Status: open
 Workflow: backlog

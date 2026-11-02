@@ -1,0 +1,3 @@
+# Backlog: Pin fail-fast checkpoints truncate later pin diagnostics
+
+Driving force: simplification. `scripts/check_maintenance_pins.sh` carries ~52 section-scoped fail-fast checkpoints (`[ "$fail" -eq 1 ] && exit 1` after each block); a red at or before a checkpoint suppresses every later section's findings, masking concurrent reds (demonstrated 2026-10-31: one red hid the pre-existing Cycle-gate red). Consider collecting all section results before a single outcome emission, or documenting the fix-earlier-reds rerun pattern. Found by the Task 2 focused re-review of plan execute-plan-plan-digest-handoff-drift.

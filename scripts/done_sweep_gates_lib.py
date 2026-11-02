@@ -114,6 +114,7 @@ import errno
 import json
 import hashlib
 import hmac
+import math
 import os
 import posixpath
 import re
@@ -537,17 +538,11 @@ def _parse_marker_content(
     path: Path, content: str, repo_root: Path
 ) -> Optional[RunMarker]:
     """Parse marker text read from a verified path or opened descriptor."""
-    content = content.strip()
-    fields = content.split()
-    if len(fields) < 3:
+    struct = _marker_struct(content)
+    if struct is None:
         return None
-    try:
-        epoch = float(fields[0])
-        pid = int(fields[-1])
-    except ValueError:
-        return None
-    recorded_root = " ".join(fields[1:-1])
-    if len(fields) == 3 and re.fullmatch(r"[0-9a-f]{64}", recorded_root):
+    epoch, pid, recorded_root = struct
+    if len(content.strip().split()) == 3 and re.fullmatch(r"[0-9a-f]{64}", recorded_root):
         # Hex identity tokens resolve by digest comparison only, never
         # through the CWD-dependent legacy realpath arm.
         if _marker_digest_matches(recorded_root, repo_root):
@@ -2260,11 +2255,56 @@ def _all_staging_review_paths(ctx: GateContext) -> list[Path]:
     return sorted(candidates)
 
 
+def _run_marker_epoch(path: Path) -> tuple[Optional[float], Optional[str]]:
+    """The bound run-start marker's recorded epoch: the leading timestamp
+    token of the marker's first content line, read for the linked-worktree
+    foreign-by-arrival arm. Returns ``(epoch, None)`` on a usable finite
+    epoch and ``(None, reason)`` fail-closed otherwise - an unreadable
+    marker file, a marker with no content line, or a first token that is
+    either unparseable or non-finite: the marker parse's plain ``float()``
+    accepts ``nan``/``inf`` tokens over an otherwise confirming root
+    record, and a non-finite boundary classifies nothing, so the arrival
+    arm refuses closed on them. Reporting/refusal channel only: never
+    mutates state."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, (
+            f"the bound run-start marker {path.name} is unreadable: {exc}"
+        )
+    for line in content.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        token = fields[0]
+        try:
+            epoch = float(token)
+        except ValueError:
+            return None, (
+                f"the bound run-start marker {path.name} records no "
+                f"parseable epoch (first content-line token {token!r})"
+            )
+        if not math.isfinite(epoch):
+            return None, (
+                f"the bound run-start marker {path.name} records a "
+                f"non-finite epoch (first content-line token {token!r})"
+            )
+        return epoch, None
+    return None, f"the bound run-start marker {path.name} has no content line"
+
+
 def _foreign_by_default_split(
-    ctx: GateContext, uncovered: list[str], owned_review_paths: list[str]
-) -> tuple[list[str], list[str]]:
+    ctx: GateContext,
+    uncovered: list[str],
+    owned_review_paths: list[str],
+    *,
+    arrival_marker: Optional[Path] = None,
+) -> tuple[list[str], list[str], Optional[str], bool]:
     """Split the write-manifest claim-or-foreign uncovered set into
-    (auto-foreign, still-refused).
+    (auto-foreign, still-refused) plus the arrival-arm report pair: the
+    refusal reason when the worktree arm's marker epoch is unusable, and
+    whether the classification ran in the linked-worktree arrival arm
+    (report-line channel selection only).
 
     The gitignored primary reviews home is by design the shared run-artifact
     surface every run migrates records INTO, so its historical contents are
@@ -2274,36 +2314,84 @@ def _foreign_by_default_split(
     A candidate qualifies for the foreign-by-default arm only when ALL hold:
 
     - the gate context's repo root IS the primary checkout (first
-      ``git worktree list --porcelain`` entry); a run-owned linked worktree
-      keeps the refuse arm, and an unresolvable worktree list fails closed
-      to refuse;
+      ``git worktree list --porcelain`` entry), or - the linked-worktree
+      foreign-by-arrival arm (plan
+      docs/history/plans/2026-11-01-done-setup-staging-doc-foreign-arrival-default.md)
+      - a linked worktree with a fresh boundary (``arrival_marker``
+      bound by the caller; an adopted manifest never passes one, so a
+      resume's fresh marker never re-classifies the adopted run's staging
+      docs) whose reviews home the provisioning transfer carried in;
     - the candidate is gitignored (``!!``-class under the reviews pathspec),
       the shared-home marker;
     - the candidate sits under the resolved reviews dir;
     - the run staged NONE of its own review records there (a run that did
-      keeps the owned arm exactly as before).
+      keeps the owned arm exactly as before);
+    - in the linked-worktree arm only: the candidate's mtime is STRICTLY
+      older than the bound run-start marker's recorded epoch (a present-
+      before-the-run candidate is not this run's write, so it classifies
+      foreign-by-arrival; an equal or newer mtime stays in the refuse set,
+      keeping the mid-run silent-claiming protection), and the marker
+      epoch itself is readable and finite - a missing, unreadable, or
+      unparseable epoch fails closed and refuses the whole uncovered set.
 
-    Everything else - candidates outside the reviews home, in a non-primary
-    checkout, tracked-but-unclaimed, or any candidate at all when the run
-    staged in the home - stays in the refuse set unchanged, so the witnessed
-    2026-10-16 silent-claiming catch keeps its coverage.
+    Everything else - candidates outside the reviews home, tracked-but-
+    unclaimed, or any candidate at all when the run staged in the home -
+    stays in the refuse set unchanged, so the witnessed 2026-10-16
+    silent-claiming catch keeps its coverage. An unresolvable worktree
+    list still fails closed to refuse in both shapes.
     """
     primary, _primary_err = _resolve_primary_checkout(ctx)
     if primary is None:
-        return [], list(uncovered)
-    if os.path.realpath(str(primary)) != os.path.realpath(str(ctx.repo_root)):
-        return [], list(uncovered)
+        return [], list(uncovered), None, False
+    is_primary = os.path.realpath(str(primary)) == os.path.realpath(
+        str(ctx.repo_root)
+    )
+    if not is_primary and arrival_marker is None:
+        # A linked worktree without a fresh boundary (an adopted
+        # manifest): the refuse arm stays exactly as before.
+        return [], list(uncovered), None, False
     if not _is_relative_to(ctx.reviews_dir, ctx.repo_root):
-        return [], list(uncovered)
+        return [], list(uncovered), None, False
     reviews_rel = ctx.reviews_dir.relative_to(ctx.repo_root).as_posix()
     if any(
         _is_relative_to(ctx.reviews_dir / p, ctx.reviews_dir)
         for p in owned_review_paths
     ):
-        return [], list(uncovered)
+        return [], list(uncovered), None, False
     ignored = set(_ignored_paths(ctx, reviews_rel))
     auto: list[str] = []
     refused: list[str] = []
+    if not is_primary:
+        # Linked-worktree foreign-by-arrival arm: the transferred reviews
+        # home's pre-marker staging docs predate the run's first owned
+        # record, so they are structurally not this run's writes.
+        epoch, epoch_refusal = _run_marker_epoch(arrival_marker)
+        if epoch_refusal is not None:
+            return [], list(uncovered), epoch_refusal, False
+        for path in uncovered:
+            rel = (
+                Path(path)
+                .resolve()
+                .relative_to(ctx.repo_root.resolve())
+                .as_posix()
+                if _is_relative_to(ctx.repo_root / path, ctx.repo_root)
+                else path
+            )
+            candidate = ctx.repo_root / rel
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                refused.append(path)
+                continue
+            if (
+                rel in ignored
+                and _is_relative_to(candidate, ctx.reviews_dir)
+                and mtime < epoch
+            ):
+                auto.append(rel)
+            else:
+                refused.append(path)
+        return auto, refused, None, True
     for path in uncovered:
         rel = (
             Path(path)
@@ -2319,7 +2407,7 @@ def _foreign_by_default_split(
             auto.append(rel)
         else:
             refused.append(path)
-    return auto, refused
+    return auto, refused, None, False
 
 
 # --------------------------------------------------------------------------- #
@@ -2847,6 +2935,118 @@ DATED_ONE_OFF_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 PROTECTED_SCRATCH_PREFIXES = ("review-loop",)
 PROTECTED_SCRATCH_DIRS = ("code-review", "handoff")
 
+# The docs/tmp drain arms' policy knobs (plan
+# docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md Task 1): the
+# deletion horizon is a named constant re-priced at the next docs/tmp census,
+# with the repo-facts knob beside it; the posture gates whether the arms
+# unlink or only report, defaulting to report-only until a census cycle
+# witnesses zero mispriced would-drain rows.
+DOCS_TMP_DELETION_HORIZON_DAYS = 30
+DOCS_TMP_DRAIN_ARMS_DEFAULT = "report-only"
+DOCS_TMP_NEVER_SYNCED_DRAIN_REASON = (
+    "expired never-synced scratch (age > horizon, outside window, uncited)"
+)
+
+
+def _docs_tmp_drain_posture(ctx: GateContext) -> str:
+    """The drain-arms posture from repo facts: report-only | on | off."""
+    raw = facts_paths.resolve_toml_key_raw(ctx.repo_root, "docs_tmp_drain_arms")
+    value = (raw or "").strip().strip('"').strip("'")
+    if value in ("report-only", "on", "off"):
+        return value
+    return DOCS_TMP_DRAIN_ARMS_DEFAULT
+
+
+def _docs_tmp_deletion_horizon_days(ctx: GateContext) -> float:
+    """The deletion horizon in days: the facts knob over the constant."""
+    raw = facts_paths.resolve_toml_key_raw(
+        ctx.repo_root, "docs_tmp_deletion_horizon_days"
+    )
+    try:
+        value = float((raw or "").strip().strip('"').strip("'"))
+    except ValueError:
+        return float(DOCS_TMP_DELETION_HORIZON_DAYS)
+    return value if value > 0 else float(DOCS_TMP_DELETION_HORIZON_DAYS)
+
+
+def _entry_birth_epoch(entry_stat: os.stat_result) -> Optional[float]:
+    """The entry's birth time where the platform records one; None keeps."""
+    birth = getattr(entry_stat, "st_birthtime", None)
+    if birth is None or birth <= 0:
+        return None
+    return float(birth)
+
+
+def _classify_never_synced_candidate(
+    entry_stat: os.stat_result,
+    window: SessionWindow,
+    horizon_days: float,
+    now_epoch: float,
+) -> tuple[str, Optional[str]]:
+    """The cheap pure guards of the never-synced scratch arm; the returned
+    arm is 'keep' (with its named reason) or 'candidate' (the sync state
+    and citation checks resolve later, batched). The boundary keeps:
+    strictly older than the horizon, never equal."""
+    if not window.anchored or window.start_epoch is None:
+        return "keep", (
+            "never-synced scratch, but the session window is unanchorable; "
+            "never guessing"
+        )
+    mtime = entry_stat.st_mtime
+    if mtime >= window.start_epoch:
+        return "keep", (
+            "never-synced scratch but modified inside the session window"
+        )
+    birth = _entry_birth_epoch(entry_stat)
+    if birth is None:
+        return "keep", (
+            "never-synced scratch with an unreadable birth time; never guessing"
+        )
+    horizon_epoch = now_epoch - horizon_days * 86400.0
+    if not (mtime < horizon_epoch and birth < horizon_epoch):
+        return "keep", (
+            "never-synced scratch inside the deletion horizon "
+            f"({horizon_days:g} days)"
+        )
+    return "candidate", None
+
+
+def _batched_docs_branch_hits(
+    ctx: GateContext, rels: list[str]
+) -> Optional[set[str]]:
+    """One batched docs-branch listing over the candidate rels; None means
+    the listing failed (uncertain) and every candidate keeps."""
+    proc = ctx.git("ls-tree", "-r", "--name-only", "refs/heads/docs", "--", *rels)
+    if proc.returncode != 0:
+        return None
+    return {line for line in proc.stdout.splitlines() if line.strip()}
+
+
+def _synced_shape_class(name: str) -> bool:
+    """The single-homed synced shape-class predicate (`.py`, `.log.md`,
+    dated one-off `.md`): the synced arm keeps these to sync, the
+    never-synced scratch arm excludes them, and one copy owns both."""
+    return (
+        name.endswith(".py")
+        or name.endswith(".log.md")
+        or (name.endswith(".md") and bool(DATED_ONE_OFF_RE.match(name)))
+    )
+
+
+def _marker_struct(content: str) -> Optional[tuple[float, int, str]]:
+    """The single-homed structural marker parse shared by the strict parser
+    and the dead-root arm's lenient foreign parse: (epoch, pid,
+    recorded_root), or None for malformed content."""
+    fields = content.strip().split()
+    if len(fields) < 3:
+        return None
+    try:
+        epoch = float(fields[0])
+        pid = int(fields[-1])
+    except ValueError:
+        return None
+    return epoch, pid, " ".join(fields[1:-1])
+
 
 @dataclass(frozen=True)
 class PinnedTmpRoot:
@@ -3233,6 +3433,11 @@ def _gate_docs_tmp_sweep_with_window(
     skipped: list[str] = []
     kept: list[str] = []
     prune_warnings: list[str] = []
+    dead_root_drained: list[Path] = []
+    dead_root_kept: list[Path] = []
+    never_synced_survivors: list[tuple[str, Path, os.stat_result, PinnedTmpRoot]] = []
+    horizon_days = _docs_tmp_deletion_horizon_days(ctx)
+    now_epoch = time.time()
 
     def rel_of(path: Path) -> str:
         try:
@@ -3279,6 +3484,8 @@ def _gate_docs_tmp_sweep_with_window(
                     directory_fd=done_session_fd,
                     root_fd=pinned.fd,
                     root_is_current=lambda: _pinned_tmp_root_is_current(ctx, pinned),
+                    dead_root_drained=dead_root_drained,
+                    dead_root_kept=dead_root_kept,
                 )
                 if not _pinned_tmp_root_is_current(ctx, pinned):
                     skipped.append(
@@ -3317,6 +3524,7 @@ def _gate_docs_tmp_sweep_with_window(
                         ctx, execute_fd, entry, removed, kept,
                         pinned_fd=pinned.fd,
                         root_is_current=lambda: _pinned_tmp_root_is_current(ctx, pinned),
+                        warnings=prune_warnings,
                     )
                 finally:
                     os.close(execute_fd)
@@ -3403,11 +3611,24 @@ def _gate_docs_tmp_sweep_with_window(
             ):
                 kept.append(rel_of(entry) + " (protected scratch; owning skill cleans up)")
                 continue
-            if stat_module.S_ISREG(entry_stat.st_mode) and (
-                name.endswith(".py")
-                or name.endswith(".log.md")
-                or (name.endswith(".md") and DATED_ONE_OFF_RE.match(name))
-            ):
+            if stat_module.S_ISREG(entry_stat.st_mode) and not (
+                name.startswith(PROTECTED_SCRATCH_PREFIXES)
+                or name in PROTECTED_SCRATCH_DIRS
+            ) and not _synced_shape_class(name):
+                # The never-synced scratch arm (plan
+                # docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md
+                # Task 1): every top-level regular file outside the synced
+                # shape classes. Cheap pure guards first; the docs-branch
+                # state and the citation hold resolve batched post-loop.
+                verdict, keep_reason = _classify_never_synced_candidate(
+                    entry_stat, window, horizon_days, now_epoch
+                )
+                if verdict == "keep":
+                    kept.append(f"{rel_of(entry)} ({keep_reason})")
+                else:
+                    never_synced_survivors.append((name, entry, entry_stat, pinned))
+                continue
+            if stat_module.S_ISREG(entry_stat.st_mode) and _synced_shape_class(name):
                 state = _docs_sync_state(ctx, rel_of(entry))
                 if state == "synced":
                     # Base guard: synced removal also requires the entry to be
@@ -3526,11 +3747,158 @@ def _gate_docs_tmp_sweep_with_window(
                 continue
             kept.append(rel_of(entry) + " (unclear ownership or active work)")
 
+    # The never-synced scratch arm's post-loop resolution (plan
+    # docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md Task 1):
+    # the batched docs-branch listing and the closeout-reference hold run
+    # once for the whole candidate set, then the posture decides between
+    # draining (quarantine flow, mirroring the synced arm's rechecks) and
+    # reporting would-drain rows that unlink nothing.
+    posture = _docs_tmp_drain_posture(ctx)
+    if never_synced_survivors:
+        if posture == "off":
+            for name, entry, _entry_stat, _pinned in never_synced_survivors:
+                kept.append(f"{rel_of(entry)} (drain arms off; never-synced scratch kept)")
+        else:
+            hits = _batched_docs_branch_hits(
+                ctx, [rel_of(entry) for _, entry, _, _ in never_synced_survivors]
+            )
+            if hits is None:
+                for _name, entry, _entry_stat, _pinned in never_synced_survivors:
+                    kept.append(
+                        f"{rel_of(entry)} (docs-branch listing failed; never guessing)"
+                    )
+            else:
+                drainable: list[tuple[str, Path, os.stat_result, PinnedTmpRoot]] = []
+                for name, entry, entry_stat, pinned in never_synced_survivors:
+                    if rel_of(entry) in hits:
+                        kept.append(
+                            f"{rel_of(entry)} (never-synced classification stale; "
+                            "now present on the docs branch)"
+                        )
+                    else:
+                        drainable.append((name, entry, entry_stat, pinned))
+
+                def _consume_never_synced(referenced: Optional[set[str]]) -> None:
+                    # Runs exactly once on every return path of the hold:
+                    # inside the merge-lock span with the verified cited set,
+                    # or with None on each unverifiable path. Only the
+                    # verified path may unlink, and only in the 'on' posture;
+                    # 'report-only' never unlinks.
+                    if referenced is None:
+                        for _name, entry, _entry_stat, _pinned in drainable:
+                            kept.append(
+                                f"{rel_of(entry)} (closeout-reference hold "
+                                "unverified; never guessing)"
+                            )
+                        return
+                    root_changed = False
+                    for name, entry, entry_stat, pinned in drainable:
+                        try:
+                            cited = str(Path(os.path.realpath(entry))) in referenced
+                        except OSError:
+                            cited = False
+                        if cited:
+                            kept.append(
+                                f"{rel_of(entry)} (cited by a live closeout "
+                                "manifest; kept)"
+                            )
+                            continue
+                        if posture == "report-only":
+                            kept.append(
+                                f"{rel_of(entry)} (would-drain: "
+                                f"{DOCS_TMP_NEVER_SYNCED_DRAIN_REASON}; "
+                                f"posture report-only)"
+                            )
+                            continue
+                        if not _pinned_tmp_root_is_current(ctx, pinned):
+                            # Report every stranded remainder before breaking,
+                            # so the pass never undercounts on the safety path.
+                            for rest_name, rest_entry, _rest_stat, _rest_pinned in (
+                                drainable[drainable.index((name, entry, entry_stat, pinned)):]
+                            ):
+                                kept.append(
+                                    f"{rel_of(rest_entry)} (pinned root identity "
+                                    "changed; cleanup skipped)"
+                                )
+                            break
+                        try:
+                            current = os.stat(
+                                name, dir_fd=pinned.fd, follow_symlinks=False
+                            )
+                        except OSError:
+                            kept.append(f"{rel_of(entry)} (recheck stat failed; kept)")
+                            continue
+                        if _candidate_identity(current) != _candidate_identity(entry_stat):
+                            kept.append(
+                                f"{rel_of(entry)} (identity changed during the "
+                                "sweep; kept)"
+                            )
+                            continue
+                        quarantined, quarantine_reason = _quarantine_candidate(
+                            pinned.fd, pinned.fd, name, current
+                        )
+                        if quarantined is None:
+                            kept.append(
+                                f"{rel_of(entry)} ({quarantine_reason}; kept)"
+                            )
+                            continue
+                        if quarantine_reason is not None:
+                            location = _quarantine_location(quarantined)
+                            kept.append(
+                                f"{rel_of(entry)} ({quarantine_reason}; "
+                                f"retained at {location})"
+                            )
+                            continue
+                        try:
+                            final_stat = os.stat(
+                                quarantined.entry_name,
+                                dir_fd=quarantined.directory_fd,
+                                follow_symlinks=False,
+                            )
+                            if _candidate_identity(final_stat) != _candidate_identity(
+                                entry_stat
+                            ):
+                                location = _quarantine_location(quarantined)
+                                kept.append(
+                                    f"{rel_of(entry)} (identity changed; retained "
+                                    f"at {location})"
+                                )
+                            elif final_stat.st_mtime >= window.start_epoch:
+                                location = _restore_quarantined_candidate(
+                                    pinned.fd, pinned.fd, name, quarantined
+                                )
+                                kept.append(
+                                    f"{rel_of(entry)} (same-inode update inside "
+                                    "the session window; preserved)"
+                                    + (f" at {location}" if location else "")
+                                )
+                            else:
+                                _discard_quarantined_candidate(pinned.fd, quarantined)
+                                removed.append(
+                                    rel_of(entry)
+                                    + f" [{DOCS_TMP_NEVER_SYNCED_DRAIN_REASON}]"
+                                )
+                        except OSError:
+                            location = _restore_quarantined_candidate(
+                                pinned.fd, pinned.fd, name, quarantined
+                            )
+                            kept.append(
+                                f"{rel_of(entry)} (removal failed; preserved)"
+                                + (f" at {location}" if location else "")
+                            )
+
+                _hold_referenced, hold_warnings = _closeout_reference_hold(
+                    ctx, _consume_never_synced
+                )
+                prune_warnings.extend(hold_warnings)
+
     kept_warnings: list[str] = []
     parts = [
         f"removed={len(removed)}",
         f"skipped={len(skipped)}",
         f"kept={len(kept)}",
+        f"dead-root-drained={len(dead_root_drained)}",
+        f"dead-root-kept={len(dead_root_kept)}",
     ]
     message = "docs/tmp sweep: " + ", ".join(parts)
     if not window.anchored:
@@ -3726,6 +4094,97 @@ def _closeout_reference_hold(
         _merge_lock_release(ctx.repo_root, exports)
 
 
+def _snapshot_candidate_checkout_roots(
+    ctx: GateContext,
+) -> tuple[list[Path], bool, list[str]]:
+    """The per-pass candidate-root snapshot (plan
+    docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md Task 2): the
+    primary checkout root, the registered worktree entries via the existing
+    worktree-entry parsing, and the sibling worktree-root families. The
+    second element is False exactly when an enumeration leg failed
+    (registration unreadable, sibling scan error); the caller's dead-root arm
+    then prunes nothing that pass."""
+    warnings: list[str] = []
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def add(raw: Path) -> None:
+        try:
+            resolved = Path(os.path.realpath(str(raw)))
+        except OSError:
+            resolved = Path(raw)
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            roots.append(resolved)
+
+    primary, _primary_err = _resolve_primary_checkout(ctx)
+    if primary is not None:
+        add(primary)
+        try:
+            from worktree_closeout_migrate import _parse_worktree_entries
+
+            for entry in _parse_worktree_entries(primary):
+                path = entry.get("path")
+                if path:
+                    add(Path(path))
+        except Exception as exc:
+            warnings.append(
+                "docs-tmp-sweep: worktree registration unreadable; the "
+                f"dead-root snapshot is unverified this pass ({exc})"
+            )
+            return roots, False, warnings
+    else:
+        warnings.append(
+            "docs-tmp-sweep: primary checkout unresolved; the dead-root "
+            "snapshot is unverified this pass"
+        )
+        return roots, False, warnings
+    family = primary.parent / (primary.name + "-worktrees")
+    try:
+        if family.is_dir():
+            for child in sorted(family.iterdir()):
+                add(child)
+    except OSError as exc:
+        warnings.append(
+            "docs-tmp-sweep: sibling worktree-root family scan failed; the "
+            f"dead-root snapshot is unverified this pass ({exc})"
+        )
+        return roots, False, warnings
+    return roots, True, warnings
+
+
+def _marker_root_matches_candidates(
+    recorded_root: str, candidates: list[Path]
+) -> bool:
+    """The parser's two-arm root match against the snapshot: a 64-hex token
+    compares by identity digest only; a legacy raw path compares by realpath
+    (plan Task 2)."""
+    if re.fullmatch(r"[0-9a-f]{64}", recorded_root):
+        return any(
+            _marker_digest_matches(recorded_root, candidate)
+            for candidate in candidates
+        )
+    try:
+        recorded_real = os.path.realpath(recorded_root)
+    except OSError:
+        return False
+    return any(
+        os.path.realpath(str(candidate)) == recorded_real for candidate in candidates
+    )
+
+
+def _lenient_foreign_marker(content: str) -> Optional[tuple[float, str]]:
+    """The (epoch, recorded_root) of a structurally well-formed marker whose
+    root does not confirm as this repo; None for malformed content, which the
+    dead-root arm never prunes. Shares the strict parser's structural parse
+    (``_marker_struct``) so the grammar lives once."""
+    struct = _marker_struct(content)
+    if struct is None:
+        return None
+    return struct[0], struct[2]
+
+
 def _prune_done_session_markers(
     ctx: GateContext,
     done_session: Path,
@@ -3736,6 +4195,8 @@ def _prune_done_session_markers(
     directory_fd: int,
     root_fd: int,
     root_is_current: Callable[[], bool],
+    dead_root_drained: list[Path],
+    dead_root_kept: list[Path],
 ) -> None:
     """Remove run-start-* markers strictly older than the previous-run anchor;
     the anchor and the current-run marker are immune; an unanchorable window
@@ -3757,6 +4218,13 @@ def _prune_done_session_markers(
         kept.append(str(done_session) + " (window unanchorable; markers immune)")
         return
     anchor_epoch = window.anchor.epoch
+    # The dead-root arm's per-pass state: the snapshot builds lazily on the
+    # first well-formed foreign marker; candidates drain in one
+    # citation-hold merge-lock span after the loop (plan Task 2).
+    snapshot_roots: Optional[list[Path]] = None
+    snapshot_verified: bool = False
+    snapshot_warnings: list[str] = []
+    dead_candidates: list[tuple[str, Path, Optional[os.stat_result], float]] = []
     marker_names = sorted(
         name for name in os.listdir(directory_fd) if name.startswith("run-start-")
     )
@@ -3767,6 +4235,7 @@ def _prune_done_session_markers(
             return
         marker_identity: Optional[os.stat_result] = None
         marker_fd: Optional[int] = None
+        content_text: Optional[str] = None
         try:
             marker_fd = os.open(
                 marker_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
@@ -3778,6 +4247,7 @@ def _prune_done_session_markers(
             with os.fdopen(marker_fd, "r", encoding="utf-8") as stream:
                 marker_fd = None
                 content = stream.read()
+            content_text = content
             parsed = _parse_marker_content(marker, content, ctx.repo_root)
         except (OSError, UnicodeError):
             parsed = None
@@ -3785,8 +4255,48 @@ def _prune_done_session_markers(
             if marker_fd is not None:
                 os.close(marker_fd)
         if parsed is None:
-            # A cross-repo or unparseable marker is never pruned by recency.
-            kept.append(str(marker) + " (content not confirmable as this repo)")
+            # A cross-repo or unparseable marker is never pruned by recency;
+            # the dead-root arm (plan
+            # docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md
+            # Task 2) owns the well-formed foreign pre-anchor subset below.
+            foreign = (
+                _lenient_foreign_marker(content_text)
+                if content_text is not None
+                else None
+            )
+            if foreign is None:
+                kept.append(str(marker) + " (content not confirmable as this repo)")
+                continue
+            foreign_epoch, foreign_root = foreign
+            if snapshot_roots is None:
+                snapshot_roots, snapshot_verified, snapshot_warnings = (
+                    _snapshot_candidate_checkout_roots(ctx)
+                )
+                warnings.extend(snapshot_warnings)
+            if not snapshot_verified:
+                kept.append(
+                    str(marker)
+                    + " (candidate-root snapshot unverified; dead-root drain "
+                    "skipped this pass)"
+                )
+                dead_root_kept.append(marker)
+                continue
+            if _marker_root_matches_candidates(foreign_root, snapshot_roots):
+                kept.append(
+                    str(marker)
+                    + " (live-root cross-repo marker; fenced by the candidate-root "
+                    "snapshot)"
+                )
+                dead_root_kept.append(marker)
+                continue
+            if not foreign_epoch < anchor_epoch:
+                kept.append(
+                    str(marker)
+                    + " (cross-repo marker inside the session window; immune)"
+                )
+                dead_root_kept.append(marker)
+                continue
+            dead_candidates.append((marker_name, marker, marker_identity, foreign_epoch))
             continue
         if parsed.epoch < anchor_epoch:
             if not root_is_current():
@@ -3855,6 +4365,126 @@ def _prune_done_session_markers(
                 )
         else:
             kept.append(str(marker) + " (anchor or current run; immune)")
+    if dead_candidates:
+        posture = _docs_tmp_drain_posture(ctx)
+
+        def _drain_dead_roots(referenced: Optional[set[str]]) -> None:
+            # The unlink arm, invoked by ``_closeout_reference_hold`` exactly
+            # once on every return path: inside the merge-lock span on the
+            # verified path, with None on each unverifiable one. Only the
+            # verified path unlinks, and only in the 'on' posture.
+            if referenced is None:
+                for _name, marker, _identity, _epoch in dead_candidates:
+                    kept.append(
+                        str(marker)
+                        + " (dead-root marker; prune skipped: closeout reference "
+                        "hold unverified)"
+                    )
+                    dead_root_kept.append(marker)
+                return
+            for marker_name_d, marker, marker_identity, dead_epoch in dead_candidates:
+                if not root_is_current():
+                    # Report every stranded remainder before returning, so the
+                    # census never undercounts on the safety path.
+                    for rest_marker in dead_candidates[dead_candidates.index(
+                        (marker_name_d, marker, marker_identity, dead_epoch)
+                    ):]:
+                        kept.append(
+                            str(rest_marker[1])
+                            + " (pinned root identity changed; cleanup skipped)"
+                        )
+                        dead_root_kept.append(rest_marker[1])
+                    return
+                if posture == "off":
+                    kept.append(
+                        str(marker) + " (drain arms off; dead-root marker kept)"
+                    )
+                    dead_root_kept.append(marker)
+                    continue
+                if posture == "report-only":
+                    kept.append(
+                        str(marker)
+                        + " (would-drain: dead-root marker (root absent, "
+                        "pre-window); posture report-only)"
+                    )
+                    dead_root_kept.append(marker)
+                    continue
+                if marker_identity is None:
+                    kept.append(str(marker) + " (quarantine unavailable; preserved)")
+                    dead_root_kept.append(marker)
+                    continue
+                quarantined, quarantine_error = _quarantine_candidate(
+                    root_fd, directory_fd, marker_name_d, marker_identity
+                )
+                if quarantined is None:
+                    kept.append(str(marker) + f" ({quarantine_error})")
+                    dead_root_kept.append(marker)
+                    continue
+                if quarantine_error is not None:
+                    location = _quarantine_location(quarantined)
+                    kept.append(
+                        str(marker) + f" ({quarantine_error}; retained at {location})"
+                    )
+                    dead_root_kept.append(marker)
+                    continue
+                try:
+                    marker_fd_d = os.open(
+                        quarantined.entry_name,
+                        os.O_RDONLY | os.O_NOFOLLOW,
+                        dir_fd=quarantined.directory_fd,
+                    )
+                    try:
+                        current_info = os.fstat(marker_fd_d)
+                        with os.fdopen(marker_fd_d, "r", encoding="utf-8") as stream:
+                            marker_fd_d = -1
+                            current_content = stream.read()
+                    finally:
+                        if marker_fd_d >= 0:
+                            os.close(marker_fd_d)
+                    current_foreign = _lenient_foreign_marker(current_content)
+                    if (
+                        _candidate_identity(current_info) != _candidate_identity(marker_identity)
+                        or current_foreign is None
+                        or current_foreign[0] != dead_epoch
+                        or current_foreign[0] >= anchor_epoch
+                    ):
+                        location = _restore_quarantined_candidate(
+                            root_fd, directory_fd, marker_name_d, quarantined
+                        )
+                        kept.append(
+                            str(marker)
+                            + " (marker changed or entered the protected window)"
+                            + (f"; retained at {location}" if location else "")
+                        )
+                        dead_root_kept.append(marker)
+                    elif not root_is_current():
+                        location = _restore_quarantined_candidate(
+                            root_fd, directory_fd, marker_name_d, quarantined
+                        )
+                        kept.append(
+                            str(marker)
+                            + " (pinned root identity changed; cleanup skipped)"
+                            + (f"; retained at {location}" if location else "")
+                        )
+                        dead_root_kept.append(marker)
+                    else:
+                        _discard_quarantined_candidate(root_fd, quarantined)
+                        removed.append(
+                            str(marker) + " [dead-root marker (root absent, pre-window)]"
+                        )
+                        dead_root_drained.append(marker)
+                except OSError:
+                    location = _restore_quarantined_candidate(
+                        root_fd, directory_fd, marker_name_d, quarantined
+                    )
+                    kept.append(
+                        str(marker) + " (marker removal failed; preserved)"
+                        + (f" at {location}" if location else "")
+                    )
+                    dead_root_kept.append(marker)
+
+        _dead_hold, dead_hold_warnings = _closeout_reference_hold(ctx, _drain_dead_roots)
+        warnings.extend(dead_hold_warnings)
     gate_reports = done_session / GATE_REPORTS_DIRNAME
     try:
         reports_fd = os.open(
@@ -4029,6 +4659,187 @@ def _remove_tree_at(parent_fd: int, name: str) -> None:
         os.close(child_fd)
 
 
+def _branch_ref_resolves(ctx: GateContext, branch: str) -> bool:
+    """True when a branch ref still resolves in the repo (a still-resolving
+    branch keeps its closeout-migration family, the gate-removal binding
+    operand)."""
+    proc = ctx.git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+    return proc.returncode == 0
+
+
+def _read_session_json_at(
+    directory_fd: int, name: str
+) -> tuple[Optional[dict], Optional[str]]:
+    """Best-effort (payload, error) for a JSON file read through a no-follow
+    descriptor; unreadable and unparseable are distinguished errors."""
+    text = _read_regular_text_at(directory_fd, name)
+    if text is None:
+        return None, "unreadable or missing"
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        return None, f"unparseable ({exc})"
+    if not isinstance(payload, dict):
+        return None, "not a JSON object"
+    return payload, None
+
+
+def _proof_family_state_file_terminal(payload: dict) -> bool:
+    """The terminal-state bound (plan
+    docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md Task 3): the
+    state file parses and carries ``terminal_receipt`` or reads
+    ``workflow_state`` complete."""
+    return bool(payload.get("terminal_receipt")) or (
+        payload.get("workflow_state") == "complete"
+    )
+
+
+def _proof_family_worktree_key(payload: dict) -> Optional[str]:
+    """Best-effort recorded worktree from the state file's worktree-family
+    keys; None when none is readable (an unresolvable registration keeps)."""
+    for key in ("worktree", "worktree_path", "worktree_family", "worktree_root"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _proof_family_session_decision(
+    ctx: GateContext,
+    session_fd: int,
+    snapshot_roots: Optional[list[Path]],
+    snapshot_verified: bool,
+    primary: Optional[Path],
+    proof_names: Optional[list[str]] = None,
+) -> tuple[str, str]:
+    """The fail-closed classification of one proof-family session directory
+    (plan Task 3). Returns ('drain', reason), ('partial', reason), or
+    ('keep', reason). The legacy receipt-less arm qualifies when no readable
+    state file exists, the migration manifest records a branch ref that no
+    longer resolves, and its recorded source worktree is unregistered or the
+    primary checkout."""
+    state_payload, state_error = _read_session_json_at(
+        session_fd, EXECUTE_PLAN_STATE_FILENAME
+    )
+    branch: Optional[str] = None
+    source: Optional[str] = None
+
+    def migration_branch_source() -> None:
+        """One single-homed (branch, source) extraction from the session's
+        closeout-migration.json, when it carries a branch record."""
+        nonlocal branch, source
+        migration_payload, _migration_error = _read_session_json_at(
+            session_fd, "closeout-migration.json"
+        )
+        if migration_payload is None:
+            return
+        records = migration_payload.get("branch")
+        if not (isinstance(records, list) and records and isinstance(records[0], dict)):
+            return
+        raw_branch = records[0].get("branch")
+        raw_source = records[0].get("source")
+        if isinstance(raw_branch, str) and raw_branch.strip():
+            branch = raw_branch.strip()
+        if isinstance(raw_source, str) and raw_source.strip():
+            source = raw_source.strip()
+
+    if state_payload is not None:
+        if not _proof_family_state_file_terminal(state_payload):
+            return "keep", "session state file present but not terminal"
+        worktree = _proof_family_worktree_key(state_payload)
+        if worktree is None:
+            return "keep", "state file carries no readable worktree-family key"
+        # The state-file arm reads its branch ref from the migration
+        # manifest when one exists; without one no branch is recorded and
+        # the manifest family has nothing to keep, so the drain is total.
+        migration_branch_source()
+    elif _is_regular_file_at(session_fd, EXECUTE_PLAN_STATE_FILENAME):
+        # The state file exists but could not be read or parsed: fail closed.
+        return "keep", f"state file {state_error}; never guessing"
+    else:
+        migration_payload, _migration_error = _read_session_json_at(
+            session_fd, "closeout-migration.json"
+        )
+        if migration_payload is None:
+            if proof_names:
+                # The legacy retention shape: no state file and no migration
+                # manifest; the family keeps under its plain listing reason.
+                return "keep", ", ".join(proof_names)
+            return "keep", (
+                "neither a readable state file nor a migration manifest; "
+                "never guessed from age or directory shape"
+            )
+        migration_branch_source()
+        if branch is None:
+            if proof_names:
+                return "keep", ", ".join(proof_names)
+            return "keep", (
+                "receipt-less session whose migration manifest records no "
+                "branch; never guessed"
+            )
+        if source is None:
+            return "keep", (
+                "receipt-less session whose migration manifest records no "
+                "source worktree; never guessed"
+            )
+
+    if snapshot_roots is None or not snapshot_verified or primary is None:
+        return "keep", "candidate-root snapshot unverified; never guessing"
+    still_resolves = (
+        _branch_ref_resolves(ctx, branch) if branch is not None else False
+    )
+    recorded_worktree = (
+        _proof_family_worktree_key(state_payload) if state_payload is not None else source
+    )
+    assert recorded_worktree is not None
+    primary_resolved = Path(os.path.realpath(str(primary)))
+    # A relative recorded value anchors at the primary checkout, never at
+    # the sweep process CWD (the premortem key-shape guard).
+    recorded_path = Path(recorded_worktree)
+    if not recorded_path.is_absolute():
+        recorded_path = primary_resolved / recorded_path
+    try:
+        resolved_wt = Path(os.path.realpath(recorded_path))
+    except OSError:
+        return "keep", "recorded worktree path unresolvable; never guessing"
+    # A recorded key resolving to a family root (a parent of a candidate
+    # checkout) is an unresolvable registration, not an unregistered leaf.
+    if any(
+        candidate != resolved_wt and resolved_wt in candidate.parents
+        for candidate in snapshot_roots
+    ):
+        return "keep", (
+            "recorded worktree key resolves to a family root; never guessing"
+        )
+    registered_elsewhere = any(
+        resolved_wt == candidate and candidate != primary_resolved
+        for candidate in snapshot_roots
+    )
+    if registered_elsewhere:
+        return "keep", "session worktree is still registered"
+    is_primary = resolved_wt == primary_resolved
+    if branch is not None and still_resolves:
+        if state_payload is None:
+            # The receipt-less arm qualifies only when the branch no longer
+            # resolves (plan Task 3); a stalled legacy migration with a live
+            # branch keeps whole.
+            return "keep", (
+                "receipt-less session whose migration branch still resolves; "
+                "never guessing"
+            )
+        return "partial", (
+            "branch still resolves; migration manifests retained, baseline "
+            "and other artifacts drained"
+        )
+    if is_primary or not registered_elsewhere:
+        return (
+            "drain",
+            "consuming closeout terminal; proof family drained (retry reads a "
+            "fresh setup baseline)",
+        )
+    return "keep", "session worktree is still registered"
+
+
 def _sweep_execute_plan_sessions(
     ctx: GateContext,
     execute_fd: int,
@@ -4037,11 +4848,16 @@ def _sweep_execute_plan_sessions(
     kept: list[str],
     pinned_fd: Optional[int] = None,
     root_is_current: Optional[Callable[[], bool]] = None,
+    warnings: Optional[list[str]] = None,
 ) -> None:
     """Descriptor-relative counterpart used by the pinned-root sweep."""
     pending_stems = _pending_plan_session_names(
         ctx.plans_dir, ctx.plans_completed_dir
     )
+    # The proof-family terminal-state drain (plan Task 3): candidates collect
+    # here and classify + drain inside one citation-hold merge-lock span
+    # after the loop.
+    proof_candidates: list[tuple[str, Path, os.stat_result]] = []
     for session_name in sorted(os.listdir(execute_fd)):
         session_path = display_path / session_name
         try:
@@ -4080,9 +4896,8 @@ def _sweep_execute_plan_sessions(
                 if _is_regular_file_at(session_fd, proof)
             ]
             if proof_present:
-                kept.append(
-                    str(session_path) + " (retained: closeout proof family: "
-                    + ", ".join(proof_present) + ")"
+                proof_candidates.append(
+                    (session_name, session_path, opened)
                 )
                 continue
             current = os.stat(
@@ -4225,6 +5040,236 @@ def _sweep_execute_plan_sessions(
             kept.append(str(session_path) + " (removal failed)")
         finally:
             os.close(session_fd)
+    if proof_candidates:
+        posture = _docs_tmp_drain_posture(ctx)
+        snapshot_roots, snapshot_verified, snapshot_warnings = (
+            _snapshot_candidate_checkout_roots(ctx)
+        )
+        if warnings is not None:
+            warnings.extend(snapshot_warnings)
+        primary, _primary_err = _resolve_primary_checkout(ctx)
+
+        def _drain_terminal_proof_families(referenced: Optional[set[str]]) -> None:
+            # Invoked by ``_closeout_reference_hold`` exactly once on every
+            # return path: inside the merge-lock span on the verified path,
+            # with None on each unverifiable one. Only the verified path
+            # unlinks, and only in the 'on' posture; any byte inside the
+            # session named by the shared referenced set keeps the whole
+            # directory.
+            for cand_name, cand_path, cand_identity in proof_candidates:
+                if referenced is None:
+                    kept.append(
+                        str(cand_path)
+                        + " (proof family retained: closeout reference hold "
+                        "unverified)"
+                    )
+                    continue
+                cited = False
+                if referenced:
+                    try:
+                        for root, _dirs, files in os.walk(cand_path):
+                            for fname in files:
+                                full = os.path.realpath(os.path.join(root, fname))
+                                if full in referenced:
+                                    cited = True
+                                    break
+                            if cited:
+                                break
+                    except OSError:
+                        cited = True  # an unreadable walk keeps, never guessing
+                if cited:
+                    kept.append(
+                        str(cand_path)
+                        + " (proof family retained: a byte inside the session "
+                        "is cited by a live closeout manifest)"
+                    )
+                    continue
+                try:
+                    session_fd_d = os.open(
+                        cand_name,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                        dir_fd=execute_fd,
+                    )
+                except OSError:
+                    kept.append(str(cand_path) + " (changed while opening; preserved)")
+                    continue
+                try:
+                    opened_d = os.fstat(session_fd_d)
+                    if _candidate_identity(opened_d) != _candidate_identity(cand_identity):
+                        kept.append(str(cand_path) + " (identity changed; preserved)")
+                        continue
+                    verdict, reason = _proof_family_session_decision(
+                        ctx, session_fd_d, snapshot_roots, snapshot_verified, primary,
+                        proof_names=[
+                            proof
+                            for proof in PLAN_SLUG_PROOF_FILES
+                            if _is_regular_file_at(session_fd_d, proof)
+                        ],
+                    )
+                    if verdict == "keep":
+                        kept.append(f"{cand_path} (retained: closeout proof family: {reason})")
+                        continue
+                    if posture == "off":
+                        kept.append(f"{cand_path} (drain arms off; proof family kept)")
+                        continue
+                    if posture == "report-only":
+                        kept.append(
+                            f"{cand_path} (would-drain: {reason}; "
+                            "posture report-only)"
+                        )
+                        continue
+                    if verdict == "partial":
+                        # Drain the baseline and other artifacts through the
+                        # quarantine flow (recovery parity with the full
+                        # drain); keep the closeout-migration.json family
+                        # (the gate-removal binding operand).
+                        if pinned_fd is None:
+                            kept.append(
+                                str(cand_path)
+                                + " (quarantine root unavailable; preserved)"
+                            )
+                            continue
+                        drained_any = False
+                        members = sorted(os.listdir(session_fd_d))
+                        for member in members:
+                            try:
+                                m_stat = os.stat(
+                                    member, dir_fd=session_fd_d, follow_symlinks=False
+                                )
+                            except OSError:
+                                continue
+                            if not stat_module.S_ISREG(m_stat.st_mode):
+                                continue
+                            if member.startswith("closeout-migration"):
+                                continue
+                            member_quarantined, member_error = _quarantine_candidate(
+                                pinned_fd, session_fd_d, member, m_stat
+                            )
+                            if member_quarantined is None or member_error is not None:
+                                continue
+                            try:
+                                member_current = os.stat(
+                                    member_quarantined.entry_name,
+                                    dir_fd=member_quarantined.directory_fd,
+                                    follow_symlinks=False,
+                                )
+                                if _candidate_identity(member_current) != (
+                                    _candidate_identity(m_stat)
+                                ):
+                                    _restore_quarantined_candidate(
+                                        pinned_fd, session_fd_d, member,
+                                        member_quarantined,
+                                    )
+                                    continue
+                                _discard_quarantined_candidate(
+                                    pinned_fd, member_quarantined
+                                )
+                                drained_any = True
+                            except OSError:
+                                _restore_quarantined_candidate(
+                                    pinned_fd, session_fd_d, member,
+                                    member_quarantined,
+                                )
+                        kept.append(f"{cand_path} ({reason})")
+                        if drained_any:
+                            removed.append(
+                                f"{cand_path} [proof-family artifacts drained; "
+                                "branch still resolving]"
+                            )
+                        continue
+                    # verdict == 'drain': full-directory removal through the
+                    # quarantine flow with the identity and pending-plan
+                    # rechecks.
+                    if pinned_fd is None:
+                        kept.append(
+                            str(cand_path) + " (quarantine root unavailable; preserved)"
+                        )
+                        continue
+                    quarantined, quarantine_error = _quarantine_candidate(
+                        pinned_fd, execute_fd, cand_name, opened_d
+                    )
+                    if quarantined is None:
+                        kept.append(
+                            str(cand_path) + f" (removal failed) ({quarantine_error})"
+                        )
+                        continue
+                    if quarantine_error is not None:
+                        location = _quarantine_location(quarantined)
+                        kept.append(
+                            str(cand_path)
+                            + f" ({quarantine_error}; retained at {location})"
+                        )
+                        continue
+                    try:
+                        current_pending = _pending_plan_session_names(
+                            ctx.plans_dir, ctx.plans_completed_dir
+                        )
+                        if cand_name in current_pending:
+                            location = _restore_quarantined_candidate(
+                                pinned_fd, execute_fd, cand_name, quarantined
+                            )
+                            kept.append(
+                                str(cand_path) + " (active: plan still pending)"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                            continue
+                        if root_is_current is not None and not root_is_current():
+                            location = _restore_quarantined_candidate(
+                                pinned_fd, execute_fd, cand_name, quarantined
+                            )
+                            kept.append(
+                                str(cand_path)
+                                + " (pinned root identity changed; cleanup skipped)"
+                                + (f"; retained at {location}" if location else "")
+                            )
+                            continue
+
+                        def session_remains_terminal_discardable() -> bool:
+                            if cand_name in _pending_plan_session_names(
+                                ctx.plans_dir, ctx.plans_completed_dir
+                            ):
+                                return False
+                            try:
+                                final_fd = os.open(
+                                    quarantined.entry_name,
+                                    os.O_RDONLY
+                                    | getattr(os, "O_DIRECTORY", 0)
+                                    | os.O_NOFOLLOW,
+                                    dir_fd=quarantined.directory_fd,
+                                )
+                            except OSError:
+                                return False
+                            try:
+                                final_stat = os.fstat(final_fd)
+                                if _candidate_identity(final_stat) != (
+                                    quarantined.expected_identity
+                                ):
+                                    return False
+                            finally:
+                                os.close(final_fd)
+                            return root_is_current is None or root_is_current()
+
+                        _discard_quarantined_candidate(
+                            pinned_fd, quarantined, revalidate=session_remains_terminal_discardable
+                        )
+                        removed.append(f"{cand_path} ({reason})")
+                    except OSError as exc:
+                        location = _restore_quarantined_candidate(
+                            pinned_fd, execute_fd, cand_name, quarantined
+                        )
+                        kept.append(
+                            str(cand_path) + " (removal failed; preserved)"
+                            + (f" at {location}" if location else "")
+                            + f"; {exc}"
+                        )
+                finally:
+                    os.close(session_fd_d)
+
+        _proof_hold, proof_hold_warnings = _closeout_reference_hold(
+            ctx, _drain_terminal_proof_families
+        )
+        if warnings is not None:
+            warnings.extend(proof_hold_warnings)
 
 
 def _is_regular_file_at(directory_fd: int, name: str) -> bool:
@@ -8373,20 +9418,59 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         and real(str(candidate)) not in foreign_real
     ]
     if uncovered and not args.claim_none:
-        auto_foreign, uncovered = _foreign_by_default_split(
-            ctx, uncovered, owned_review_paths
+        # The linked-worktree foreign-by-arrival arm engages only on a fresh
+        # boundary: an adopted manifest (--adopt; the wrapper's --from-
+        # manifest re-entry never rewrites through this writer) never passes
+        # an arrival marker, so the resume's fresh marker never silently
+        # classifies the adopted run's mid-run staging docs foreign.
+        auto_foreign, uncovered, arrival_refusal, arrival_classified = (
+            _foreign_by_default_split(
+                ctx,
+                uncovered,
+                owned_review_paths,
+                arrival_marker=(
+                    ctx.done_session_dir / marker_name
+                    if adopted is None and marker_name is not None
+                    else None
+                ),
+            )
         )
+        if arrival_refusal is not None:
+            return _cli_fail(
+                "write-manifest: foreign-by-arrival: "
+                + arrival_refusal
+                + "; refusing the whole uncovered set fail-closed (no "
+                "auto-foreign): "
+                + ", ".join(uncovered)
+            )
         if auto_foreign:
             foreign_review_paths = _dedup_preserving_order(
                 foreign_review_paths + auto_foreign
             )
-            print(
-                "write-manifest: foreign-by-default: "
-                f"{len(auto_foreign)} gitignored historical staging "
-                "candidate(s) under the primary checkout's reviews home "
-                "classified foreign (shared run-artifact home; origin row "
-                "landing commit b3025de59)"
-            )
+            if arrival_classified:
+                # Bounded per the existing report-emission limit: at most
+                # SAMPLE_LIMIT samples inline, the full list under the
+                # done-session gate-reports home above the bound.
+                arrival_listing, arrival_warnings = bounded_inline_listing(
+                    ctx, "foreign-by-arrival", sorted(auto_foreign)
+                )
+                print(
+                    "write-manifest: foreign-by-arrival: "
+                    f"{len(auto_foreign)} gitignored staging candidate(s) "
+                    "under the run-owned worktree's reviews home classified "
+                    "foreign (mtime strictly predates the bound run-start "
+                    f"marker's recorded epoch): {arrival_listing}"
+                )
+                for arrival_warning in arrival_warnings:
+                    print(arrival_warning, file=sys.stderr)
+            else:
+                print(
+                    "write-manifest: foreign-by-default: "
+                    f"{len(auto_foreign)} gitignored historical staging "
+                    "candidate(s) under the primary checkout's reviews home "
+                    "classified foreign (shared run-artifact home; origin row "
+                    "landing commit b3025de59)"
+                )
     if uncovered:
         if args.claim_none:
             # F13: the run owns no staging doc, so every unclaimed candidate

@@ -1,4 +1,5 @@
 # Backlog: systematic-debugging skill references files, skills, and a phase that do not exist
+Cluster: docs/history/backlog/2026-11-01-skill-review-cross-skill-repetition-debt.md; docs/history/backlog/2026-11-01-skill-review-maintenance-stance-stale-cap-wording.md; docs/history/backlog/2026-11-01-skill-review-review-agents-portability-markers.md (same-day review family)
 
 - **Filed:** 2026-11-01, weekly skill-review lane run 1 (batch unit: agents/skills/systematic-debugging/)
 - **Status:** open

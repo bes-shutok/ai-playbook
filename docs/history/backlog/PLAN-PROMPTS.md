@@ -1,4 +1,7 @@
 Tracked rolling log of ready-to-dispatch plan-creation prompts, most urgent first.
+PLAN-PROMPTS-PRUNE: maintenance-self-heal-first-on-blocks -> docs/history/plans/2026-11-02-maintenance-self-heal-first-on-blocks.md
+PLAN-PROMPTS-PRUNE: gate-removal-inherited-manifest-rows -> docs/history/plans/completed/2026-11-01-gate-removal-inherited-manifest-rows.md (completed plan exists and its origin row is deleted; pruned by the maintenance monitor)
+PLAN-PROMPTS-PRUNE: maintenance-codex-continuation -> docs/history/plans/2026-11-02-maintenance-codex-continuation.md
 PLAN-PROMPTS-PRUNE: machinery-registry-canonical-serializer-round-trip -> docs/history/plans/2026-10-31-machinery-registry-canonical-serializer-round-trip.md
 PLAN-PROMPTS-PRUNE: quota-doctrine-committed-rewrite-narrowing -> docs/history/plans/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
 PLAN-PROMPTS-PRUNE: docs-tmp-retention-redesign -> docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md (own frozen entry pruned at the authoring landing; three origin rows covered by the covering plan)
@@ -9,6 +12,9 @@ PLAN-PROMPTS-PRUNE: baseline-red-gates-regreen -> docs/history/plans/2026-10-31-
 PLAN-PROMPTS-PRUNE: machinery-witness-ref-validation -> docs/history/plans/2026-10-30-machinery-witness-ref-validation.md (frozen entry pruned after the covering plan landed; rider on the hygiene-scanner-default-scope-parity landing after the pins suite flagged the unpruned served entry)
 PLAN-PROMPTS-PRUNE: execute-plan-teardown-staging-record-mirror -> docs/history/plans/2026-10-30-execute-plan-teardown-staging-record-mirror.md (frozen entry pruned after the covering plan landed; same rider)
 PLAN-PROMPTS-PRUNE: done-gate-report-retention -> docs/history/plans/completed/2026-10-29-done-gate-report-retention.md (frozen entry pruned; origin deleted in de6ad7a16, completed twin is the witness; same rider)
+PLAN-PROMPTS-PRUNE: closeout-migrate-clobber-guard-restore-arms -> docs/history/plans/2026-11-02-closeout-migrate-clobber-guard-restore-arms.md
+
+PLAN-PROMPTS-PRUNE: review-freshness-and-code-coverage-gaps -> docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md
 
 PLAN-PROMPTS-PRUNE: light-boundary-stale-setup-directives-and-residuals -> docs/history/plans/2026-10-29-light-boundary-stale-setup-directives-and-residuals.md
 PLAN-PROMPTS-PRUNE: review-plan-new-plan-seal-anchor -> docs/history/plans/2026-10-29-plan-new-plan-seal-anchor.md
@@ -36,6 +42,8 @@ PLAN-PROMPTS-PRUNE: done-lock-acquire-vanished-directory-indeterminate -> 2edee2
 PLAN-PROMPTS-PRUNE: task-primary-worktree-archive-refusal -> docs/history/plans/2026-10-27-task-primary-worktree-archive-refusal.md (own frozen entry pruned after certified plan landing)
 PLAN-PROMPTS-PRUNE: plan-authoring-branch-manifest-handoff -> docs/history/plans/2026-10-27-plan-authoring-branch-manifest-handoff.md (own frozen entry pruned after certified plan landing)
 PLAN-PROMPTS-PRUNE: plan-closeout-missing-phase0-baseline -> docs/history/plans/2026-10-27-plan-closeout-missing-phase0-baseline.md (own frozen entry pruned after certified plan landing)
+PLAN-PROMPTS-PRUNE: hard-mode-clause-pointer-residuals -> docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md (own frozen entry pruned after certified plan landing; folds the done-advisory row as a task)
+PLAN-PROMPTS-PRUNE: done-advisory-threshold-pin-and-re-aim-comment-trim -> docs/history/plans/2026-10-28-hard-mode-clause-pointer-residuals.md (own frozen entry pruned; its origin row rides the covering plan as a task)
 
 
 PLAN-PROMPTS-PRUNE: agent-type-affinity-before-plan-work -> docs/history/plans/2026-10-27-agent-type-affinity-before-plan-work.md
@@ -242,36 +250,74 @@ PLAN-PROMPTS-PRUNE: prune-audit-standing-flags-unowned-accumulation -> docs/hist
 
 PLAN-PROMPTS-PRUNE: quota-governor-runtime-evidence -> docs/history/plans/completed/2026-11-01-quota-governor-runtime-evidence.md (peer exec run landed the plan 944cb825c with review r4 ready=yes; its cross-runtime origin row was deleted in that same landing; the frozen entry's claim is served; section pruned at the ee6cde74 auth-carrier session's learn+investigate boundary)
 
-## maintenance-codex-continuation
 
-Added: 2026-11-01, investigate of the Codex continuation backlog after a witnessed interrupted maintenance turn
+## memory-index-load-budget-consolidation
 
-Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this origin requires runtime capability discovery, a durable continuation/checkpoint design, and an unattended recovery path, exceeding the arm's bounded small-change route. The Stage 0/1 group roster is recorded below; this entry handles the Codex-specific origin because the ZCode session-spawn mechanism and the shared cycle-gate scenario are distinct agent and test work.
+Frozen: authoring claim memory-index-load-budget-consolidation.md (session sess_fa4273f5-30c1-454b-afee-5683f68c33f4), 2026-11-02
+
+
+Added: 2026-11-02, investigation of the worsened memory-index load-budget witness (learn Step 1.9 re-witness, same-day entry)
+
+Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the test admits only tracked skill, docs, or script surfaces and a body-named single-surface fix with no open design choice; this item's surface is the per-project memory store the repo's maintenance sessions run (outside the repository's tracked trees; the store path is recorded tilde-form in the origin row), and its body carries an open design choice, the operator decision requested section gating compress, prune, and retirement-rule scope (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
 
 Origins:
-- docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md
+- docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md
 
 Group roster:
-- docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md
-- docs/history/backlog/2026-10-31-maintenance-autopilot-zcode-session-per-pick.md
-- docs/history/backlog/2026-10-31-maintenance-cycle-gate-scenario-test.md
+- docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md (ungrouped single-origin scope; the Stage 0 sweep found no open sibling sharing the store-load mechanism, surface, or defect class)
 
-Urgency: high - the witnessed turn ended after an interleaved cleanup request despite an eligible authoring lane and a live continuation mandate; the runtime-specific continuation and recovery mechanism is also explicitly deferred.
+Urgency: high - the load budget is receding, not converging: the 2026-10-31 audit measured 450 lines with a witnessed 111-of-450 load, and the 2026-11-02 re-witness measured 545 lines / 132999 bytes with a witnessed 94-of-543 load, roughly 46 index lines of growth per day; truncated context silently drops do-not-redo markers and standing preferences, a redo risk for the fleet this repo runs, and the finding is operator-gated so nothing moves until the decision lands
 
-Scope: inspect Codex's actual context measurement, compaction, and session-resumption capabilities and the current maintenance/execute-plan checkpoint contract. Reconcile the older `Fresh-context note` in `agents/skills/maintenance/decisions.md` with D-17 and its `Interruption-resume rule`. Separate the observed assistant failure to re-enter the maintenance loop from the deferred runtime integration; do not claim the stale note caused the turn without evidence. Specify and implement the smallest supported same-session continuation with durable progress and safe-boundary compaction, plus unattended recovery when compaction is unavailable or fails. Preserve same-target holds, quota pauses, explicit stop requests, and empty-queue behavior. Verify host capabilities directly; do not assume another runtime's session primitives apply.
+Scope: contingent on operator approval of the consolidation the origin row requests, author a focused plan that designs three arms as one bounded maintenance run inside the lane-quiet window the row names: the compress-and-index fold (retire time-superseded per-run outcome entries into current per-mandate summary lines, add one-line pointers for durable still-current records, hold the roughly 200-line load budget), the reviewed never-bulk prune (delete a topic file only when its entire durable signal is captured by the compressed index or the repository's own durable records; in-doubt stays), and the standing retirement rule amending the append-first convention's missing half so the store cannot regrow past the budget (see agents/skills/maintenance/zcode.md and docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
 
-Orientation: `docs/maintenance/operator-directives.md` D-17; `agents/skills/maintenance/decisions.md` Interactive continuation and Interruption-resume rule; its older Fresh-context note (introduced by `867f8ed7e`); the Codex runtime backlog; `projects/.ai-playbook/execute-plan-runtime-inventory.toml`; and `docs/history/plans/completed/2026-10-31-maintenance-autopilot-continuation.md`, which explicitly defers both runtime-specific mechanisms.
+Orientation: docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md (measured values, store shape, and the 2026-11-02 re-witness bullet); agents/skills/maintenance/zcode.md (the append-first one-line convention and its sanctioned targeted edits, line 110); docs/maintenance/recurring-tasks/memory-index-audit.md (the lane's procedure of record and its charter limits); .ai-playbook/maintenance/memory-index-audit.json (run 1 state record, disk record); docs/history/plans/completed/ for the audit-lane landing history
 
-Machinery admission: reject a new scheduler gate, validator, lock, ledger, or required ceremony: no witnessed incident shows the existing guards or checkpoint contract need another blocking layer (`agents/skills/maintenance/decisions.md`; repository guidelines, Machinery admission protocol). Review whether existing durable state suffices during plan authoring.
+Continuity disposition: the operator gate is a blocker interrupting the lane's self-fix; keep it, its protective value is demonstrated by the lane charter's self-authorization exclusion and the origin's self-serving-evidence caveat (the finding was witnessed in a consumer of the store the lane itself reports on), and the entry's whole payload is the operator-gated design work, never a lane self-execution (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
 
 Rejected alternatives:
-- Start a fresh session for each Codex pick: rejected because the completed continuation plan records same-session continuation with periodic compaction as the Codex direction (`docs/history/plans/completed/2026-10-31-maintenance-autopilot-continuation.md`)
-- Change shared D-17 wording only: rejected because D-17 and the interruption-resume contract already require continuation, while the completed plan deliberately defers the runtime mechanism (`docs/history/plans/completed/2026-10-31-maintenance-autopilot-continuation.md`)
-- Treat the execution lane's same-target hold as a global stop: rejected because lane decisions are independent and same-target protection remains in force (`agents/skills/maintenance/decisions.md`)
-- Remove or weaken the cycle gate and other guards to force continuation: rejected because the interruption-resume rule explicitly re-enters through existing holds unchanged (`agents/skills/maintenance/decisions.md`)
-- Add a new gate or progress ledger: rejected because no witnessed incident supports net blocking machinery and the backlog already requires durable progress using existing checkpoint rules (repository guidelines, Machinery admission protocol; Codex origin).
+- Raise the runtime load budget: rejected because the roughly 200-line load is the session runtime's index loader property, not a repository-configurable value; the runtime-issued truncation notices in the 2026-10-31 and 2026-11-02 loads are the witnesses (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
+- Freeze all store writes until the operator decides: rejected because durable do-not-redo markers are the index-rather-than-prune convention's payload and the one-shot carrier fleet legitimately records completions; a freeze trades truncation risk for silent context loss (see agents/skills/maintenance/zcode.md)
+- Let the audit lane consolidate its own finding: rejected because the lane charter forbids mid-lane index rewrites and bulk topic-file deletion and the origin files the consolidation as operator-gated with a self-serving-evidence caveat on the lane's own store (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
+- Wait for the next scheduled audit (2026-11-07) before acting: rejected because growth measures roughly 46 index lines per day with the fresh load witness already worse (94-of-543 versus 111-of-450 two days earlier), so waiting deepens the witnessed redo risk while the fix shape is known (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
+- Build an automated compression script for the store: rejected because the store is operator-owned session context and machine mass-editing is the do-not-redo-loss class the reviewed never-bulk shape exists to guard; the smallest arm that removes the witnessed cost is the operator-approved fold plus retirement rule, not a new tooling surface (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
+- Keep the append-first convention unchanged: rejected because the convention is the correct mechanism with a missing complement and the witnessed harm sits in that missing half, the retirement rule; completing the mechanism, not removing it, is the fix (see agents/skills/maintenance/zcode.md)
 
-Prompt: Author a focused plan from the Codex origin and this investigation. Inspect the available Codex primitives and demonstrate the supported continuation/compaction behavior before choosing an implementation. Resolve the stale Fresh-context note against D-17 and the interruption-resume contract; preserve a clear distinction between the witnessed failure to resume after an interleaved request and the still-deferred runtime integration. Define safe compaction boundaries, the durable checkpoint fields needed to resume the exact target and phase, and unattended recovery when compaction is unavailable or fails. Preserve same-target holds, quota and stop behavior, and the empty-queue boundary. Do not add a scheduler gate, validator, lock, ledger, or required ceremony without a separately evidenced incident and a removal/demotion proposal.
+Machinery admission: reject added machinery; the retirement rule is a write-discipline convention amendment adding no gate, validator, lock, or ledger, and no witnessed incident justifies new blocking machinery for a context-store write shape (see agents/skills/maintenance/zcode.md)
+
+Prompt: Author a focused plan from this entry and its origin, contingent on the operator approving the consolidation the origin requests. Design the three scope arms as one bounded run: the compress-and-index fold with its current-entry retirement mapping, the reviewed prune criteria (per-file durable-signal coverage checks against the compressed index and the repository's own durable records), and the standing retirement rule text amending the append-first convention. Specify the lane-quiet window check (no live authoring or execution claims under the memory or tmp directories), the consolidation verification (post-consolidation index line count within the roughly 200-line budget, pointer integrity zero dangling, an explicit do-not-redo marker survival audit over every pruned file), and the rollback posture (the operator-owned store is user-level; plan the fold so any topic file deletion is individually reviewable and reversible from the repository's durable records). Add no machinery beyond the convention amendment; never bulk-delete; keep every deleted file's durable signal captured before its deletion lands. Acceptance evidence must cover: the measured line budget holding after the fold, zero dangling pointers after the prune, every surviving do-not-redo marker still reachable from the compressed index, the retirement rule refusing a superseded-entry rewrite shape, and a dry-run presentation the operator can approve row by row before any deletion executes.
+
+## review-staging-archived-plan-source-identity
+Frozen: authoring claim review-staging-archived-plan-source-identity.md (session sess_175f4067-23d2-4a64-b802-b1ce6674e2d1), 2026-11-02
+
+Added: 2026-11-02, investigation of the archived-source-path closeout refusal
+
+Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the defect crosses the plan archive transition, review-record source identity, validator path resolution, and done closeout; the fix is not a bounded edit to one surface.
+
+Origins:
+- docs/history/backlog/2026-11-02-review-staging-archived-source-path.md
+
+Group roster:
+- docs/history/backlog/2026-11-02-review-staging-archived-source-path.md
+
+Urgency: high - the witnessed archive move made the final closeout reject an otherwise superseded historical local-equivalence attempt; a targeted record-path repair restored the pass while retaining the reviewed-byte digest.
+
+Scope: trace how plan archival changes the source path while preserving bytes and `source_digest`. Inspect the plan-review `URL or Artifact` field, local-equivalence `coverage.attempts[].artifact`, the `--source-plan` existence-and-digest check, and the done landing sweep. Compare archive-time reference relocation, an immutable source snapshot, and an archive-aware validator resolution. Preserve the original byte digest, canonical plan identity, lineage to the exact reviewed plan, and the existing evidence bar for the artifact/sidecar pair. Keep the current closeout check effective for missing or mismatched sources.
+
+Orientation: the origin row; `agents/skills/plans/SKILL.md` Plan Lifecycle archive move; `agents/skills/review-staging/SKILL.md` Coverage sidecar contract; `scripts/validate_review_staging.py` `validate_coverage_contract` and `--source-plan` handling; and `agents/skills/done/SKILL.md` final review-staging gate.
+
+Continuity disposition: the origin records a closeout refusal that interrupted authorized landing work. Preserve the guard that verifies the source and local-equivalence evidence; make the archival transition retain a resolvable identity so the guard can pass on unchanged reviewed bytes.
+
+Rejected alternatives:
+- Remove the local-equivalence artifact/sidecar evidence check: rejected because the witnessed original review-plan finding showed an arbitrary existing artifact and an unparseable sidecar could falsely claim equivalent coverage (`.ai-playbook/reviews/2026-09-14-plan-review-review-runner-bounded-timeout-fallback-r5.md`, F1).
+- Keep exact-path-only source lookup and leave records stale after archival: rejected because `--source-plan` requires the supplied file to exist before digest verification (`scripts/validate_review_staging.py`, source-file check), and the origin records the witnessed closeout refusal after the move.
+- Narrow source verification to digest equality alone: rejected because local-equivalence coverage also depends on prompt scope and an existing, parseable artifact/sidecar pair (`scripts/validate_review_staging.py`, `validate_coverage_contract`); this is the witnessed evidence contract.
+- Rewrite each affected review record manually after archival as the permanent rule: rejected as the sole fix because the origin's one-record retarget was only a workaround and each omitted record would remain stale; evaluate archive-time relocation as a bounded option in the plan, as the origin witnessed.
+- Add a second closeout validator or gate: rejected as unnecessary machinery; the witnessed refusal is addressed by repairing source identity in the existing archival/validation path, and the existing evidence check already owns this contract (`agents/skills/done/SKILL.md`, final review-staging gate).
+
+Machinery admission: reject a new gate or validator; no witnessed incident requires a second blocker, while the existing source check and the origin's refusal demonstrate the needed catch.
+
+Prompt: Author a focused plan from this origin. Derive the exact original plan bytes and digest for the r10 local-equivalence witness; confirm the archived path and former plans-root path behavior from repository history. Map every producer and consumer of plan-review source identity and local-equivalence `artifact` links. Compare archive-time reference relocation, a retained source snapshot, and archive-aware resolution for canonical identity, byte-digest stability, record immutability, old-record compatibility, and failure behavior. Select the smallest option that makes unchanged reviewed bytes resolvable after archive while preserving the existing local-equivalence evidence bar and done closeout gate. Add focused acceptance evidence for a successful archive transition, an unchanged digest, a resolvable historical record, a changed or missing source refusal, and a malformed or unrelated sidecar refusal. Do not weaken source verification or add a second gate.
+
 ## codex-quota-reset-wake
 
 Added: 2026-11-01, investigation of the Codex quota-boundary continuation
@@ -308,6 +354,7 @@ Prompt: Author a future Codex-specific plan from this origin and investigation. 
 
 
 ## done-finalize-resume-marking-honesty
+Frozen: authoring claim done-finalize-resume-marking-honesty.md (session sess_8ef45ec3-0098-413e-ab29-ac17d2bf6cd4), 2026-11-02
 
 Added: 2026-11-01, learn Step 1.9 investigate over a same-day authoring closeout session (its plan landed 31b1809c5)
 
@@ -332,32 +379,9 @@ Rejected alternatives:
 - Trust the interrupted-manifest census to surface stranded states without ceremony output: rejected because the census counts undisposed manifests, not their cause, and the witnessed diagnosis needed several disk reads to separate the deferred-squash design arm from the resolution failure (witnessed)
 - Bind the re-run by owned-commits ledger recency instead of the newest manifest: rejected because the per-run ledger files do not identify which run the invoking shell owns any better than the manifest glob does (scripts/done_run.sh resolve_run_id fallback order)
 
-## gate-removal-inherited-manifest-rows
-
-Added: 2026-10-31, learn Step 1.9 investigate over the pending-receipt-removal-audit-promotion completion-pass session
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix changes the removal gate's adjudication scope inside the guard-bearing script `scripts/worktree_closeout_migrate.py`, which the "never a guard-bearing path" clause excludes from the ad-hoc route, and the scoping choice (adjudicated-record rows versus a sanctioned row-retirement operation) is an open design choice.
-
-Origins:
-- docs/history/backlog/2026-10-31-gate-removal-inherited-manifest-rows.md
-
-Urgency: medium - the witnessed cost is one worktree-plus-branch pair held past its closeout (the fail disposition is safe, only unbounded), and the trigger is common: the canonical session slug strips the plan date, so every re-run of a plan extends one shared `closeout-migration.json`, and any prior-run destination later drained by the sanctioned tmp-sweep lifecycle (gitignored, no recoverable copy) permanently refuses the later run's teardown.
-
-Scope arms:
-1. Keep and narrow (recommended): scope the gate's missing-destination check to the verified destinations of the branch record it adjudicates (the manifest's last element, the resolver's own authoritative-binding rule at `scripts/worktree_closeout_migrate.py` `_resolve_closeout_reference_state`), so prior-run rows stop blocking a later run's teardown.
-2. Keep and complete (alternative shape): add a sanctioned row-retirement arm to `migrate` that re-verifies destinations and retires rows whose destinations were removed by the documented tmp-sweep lifecycle, keeping the manifest append-only for live rows.
-3. Keep as-is: rejected in the recommendation but retained as the fallback; the fail disposition preserves the worktree and branch for operator resolution, which is safe but repeats the witnessed cost on every re-run over a drained shared manifest.
-
-Orientation: `scripts/worktree_closeout_migrate.py` (`migrate` append semantics - "repeated migrate runs extend the branch list" - and `gate-removal`'s missing-destination check over every verified destination), the shared-slug session-dir rule behind the cross-run manifest (execute-plan Step 0.4 canonical session-slug rule), the completed teardown plan `docs/history/plans/completed/2026-10-30-execute-plan-teardown-staging-record-mirror.md`, and the tmp-sweep retention family `docs/history/backlog/2026-10-30-gate-report-retention-sweep-polish-family.md`. Disk re-derivation at the entry's write: the witness destination absent at both homes (filesystem probe: the primary and run-worktree gate-reports listings) with the manifest row present and verified (file probe over the witness run's `closeout-migration.json`), and the cluster sibling's own gate-removal surface cluster line on the origin row.
-
-Machinery admission: the recommended arm narrows an existing gate's check (no new gate, ledger, or registry), so the completion shape applies: incident, this origin row (the 2026-10-31 witnessed retained worktree); expected catch frequency, every plan re-run whose shared manifest carries a prior-run destination drained by the tmp sweep; false-positive cost, a genuinely missing migration of the adjudicated run still refuses fail-closed (the narrowing keeps all rows the adjudicated record owns); review date, the next gate-removal-machinery maintenance pass.
-
-Rejected alternatives:
-- Retire the fail disposition so missing destinations only warn: rejected because the gate's fail-closed refusal is the witnessed protection that kept an intact run's migration from being torn down blind (`scripts/worktree_closeout_migrate.py` gate-removal refusal classes; completed teardown plan)
-- Stop appending to the shared manifest (per-run manifest files keyed by branch): rejected as a larger producer-contract change touching every migrate consumer and the done-session sweep's proof-family retention (`PLAN_SLUG_PROOF_FILES` retains `closeout-migration.json` by its canonical name) for a benefit the narrow scoping already delivers (producer contract: `scripts/worktree_closeout_migrate.py` migrate append semantics)
-- Auto-delete manifest rows whose destinations are absent at gate time: rejected because absence is also the genuine-migration-loss signal the gate exists to catch; deleting rows on absence erases the loss evidence (docs/history/backlog/2026-10-31-gate-removal-inherited-manifest-rows.md Expected paragraph's fail-closed clause)
-
 ## authoring-empty-diff-closeout-route
+Frozen: authoring claim 2026-10-31-plan-empty-diff-closeout-route.md (session sess_d31a3a90-5e01-44f7-a611-408e8d39a63c), 2026-11-02
+
 
 Added: 2026-10-31, investigate after plan-authoring worktree closeout recovery
 
@@ -424,6 +448,36 @@ Rejected alternatives:
 - Widen the selection verifier to accept plan-bytes digests for plan-family records: rejected because the verifier's recomputed range digest is the operative freshness instrument for code records, and coupling the two digest domains into one gate weakens that check (2026-10-25 witness section, `docs/history/backlog/2026-10-22-producer-review-findings-followups.md`)
 - Keep the test-docstring example as the grammar's only home and change nothing: rejected because the witnessed hand-built pair satisfied the sidecar schema yet failed staging validation repeatedly on markdown sub-sections no schema document names (`scripts/validate_review_staging.py`)
 - Remove the code-family record requirement so runs write only seals: rejected because the landing sweep's review-staging gate validates the record markdown itself, so a record-less route fails closed (`scripts/done_sweep_gates_lib.py`)
+
+## agent-resource-cleanup-disposition
+
+Added: 2026-11-02, investigation of a repeated user-directed worktree cleanup request
+
+Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the new origin has no evidenced single-surface correction because `self-heal` already requires verifying the caller's complete terminal conditions, while its failure crossed self-heal, execute-plan, and done ownership boundaries; the clustered branch-retention origin edits the guard-bearing `scripts/worktree_closeout_migrate.py`, which the test excludes from the ad-hoc route. The group therefore routes uniformly to this plan-creation log.
+
+Origins:
+- docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md
+- docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md
+
+Group roster:
+- docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md (cross-turn inventory and full user-request disposition)
+- docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md (branch-retention gate's base-history proof)
+
+Urgency: medium - the user repeated cleanup direction after only a subset had received a disposition; the fresh write-window inventory found one and four unmerged commits on the two workflow-owned branches, so indiscriminate deletion risks losing work; the authoring branch advanced during the cleanup sequence. The witnessed cost is operator rework and unclear closure, not data loss. The neighboring gate false-negative has its own origin and must not be mistaken for the response-level scope gap.
+
+Scope arms: determine whether one owner handoff can reuse the existing run/claim records and Git inventory to bind each resource to its originating workflow, distinguish safe cleanup from retained unmerged work, and continue each in-scope owned closeout to its terminal state; separately evaluate whether the base-history proof false positive needs a coordinated gate change or stays a narrow sibling plan. Define the completion report so it accounts for every in-scope worktree and branch and never calls a partial disposal complete. Preserve active-owner and unmerged-work retention. Do not execute cleanup from the authoring plan.
+
+Orientation: `agents/skills/self-heal/SKILL.md` Recovery 1-4; `agents/skills/execute-plan/SKILL.md` worktree closeout; `agents/skills/done/SKILL.md` final report and worktree removal; `agents/skills/plans/SKILL.md` final worktree landing; `docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`; `docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`; both origin rows and current `git worktree list --porcelain` / `git rev-list` evidence.
+
+Prompt: Author a focused plan from both origins. Reconstruct how the user's cleanup intent, worktree registrations, branch refs, and existing run/claim records were interpreted across turns. Distinguish the response-level failure to inventory and disposition the full request from the separate closeout gate's base-history false negative. Decide whether the smallest correction is to enforce the existing self-heal terminal-condition duty at cleanup handoff, clarify the shared resource inventory/disposition contract, or add a runtime-specific evidence adaptor; keep agent-specific lookup details outside the shared skill. Specify the exact owner and terminal action for current-run resources, and the preserve/report action for foreign or active claims. Acceptance evidence must include a request spanning multiple workflow-owned resources with both landed and unmerged branches: every in-scope item receives a verified removal, completed closeout, or named retention disposition, and the final report's completion claim matches that inventory. Do not delete resources during authoring.
+
+Rejected alternatives:
+- Delete every registered worktree and local branch ref: rejected because the fresh write-window inventory found one and four commits outside `main`, and the authoring branch advanced during cleanup; the completed owner contract retains unaccounted or unmerged work (docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md)
+- Stop once resources are classified as workflow-managed: rejected because the witnessed operator correction followed the assistant's subset-only result (new origin Problem).
+- Add a global resource ledger or blocking cleanup validator: rejected because no witnessed incident shows that the current Git inventory and owning run/claim records cannot support an on-demand disposition; the Codex task-resource investigation also rejects a new ledger absent a proven owner/correlation need (`docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`).
+- Expand the Codex task-attachment plan to own project worktrees: rejected because its completed investigation found no exact app-managed attachment or supported callback and explicitly keeps project-run closeout in its existing owner workflow (`docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`)
+
+Machinery admission: no new gate, validator, ledger, or required ceremony is recommended; the proposed plan must first test whether existing inventory and owner records suffice. Any future machinery arm must name a witnessed incident and its false-positive cost under the repository Machinery admission protocol.
 
 ## execute-plan-sequential-trace-harness
 Added: 2026-10-12, investigate pass over the remaining sequential-behavior witness
@@ -580,3 +634,4 @@ Rejected alternatives:
 - Leave the receipt line byte-frozen and correct only the script comment: rejected because the receipt names the same dangling digest as its implementing-commit witness; a corrected citation in one span and a dangling one in the other invites the next reader to trust the wrong twin (docs/history/backlog/2026-11-01-closeout-migrate-stale-landing-sha-comment.md, Evidence section)
 
 PLAN-PROMPTS-PRUNE: maintenance-runtime-native-quota-sources -> docs/history/plans/2026-11-01-maintenance-runtime-native-quota-sources.md
+PLAN-PROMPTS-PRUNE: rolling-log-write-foreign-staged-remedy -> docs/history/plans/2026-11-02-rolling-log-write-foreign-staged-remedy.md
