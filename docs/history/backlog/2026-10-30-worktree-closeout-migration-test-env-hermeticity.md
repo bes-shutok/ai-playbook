@@ -9,6 +9,7 @@
 - **Dedup probe:** searched open backlog filenames and bodies plus both rolling prompt logs for `DOCS_SYNC_MERGE_MAX_WAIT`, closeout migration fixture environment, and migration test hermeticity; no open row covers this inherited environment variable in the migration test helper.
 
 Driving force: reliability.
+- **Cluster:** docs/history/backlog/2026-10-23-wrapper-fixture-git-scrub-object-selectors.md
 
 ## Problem
 

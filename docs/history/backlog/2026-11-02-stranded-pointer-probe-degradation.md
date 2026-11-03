@@ -7,6 +7,10 @@ Cluster: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-
 Status: open, Priority: medium, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-stranded-doc-pointer-edit-orphan-code-review-r2.md; .ai-playbook/reviews/2026-11-02-stranded-doc-pointer-edit-orphan-code-review-r3.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-doc-fidelity.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-pairing-vintage.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-pin-hardening.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-receipt-disposition-corrections.md
 
 Three probe-degradation arms: a failed docs/AGENTS.md status probe reads as clean (false-clean summary plus false informational line on the --changed route, worker-verified); no pin discriminates the status probe's docs/AGENTS.md pathspec scope (a whole-tree mutant firing spurious rows on unrelated dirt survived all twelve pins); and the changed-set diff probe parses name-only text output, silently dropping C-quoted exotic paths (the exact class the repo's -z convention pins elsewhere).
 

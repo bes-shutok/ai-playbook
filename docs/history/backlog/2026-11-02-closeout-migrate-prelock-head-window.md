@@ -7,6 +7,13 @@ Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family r
 Status: open, Priority: high, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r1.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r2.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r3.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-finally-guard-exception-containment.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-ambient-git-env-filter.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-failure-manifest-trace.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-nested-repo-toplevel-boundary.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-direction-overbreadth.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-git-probe-n-plus-one.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-runbook-preflight-disposition.md
 
 The pre-flight reads HEAD and source bytes before the merge-lock span and the carry never re-reads HEAD, so a peer landing that commits inside the pre-lock window re-creates a tracked destination with newer bytes the copy then overwrites and the staged-set guard cannot see (no staged entry exists for a committed change); the overwritten bytes survive only in git history. The window spans the pre-flight probe fan-out plus the bounded merge-lock wait (300s default), and has a second half: a source file baseline-identical at pre-flight and edited during the same window is carried at new bytes with no HEAD re-comparison (r3 overflow premortem#preflight-source-drift-escapes-offender-set).
 

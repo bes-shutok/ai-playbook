@@ -1,6 +1,6 @@
 # Plan: documented foreign-staged recovery for the rolling-log Write boundary rule
 
-Backlog origin: docs/history/backlog/2026-11-02-rolling-log-write-foreign-staged-refusal.md
+Backlog origin: docs/history/backlog/2026-11-02-rolling-log-write-foreign-staged-refusal.md (the living row at authoring time; deleted: the landing had parked it under docs/history/backlog/completed/ against the completed/ charter, and the 2026-11-08 operator-directed charter repair fold-deleted it; this plan is the row's durable home)
 Driving force: automation
 Execution budget: 1.5h total, largest task 0.5h
 Plan review record: the staging series .ai-playbook/reviews/2026-11-02-plan-review-rolling-log-write-foreign-staged-remedy-r*.md (the highest rN for this source-plan path is authoritative)
@@ -82,7 +82,7 @@ Decision points requiring a grill: acknowledgment-arm disposition: pre-registere
 **Documentation:**
 - `docs/history/backlog/PLAN-PROMPTS.md` (Task 1): the Write boundary rule remedy text; the rest of the log, including every entry section, is frozen for this plan
 - `docs/history/backlog/PLAN-PROMPTS.md` (Task 2): the acknowledgment arm's pre-registration admission text
-- `docs/history/backlog/2026-11-02-rolling-log-write-foreign-staged-refusal.md` (Task 2): the origin row's disposition section only
+- the origin row `2026-11-02-rolling-log-write-foreign-staged-refusal` (Task 2; at execution time the row lived at `docs/history/backlog/`): the origin row's disposition section only
 
 **Plan-related extension:** implementation and review may change files not listed above. Treat a finding as in scope when it is causally related to this plan: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
@@ -105,11 +105,11 @@ Context surface: the plan's Terms, this task, and the Gist's remedy steps.
 Files:
 - `docs/history/backlog/PLAN-PROMPTS.md`
 
-- [ ] The Write boundary rule text gains the remedy in the entry's wording, all five steps named: record the foreign path's staged blob sha, restore only that named path (worktree bytes untouched), rerun the refused transaction, re-add the path, verify the re-staged blob sha byte-identical [class: IMPLEMENTATION_REQUIRED]
-- [ ] The remedy text states its gate: it runs only on the operator's explicit direction for that foreign path, and without direction the writer stands down or parks as today [class: IMPLEMENTATION_REQUIRED]
-- [ ] The remedy text names the ride-along precondition: re-verify the foreign path's worktree blob equals its staged blob immediately before and immediately after the window; when it fails mid-window, the text names the abort residue: stop before the transaction rerun, re-add the path only when its worktree bytes still equal the recorded staged blob sha, otherwise leave the path unstaged and park for the operator with the recorded sha in the report [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect pass: within the Write boundary rule span of `docs/history/backlog/PLAN-PROMPTS.md` (the Standing rules block at the top of the file, above the entry sections), grep finds the sha record step, the restore step for the single named path, the rerun, the re-add, and the byte-identical verification; the entry sections below the rules block do not satisfy this check [class: REPOSITORY_TEST]
-- [ ] Run → expect pass: `git diff $(git merge-base main HEAD)..HEAD --stat -- scripts/done_run.sh` prints nothing [class: REPOSITORY_TEST]
+- [x] The Write boundary rule text gains the remedy in the entry's wording, all five steps named: record the foreign path's staged blob sha, restore only that named path (worktree bytes untouched), rerun the refused transaction, re-add the path, verify the re-staged blob sha byte-identical [class: IMPLEMENTATION_REQUIRED]
+- [x] The remedy text states its gate: it runs only on the operator's explicit direction for that foreign path, and without direction the writer stands down or parks as today [class: IMPLEMENTATION_REQUIRED]
+- [x] The remedy text names the ride-along precondition: re-verify the foreign path's worktree blob equals its staged blob immediately before and immediately after the window; when it fails mid-window, the text names the abort residue: stop before the transaction rerun, re-add the path only when its worktree bytes still equal the recorded staged blob sha, otherwise leave the path unstaged and park for the operator with the recorded sha in the report [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect pass: within the Write boundary rule span of `docs/history/backlog/PLAN-PROMPTS.md` (the Standing rules block at the top of the file, above the entry sections), grep finds the sha record step, the restore step for the single named path, the rerun, the re-add, and the byte-identical verification; the entry sections below the rules block do not satisfy this check [class: REPOSITORY_TEST]
+- [x] Run → expect pass: `git diff $(git merge-base main HEAD)..HEAD --stat -- scripts/done_run.sh` prints nothing [class: REPOSITORY_TEST]
 - Commit: `docs: add operator-gated foreign-staged recovery to the log Write boundary rule`
 
 ### Task 2: acknowledgment arm pre-registration and origin row disposition
@@ -118,13 +118,13 @@ Context surface: the plan's Terms and Assumptions decision receipt.
 
 Files:
 - `docs/history/backlog/PLAN-PROMPTS.md`
-- `docs/history/backlog/2026-11-02-rolling-log-write-foreign-staged-refusal.md`
+- the origin row `2026-11-02-rolling-log-write-foreign-staged-refusal` (fold-deleted at the 2026-11-08 charter repair)
 
-- [ ] The rules text pre-registers the acknowledgment arm as admission-only text naming: one witnessed incident linked to the origin row's three-refusal transcript and its recovery witness landing 0ec10c5bd, unknown catch frequency, and review date 2026-12-02 [class: IMPLEMENTATION_REQUIRED]
-- [ ] The admission text states a concrete operator-gated false-positive cost: an acknowledgment can admit a foreign path whose worktree bytes then drift mid-window; the ride-along precondition's sha verification bounds it and stops before any peer byte is committed [class: IMPLEMENTATION_REQUIRED]
-- [ ] The admission text states the arm ships no code and promotes only on a second true catch [class: IMPLEMENTATION_REQUIRED]
-- [ ] The origin row gains a dated disposition line recording the deliberate decision: pre-registered admission text, implementation only on a second true catch [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect pass: `python3 scripts/check_prompt_log_origins.py --prune-audit --base $(git merge-base main HEAD)` exits 0 with no REMOVED-WITHOUT-WITNESS flag [class: REPOSITORY_TEST]
+- [x] The rules text pre-registers the acknowledgment arm as admission-only text naming: one witnessed incident linked to the origin row's three-refusal transcript and its recovery witness landing 0ec10c5bd, unknown catch frequency, and review date 2026-12-02 [class: IMPLEMENTATION_REQUIRED]
+- [x] The admission text states a concrete operator-gated false-positive cost: an acknowledgment can admit a foreign path whose worktree bytes then drift mid-window; the ride-along precondition's sha verification bounds it and stops before any peer byte is committed [class: IMPLEMENTATION_REQUIRED]
+- [x] The admission text states the arm ships no code and promotes only on a second true catch [class: IMPLEMENTATION_REQUIRED]
+- [x] The origin row gains a dated disposition line recording the deliberate decision: pre-registered admission text, implementation only on a second true catch [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect pass: `python3 scripts/check_prompt_log_origins.py --prune-audit --base $(git merge-base main HEAD)` exits 0 with no REMOVED-WITHOUT-WITNESS flag [class: REPOSITORY_TEST]
 - Commit: `docs: pre-register acknowledgment arm and record origin row disposition`
 
 ### Task 3: fixture verification of sha preservation end to end
@@ -134,8 +134,12 @@ Context surface: the plan's Terms (scratch clone, blob-preserving remedy, ride-a
 Files:
 - none; verification only, artifacts recorded in the session notes
 
-- [ ] Run → expect pass: in a scratch clone, stage a fixture file at an unrelated path and attempt a log transaction declaring only the log path; the pre-stage guard refuses naming the foreign path [class: REPOSITORY_TEST]
-- [ ] Run → expect pass: record the fixture's staged blob sha, restore only the fixture path from the index, and rerun the transaction with the same declared paths; the pre-stage guard passes with no foreign-path refusal [class: REPOSITORY_TEST]
-- [ ] Run → expect pass: re-add the fixture and verify the re-staged blob sha equals the recorded sha; a full landing inside the scratch clone is not required (landing-grade inputs stay execution-selected and out of scope here) [class: REPOSITORY_TEST]
-- [ ] Run → expect pass: the fixture's worktree bytes equal its staged blob immediately before and immediately after the window (the ride-along precondition holds in the clean fixture); the shared primary checkout's index is never touched by this task [class: REPOSITORY_TEST]
+- [x] Run → expect pass: in a scratch clone, stage a fixture file at an unrelated path and attempt a log transaction declaring only the log path; the pre-stage guard refuses naming the foreign path [class: REPOSITORY_TEST]
+- [x] Run → expect pass: record the fixture's staged blob sha, restore only the fixture path from the index, and rerun the transaction with the same declared paths; the pre-stage guard passes with no foreign-path refusal [class: REPOSITORY_TEST]
+- [x] Run → expect pass: re-add the fixture and verify the re-staged blob sha equals the recorded sha; a full landing inside the scratch clone is not required (landing-grade inputs stay execution-selected and out of scope here) [class: REPOSITORY_TEST]
+- [x] Run → expect pass: the fixture's worktree bytes equal its staged blob immediately before and immediately after the window (the ride-along precondition holds in the clean fixture); the shared primary checkout's index is never touched by this task [class: REPOSITORY_TEST]
 - Commit: none; verification task, evidence recorded in the session notes
+
+## Disposition of migrated backlog items
+
+- origin row `2026-11-02-rolling-log-write-foreign-staged-refusal` (deleted; this plan is its durable home): covered by this plan (Tasks 1-3 landed; the landing had parked the row under docs/history/backlog/completed/ against the completed/ charter, and the 2026-11-08 operator-directed charter repair fold-deleted it; the Write boundary rule's admission text cites this plan).

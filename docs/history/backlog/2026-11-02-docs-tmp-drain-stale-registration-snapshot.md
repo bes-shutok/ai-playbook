@@ -5,6 +5,7 @@ Status: open
 Priority: medium (promotion gate; MUST close before `docs_tmp_drain_arms` promotes past `report-only`)
 Severity: Medium
 Origin: code review r1 of plan `docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md` (risk, concurrency#stale-worktree-snapshot-across-hold-span).
+- **Cluster:** docs/history/backlog/2026-11-02-docs-tmp-drain-hold-reacquisition.md
 
 ## Problem
 

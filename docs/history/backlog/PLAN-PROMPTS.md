@@ -1,4 +1,8 @@
 Tracked rolling log of ready-to-dispatch plan-creation prompts, most urgent first.
+
+PLAN-PROMPTS-PRUNE: authoring-empty-diff-closeout-route -> docs/history/plans/2026-11-02-empty-diff-closeout-route.md
+PLAN-PROMPTS-PRUNE: review-staging-archived-plan-source-identity -> docs/history/plans/2026-11-02-review-staging-archived-plan-source-identity.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
+PLAN-PROMPTS-PRUNE: certification-gates-full-violation-reporting -> docs/history/plans/2026-11-03-certification-gates-full-violation-reporting.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
 PLAN-PROMPTS-PRUNE: maintenance-self-heal-first-on-blocks -> docs/history/plans/2026-11-02-maintenance-self-heal-first-on-blocks.md
 PLAN-PROMPTS-PRUNE: gate-removal-inherited-manifest-rows -> docs/history/plans/completed/2026-11-01-gate-removal-inherited-manifest-rows.md (completed plan exists and its origin row is deleted; pruned by the maintenance monitor)
 PLAN-PROMPTS-PRUNE: maintenance-codex-continuation -> docs/history/plans/2026-11-02-maintenance-codex-continuation.md
@@ -98,6 +102,7 @@ PLAN-PROMPTS-PRUNE: plan-authoring-stand-down-before-charter -> docs/history/pla
 PLAN-PROMPTS-PRUNE: self-heal-before-unknown-remedy -> docs/history/plans/2026-10-29-self-heal-before-unknown-remedy.md (certified plan bytes landed at 7756b3d; origin row covered-flipped in the closeout rider)
 
 PLAN-PROMPTS-PRUNE: doctrine-text-precision-residuals -> docs/history/plans/2026-10-31-doctrine-text-precision-residuals.md
+PLAN-PROMPTS-PRUNE: done-finalize-resume-marking-honesty -> docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md
 
 Standing rules:
 
@@ -109,7 +114,7 @@ Standing rules:
 - Writes are targeted section edits (an entry's own section), never a whole-file rewrite from a stale read.
 - Before every write, re-read the file and compare it against the read the edit was prepared from; any difference is drift: retry once from the fresh read, then attempt a pure append of the entry at the end of the file (conflict-free under the targeted-edit rule); only when that append also fails the drift check, abort and report the full intended entry text in the turn output as the fallback record; the next write attempt re-emits from that record instead of re-running the investigation.
 - Every log write is committed in the same turn that performs it.
-- Write boundary rule: a log write that commits in the primary checkout (the monitor's prune, freeze, or investigate write, a Phase 0 freeze commit, a primary-placement checkpoint touching a log) acquires or reuses the primary done lock (the repository's `scripts/done-lock.sh` done lock), before any staging or index write and before the final log read, holding it through the commit and failure recovery; the caller selects the intended symbolic ref and starting OID after lock acquisition, verifies the selected pair against primary `HEAD` under the done lock before the final log read or edit, and on a mismatch recovers before changing the log; the write then passes the selected pair to the runner's ref-bound captured-tree transaction (`scripts/done_run.sh`) and never takes the repo-wide merge lock (the merge-lock acquisition refusal for primary log writes is retired 2026-10-28, plan `docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md`). The runner refuses before staging when either rolling-log path already has a staged delta (the caller-side pre-staged-owned-path refusal is retired; the runner owns the two-path check), stages and commits only the declared owned paths through that transaction, and on every refusal before the captured-ref compare-and-swap succeeds the runner's cleanup unstages and verifies only this writer's declared owned delta before release (recovery that cannot be verified blocks later primary writes and reports through the existing recovery path); after the compare-and-swap succeeds, a later ledger-append or post-commit-hook error reports that the landed commit stands and never rolls it back. Done-lock acquisition failure does no work. A session working from a worktree keys the primary done lock from primary-checkout context (the Phase 0 freeze included); worktree branch commits stay isolated under the existing merge-lock guard, and no new lock is added.
+- Write boundary rule: a log write that commits in the primary checkout (the monitor's prune, freeze, or investigate write, a Phase 0 freeze commit, a primary-placement checkpoint touching a log) acquires or reuses the primary done lock (the repository's `scripts/done-lock.sh` done lock), before any staging or index write and before the final log read, holding it through the commit and failure recovery; the caller selects the intended symbolic ref and starting OID after lock acquisition, verifies the selected pair against primary `HEAD` under the done lock before the final log read or edit, and on a mismatch recovers before changing the log; the write then passes the selected pair to the runner's ref-bound captured-tree transaction (`scripts/done_run.sh`) and never takes the repo-wide merge lock (the merge-lock acquisition refusal for primary log writes is retired 2026-10-28, plan `docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md`). The runner refuses before staging when either rolling-log path already has a staged delta (the caller-side pre-staged-owned-path refusal is retired; the runner owns the two-path check), stages and commits only the declared owned paths through that transaction, and on every refusal before the captured-ref compare-and-swap succeeds the runner's cleanup unstages and verifies only this writer's declared owned delta before release (recovery that cannot be verified blocks later primary writes and reports through the existing recovery path); after the compare-and-swap succeeds, a later ledger-append or post-commit-hook error reports that the landed commit stands and never rolls it back. Done-lock acquisition failure does no work. A session working from a worktree keys the primary done lock from primary-checkout context (the Phase 0 freeze included); worktree branch commits stay isolated under the existing merge-lock guard, and no new lock is added. When the runner's pre-stage guard (the staged-set enumeration) refuses the transaction naming a foreign staged path (staged in the shared primary index by a session other than this writer, outside the writer's declared owned set), the remedy is operator-gated and blob-preserving: never stage, discard, or commit that path autonomously; the remedy runs only on the operator's explicit direction for that foreign path, and without that direction the writer stands down or parks exactly as before. Under that direction: (a) record the foreign path's staged blob sha; (b) restore only that named path from the index (`git restore --staged -- <path>`, worktree bytes untouched); (c) rerun the refused transaction; (d) re-add the path; (e) verify the re-staged blob sha is byte-identical to the recorded sha. Ride-along precondition: re-verify the foreign path's worktree bytes equal its staged blob immediately before and immediately after the unstage/re-add window; if verification fails mid-window, the remedy aborts before the transaction rerun, re-adds the path only when its worktree bytes still equal the recorded staged blob sha, and otherwise leaves the path unstaged and parks for the operator with the recorded sha in the report; on a step (e) mismatch the remedy stops the same way, leaving the path unstaged and reporting both the recorded and the re-staged sha. Acknowledgment arm admission text (pre-registered only; ships no code; promotes only on a second true catch; review date 2026-12-02): one witnessed incident, linked to the origin's durable home `docs/history/plans/completed/2026-11-02-rolling-log-write-foreign-staged-remedy.md` (the fold-deleted row's disposition, its three-refusal transcript, recovery witness landing 0ec10c5bd); catch frequency unknown; operator-gated false-positive cost: an acknowledgment can admit a foreign path whose worktree bytes then drift mid-window, bounded by the ride-along precondition's sha verification, which stops before any peer byte is committed.
 - Entries carry repo-relative paths only and no personal or machine-specific data.
 - An entry is a prompt for a later authoring turn; the write turn never executes or dispatches its payload.
 
@@ -251,73 +256,7 @@ PLAN-PROMPTS-PRUNE: prune-audit-standing-flags-unowned-accumulation -> docs/hist
 PLAN-PROMPTS-PRUNE: quota-governor-runtime-evidence -> docs/history/plans/completed/2026-11-01-quota-governor-runtime-evidence.md (peer exec run landed the plan 944cb825c with review r4 ready=yes; its cross-runtime origin row was deleted in that same landing; the frozen entry's claim is served; section pruned at the ee6cde74 auth-carrier session's learn+investigate boundary)
 
 
-## memory-index-load-budget-consolidation
-
-Frozen: authoring claim memory-index-load-budget-consolidation.md (session sess_fa4273f5-30c1-454b-afee-5683f68c33f4), 2026-11-02
-
-
-Added: 2026-11-02, investigation of the worsened memory-index load-budget witness (learn Step 1.9 re-witness, same-day entry)
-
-Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the test admits only tracked skill, docs, or script surfaces and a body-named single-surface fix with no open design choice; this item's surface is the per-project memory store the repo's maintenance sessions run (outside the repository's tracked trees; the store path is recorded tilde-form in the origin row), and its body carries an open design choice, the operator decision requested section gating compress, prune, and retirement-rule scope (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-
-Origins:
-- docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md
-
-Group roster:
-- docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md (ungrouped single-origin scope; the Stage 0 sweep found no open sibling sharing the store-load mechanism, surface, or defect class)
-
-Urgency: high - the load budget is receding, not converging: the 2026-10-31 audit measured 450 lines with a witnessed 111-of-450 load, and the 2026-11-02 re-witness measured 545 lines / 132999 bytes with a witnessed 94-of-543 load, roughly 46 index lines of growth per day; truncated context silently drops do-not-redo markers and standing preferences, a redo risk for the fleet this repo runs, and the finding is operator-gated so nothing moves until the decision lands
-
-Scope: contingent on operator approval of the consolidation the origin row requests, author a focused plan that designs three arms as one bounded maintenance run inside the lane-quiet window the row names: the compress-and-index fold (retire time-superseded per-run outcome entries into current per-mandate summary lines, add one-line pointers for durable still-current records, hold the roughly 200-line load budget), the reviewed never-bulk prune (delete a topic file only when its entire durable signal is captured by the compressed index or the repository's own durable records; in-doubt stays), and the standing retirement rule amending the append-first convention's missing half so the store cannot regrow past the budget (see agents/skills/maintenance/zcode.md and docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-
-Orientation: docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md (measured values, store shape, and the 2026-11-02 re-witness bullet); agents/skills/maintenance/zcode.md (the append-first one-line convention and its sanctioned targeted edits, line 110); docs/maintenance/recurring-tasks/memory-index-audit.md (the lane's procedure of record and its charter limits); .ai-playbook/maintenance/memory-index-audit.json (run 1 state record, disk record); docs/history/plans/completed/ for the audit-lane landing history
-
-Continuity disposition: the operator gate is a blocker interrupting the lane's self-fix; keep it, its protective value is demonstrated by the lane charter's self-authorization exclusion and the origin's self-serving-evidence caveat (the finding was witnessed in a consumer of the store the lane itself reports on), and the entry's whole payload is the operator-gated design work, never a lane self-execution (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-
-Rejected alternatives:
-- Raise the runtime load budget: rejected because the roughly 200-line load is the session runtime's index loader property, not a repository-configurable value; the runtime-issued truncation notices in the 2026-10-31 and 2026-11-02 loads are the witnesses (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-- Freeze all store writes until the operator decides: rejected because durable do-not-redo markers are the index-rather-than-prune convention's payload and the one-shot carrier fleet legitimately records completions; a freeze trades truncation risk for silent context loss (see agents/skills/maintenance/zcode.md)
-- Let the audit lane consolidate its own finding: rejected because the lane charter forbids mid-lane index rewrites and bulk topic-file deletion and the origin files the consolidation as operator-gated with a self-serving-evidence caveat on the lane's own store (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-- Wait for the next scheduled audit (2026-11-07) before acting: rejected because growth measures roughly 46 index lines per day with the fresh load witness already worse (94-of-543 versus 111-of-450 two days earlier), so waiting deepens the witnessed redo risk while the fix shape is known (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-- Build an automated compression script for the store: rejected because the store is operator-owned session context and machine mass-editing is the do-not-redo-loss class the reviewed never-bulk shape exists to guard; the smallest arm that removes the witnessed cost is the operator-approved fold plus retirement rule, not a new tooling surface (see docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md)
-- Keep the append-first convention unchanged: rejected because the convention is the correct mechanism with a missing complement and the witnessed harm sits in that missing half, the retirement rule; completing the mechanism, not removing it, is the fix (see agents/skills/maintenance/zcode.md)
-
-Machinery admission: reject added machinery; the retirement rule is a write-discipline convention amendment adding no gate, validator, lock, or ledger, and no witnessed incident justifies new blocking machinery for a context-store write shape (see agents/skills/maintenance/zcode.md)
-
-Prompt: Author a focused plan from this entry and its origin, contingent on the operator approving the consolidation the origin requests. Design the three scope arms as one bounded run: the compress-and-index fold with its current-entry retirement mapping, the reviewed prune criteria (per-file durable-signal coverage checks against the compressed index and the repository's own durable records), and the standing retirement rule text amending the append-first convention. Specify the lane-quiet window check (no live authoring or execution claims under the memory or tmp directories), the consolidation verification (post-consolidation index line count within the roughly 200-line budget, pointer integrity zero dangling, an explicit do-not-redo marker survival audit over every pruned file), and the rollback posture (the operator-owned store is user-level; plan the fold so any topic file deletion is individually reviewable and reversible from the repository's durable records). Add no machinery beyond the convention amendment; never bulk-delete; keep every deleted file's durable signal captured before its deletion lands. Acceptance evidence must cover: the measured line budget holding after the fold, zero dangling pointers after the prune, every surviving do-not-redo marker still reachable from the compressed index, the retirement rule refusing a superseded-entry rewrite shape, and a dry-run presentation the operator can approve row by row before any deletion executes.
-
-## review-staging-archived-plan-source-identity
-Frozen: authoring claim review-staging-archived-plan-source-identity.md (session sess_175f4067-23d2-4a64-b802-b1ce6674e2d1), 2026-11-02
-
-Added: 2026-11-02, investigation of the archived-source-path closeout refusal
-
-Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the defect crosses the plan archive transition, review-record source identity, validator path resolution, and done closeout; the fix is not a bounded edit to one surface.
-
-Origins:
-- docs/history/backlog/2026-11-02-review-staging-archived-source-path.md
-
-Group roster:
-- docs/history/backlog/2026-11-02-review-staging-archived-source-path.md
-
-Urgency: high - the witnessed archive move made the final closeout reject an otherwise superseded historical local-equivalence attempt; a targeted record-path repair restored the pass while retaining the reviewed-byte digest.
-
-Scope: trace how plan archival changes the source path while preserving bytes and `source_digest`. Inspect the plan-review `URL or Artifact` field, local-equivalence `coverage.attempts[].artifact`, the `--source-plan` existence-and-digest check, and the done landing sweep. Compare archive-time reference relocation, an immutable source snapshot, and an archive-aware validator resolution. Preserve the original byte digest, canonical plan identity, lineage to the exact reviewed plan, and the existing evidence bar for the artifact/sidecar pair. Keep the current closeout check effective for missing or mismatched sources.
-
-Orientation: the origin row; `agents/skills/plans/SKILL.md` Plan Lifecycle archive move; `agents/skills/review-staging/SKILL.md` Coverage sidecar contract; `scripts/validate_review_staging.py` `validate_coverage_contract` and `--source-plan` handling; and `agents/skills/done/SKILL.md` final review-staging gate.
-
-Continuity disposition: the origin records a closeout refusal that interrupted authorized landing work. Preserve the guard that verifies the source and local-equivalence evidence; make the archival transition retain a resolvable identity so the guard can pass on unchanged reviewed bytes.
-
-Rejected alternatives:
-- Remove the local-equivalence artifact/sidecar evidence check: rejected because the witnessed original review-plan finding showed an arbitrary existing artifact and an unparseable sidecar could falsely claim equivalent coverage (`.ai-playbook/reviews/2026-09-14-plan-review-review-runner-bounded-timeout-fallback-r5.md`, F1).
-- Keep exact-path-only source lookup and leave records stale after archival: rejected because `--source-plan` requires the supplied file to exist before digest verification (`scripts/validate_review_staging.py`, source-file check), and the origin records the witnessed closeout refusal after the move.
-- Narrow source verification to digest equality alone: rejected because local-equivalence coverage also depends on prompt scope and an existing, parseable artifact/sidecar pair (`scripts/validate_review_staging.py`, `validate_coverage_contract`); this is the witnessed evidence contract.
-- Rewrite each affected review record manually after archival as the permanent rule: rejected as the sole fix because the origin's one-record retarget was only a workaround and each omitted record would remain stale; evaluate archive-time relocation as a bounded option in the plan, as the origin witnessed.
-- Add a second closeout validator or gate: rejected as unnecessary machinery; the witnessed refusal is addressed by repairing source identity in the existing archival/validation path, and the existing evidence check already owns this contract (`agents/skills/done/SKILL.md`, final review-staging gate).
-
-Machinery admission: reject a new gate or validator; no witnessed incident requires a second blocker, while the existing source check and the origin's refusal demonstrate the needed catch.
-
-Prompt: Author a focused plan from this origin. Derive the exact original plan bytes and digest for the r10 local-equivalence witness; confirm the archived path and former plans-root path behavior from repository history. Map every producer and consumer of plan-review source identity and local-equivalence `artifact` links. Compare archive-time reference relocation, a retained source snapshot, and archive-aware resolution for canonical identity, byte-digest stability, record immutability, old-record compatibility, and failure behavior. Select the smallest option that makes unchanged reviewed bytes resolvable after archive while preserving the existing local-equivalence evidence bar and done closeout gate. Add focused acceptance evidence for a successful archive transition, an unchanged digest, a resolvable historical record, a changed or missing source refusal, and a malformed or unrelated sidecar refusal. Do not weaken source verification or add a second gate.
-
+PLAN-PROMPTS-PRUNE: memory-index-load-budget-consolidation -> docs/history/plans/2026-11-02-memory-index-load-budget-consolidation.md
 ## codex-quota-reset-wake
 
 Added: 2026-11-01, investigation of the Codex quota-boundary continuation
@@ -353,57 +292,58 @@ Rejected alternatives:
 Prompt: Author a future Codex-specific plan from this origin and investigation. Verify the current Codex task and automation primitives before selecting a wake mechanism. Preserve the exact target and phase across a genuine primary five-hour pause, schedule or resume immediately after the reported reset, and re-probe before continuing. Keep the weekly secondary window, false cross-runtime exhaustion, same-session compaction, explicit stop, and empty-queue behavior separate. If Codex exposes no timed wake, state the verified limitation and supported fallback without inventing host scheduling machinery or claiming indefinite unattended reset resumption.
 
 
-## done-finalize-resume-marking-honesty
-Frozen: authoring claim done-finalize-resume-marking-honesty.md (session sess_8ef45ec3-0098-413e-ab29-ac17d2bf6cd4), 2026-11-02
+PLAN-PROMPTS-PRUNE: dispatch-ladder-rearm-joint-hardening -> docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md (r4-certified ready=yes zero blocking, seal .ai-playbook/review-certs/dispatch-ladder-rearm-joint-hardening.md; the entry pruned by its own landing rider)
 
-Added: 2026-11-01, learn Step 1.9 investigate over a same-day authoring closeout session (its plan landed 31b1809c5)
+## done-run-setup-stdout-export-emission-split
+Frozen: authoring claim done-run-setup-stdout-export-emission-split.md (session sess_0579a3dc-7408-418d-bdf3-b7eea257a06e), 2026-11-03
 
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix arms live inside the guard-bearing closeout ceremony `scripts/done_run.sh` (the finalize outcome assembly and its manifest-resolution fallback), which the test's "never a guard-bearing path" clause excludes from the ad-hoc route, and the fallback arm carries an open design choice (fail-loud refusal when the setup exports are lost versus verifying the bound manifest against the done lock's own recorded run identity).
+Added: 2026-11-03, learn Step 1.8 capture and investigate over the authoring-closeout session (second field failure of the emission shape)
 
-Origins:
-- (session-witnessed 2026-11-01; no backlog row) an authoring run's closeout: the first finalize ran pre-landing and the deferred-squash arm withheld the complete marking with the checkpoint kept (by design); the landing landed; the post-landing resume re-run - a fresh shell holding only the re-derived lock env, with the setup's manifest exports lost - reported a success-shaped tail (the done-lock release's own `OUTCOME: pass`) while the run's manifest stayed complete=false and its resumable-closeout checkpoint survived, so the documented resume duty consumed nothing and the ceremony's output carried no line saying so (the stranded run's disposition is arm 3).
-
-Urgency: medium - the witnessed cost is one stranded false-resumable closeout state (the interrupted-manifest census now carries the undisposed run and will flag it as growth at each survey) plus a latent wrong-run hazard: the shared done-session directory holds every run's manifests, the env-lost resolution falls to the newest-manifest glob (`scripts/done_run.sh` resolve_manifest_path fallback), and the only identity contract (`scripts/done_sweep_gates_lib.py` `_finalize_identity_mismatch`, schema + repo_root) cannot distinguish same-repo peer runs, so a re-run can silently make its marking decision about a foreign run.
-
-Scope arms:
-1. Completion observability (recommended): the finalize ceremony prints one finalization-state line on every exit path - the bound run id, whether the marking was applied, withheld, refused, or not bound, and the resume duty when incomplete - so a success-shaped release tail can no longer stand in for a completed marking; the manifest-completion introspection that today runs only inside the lock-not-free branch (`scripts/done_run.sh` finalize status-free verification) extends to the success path.
-2. Resolution narrowing (paired with arm 1): when the setup exports are lost, either refuse fail-loud with the re-derive-and-retry advice, or verify the newest-glob manifest against the done lock's own recorded run identity (the hold's acquire-time records) before any marking decision, so a same-repo foreign manifest can never bind silently.
-3. Disposition the witnessed run (first action of the executing session): run the existing remedy ladder (`disposition-manifest` with a work-verified-landed reason naming 31b1809c5, then checkpoint remove) for the stranded run so the interrupted-manifest census returns to baseline.
-
-Orientation: `scripts/done_run.sh` (the finalize marking leg, the status-free verification's manifest introspection, and `resolve_manifest_path`'s newest-glob fallback), `scripts/done_sweep_gates_lib.py` (`_finalize_identity_mismatch`, the checkpoint-manifest and finalize-manifest subcommands), and the landed deferred-squash honesty arms (the `done-finalize-deferred-squash-silent-success` prune receipt in `docs/history/backlog/EXEC-PROMPTS.md`). Disk re-derivation at the entry's write: the stranded manifest reads complete=false with the sibling checkpoint present (filesystem probes), the landing commit is an ancestor of main (`git merge-base --is-ancestor`), and the identity predicate's checked fields are read at its definition.
-
-Machinery admission: arm 1 is an additive report-only output line (no gate, no refusal, no new state); arm 2 narrows a resolution fallback (removal-shaped, no new gate) - the incident is this entry's Origins witness, the expected catch is every env-lost resume re-run in a window with parallel peers, the false-positive cost is zero for a genuinely matching hold (the hold's own acquire-time records name its run), and the review date is the next done-machinery maintenance pass.
-
-Rejected alternatives:
-- Exit non-zero whenever the marking did not apply: rejected because the ceremony's exit code also carries release failures, so the exit-vocabulary change is the plan's deliberate decision rather than a folding detail (scripts/done_run.sh finalize exit contract)
-- Trust the interrupted-manifest census to surface stranded states without ceremony output: rejected because the census counts undisposed manifests, not their cause, and the witnessed diagnosis needed several disk reads to separate the deferred-squash design arm from the resolution failure (witnessed)
-- Bind the re-run by owned-commits ledger recency instead of the newest manifest: rejected because the per-run ledger files do not identify which run the invoking shell owns any better than the manifest glob does (scripts/done_run.sh resolve_run_id fallback order)
-
-## authoring-empty-diff-closeout-route
-Frozen: authoring claim 2026-10-31-plan-empty-diff-closeout-route.md (session sess_d31a3a90-5e01-44f7-a611-408e8d39a63c), 2026-11-02
-
-
-Added: 2026-10-31, investigate after plan-authoring worktree closeout recovery
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the primary origin changes the plans skill's hard-gated worktree lifecycle and depends on an explicit choice about when ancestry and artifact proofs substitute for a landing receipt; the sibling changes the shared closeout command's branch-only completion contract. Neither is a body-named, single-surface correction with no open design choice, so the uniform group routes to the plan-creation log.
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix spans the done lock machinery's own scripts (`scripts/done_run.sh`, `scripts/done-lock.sh`), whose focused test suites pin the current output shapes, and the eligibility test's guard-bearing-path exclusion keeps the lock scripts on the plan route even though the change is behavioral output reshaping only.
 
 Origins:
-- docs/history/backlog/2026-10-31-plan-empty-diff-closeout-route.md
-- docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md
+- docs/history/backlog/2026-11-03-done-run-setup-stdout-export-emission-split.md
 
-Urgency: medium - the observed authoring closeout is complete and exact-base branches are uncommon, while leaving the hard refusal unchanged can strand a future completed worktree; the sibling branch-only retention gap is explicitly deferred by the completed done-gate-report-retention plan (`docs/history/plans/completed/2026-10-29-done-gate-report-retention.md`).
+Cluster: docs/history/backlog/2026-10-30-done-lock-hold-overbroad-commit-stop.md (same done-lock script surface; different defect: that row's commit-stop scope, not the acquisition stdout shape)
 
-Scope arms: decide whether these two origins need one coordinated plan because they meet at `gate-removal`, or separate plans because their lifecycle outcomes differ; define the exact empty-diff condition under which the current ancestry and artifact proofs can satisfy plans closeout, retaining the worktree, branch, and claim for every other helper refusal; assess the branch-only completion signal as a separate arm and keep it out of the empty-diff fix unless a concrete contract dependency requires it. Preserve the existing exact-tree, ancestry, and artifact checks and avoid adding a second ledger or weakening deletion authority.
+Urgency: medium - two witnessed field failures of the same trap (the tee-source abort of 2026-10-26/27, lesson #261's witness; the whole-stdout eval parse error of 2026-11-03, lesson #387's incident), and each failure leaked an acquired hold plus a partial boundary that a later invocation had to re-enter or orphan-release; the skill text's evaluate-only-export-lines prescription alone has not prevented the trap.
 
-Orientation: `agents/skills/plans/SKILL.md` Final Step requires `land-worktree` and retains resources on refusal. `scripts/land_squash.sh` correctly refuses a candidate tree identical to its parent. The completed gate-removal plan introduced `ancestry-accounted` branch closeout with artifact identity checks (`docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md`); the 2026-10-31 recovery passed that existing gate after migration and review-record verification. The neighboring branch-only terminal-state origin is explicitly deferred, not covered, by `docs/history/plans/completed/2026-10-29-done-gate-report-retention.md`.
+Scope arms: (1) split the acquisition emission in `scripts/done_run.sh` setup and the `scripts/done-lock.sh` acquire/wait-acquire echo: assignment lines alone on stdout, status/advisory/diagnostic lines on stderr, payload lines byte-identical; (2) update the focused suites pinning the current shapes (`scripts/test_done_run_wrapper.py`, `scripts/test_done_lock_holder_visibility.sh`) and any consumer parsing the banner; (3) one sentence in the done skill's Step 0 noting stdout is now eval-safe while the filter-the-export-lines rule stays as the consumer-side guard.
 
-Prompt: Author a focused plan from both origins and the cited closeout history. Trace the plans Final Step, `land-worktree` empty-diff refusal, and `gate-removal`'s `ancestry-accounted` and `exact-tree-accounted` checks. Specify a fail-closed no-op route for a source branch whose exact tree and required artifacts are already proven at the destination, including a non-ancestor branch matching reachable destination history after a superseded draft is preserved and removed. Preserve current retention for every other landing refusal. Decide whether the branch-only terminal-state origin is a necessary coordinated task or a separate plan, and explain the boundary from the existing retention plan. Do not add a validator, ledger, retry loop, or new deletion authority. Include acceptance evidence for the successful no-op route and a retained unlanded delta.
+Orientation: `scripts/done_run.sh` setup contract comment ("one status line on stdout followed by eval-able export lines") and its export echo; `agents/skills/done/SKILL.md` Step 0 (the evaluate-only-export-lines prescription and the blocked-acquire report shape); lessons #261 and #387 (the two witnesses).
 
 Rejected alternatives:
-- Remove the landing-helper prerequisite after any refusal: rejected because the plans skill's existing retention rule protects work when a refused landing still has source delta (`agents/skills/plans/SKILL.md`)
-- Manufacture an empty commit so the helper has a non-empty landing: rejected because the witnessed 2026-10-31 refusal correctly identifies a tree-identical candidate with no change to land
-- Let ancestry alone authorize removal: rejected because `gate-removal` already couples ancestry accounting with exact-tree and artifact verification (`docs/history/plans/completed/2026-10-19-gate-removal-closeout-accounting.md`)
-- Add a new branch-only completion ledger to solve the empty-diff refusal: rejected because the branch-only terminal-state contract is a separately deferred origin and no second ledger is justified by the empty-diff incident (`docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md`)
+- Restate or harden the filter prescription in the skill text alone: rejected - the prescription already exists and both field failures happened anyway; the trap is the emission shape, not the documentation (evidence basis: lessons #261 and #387 in docs/maintenance/development_lessons.md, agents/skills/done/SKILL.md Step 0)
+- Add a validator or gate refusing a non-assignment line on the acquisition stdout: rejected - a gate would only re-detect what the split eliminates at the source, and no witnessed incident needs a standing blocker beyond the split itself (machinery admission: no incident for a new gate; repository guidelines Machinery admission protocol section)
+- Move the status lines into the run manifest instead of stderr: rejected - the status output is the operator's acquire-time confirmation, the holder evidence the blocked-acquire report consumes, and burying it in a file adds a read step to every acquire (evidence basis: agents/skills/done/SKILL.md Step 0 blocked-acquire reporting shape)
+
+Prompt: Author a focused plan from this entry and its origin. Split the acquisition emission so stdout carries only eval-able assignment lines and stderr carries status and advisory lines, across `scripts/done_run.sh` setup and the `scripts/done-lock.sh` acquire/wait-acquire echo; update the focused suites for the new shapes; align the done skill's Step 0 sentence. Verify no consumer parses the removed stdout lines (grep scripts and tests for the banner patterns), run the focused suites green, and keep every payload line byte-identical between the old and new surfaces.
+
+## machinery-regrowth-unregistered-script-pair
+
+Added: 2026-11-03, learn Step 1.9 investigate anchored on the origin row's same-day second witness (the interactive scheduler-turn survey's machinery-inventory consult)
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix's single surface is `scripts/machinery_registry.json`, a whole path on the eligibility test's mechanical denylist, so the row cannot route ad-hoc; registering the scripts is a registry edit by definition.
+
+Origins:
+- docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md
+
+Cluster: docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md (same defect class, covered pair; durable home docs/history/plans/completed/2026-10-31-baseline-red-gates-regreen.md covering only its own two scripts)
+
+Urgency: medium - the inventory check has held a red baseline since 2026-11-02 and the 2026-11-03 scheduler-turn survey consult re-witnessed the same two failures, muting the check's signal for genuinely new regrowth; no lane is blocked.
+
+Scope arms: (1) register `scripts/quota_sources.py` and `scripts/reconcile_execute_plan_handoff.py` in `scripts/machinery_registry.json` with their consuming witnesses, restoring `python3 scripts/machinery_inventory.py --check` to green; (2) keep the check's enforcing arm unchanged.
+
+Orientation: both scripts are live consumers (scripts/quota_governor.py and scripts/quota_window_probe.py import the quota source identity; scripts/test_execute_plan_resume_watcher.py imports the reconciliation module), so removal is not on the table; the check is witnessed protective (it caught the 2026-10-31 release-script pair and this pair), so this is a keep-and-restore change, not gate surgery. Arm 1 is a registry data row: no machinery added or removed, no admission test applies.
+
+Prompt: Author a focused plan registering the two unregistered runtime scripts in the machinery registry. Read scripts/machinery_registry.json (entry shape and witness requirements, per the machinery-witness-ref-validation plan docs/history/plans/completed/2026-10-30-machinery-witness-ref-validation.md lineage), the scripts' consuming importers and their landing commits as witnesses, and the origin row. Restore `python3 scripts/machinery_inventory.py --check` to exit 0 and pin that green with the suite. No skill-text changes.
+
+Rejected alternatives:
+- Remove the two scripts to clear the red: rejected because both are live consumers with working-tree import witnesses (scripts/quota_governor.py; scripts/test_execute_plan_resume_watcher.py)
+- Demote the inventory check to warn-only to stop the baseline churn: rejected because the check's two true catches in nine days are its admission basis (docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md; docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md)
+- Auto-register unregistered scripts at scan time: rejected machinery arm with the missing-incident absence named - no witnessed incident shows a registration-time false positive the registry data rows do not already address
+
+Machinery admission: arm 1 adds no gate, validator, lock, ledger, or ceremony (a registry data row restoring an existing check's green); the auto-register alternative is rejected above with the missing-incident absence named.
 
 ## doing-code-review-staging-doc-scaffold-pointer
 
@@ -635,3 +575,26 @@ Rejected alternatives:
 
 PLAN-PROMPTS-PRUNE: maintenance-runtime-native-quota-sources -> docs/history/plans/2026-11-01-maintenance-runtime-native-quota-sources.md
 PLAN-PROMPTS-PRUNE: rolling-log-write-foreign-staged-remedy -> docs/history/plans/2026-11-02-rolling-log-write-foreign-staged-remedy.md
+
+## wrong-location-lead-clause-race-resolution
+
+Added: 2026-11-03, learn Step 1.9 investigate over the interactive auth session sess_2e80006b (wrong-location-lead-clause-contradiction, landed e42a0ac786, archived 0fa782f20)
+
+Work-type verdict: record-keeping correction, not plan-worthy: the design work is complete and landed; the residual surfaces are already owned by tracked rows, and no skill text or script behavior needs authoring.
+
+Origins:
+- docs/history/backlog/2026-11-02-wrong-location-lead-clause-r3-residuals.md (resolution note added in the completion pass)
+- docs/history/backlog/2026-11-02-lead-clause-amendment-unlanded-skilled.md (the sibling row owning the live SKILL.md lead-line amendment)
+
+Urgency: medium on the sibling row (a live self-contradicting lead Solution line in `agents/skills/how-to-write-skills/SKILL.md` lines 424-425 after its covering plan landed), low on the r3-residuals row (archive-trail context only).
+
+Scope arms:
+1. Execute the sibling row (recommended): amend both fragments of the Wrong Location lead Solution line per the covering plan's Terms (the resolve-paths directive plus the hardcode prohibition), scoped so neither reading contradicts the documented project-local path sub-section; single-file edit, existing review surface.
+2. Widen to a how-to-write-skills section rewrite: rejected; the sub-section the referenced plan landed already carries the convention, only the lead line contradicts it.
+
+Orientation: the covering plan's Task 1 text (docs/history/plans/completed/2026-11-02-wrong-location-lead-clause-contradiction.md, bullet naming both lead-line fragments and the same-edit timing) and the executed referenced plan's landed sub-section (commit ef52887c4).
+
+Machinery admission: correction-shaped; adds no gate, ledger, or validator.
+
+Rejected alternatives:
+- Re-open the archived covering plan to execute its Task 1: rejected; its task amends the referenced plan's Task 1 text, which is archived and executed; the SKILL.md bytes are the only live surface and the sibling row owns them: docs/history/backlog/2026-11-02-lead-clause-amendment-unlanded-skilled.md

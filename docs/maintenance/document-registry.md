@@ -11,6 +11,7 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 
 | identity | sot | state | archived | reason | src | successor | aliases | audit |
 |---|---|---|---|---|---|---|---|---|
+| coverage-gate-checkpoint-twin-self-exemption | no | completed | 2026-11-03 | executed | docs/history/plans/completed/2026-11-02-coverage-gate-checkpoint-twin-self-exemption.md |  |  |  |
 | maintenance-codex-continuation | no | completed | 2026-11-02 | executed | docs/history/plans/completed/2026-11-02-maintenance-codex-continuation.md |  |  |  |
 | maintenance-autopilot-codex-same-session-compaction | no | completed | 2026-11-02 | covered | docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md |  |  |  |
 | maintenance-runtime-native-quota-sources | no | completed | 2026-11-02 | executed | docs/history/plans/completed/2026-11-01-maintenance-runtime-native-quota-sources.md |  |  |  |

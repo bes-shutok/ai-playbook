@@ -8,6 +8,9 @@ Quarantine: 2026-10-27
 - **Class:** fix-class
 - **Driving force:** code-quality (intermediate review findings of Task 2, docs/history/plans/2026-10-18-review-runtime-sibling-module-deployment.md)
 - **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-design-simplification.md; docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md; docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md; (shared runtime deployment scripts and verifier; that deleted sibling added the documented test-runner under-collection defect class, covered by the guidelines' pytest collector arm)
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-design-simplification.md
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md
+- **Cluster:** docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md
 
 ## Problem
 

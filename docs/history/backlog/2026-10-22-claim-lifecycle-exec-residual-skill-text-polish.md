@@ -5,6 +5,8 @@
 - **Workflow:** backlog
 - **Priority:** low
 - **Driving force:** correctness (each item is a stale pointer, mis-citation, or un-pinned referent that a verifier can follow into a wrong conclusion)
+- **Cluster:** docs/history/backlog/2026-10-22-claim-lifecycle-disposition-attribution-wording.md
+- **Cluster:** docs/history/backlog/2026-10-22-reverse-squash-guard-backlog-root-resolution-narrowing.md
 
 Items (each independently foldable; one landing may carry several):
 1. `agents/skills/maintenance/guards.md:16` still points the authoring payload's claim duty at `agents/skills/maintenance/prompt-templates.md`, which has held no AUTHORING CLAIM copy since the 2026-10-10 re-homing to `template-authoring.md`.

@@ -7,6 +7,13 @@ Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family r
 Status: open, Priority: medium, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r2.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r3.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-ambient-git-env-filter.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-failure-manifest-trace.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-nested-repo-toplevel-boundary.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-direction-overbreadth.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-git-probe-n-plus-one.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-prelock-head-window.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-runbook-preflight-disposition.md
 
 The transfer finally runs the post-run guard block (ownership normalization plus `_prevent_tracked_clobbers`' serial git spawns and full-history walks) before the manifest write with no exception containment: a SIGINT mid-walk (the migrate arm arms no signal bridge), a spawn OSError, or a decode error escapes the finally, so a fully-copied migration ends with no manifest, replacement priors neither restored nor discarded, and the interrupted-marker path never runs.
 

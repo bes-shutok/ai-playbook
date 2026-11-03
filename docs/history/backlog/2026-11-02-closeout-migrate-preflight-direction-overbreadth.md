@@ -7,6 +7,13 @@ Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family r
 Status: open, Priority: medium, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r1.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-finally-guard-exception-containment.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-ambient-git-env-filter.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-failure-manifest-trace.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-nested-repo-toplevel-boundary.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-git-probe-n-plus-one.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-prelock-head-window.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-runbook-preflight-disposition.md
 
 The pre-flight refusal is direction-blind: any would-carry path tracked at the target HEAD whose source bytes differ refuses, forward or backward, before the mirror-receipt machinery runs, so a receipt-proven replacement or a forward carry of the run's own edits to a tracked surface exits 2; the priced re-capture remedy then re-freezes the source bytes and the retry silently carries nothing.
 

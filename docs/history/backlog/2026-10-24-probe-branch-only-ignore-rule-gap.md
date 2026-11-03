@@ -10,6 +10,7 @@ Quarantine: 2026-10-27
 - **Driving force:** correctness
 - **Skill/step:** scripts/land_squash.sh, probe tracked-ignored pass (check-ignore --no-index --stdin over the branch delta)
 - **Cluster:** docs/history/plans/2026-10-23-ignored-audit-home-tracked-index-fence.md (the probe arm this row bounds)
+- **Cluster:** docs/history/backlog/2026-10-24-sweep-warning-line-separator-fragmentation.md
 
 ## Problem
 

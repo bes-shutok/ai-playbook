@@ -2,6 +2,7 @@
 
 Filed: 2026-10-23
 Status: open
+Cluster: docs/history/backlog/2026-11-03-dispatch-ladder-rearm-first-action-joint.md (same surface: the re-arm paragraphs in the scheduling contract and dispatch ladder; different defect class: wording precision versus emission reliability)
 
 Origin: Task 1 intermediate review and the Phase 3 r1 focused panel of plan 2026-10-23-loop-carrier-restore-surface-for-reduced-toolset-carriers (docs/history/plans/completed/2026-10-23-loop-carrier-restore-surface-for-reduced-toolset-carriers.md once archived) of plan 2026-10-23-loop-carrier-restore-surface-for-reduced-toolset-carriers
 

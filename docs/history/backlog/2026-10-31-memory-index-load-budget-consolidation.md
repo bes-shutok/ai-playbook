@@ -1,7 +1,7 @@
 # Backlog: the per-project memory index runs 2.25x over its load budget; operator decision requested on compress-and-index consolidation
 
 - **Filed:** 2026-10-31, memory-index-audit lane run 1 (recurring task, cadence 7 days)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-02-memory-index-load-budget-consolidation.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** audit-lane finding (self-serving evidence caveat: the witnessed truncation was seen in a consumer of this project's memory store - the maintenance scheduler sessions this repo runs - so the lane files it rather than silently treating it as its own)

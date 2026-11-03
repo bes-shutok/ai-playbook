@@ -1,7 +1,7 @@
 # Backlog: authoring closeout has no route for an already-landed branch
 
 - **Filed:** 2026-10-31, self-heal recovery during plan authoring closeout
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-02-empty-diff-closeout-route.md)
 Cluster: docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md (shared `gate-removal` closeout surface; the branch-only terminal-state defect remains distinct); docs/history/backlog/2026-11-01-adhoc-planless-worktree-closeout-arm.md (same gate-removal surface; the plan-less ad-hoc invocation gap remains distinct)
 - **Workflow:** backlog
 - **Priority:** high

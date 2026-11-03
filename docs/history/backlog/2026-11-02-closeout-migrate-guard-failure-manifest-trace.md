@@ -7,6 +7,13 @@ Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family r
 Status: open, Priority: low, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r1.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r3.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-finally-guard-exception-containment.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-guard-ambient-git-env-filter.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-nested-repo-toplevel-boundary.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-direction-overbreadth.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-preflight-git-probe-n-plus-one.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-prelock-head-window.md
+- **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-runbook-preflight-disposition.md
 
 Three guard failure paths print to stderr and otherwise vanish: the post-run guard's unreadable staged set and failed restore print a WARN (the run exits 0 and prevented_clobbers cannot distinguish no-rewind from rewind-found-but-undone), and the pre-flight's failed HEAD probe returns None - indistinguishable from absent-at-HEAD - so the path silently exits the offender scan exactly when git is unhappy.
 

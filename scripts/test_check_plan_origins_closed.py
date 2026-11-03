@@ -12,6 +12,7 @@ repo root, so no network and no real repo state are involved.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -1069,6 +1070,202 @@ class TestOriginCoverage(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("no longer top-level", proc.stdout)
         self.assertIn("2026-01-01-gone.md", proc.stdout)
+
+
+    # ------------------------------------------------------------------
+    # Byte-identical checkpoint-twin self-exemption
+    # (plan 2026-11-02-coverage-gate-checkpoint-twin-self-exemption):
+    # the self-exemption skips a scanned plan byte-identical to the
+    # declaring plan whose parent directory is exactly the active plans
+    # directory.
+    # ------------------------------------------------------------------
+
+    _TWIN_BODY = "\n\nshared body prose\n"
+
+    def _twin_text(self, origin: str) -> str:
+        return (
+            "# Plan: twin pair\n\n"
+            f"Backlog origin: docs/history/backlog/{origin}\n"
+            f"{self._TWIN_BODY}"
+        )
+
+    def test_byte_identical_twin_on_active_surface_exempt(self) -> None:
+        self._open_top(ALPHA)
+        text = self._twin_text(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA, header=text)
+        self._write(self.active / "2026-01-01-b.md", text)
+        self.assertEqual(
+            (self.active / "2026-01-01-a.md").read_bytes(),
+            (self.active / "2026-01-01-b.md").read_bytes(),
+        )
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("coverage gate clean", proc.stdout)
+        self.assertNotIn("2026-01-01-b.md", proc.stdout + proc.stderr)
+
+    def test_bytes_differing_twin_still_flags(self) -> None:
+        # A one-byte mutation in the body (outside the origins block)
+        # keeps the citer reported.
+        self._open_top(ALPHA)
+        self._active_plan(
+            "2026-01-01-a.md", ALPHA,
+            header=self._twin_text(ALPHA),
+        )
+        mutated = self._twin_text(ALPHA) + "x"
+        self._write(self.active / "2026-01-01-b.md", mutated)
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("2026-01-01-b.md", combined)
+        self.assertIn("first-landed wins", combined)
+
+    def test_byte_identical_non_active_twin_still_flags(self) -> None:
+        # Byte-identical twins on the non-active surfaces (completed,
+        # deferred, rejected) are still reported: the exemption's
+        # directory-exact scoping must never swallow the state-specific
+        # remedy. The pre-existing rglob double scan yields two conflict
+        # lines per twin (one under the active-pass default remedy, one
+        # under the twin's state-specific remedy), so this test asserts
+        # remedy presence per twin rather than a conflict count.
+        self._open_top(ALPHA)
+        text = self._twin_text(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA, header=text)
+        twin_completed = self._write(
+            self.plans_dir / "2026-01-01-twin-completed.md", text
+        )
+        twin_deferred = self._write(
+            self.active / "deferred" / "2026-01-01-twin-deferred.md", text
+        )
+        twin_rejected = self._write(
+            self.active / "rejected" / "2026-01-01-twin-rejected.md", text
+        )
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn(str(twin_completed), combined)
+        self.assertIn(str(twin_deferred), combined)
+        self.assertIn(str(twin_rejected), combined)
+        self.assertIn("first-landed wins", combined)
+        self.assertIn("supersede-or-explicit-revival", combined)
+        self.assertIn("revive-or-explicitly-supersede", combined)
+        self.assertIn("revival-is-a-new-decision", combined)
+
+    def test_directory_declaring_plan_keeps_path_only_exemption(self) -> None:
+        # A well-formed directory-shaped declaring plan (PLAN.md charter
+        # with a resolving origins line plus a tasks/ file with a
+        # `### Task N:` heading) placed outside the active plans scan
+        # surface: exit 0, the clean output naming no covering citer, no
+        # crash, no traceback, no content comparison (declaring bytes are
+        # unavailable for a directory operand). The vacuous arms (a bare
+        # directory refused by the plan-shape gate; a no-origins charter
+        # printing the trivially-clean line) are excluded below by
+        # asserting the clean line AND the absence of both refusal shapes.
+        self._open_top(ALPHA)
+        plan_dir = self.root / "fixture-dir-plan"
+        charter = (
+            "# Plan: directory twin\n\n"
+            f"Backlog origin: docs/history/backlog/{ALPHA}\n"
+        )
+        self._write(plan_dir / "PLAN.md", charter)
+        self._write(
+            plan_dir / "tasks" / "01-fixture.md",
+            "### Task 1: fixture task\n\n- [ ] do the fixture thing\n",
+        )
+        proc = self._run(
+            "--check-coverage", str(plan_dir),
+            "--active-plans-dir", "docs/history/plans",
+            "--plans-dir", "docs/history/plans/completed",
+            "--backlog-dir", "docs/history/backlog",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("coverage gate clean", combined)
+        self.assertNotIn("no origins", combined)
+        self.assertNotIn("Traceback", combined)
+        self.assertNotIn("unresolved", combined)
+        self.assertNotIn("plan operand rejected", combined)
+
+    def test_directory_operand_distinct_citer_still_flags(self) -> None:
+        # The None-sentinel arm: with declaring bytes unavailable (the
+        # directory operand), the path-only comparison alone applies, so a
+        # distinct bytes-differing active-surface citer is still reported.
+        self._open_top(ALPHA)
+        plan_dir = self.root / "fixture-dir-plan"
+        charter = (
+            "# Plan: directory twin\n\n"
+            f"Backlog origin: docs/history/backlog/{ALPHA}\n"
+        )
+        self._write(plan_dir / "PLAN.md", charter)
+        self._write(
+            plan_dir / "tasks" / "01-fixture.md",
+            "### Task 1: fixture task\n\n- [ ] do the fixture thing\n",
+        )
+        self._write(
+            self.active / "2026-01-01-b.md", charter + "\n"
+        )
+        proc = self._run(
+            "--check-coverage", str(plan_dir),
+            "--active-plans-dir", "docs/history/plans",
+            "--plans-dir", "docs/history/plans/completed",
+            "--backlog-dir", "docs/history/backlog",
+        )
+        self.assertEqual(proc.returncode, 1)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("2026-01-01-b.md", combined)
+        self.assertIn("first-landed wins", combined)
+
+    def test_declaring_outside_surface_twin_exempt(self) -> None:
+        # The motivating checkpoint-twin shape: a file-shaped declaring
+        # plan outside the scan surfaces with its byte-identical twin on
+        # the active surface passes the gate.
+        self._open_top(ALPHA)
+        text = self._twin_text(ALPHA)
+        declaring = self._write(
+            self.root / "worktree-plans" / "2026-01-01-a.md", text
+        )
+        self._write(self.active / "2026-01-01-b.md", text)
+        proc = self._run(
+            "--check-coverage", str(declaring.relative_to(self.root)),
+            "--active-plans-dir", "docs/history/plans",
+            "--plans-dir", "docs/history/plans/completed",
+            "--backlog-dir", "docs/history/backlog",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("coverage gate clean", proc.stdout)
+        self.assertNotIn("2026-01-01-b.md", proc.stdout + proc.stderr)
+
+    def test_path_equal_plan_stays_exempt(self) -> None:
+        # The declaring plan itself on the scan surface: the existing
+        # path-only skip is pinned beside the widened predicate.
+        self._open_top(ALPHA)
+        text = self._twin_text(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA, header=text)
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("coverage gate clean", proc.stdout)
+
+    @unittest.skipIf(
+        not hasattr(os, "geteuid") or os.geteuid() == 0,
+        "chmod 000 is still readable as root",
+    )
+    def test_unreadable_scan_surface_citer_keeps_existing_skip(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan(
+            "2026-01-01-a.md", ALPHA, header=self._twin_text(ALPHA)
+        )
+        citer = self._active_plan(
+            "2026-01-01-b.md", ALPHA, header=self._twin_text(ALPHA) + "\n"
+        )
+        citer.chmod(0o000)
+        try:
+            proc = self._check("docs/history/plans/2026-01-01-a.md")
+        finally:
+            citer.chmod(0o644)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("coverage gate clean", combined)
+        self.assertNotIn("2026-01-01-b.md", combined)
+        self.assertNotIn("Traceback", combined)
 
 
 class CoveredCompletionTest(unittest.TestCase):

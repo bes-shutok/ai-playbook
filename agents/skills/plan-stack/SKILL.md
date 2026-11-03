@@ -16,6 +16,8 @@ Use this skill when the user wants one plan to drive a linear series of pull req
 5. Give every task an independent acceptance witness: the branch containing its ancestors and current task, with later tasks absent, passes task-specific checks and the repository-standard suite. Name the observable output or assertion that proves the slice works.
 6. Use the standard single-file plan format and lifecycle from `plans`. Keep stack-specific definitions and constraints in the plan's Terms and Standing constraints; do not duplicate the `execute-plan` or GitHub workflow procedures.
 
+When separate repository plans split one agreed cross-repository stack, apply this task shape in every plan; a repository contributing one PR still uses one Task 1 with `Depends on: none` and that repository's configured `Base`.
+
 ## Required task content
 
 Each task includes:

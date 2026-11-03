@@ -5,6 +5,7 @@
 - Status: open
 - Priority: low
 - Age: new (2026-10-23)
+- **Cluster:** docs/history/backlog/2026-10-23-dirt-gate-tree-mode-contract-surface-stale.md
 
 ## What is owed
 

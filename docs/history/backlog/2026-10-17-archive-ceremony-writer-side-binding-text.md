@@ -10,6 +10,7 @@
 - **Skill/step:** `agents/skills/execute-plan/SKILL.md`, completion evidence
 - **Cluster:** docs/history/backlog/2026-10-18-acrem-certification-residuals.md (same surface: residuals tracked against the landed archive-ceremony plan)
 
+Cluster (missing-review-record class): docs/history/backlog/2026-10-28-missing-plan-review-series-pd5c64f3c-witness.md, docs/history/backlog/2026-10-06-done-boundary-review-candidates.md
 ## Problem
 
 Execute-plan's completion-evidence text does not ask the writer side to record the staging binding fields (`extensions.plan_identity`, `source_digest`, `verdict`) when a receipt or a marked reconstruction is produced. The archive-ceremony bound-receipt acceptance plan adjudicated the writer side out of scope: the acceptance universe reads staged plan-review sidecars, which already carry the fields through the staging flow, and exec-series receipts keep their filename path, so no landing dependency exists. This row tracks the optional standardization so the adjudicated residual has a named home instead of silent silence.

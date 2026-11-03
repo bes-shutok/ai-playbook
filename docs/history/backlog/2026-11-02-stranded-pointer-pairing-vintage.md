@@ -7,6 +7,10 @@ Cluster: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-
 Status: open, Priority: medium, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-stranded-doc-pointer-edit-orphan-code-review-r1.md; .ai-playbook/reviews/2026-11-02-stranded-doc-pointer-edit-orphan-code-review-r2.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-doc-fidelity.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-pin-hardening.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-probe-degradation.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-receipt-disposition-corrections.md
 
 The pairing text's vintage is unspecified and the probe reads the primary's working tree: a primary not yet fast-forwarded reports rows introduced by the landing as absent (r1's stale-working-tree shape), and uncommitted dirt that DELETES the landed row makes the check print "no docs/AGENTS.md index row references it (no pairing to strand)" while suppressing the WARN - the deletion sub-shape of the exact incident class, worker-verified, which can never generate the true-catch witness the admission protocol requires.
 

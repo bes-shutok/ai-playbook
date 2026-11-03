@@ -7,6 +7,10 @@ Cluster: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-
 Status: open, Priority: low, Class: record-class
 
 Witness: .ai-playbook/reviews/2026-11-02-stranded-doc-pointer-edit-orphan-code-review-r3.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-doc-fidelity.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-pairing-vintage.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-pin-hardening.md
+- **Cluster:** docs/history/backlog/2026-11-02-stranded-pointer-probe-degradation.md
 
 The landed EXEC-PROMPTS-PRUNE receipt carries two dispositions its own change cannot evidence: the "sibling Cluster pointer tidied" clause (no sibling pointer ever named the row; the tidy was vacuous and the clause over-claims an action) and the residual-routing clauses (the r1/r2 findings' row homes are the files this row family creates, not bytes of the landing). The receipt line itself is not rewritten post-landing (a receipt-ledger rewrite pair would trip the prune audit); this row is the corrections' durable home and the routing's traceable destination.
 

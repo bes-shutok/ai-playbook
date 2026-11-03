@@ -848,9 +848,19 @@ def _find_covering_citers(
     declaring: Path,
     backlog_dir: Path,
     completed_dir: Path,
+    declaring_bytes: bytes | None,
+    active_plans_dir_resolved: Path,
 ) -> list[tuple[Path, str]]:
     """Every OTHER plan citing ``origin_name`` across the scan surfaces,
-    as (plan path, citer state) pairs."""
+    as (plan path, citer state) pairs.
+
+    Beyond the declaring plan's own path, the self-exemption also skips a
+    scanned plan whose raw bytes equal the declaring plan's bytes when the
+    scanned plan's parent directory is exactly the active plans directory
+    (the checkpoint-twin shape: certification committed the declaring
+    bytes to main while the authoring worktree still declares them). A
+    twin on a non-active surface (completed, deferred, rejected) keeps its
+    state-specific report, and any bytes difference keeps the conflict."""
     citers: list[tuple[Path, str]] = []
     for directory, state in scan_dirs:
         if not directory.is_dir():
@@ -859,13 +869,36 @@ def _find_covering_citers(
             if plan.resolve() == declaring.resolve():
                 continue
             try:
-                text = plan.read_text(encoding="utf-8", errors="replace")
+                data = plan.read_bytes()
             except OSError:
                 continue
+            # Parity limit vs the pre-change text-mode read: lone-CR files
+            # no longer get universal-newline translation, so their
+            # "## " heading boundary is not found; per-line parsing is
+            # unaffected (splitlines normalizes CR and CRLF) and the
+            # direction of the delta is over-extraction (false conflict),
+            # never a silent pass.
+            text = data.decode("utf-8", errors="replace")
             names = extract_coverage_origin_basenames(
                 text, backlog_dir, completed_dir
             )
             if origin_name in names:
+                # Accepted residual (plan 2026-11-02-coverage-gate-
+                # checkpoint-twin-self-exemption): an ACCIDENTAL
+                # byte-identical duplicate in the active plans dir (a plan
+                # copied as a starting point whose origin line was never
+                # edited, cp/rename residue) is exempted here too; no
+                # content-based discriminator separates it from the
+                # checkpoint twin, and the pinned test forbids naming the
+                # twin in output. The duplicate surfaces only as repo
+                # hygiene, never as a gate conflict.
+                if (
+                    declaring_bytes is not None
+                    and active_plans_dir_resolved is not None
+                    and data == declaring_bytes
+                    and plan.parent.resolve() == active_plans_dir_resolved
+                ):
+                    continue
                 citers.append((plan, state))
     return citers
 
@@ -901,10 +934,21 @@ def run_check_coverage_mode(
         (completed_plans_dir, "completed"),
         (active_plans_dir / "rejected", "rejected"),
     ]
+    try:
+        declaring_bytes: bytes | None = plan_path.read_bytes()
+    except OSError:
+        declaring_bytes = None
+    active_plans_dir_resolved = active_plans_dir.resolve()
     conflicts = 0
     for name in names:
         for citer, citer_state in _find_covering_citers(
-            name, scan_dirs, plan_path, backlog_dir, completed_dir
+            name,
+            scan_dirs,
+            plan_path,
+            backlog_dir,
+            completed_dir,
+            declaring_bytes,
+            active_plans_dir_resolved,
         ):
             conflicts += 1
             remedy = REMEDY_BY_STATE.get(

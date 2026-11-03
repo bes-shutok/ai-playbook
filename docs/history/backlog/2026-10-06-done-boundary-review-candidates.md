@@ -35,6 +35,7 @@ Phase 3 r1 panel captures (all non-blocking, five lenses, zero blocking):
 - correctness#missing-run-deferral-arm-undetermined-at-terms (low): Terms' deferral arm keys only on the exits-non-zero shape.
 - design#ip-rows-restating-consumer-duty-text (low), design#plan-terms-vocabulary-dangling-reference (low), design#redundant-restatement-in-changed-spans (low), design#parity-test-name-encodes-superseded-contract (low): duplication/vocabulary/naming slivers.
 
+Cluster (missing-review-record class): docs/history/backlog/2026-10-28-missing-plan-review-series-pd5c64f3c-witness.md, docs/history/backlog/2026-10-17-archive-ceremony-writer-side-binding-text.md
 ## Triage verdicts (2026-10-16, plan 2026-10-16-done-emit-prelock-classification execution; one dated verdict per residual, superseded-by witness or kept)
 
 - F1/T-F1 (held-lock fixture resolves a run manifest): KEPT - no held-lock fixture composing marker plus `write_run_manifest_record` plus staged foreign file exists in either suite (probed 2026-10-16).

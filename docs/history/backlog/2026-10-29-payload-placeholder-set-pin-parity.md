@@ -9,6 +9,7 @@
 - **Driving force:** reliability (secondary: automation)
 
 Cluster: docs/history/backlog/2026-10-29-new-duty-span-pin-witnesses.md (shared surface: maintenance duty and payload pins in the same pins suite)
+- **Cluster:** docs/history/backlog/2026-10-29-new-duty-span-pin-witnesses.md
 ## Observed versus expected
 
 The maintenance pins suite carries placeholder-set pins for exactly two of the three dispatch payload blueprints: the execution blueprint's inner block set and the authoring body set (the `## Authoring child` span), both restated 2026-10-29 to include `{EFFORT_DIRECTIVE}`. The unblock payload (`agents/skills/maintenance/template-unblock.md`) carries the same class of fill-in spec (its set is `{EFFORT_DIRECTIVE}`, `{REPO_ROOT}` after the same change) with no set pin, and all three set pins are placement-blind: a silent removal of any payload's effort-directive line, or of the unblock legend line, fails nothing in the suite; the only guards are one-time plan validation greps.

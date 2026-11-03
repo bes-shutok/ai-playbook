@@ -691,7 +691,17 @@ correct but the commit fields carried a short 9-hex sha, and the entry again
 read as unresolved (the same degraded-grading warning); rewriting the two
 commit fields as full 40-char SHAs resolved the round with no other change,
 so the resolvable-shape rule covers the field values too: record full
-resolvable SHAs, never abbreviations.
+resolvable SHAs, never abbreviations. Fourth witness 2026-11-03 (playbook
+repo, an authoring closeout): the same degraded warning fired again from a
+seal drafted with short anchors. The first attribution - the review-plan
+skill's own seal example teaching the short shape - was falsified by the
+record re-derivation fence (0 hits for the cited value in the working tree
+and at HEAD; the example's placeholders are full-form 40-hex), and the
+re-derivation localized the short anchors to the working-tree cert corpus's
+older short-form exemplars plus the duty paragraph's silence on the
+HEX40 field shape; the skill-text fix is a duty-paragraph clause, tracked
+as a backlog item (2026-11-03-review-plan-seal-example-short-anchor.md,
+filed in corrected form).
 
 ## 33. Index-Only Deletions Silently Re-Sync From the Working Tree
 
@@ -845,7 +855,7 @@ text policy - and the em-dash added-lines gate refused at the closeout, after
 certification, forcing a fix commit plus a fresh certification round. A
 repository's mechanical text-policy gates (em-dash added-lines, public
 hygiene, pins) belong in the same pre-round sweep over the authored bytes.
-Re-witnessed 2026-11-02 (playbook repo, authoring run): the first review panel was launched before any pre-round gate run, and the panel spent three of its blocking findings on structural hard-refusals (classification tags, primary class anchors, off-taxonomy driving force) the pre-round gate refuses mechanically - a full-panel round spent on what one local gate invocation returns in seconds; the gate run now precedes every round launch.
+Re-witnessed 2026-11-02 (playbook repo, authoring run): the first review panel was launched before any pre-round gate run, and the panel spent three of its blocking findings on structural hard-refusals (classification tags, primary class anchors, off-taxonomy driving force) the pre-round gate refuses mechanically - a full-panel round spent on what one local gate invocation returns in seconds; the gate run now precedes every round launch. Re-witnessed 2026-11-03 (playbook repo, authoring run): the full readiness gate ran only after the fourth certification round and refused on a classification-tag rule, and a later fold's checkbox enrichment breached the per-item byte cap, each refusal forcing a fold plus a fresh certification round; the full-gate run belongs before the first certification round and after every fold commit.
 ## 37. Detached-HEAD Done Setup Needs an Explicit Lock Label
 
 `done_run.sh setup` derives its done-lock label from
@@ -1221,7 +1231,7 @@ the durable fix is an authoring-side operative duty, not another corpus note.
 
 **Rule:** derive the landing subject prefix from the verification machinery recognized landing-claim grammar (read the guard constant) before landing, not from the lane vocabulary. An unrecognized prefix forces hand-run verification (rev-list) and loses the guard coverage for every later walk that anchors on subject classes.
 
-**Example:** an authoring landing used `author: land ...`; the single-commit sweep refused the anchor (not a landing-claiming commit) and the run fell back to a manual rev-list count. A same-day landing using the guard own `plans: land ` prefix classified cleanly.
+**Example:** an authoring landing used `author: land ...`; the single-commit sweep refused the anchor (not a landing-claiming commit) and the run fell back to a manual rev-list count. A same-day landing using the guard own `plans: land ` prefix classified cleanly. Second witness 2026-11-03 (playbook repo, authoring run): a landing message prefixed `docs: land ...` passed the landing but printed the helper's grammar warning naming the recognized prefixes, and the remedy window had already closed at composition, leaving the guard coverage lost for later anchor walks (inert here only because no live landing claim existed).
 
 ## 51. Anchor a Scoped Range Edit on a Boundary Proven Unique
 
@@ -1478,6 +1488,21 @@ Recurred 2026-10-17 at about fifteen collapses: switching tool families and
 mixed parallel blocks did not break the loop, and delegation could not carry
 the decided call because the delegate lacked the looped tool family; the
 durable state write plus a shell-installed fallback carrier still landed it.
+Recurred 2026-11-03 (playbook repo): an automation-born session's
+automation-family emissions stayed suppressed past quota reset until the
+operator's directive arrived as a fresh operator message; the first
+post-directive automation call emitted fine and the surface never re-looped
+across the session's remaining hundreds of calls, pinning the recovery
+boundary at a fresh operator turn, not at elapsed time or internal
+re-derivation.
+Recurred 2026-11-03: the signature held across four consecutive assistant
+turns with the stand-down rule and the state-first record already in context,
+and narrating the remedy between listings did not restore emission; a bare
+continuation user turn failed to break it too. Emission returned only with
+the next fresh operator directive message, after which the recorded
+delete-plus-create landed on the first attempt. The witness adds two shapes:
+in-context rule text does not immunize against the loop, and the recovery
+boundary is a new operator directive, not any user turn.
 
 **See also:** #43 (the checkout a command runs in is state; this is
 its emission-surface analogue).
@@ -2557,9 +2582,9 @@ Second witness (2026-10-27, playbook repo, exec-mode ad-hoc run): the lock direc
 
 **Trigger:** any post-landing reconciliation or stale-checkout restore that runs a wholesale or containment-delta restore arm over the primary checkout, before declaring the checkout clean.
 
-**Rule:** after a restore-based reconciliation completes, read `git status --porcelain` (index plus worktree), never a working-tree diff alone: a restore arm can leave the pre-restoration bytes staged in the index while the worktree holds the fresh bytes, presenting later gates with unowned staged dirt that looks like a peer's staging violation. The remedy is a per-path `git restore --staged` after confirming the staged bytes equal an ancestor blob (the stale-checkout discriminator's half-synced arm), never a blanket reset.
+**Rule:** after a restore-based reconciliation completes, read `git status --porcelain` (index plus worktree), never a working-tree diff alone: a restore arm can leave the pre-restoration bytes staged in the index while the worktree holds the fresh bytes, presenting later gates with unowned staged dirt that looks like a peer's staging violation. The remedy is a per-path `git restore --staged` after confirming the staged bytes equal an ancestor blob (the stale-checkout discriminator's half-synced arm), never a blanket reset. A porcelain entry whose staged and unstaged diffs are both empty is index stat-staleness, not dirt: `git update-index --refresh` clears it; refresh before dirt attribution or before any gate whose pre-refusals read the porcelain snapshot.
 
-**Why:** witnessed 2026-10-19 (playbook repo): a landing's reconciliation receipt reported a wholesale restore plus per-path containment-delta restores with exit 1; the working tree matched the new tip, but the index still held the pre-landing ancestor blob of the restored log file, and the checkout read as carrying a foreign staged reversal until the index entry was cleared. The receipt's exit code was the only surface that flagged the block; the index residue surfaced only through the porcelain read. Witnessed again 2026-10-28 (playbook repo): a primary checkout carried the pre-landing freeze blob staged on a log path the landing had touched; `git log --find-object` resolved the staged bytes to an ancestor commit before the path was cleared, preserved as a labeled stash per the foreign-dirt preserve precedent rather than discarded.
+**Why:** witnessed 2026-10-19 (playbook repo): a landing's reconciliation receipt reported a wholesale restore plus per-path containment-delta restores with exit 1; the working tree matched the new tip, but the index still held the pre-landing ancestor blob of the restored log file, and the checkout read as carrying a foreign staged reversal until the index entry was cleared. The receipt's exit code was the only surface that flagged the block; the index residue surfaced only through the porcelain read. Witnessed again 2026-10-28 (playbook repo): a primary checkout carried the pre-landing freeze blob staged on a log path the landing had touched; `git log --find-object` resolved the staged bytes to an ancestor commit before the path was cleared, preserved as a labeled stash per the foreign-dirt preserve precedent rather than discarded. Third witness 2026-11-03 (playbook repo, pre-landing): the primary checkout showed a staged-looking `M` on a diagnostics log with empty staged and unstaged diffs on both sides; one `git update-index -q --refresh` cleared it, separating stat staleness from the content-divergence arms above before a landing's staged-state pre-refusal could misfire.
 
 ## 113. Wire the Guard to the Channel Where the Verdict Rides
 
@@ -3620,7 +3645,7 @@ done-lock.sh source read after two fixture debug cycles.
 
 **Rule:** before removal, re-derive liveness from the repository, not from git topology: under squash landing an authoring branch never advances, so an ancestor-of-main branch can be a live reserved surface and a non-ancestral branch can hold the only copy of certified work. Probe the open backlog rows and rolling-log entries citing the branch's plan slug, and check for a fresh authoring claim; inventory the worktree's gitignored homes (reviews home, authoring claims) for unlanded records and mirror them to the primary checkout; land unique durable artifacts (a plan file lands verbatim with the frozen-entry prune rider) before deleting. Removal then follows on a clean, re-derived-dead lane.
 
-**Why:** witnessed 2026-10-23 (playbook repo, operator-directed cleanup): a fully-merged-looking branch was the reserved surface of a still-open high-priority plan, and a sibling non-ancestral branch held a five-round-certified plan plus its untracked review series; both were recoverable only because the teardown ran the probes and mirrors first, and the rescue landing is `88a718cf8`.
+**Why:** witnessed 2026-10-23 (playbook repo, operator-directed cleanup): a fully-merged-looking branch was the reserved surface of a still-open high-priority plan, and a sibling non-ancestral branch held a five-round-certified plan plus its untracked review series; both were recoverable only because the teardown ran the probes and mirrors first, and the rescue landing is `88a718cf8`. Witnessed again 2026-11-03 (playbook repo, an authoring self-landing teardown), the removal gate's own ordering: `worktree_closeout_migrate.py gate-removal` is a pre-removal verification. It refuses on a missing target directory once the worktree is gone, and while the branch is checked out in the live worktree it rules "preserve the branch, delete only the worktree"; its branch-only accounting also needs `--migration-manifest` passed explicitly. Worktree removal therefore precedes branch deletion, and the post-removal branch deletion proceeds on the closeout's own authority rather than a re-run gate's blessing.
 
 **See also:** #167 (mirror untracked run records before the closeout stages run), #46/#104 (landing-shape mechanics); the durability arm is owned by the plans skill's certification-time checkpoint duty in the authoring round-close (its origin row covered by the landing commit).
 
@@ -3758,7 +3783,7 @@ Re-witnessed 2026-11-01/02 (done-setup-staging-doc-foreign-arrival-default execu
 
 **Rule:** run `done_run.sh finalize` from the checkout that holds the run's `docs/tmp/done-session/` scratch (the run worktree); the `--manifest <path>` alternative is dead guidance (finalize parses the flag but no arm reads it), so the owner-checkout rerun is the sole remedy; re-export the acquire-step lock tokens in the same command, since the release arms read them from env. The finalize's checkpoint-refresh arm resolves the done-session directory from cwd even when `DONE_RUN_MANIFEST` is exported, so a primary-checkout invocation refuses "no run manifest found for run_id" and degrades the closeout to warning-only skips that leave a resume-shaped checkpoint behind.
 
-**Why:** witnessed 2026-10-23 (playbook repo, exec mandate pick 1 closeout): the first finalize ran from the primary checkout with `DONE_RUN_ID` and `DONE_RUN_MANIFEST` exported and still refused the checkpoint refresh, remove, and manifest finalize (all warning-only, nothing mutated); re-running the identical command from the run worktree resolved the manifest and finalized cleanly. The `DONE_RUN_MANIFEST` env path resolves from any checkout, but the checkpoint arm's session-dir scan is cwd-relative, so the env alone never completes the closeout.
+**Why:** witnessed 2026-10-23 (playbook repo, exec mandate pick 1 closeout): the first finalize ran from the primary checkout with `DONE_RUN_ID` and `DONE_RUN_MANIFEST` exported and still refused the checkpoint refresh, remove, and manifest finalize (all warning-only, nothing mutated); re-running the identical command from the run worktree resolved the manifest and finalized cleanly. The `DONE_RUN_MANIFEST` env path resolves from any checkout, but the checkpoint arm's session-dir scan is cwd-relative, so the env alone never completes the closeout. Ordering corollary (second witness, 2026-11-03, an authoring closeout): the teardown gate passed and the worktree was removed BEFORE finalize ran, destroying the owner checkout's done-session scratch (manifest, marker) with it; finalize then ran from the primary on a missing manifest (the tolerated one-line note) and only the token-verified release completed the run - in any worktree placement, finalize precedes the worktree removal, or the manifest disposition happens before the teardown gate.
 
 **See also:** #65 (run a validator from the checkout owning its state; the same checkout-scoping family), the lock-export lesson at the env-per-shell rule (acquire exports are absent in later tool calls).
 
@@ -4173,7 +4198,7 @@ Third witness 2026-11-02 (playbook repo, exec resume carrier run): the landing r
 
 **Rule:** after a closeout helper returns, re-derive the landing from the default branch itself (the squash subject naming the plan slug, or the archived destination's presence and bytes) before recording any terminal receipt or reporting a hash; never read the helper's landing summary line as the witness. When the landing was deferred behind a peer's held merge lock, complete it by hand under a fresh acquire, and note the egress gate's ack shape: `--ack-egress` must name the detected egress's old path (never the pointer record), and no ack is needed at all when the plans-egress pointer record already sits in the anchored reviews home the gate reads.
 
-**Why:** witnessed 2026-10-26 (playbook repo, done closeout): finalize exited 0, marked the run manifest complete, released the done lock, and printed a landing summary naming the branch commit, while the squash itself had been skipped behind a live peer's merge lock; the default branch did not contain the archive until the landing was re-derived from main's history, confirmed absent, and completed by hand. Two landing retries then failed on the egress ack before the pointer record's evidence legs were recognized as already sufficient. Second witness 2026-11-02 (playbook repo, an exec run's plan landing): the converse arm is enforceable - once the evidence legs ARE satisfied, passing `--ack-egress` becomes a fatal `unused --ack-egress` refusal, so the ack is not a belt-and-suspenders flag but an exact-match argument; retry without it once the egress digest is already carried in the record pair.
+**Why:** witnessed 2026-10-26 (playbook repo, done closeout): finalize exited 0, marked the run manifest complete, released the done lock, and printed a landing summary naming the branch commit, while the squash itself had been skipped behind a live peer's merge lock; the default branch did not contain the archive until the landing was re-derived from main's history, confirmed absent, and completed by hand. Two landing retries then failed on the egress ack before the pointer record's evidence legs were recognized as already sufficient. Second witness 2026-11-02 (playbook repo, an exec run's plan landing): the converse arm is enforceable - once the evidence legs ARE satisfied, passing `--ack-egress` becomes a fatal `unused --ack-egress` refusal, so the ack is not a belt-and-suspenders flag but an exact-match argument; retry without it once the egress digest is already carried in the record pair. Third witness 2026-11-03 (playbook repo, an authoring run's finalize), the output-suppressed arm: the finalize's output stream was cut off mid-scan with no completion line ever observed, and the released lock state (`done-lock.sh status` reporting free, the run checkpoint gone) proved the release had completed, so no re-run was needed; completion is a lock-and-manifest property, not an output property, in both directions.
 
 **See also:** #240 (a lock token lost across shells; the token-fenced release arm), #243 (the cherry-pick re-land when the base was rewritten), #34 (base-tip and expected-tip argument semantics).
 
@@ -4334,7 +4359,7 @@ Third witness 2026-11-02 (playbook repo, exec resume carrier run): the landing r
 
 **Rule:** recover the hold from the lock directory's own `meta.env` (token, label, holder pid, repo_root): verify the recorded holder pid is dead, then release via the lock script's orphaned arm with only the lock directory path in env - the verified-dead gate is the release's authority, not a re-supplied token. A `tee` capture of the setup banner is not a sourceable export file (interleaved status lines abort `source` mid-file), so "re-export from your acquire output" fails when the only capture is the banner; the env-less orphaned release keyed by the recorded directory is the working path, and it works even after the worktree the hold keyed on is gone.
 
-**Why:** witnessed 2026-10-26/27 (playbook repo): an exec run interrupted between two worktree picks left both per-worktree done locks held by dead shells; sourcing the tee'd setup outputs failed on their non-export lines, and both holds released cleanly through the orphaned arm (holders verified dead, ages 8-9 hours) after their worktrees had been removed by other sessions.
+**Why:** witnessed 2026-10-26/27 (playbook repo): an exec run interrupted between two worktree picks left both per-worktree done locks held by dead shells; sourcing the tee'd setup outputs failed on their non-export lines, and both holds released cleanly through the orphaned arm (holders verified dead, ages 8-9 hours) after their worktrees had been removed by other sessions. Second witness 2026-11-03 (playbook repo): the arm released an authoring run's per-worktree hold whose holder had been dead for hours, before finalize-manifest completed the run (#387).
 
 **See also:** #166 (transfer the run inputs in before the done boundary setup - the same run's first refusal, whose failed setup releases its own hold), #43 (re-derive checkout state at every call).
 
@@ -4631,7 +4656,7 @@ The reverse-squash guard's archive-egress check resolves the reviews home inside
 
 **Why:** witnessed 2026-10-27 (playbook repo, the run-tmp-evidence-loss-sweep-scope-out landing): the receipt was written to the primary reviews home; two consecutive landings refused with the identical missing-evidence message; mirroring the two records into the worktree's `.ai-playbook/reviews/` passed the gate on the next attempt unchanged. Second witness 2026-10-31 (corrections-chain-recursion-refusal-and-pins landing): the backfilled egress record sat only in the primary home and the refusal repeated byte-identically; copying the same file into the worktree-side home (no edits, no receipt rewrite) passed on the next land, confirming the record-copy remedy over any receipt edit. Third witness 2026-11-01 (plan-prompts-stub-writer-forensics landing): with the record mirrored into both homes the refusal persisted because the demanded egress digest was absent from the record's content - the backfill append was `&&`-chained after a failing sha probe (the archived file exists only in the worktree pre-landing) and was silently skipped, so the mirror shipped stale bytes; verify the demanded digest is actually present (`grep -c <digest> <record>` in both homes) before retrying the landing, and note the evidence-satisfied ack becomes an unused-ack refusal (the ack is an alternative exit, not an additive leg).
 
-**See also:** the Worktree-first standard's Transfer-in mirror-skip paragraph; the resolve-at-use digest rule.
+**See also:** the Worktree-first standard's Transfer-in mirror-skip paragraph; the resolve-at-use digest rule. Fourth witness 2026-11-03 (playbook repo, the rolling-log-write-foreign-staged-remedy landing): the backfilled exec record sat only in the primary home and the refusal repeated; mirroring the identical file into the worktree-side home satisfied the evidence legs on the next attempt, and the still-passed `--ack-egress` then became the unused-ack refusal exactly as the third witness predicted - dropping the ack (and its trailer) landed clean; the run also hit the dead unpinned merge-lock hold, where `merge-release --from-holder` refused on the pin gate and the reclaim was a fresh `merge-acquire` plus same-shell `merge-release`.
 
 ## 288. A Baseline-Relative Closeout Migrate Reports a Stale-Baseline Strand as a Clean Zero
 
@@ -4661,7 +4686,7 @@ The reverse-squash guard's archive-egress check resolves the reviews home inside
 
 **Rule:** the pathspec form of commit takes each named path's working-tree content and never reads that path's staged entry, so on a foreign-dirty file it transplants the worktree's foreign deletions or edits into history even though the constructed blob sits in the index. When the worktree holds exactly the intended content, commit the worktree content deliberately (`git add <path>` plus the pathspec commit, then verify); when the worktree carries foreign dirt that must not be committed, the constructed index entry is not enough: make the worktree file hold exactly HEAD plus own edits for the commit's duration and re-apply the foreign dirt afterward, or plan the corrective commit up front. Either way, verify the landed bytes before building on them: diff `git show HEAD:<path>` against the intended content and read the commit's `--stat` deletions against the author's own hunks.
 
-**Why:** witnessed 2026-10-28 (playbook repo, a learn run over the shared primary checkout): the constructed blob carried HEAD plus the run's two lesson edits only, but the pathspec commit landed the worktree copy, transplanting a peer session's uncommitted deletions of two landed witness blocks into history (caught by the commit's `--stat` reading 4 deletions where the own hunks had 1); base-branch immutability made the repair a corrective restore commit (`f69f12577`) re-adding both blocks, and the intended corpus state was reached only across the two commits. Second witness 2026-10-31 (playbook repo): even the plain `git add <path>` plus pathspec commit arm carries the same hazard on a shared checkout - the index is shared, so the add swept a peer session's staged deletions of the same path into the commit; caught the same way (--stat deletions vs own hunks) and repaired with a corrective restore. Pre-commit mechanical check on a shared checkout: `git status --short` staged column and `git diff --cached -- <path>` before any add. Third witness 2026-10-31 (playbook repo, an exec carrier run's landing): even the staged-column check is insufficient when the sweep source is the WORKING TREE - a plain multi-path `git add` swept a peer session's uncommitted working-tree edits (an unlanded fix plus its fixtures and doc-registry rows) authored between the run's file reads and the add; the `--stat` read missed it because the swept paths were whole-file changes the run had legitimately touched, and the sweep surfaced only through a downstream test suite at the landed HEAD and the focused review panel. So the shared-checkout discipline is two checks, not one: immediately before the landing commit, re-derive the changed-file set (`git diff --cached --name-only`) and diff it against the hunks you authored (a foreign path or a foreign hunk inside a shared path goes back to its owner session before the commit); and after any landing on a shared checkout, run the touched surface's test suite at the new HEAD before declaring the landing done - the suite is the catcher when the diff read is not.
+**Why:** witnessed 2026-10-28 (playbook repo, a learn run over the shared primary checkout): the constructed blob carried HEAD plus the run's two lesson edits only, but the pathspec commit landed the worktree copy, transplanting a peer session's uncommitted deletions of two landed witness blocks into history (caught by the commit's `--stat` reading 4 deletions where the own hunks had 1); base-branch immutability made the repair a corrective restore commit (`f69f12577`) re-adding both blocks, and the intended corpus state was reached only across the two commits. Second witness 2026-10-31 (playbook repo): even the plain `git add <path>` plus pathspec commit arm carries the same hazard on a shared checkout - the index is shared, so the add swept a peer session's staged deletions of the same path into the commit; caught the same way (--stat deletions vs own hunks) and repaired with a corrective restore. Pre-commit mechanical check on a shared checkout: `git status --short` staged column and `git diff --cached -- <path>` before any add. Third witness 2026-10-31 (playbook repo, an exec carrier run's landing): even the staged-column check is insufficient when the sweep source is the WORKING TREE - a plain multi-path `git add` swept a peer session's uncommitted working-tree edits (an unlanded fix plus its fixtures and doc-registry rows) authored between the run's file reads and the add; the `--stat` read missed it because the swept paths were whole-file changes the run had legitimately touched, and the sweep surfaced only through a downstream test suite at the landed HEAD and the focused review panel. So the shared-checkout discipline is two checks, not one: immediately before the landing commit, re-derive the changed-file set (`git diff --cached --name-only`) and diff it against the hunks you authored (a foreign path or a foreign hunk inside a shared path goes back to its owner session before the commit); and after any landing on a shared checkout, run the touched surface's test suite at the new HEAD before declaring the landing done - the suite is the catcher when the diff read is not. Fourth witness 2026-11-03 (playbook repo, the wrong-location authoring run's completion pass on main): the sweep needed NO add at all - two explicit `git add <own-path>` calls followed by a bare `git commit` consumed the shared index wholesale, landing a peer session's PRE-STAGED one-line edit in a path the run never touched; caught on the spot by re-reading `git status --porcelain` in the same message before reporting, and repaired with an attributing revert (`33707a7f9`) so the owner re-lands deliberately. The pre-commit check generalizes: on a shared checkout, ANY commit - not only landings - must be preceded by `git diff --cached --name-only` against the session's own authored set.
 
 **See also:** #227 (a landing's recorded sha comes from the landing receipt: the verify arm); lesson 234's second witness (the sibling capture surprise: a pathspec commit landing the whole staged index); the index-blob construction practice for committing own hunks out of a foreign-dirty file.
 
@@ -5689,3 +5714,162 @@ Sixth witness extension to #65 (2026-11-02, execution run landing, three-way lan
 **Why:** witnessed 2026-11-02 (playbook repo, an authoring self-landing run): the run invoked `done_run.sh setup` directly (which printed the done-lock env and ran the residue sweep but never wrote `closeout-baseline.json`), and the closeout `migrate` refused until a late capture ran; the migration then completed with 1 file moved and 0 collisions, but the deviation is a recorded capture-failure the next auditor must weigh. The cheap pass is capturing at Phase 0 alongside setup.
 
 **See also:** #269 (the one-baseline capture-once discipline), #319 (a baseline can sit in the wrong checkout), the foreign-run-residue provenance check that governs recaptures into an existing session dir.
+
+## 377. A Peer Landing Can Commit a Stale-Byte Revert of a Just-Landed Shared File
+
+**Trigger:** after a landing on a shared skill/doc file, a peer lane's later landing touches the same path and its tree no longer carries the just-landed content - the clobber is COMMITTED history, not uncommitted dirt, so the lesson-249 phantom restore-from-HEAD does not apply (HEAD itself holds the reverted bytes).
+
+**Rule:** attribute before touching: read the peer commit's diff for the shared path in full - if the hunk is a pure revert of the own landing's bytes (carries none of the peer's own change), restore the path from the own landing's commit (`git checkout <landing-sha> -- <path>` + a scoped commit) and file a tracked backlog row naming the peer's still-unlanded amendment for its owning lane - never adopt, re-derive, or silently re-implement the peer's content; if the hunk mixes the peer's own change with the revert, land only the own-side restore and let the owning lane re-land its piece. Post-landing verification must therefore grep for the own landing's distinctive content at HEAD, not only `git status --porcelain` (the phantom check), because a clean status can coexist with committed clobber.
+
+**Why:** witnessed 2026-11-02/03 (playbook repo, private-project-skills landing ef52887c4): the auth-lane completion pass d4374b9b2 landed SKILL.md bytes that predated ef52887c4, reverting the whole project-local-skills sub-section; its diff carried none of the peer's own lead-clause amendment, so the restore (4dc1ffabe) came from the own landing's commit and the peer's unlanded amendment was tracked for its owner (row 2026-11-02-lead-clause-amendment-unlanded-skilled.md, c8b80956e) instead of being adopted. The initial restore attempt from HEAD would have committed the clobber.
+
+**See also:** #249 (post-landing stale-bytes phantom - the UNCOMMITTED sibling; this rule extends the post-landing status read with a HEAD-content grep for landing-touched shared files), #134 (stale-write-vs-fresh-read family), #108-adjacent attribution recipe (verify the reverse-diff names nothing the landing did not touch).
+
+Seventh witness extension to #65 (2026-11-02, execution run landing, main-rider digest correction): the completion record's egress digest is GATE-QUOTED, not pre-image-derived - the archive gate's refusal names the exact sha256 it matches against (bytes at the gate's own resolution point, not the obvious pre-image tip), and a rider minted from a self-derived pre-image sha costs one extra rider+rebase+re-land round-trip; mint the record with the value quoted verbatim in the refusal (or leave a placeholder and patch it from the refusal text) instead of re-deriving.
+
+## 378. Land Through the Sanctioned Landing Helper, Message Composed Before the Lock
+
+**Principle:** Family D adjacent (the owning machinery already prescribes the landing path; improvising it re-derives its guarantees worse).
+
+**Trigger:** an execution or ad-hoc run reaches the landing critical section holding a live merge lock and the executor assembles the landing from raw git commands (a manual squash, a `commit-tree`, a CAS `update-ref`) instead of the helper the run's template prescribes.
+
+**Rule:** run the landing through `scripts/land_squash.sh` (`probe` before the lock, `land-worktree` under it) with the final `--message` composed BEFORE lock acquisition. A hand-rolled landing skips the helper's built-ins (the parentage-gate pre-swap leg, the porcelain snapshot, path-exclusive restore on failure) and invites in-lock churn: this run's placeholder message forced a post-landing rewrite, and the obvious repair tool refuses there (`git commit --amend` on a detached empty squash commit fails with "would make it empty"), so the correction costs a second `commit-tree` + CAS round-trip. If a message correction inside the lock is ever unavoidable, `commit-tree` over the same tree with the same parent is the working repair; plan not to need it.
+
+**Why:** witnessed 2026-11-02/03 (playbook repo, maintenance exec run landing the shared-seam fence): the landing went in via manual squash + `commit-tree` + `update-ref` with a stub message (`3d2262b66`), the amend repair refused, and the message was rewritten through a second commit-tree CAS (`2c39a721f`) while holding the merge lock; `template-execution.md` lines 198/234/238 already named `land_squash.sh` as the path. A secondary effect of the ref-only landing: the primary checkout's index shows stale reverse-rename entries until touched; verify any post-landing staged entry is a byte-identical residue (0/0 diff) before restoring it, never blanket-unstage.
+
+**See also:** #65's witness family (landing-side disclosure and rider discipline), #373 (sha-verified unstage-restage for foreign staged entries - the same scoped-not-blanket restore rule on the primary).
+
+## 379. Pin a Plan's Change-Set Validation to the Landing Commit, Never to a Moving Ref
+
+**Trigger:** a plan task's acceptance or Validation Commands section states a change-set expectation as a diff against a branch ref (`git diff --stat main shows exactly ...`, `git diff --name-only main -- <paths>`), on a repository with parallel landing traffic.
+
+**Rule:** an exact-set diff expectation anchored to a moving ref (main, a base branch) races unrelated landings and fails on the conforming path even when path-scoped, because peer commits land inside the same paths between authoring and execution; the stable form is commit-scoped: `git show --name-only --format= HEAD` (or the recorded landing commit) checked against the task's own Files list. If a broader surface check is wanted, diff against the merge base captured at execution start and compare only membership of the task's own paths, never exact-set equality of the whole output. Reviews should treat a branch-anchored exact-set expectation as a blocking invalid-validation-claim finding on any repo with live peer landings.
+
+**Why:** witnessed twice in one session (playbook repo, 2026-11-02, the wrong-location-lead-clause authoring run): r1 staged the branch-anchored expectation `git diff --stat main shows exactly the two plan files changed` as blocking (main-side drift file already present); the r1 fold path-scoped the command but kept the main anchor, and r2's fresh panel re-falsified it with three drift files now inside the pinned paths (peer landings on the same day); only the r2 fold to `git show --name-only --format= HEAD` survived r3 certification. The recurrence across two rounds is the lesson: the fold fixed the scoping half while keeping the unstable anchor half.
+
+**See also:** #78 (diff-vs-main measures drift, not work: same root cause from the landedness side), #171 (a log-audit base is the true merge-base: the merge-base arm when a broader surface check is wanted).
+
+## 380. A Gate That Reports One Violation at a Time Mints a Round per Violation
+
+**Trigger:** a validation gate in a review or certification loop runs repeatedly against artifacts a session revises between runs, or its record contract (identifier chain, enum, filename rule) rejects shapes that later rounds legitimately produce.
+
+**Rule:** a gate that exits at its first defect converts N independent defects into N full review rounds, and every rejected-but-legitimate record shape forces callers to rediscover the accepted form by trial. Report the full violation set in one pass, each violation with its evidence, before exiting non-zero; when a record contract rejects a caller-produced shape, the report names the accepted forms in the same message. Pair the reporting with an authoring-time preflight that runs every pinned validation command once before the first review round, so unsatisfiable gates fail at authoring, not at certification.
+
+**Why:** witnessed across one harvest window (playbook repo, 2026-11-02 to 11-03): certification runs churned r4 through r8 on sequentially reported refusals; the run-id chain rule rejected coordinator-supplied identifiers in four of seven reviewed sessions; one round listed four separate record-side adaptations forced by closed enums and filename rules; a fold-missed second over-cap item re-blocked a plan at r3 after the prior round had passed. Re-witnessed 2026-11-03 (playbook repo, authoring run): the readiness gate reported one violation per run (a classification-tag refusal, then a 512-byte checklist-item breach), and the caller converged it in one pass only by pre-measuring every checklist row's UTF-8 byte length and fixing all over-limit rows in one fold. Durable home: docs/history/backlog/2026-11-03-certification-gates-sequential-reporting-churn.md.
+
+**See also:** #374 (budget byte balance at authoring: the preflight arm's landed precedent), #379 (pin change-set validation to the landing commit, never a moving ref), #321 (derive validator-gated artifacts from the owner's scaffold, never a recent record).
+
+## 381. A Fold's Landed-ness Is Its Diff, Never Its Message
+
+**Trigger:** a review fold lands as a commit plus record annotations (a commit subject, a record counts note, a seal close) that name what the fold changed, and the next certification round trusts those claims instead of the bytes.
+
+**Rule:** before recording a fold as landed, re-derive every claimed change from the fold's own diff, hunk by hunk; a commit message or record note asserting a change the diff does not contain is a false completeness claim, and the fold is not landed until the bytes carry it.
+
+**Why:** witnessed 2026-11-02 to 11-03 (playbook repo, an authoring run): a fold commit's subject claimed a scoped outcome bullet while its diff touched only the evaluation criteria, implementation notes, and a checkbox, leaving the Outcome section's unscoped sentence intact; two certification rounds later a fold-completeness check flagged the contradiction as a blocking finding, and the completion fold cost a full panel round. The record's counts note repeated the same claim, so the false completeness propagated across surfaces.
+
+**See also:** #36 (re-derive fold claims against the artifact they name), #85 (release-summary claims follow the witness).
+
+## 382. Fold a Stale Claim's Whole Class, Not Its Named Instance
+
+**Trigger:** a review finding names one stale or unscoped claim on a surface that carries several structurally identical claims (a headline summary, before/after paragraphs, numbered outcome bullets, evaluation criteria, done-when lines).
+
+**Rule:** the fold's scope is the claim class, not the named instance: enumerate every line of the same kind and fix all of them in the same fold, or the next round re-mints the identical finding one line away and burns a certification round.
+
+**Why:** witnessed 2026-11-02 to 11-03 (playbook repo, an authoring run): a plan's byte-identity exemption was summarized without its directory scoping on two adjacent summary surfaces; successive folds fixed each named line (an outcome bullet, then a gist summary) while the other kept the stale predicate, re-minting a blocking finding twice; the round that finally swept every summary-level line in one pass certified clean.
+
+**See also:** #36 (the gate run belongs at every fold commit), #381 (a fold's landed-ness is its diff).
+## 383. The Cap-Closure Seal Anchors the Certified Bytes, Not the Reviewed Bytes
+
+**Principle:** Family A (precision-critical values are re-derived at validation time: the corrections anchor leg verifies the declared digest against the seal's round-start digest, so the seal must bind the exact bytes the certification declares).
+
+**Trigger:** closing a loop through the cap-closure terminal shape, where the final round's sidecar `source_digest` is re-bound to the post-fold-plus-residual-section bytes while the seal entry for that round was drafted from the round's pre-fold review state.
+
+**Rule:** after the cap-closure plan edit, anchor the certified round's seal entry at the checkpoint carrying the certified bytes (round_start_commit and round_close_commit both resolve the blob whose bytes hash to the re-bound digest); the authoring-checkpoint duty supplies that anchor (a fresh checkpoint and exact-byte anchor after every later plan edit, consumed by the round-close seal). A seal drafted from the reviewed pre-fold state passes nothing: with the entry resolvable, the anchor leg grades the declared digest against the round-start digest and refuses the sanctioned re-bind as a bare rewrite; without the entry, the certification degrades to the exact-match rule with a named warning. The pre-fold review state still lives in the record's own metadata; the seal documents the certification, not the review.
+
+**Why:** witnessed 2026-11-03 (playbook repo, authoring run): the first seal draft anchored the round's reviewed pre-fold bytes, and the staging validator refused with a bare-rewrite message the moment the entry resolved; re-anchoring the entry at the cap-closure checkpoint (whose blob hashes to the re-bound digest) passed both the staging validator and the readiness gate, and the post-squash diagnostic's not-an-ancestor anchor checks held because the squash landing orphans authoring-branch commits by design.
+
+**See also:** #92 (the closure record rides the series' highest round with the digest re-bound), #378 (compose the landing message before the lock: the same compose-before-critical-section discipline for the seal).
+
+## 384. Once New Roots Converge, the Fix Loop Is the Finding Source
+
+**Principle:** Family D adjacent (the churn triggers own this exit; the discipline is recognizing the signature early instead of paying for it in rounds).
+
+**Trigger:** a review series whose staged findings stop shrinking while fold-defect classifications stay flat, under a constraint set (byte caps, per-item limits) that forces every fix into compressed rewrites of clause-dense text.
+
+**Rule:** read the convergence ledger per class, not the total: when new-root findings fall toward the fresh-panel floor while fold-defect findings hold flat, the fix loop has become the primary finding source, and the highest-value next action is a fold-time mechanism walk (exercise every amended check against its exact byte arithmetic and clause neighbors before committing the fold) plus the churn-trigger exit, not another round. Compression under caps is the mechanism: fixing a finding compresses prose, compression creates ambiguity, disambiguation regrows bytes, the cap forces splits and more compression, so each fold manufactures the next round's findings.
+
+**Why:** witnessed 2026-11-03 (playbook repo, five-round authoring series): new-root staged findings fell 7, 6, 4, 4 across r2-r5 while fold-defect findings went 2, 5, 5, 5; every blocker after r3 was introduced by a fix fold (an unsatisfiable derived formula, a tail measure that could never fire, an enumeration omission), both churn triggers fired, and the loop exited through the operator-authorized cap-closure terminal shape; the rounds a fold-time mechanism walk would have front-loaded are exactly the fold-defect class.
+
+**See also:** #380 (one-violation-per-run gates mint rounds: the same round-burning shape from the gate side), #381 and #382 (per-fold discipline: the diff is the landed-ness; sweep the claim class).
+
+## 385. Resolve a Checkpoint-Collision Rebase With the Replayed Commit's Bytes
+
+**Principle:** Family A (the rebase replay must stay self-consistent; the landing composes from the branch tip, never from an intermediate resolution).
+
+**Trigger:** an authoring landing meets its own certification-time checkpoint as a stale-base refusal: the base branch already carries the certified plan bytes (an add/add conflict on the plan path) while the authoring branch replays a history of fold commits onto them.
+
+**Rule:** resolve each replayed add/add conflict with the replayed commit's version of the file, not the base's: taking the base's certified bytes at the first conflict desynchronizes every later fold diff and forces conflict churn through the whole chain, while the branch-side resolution replays the chain self-consistently and the final tip still equals the certified bytes (identical content on both sides). Verify the outcome by the tip's digest (unchanged from the pre-rebase certified digest) and the branch-vs-base diff (only the landing's intended riders remain).
+
+**Why:** witnessed 2026-11-03 (playbook repo, authoring run): the certification-time checkpoint had landed the plan on the base; the stale-base rebase hit an add/add on the plan path at the first replayed fold; the branch-side resolution carried all 17 replayed commits through cleanly and the post-rebase tip hashed to the same certified digest, leaving a branch delta of exactly the covered-origin rider.
+
+**See also:** #92 (the digest re-bind the certified bytes carry), #379 (pin change-set expectations to commits, never moving refs).
+
+## 386. Run the Pre-Round Structural Probe Before Review Round One and After Every Fold Batch
+
+**Principle:** Family A adjacent (the probe is already mandated at the first-review boundary; the discipline is extending it to the fold boundary, where the certification path cannot see structure).
+
+**Trigger:** a plan-review series whose certification passes while mechanical readiness failures accumulate: the readiness gate short-circuits at the first failure class (stale sidecar digest, duplicate marker, missing tag), so each fix reveals the next, and the deep structural probes (executability byte limits, aggregate caps) never run at all until the sidecar finally binds.
+
+**Rule:** run `python3 scripts/plan_readiness.py --pre-round <plan>` (a) after the last plan-file write and before launching the first `review-plan` round, alongside the text-policy sweep, and (b) after every fold batch, before the next round or the certification attempt. The pre-round probe runs the structural set review-record-independently, so it sees everything the full gate's early returns would mask; a clean pre-round plus the certified round is the minimum certification input. Byte-limit splits are content restructuring: after splitting oversized criteria or dividing a task, re-run the probe AND re-certify (the restructure can strand work items across the new task boundary, born-GREEN cases under RED labels, and ownership drift for moved edits).
+
+**Why:** witnessed 2026-11-03 (playbook repo, authoring run): certification passed at r4 (ready=yes, zero blocking) but the gate then churned r5-r7 one failure at a time (duplicate `*(new)*` annotation, two missing class tags, a Ship-when-only class on a task checkbox), and the 512-byte/4096-byte executability limits surfaced only at r8, masked since r1 by the stale-sidecar early return; the repair split six items and divided a task, which produced three more blocking rounds (r9-r10) of boundary drift before the clean r11. One pre-round probe at authoring time would have front-loaded every structural failure into the pre-review sweep.
+
+**See also:** #384 (the fix loop as finding source: the same churn economics from the convergence-ledger side), #380 (one-violation-per-run gates mint rounds).
+
+## 387. After an Orphan Release, Complete the Landed Run With finalize-manifest
+
+**Principle:** Family B (ordering: the lock release and the run's manifest completion are separate legs; the corpus surface's drain disposition and the owner checkout's manifest are different records of one run).
+
+**Trigger:** resuming a run whose holder died and whose setup exports are lost beyond re-export, with the run's work already landed, at the point of closing the run.
+
+**Rule:** release the hold through the orphaned arm, then complete the run with `finalize-manifest --run-id <id>` (the classify-refusal remedy ladder's own completion tool); it marks the owner manifest complete and handles the checkpoint. Never source a session fence, and never re-enter a landed, drained run through a setup re-entry: a peer drain dispositions the primary-resolved manifest copy (`work-verified-landed`) while the owner checkout's copy stays open, and that disposition records the interregnum instead of doing the owner's physical closeout, which stays with the resumed owner session.
+
+**Why:** witnessed 2026-11-03 (playbook repo, an authoring closeout resumed after context compaction): the orphaned arm released the worktree hold (holder dead for hours), finalize-manifest completed the owner manifest, and a same-day scheduler-turn drain had already dispositioned the primary-resolved copy; both records described one run from two surfaces, and only the owner copy still owed a leg.
+
+**See also:** #261 (the orphaned arm this extends past the lock release), #259 (the drained run's closeout-duty split this witness sharpens).
+
+## 388. A Plan-Scoped Origin Exclusion Governs mark-covered's Whole-Block Flip
+
+**Principle:** Family A (identity: the covered-flip rider's bytes are governed by the plan's certified scope text, not by the tool's block-wide default).
+
+**Trigger:** a landing closeout runs the origins checker's mark-covered mode on a plan whose origins block names an origin the plan's certified text excludes, such as an out-of-scope sibling row.
+
+**Rule:** mark-covered flips every named open origin and has no partial mode; when the plan's certified gate delta or scope text promises an origin stays open, revert that row to HEAD bytes before the rider commit and stage only the certified flips, naming the partial flip in the commit message. A flip that missed the landing recovers as an additive follow-up commit naming the landing sha; the landing-residue sweep flags that post-landing shape, and the flag is the honest record, never a reason to leave the false open state standing.
+
+**Why:** witnessed 2026-11-03 (playbook repo, a plan-landing closeout): the landing carried no covered flip; the recovery ran mark-covered, which flipped the excluded sibling row too; reverting the sibling pre-commit left a one-row flip matching the plan's certified gate delta, and the sweep flagged the follow-up commit as expected.
+
+**See also:** #357 (gate the flip on its stdout lines, not its exit status).
+
+## 389. Acquire a Lock Once per Closeout Generation
+
+**Principle:** Family A (identity: one acquire mints the hold's generation identity; a second acquire mints a rival generation, it does not re-enter the first).
+
+**Trigger:** resuming a closeout in a fresh shell while a lock the same session acquired earlier is still on disk, and re-running the acquire verb to re-check it or under a different label.
+
+**Rule:** run the acquire verb exactly once per closeout generation; carry its exports through later shells from a scratch capture under the run's session directory (#35). The recorded holder is the acquiring shell, dead by the next tool call, so a later bare acquire takes the dead-holder steal path: it removes the lock dir and mints a fresh generation whose meta.env replaces the first, leaving the first token nowhere. Recovery after a clobber: verify the recorded holder PID is dead, release through the orphaned arm, re-acquire once with the exports captured in the same step, and corroborate the release against a fresh meta.env fingerprint before the critical section. Distinguish: a genuinely lost capture with the setup witness intact is #109's recovery arm, not this self-inflicted clobber.
+
+**Why:** witnessed twice in one closeout (2026-11-03, playbook repo, an authoring self-landing): a speculative done-lock acquire under a new label orphaned the setup generation (only its fingerprint had been held, now unrecoverable), and a speculative merge-wait-acquire did the same to the held merge-lock generation mid-landing.
+
+**See also:** #35 (exports die at the tool-call boundary), #109 (lost-capture arm), #261 (orphaned-arm recovery from meta.env), #387 (complete the run after the orphan release).
+
+## 390. A Late Closeout-Baseline Capture Marks the Run's Own Product as Pre-Existing
+
+**Principle:** Family D (state-first: the baseline records the run-start inventory, not a snapshot of whenever capture happens to run).
+
+**Trigger:** a worktree closeout whose Phase 0 closeout-baseline is missing, discovered at the commit run's migration refusal, after the run's gitignored artifacts already exist.
+
+**Rule:** when the baseline is genuinely absent from both the worktree and the primary session dir, reconstruct the run-start inventory instead of capturing late over the finished state: run capture, then remove this run's own product files (review record pairs, seals, the session-dir scratch) from the captured map so the delta-driven migration sees them as new, and record the late capture as a capture-failure deviation in the completion report. A raw late capture folds the run's product into the pre-existing set, the migration then skips exactly the artifacts it exists to transfer, and the stranding surfaces only later as a teardown-gate refusal.
+
+**Why:** witnessed 2026-11-03 (playbook repo, an authoring closeout): the Phase 0 baseline was missing everywhere; the commit run's refusal remedy named the primary session dir (also absent); a raw recapture would have marked the run's nine product files pre-existing and migrated none of them. The reconstructed map (nine entries removed, the deviation recorded in the baseline itself) migrated all ten expected files digest-verified on the next commit run, and the teardown gate consumed the migration manifest cleanly.
+
+**See also:** #212 (finalize owns the owner checkout's scratch; the same worktree closeout), the capture recipe's quoted-operand lesson (#24-family, closeout-baseline --dirs).

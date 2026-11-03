@@ -10,3 +10,5 @@
 `python3 scripts/machinery_inventory.py --check` fails with 2 regrowth failures on 2026-11-02: `scripts/quota_sources.py` and `scripts/reconcile_execute_plan_handoff.py`, neither carrying a machinery registry entry. Register both in `scripts/machinery_registry.json` (or witness their planned removal), restoring the check's green baseline.
 
 Witnessed 2026-11-02 during the interactive authoring run's survey (plan docs/history/plans/2026-11-02-shared-seam-prescription-fence.md, landed ccd293471); the run's scope did not own the registry, so the residual was recorded rather than repaired. The instance is distinct from the covered 2026-10-31 pair (release scripts): the regrowth class keeps re-arming with new unregistered scripts, which is the standing signal that script authors bypass registration.
+
+Witness 2026-11-03T14:05Z (interactive scheduler-turn survey, mode dual): `python3 scripts/machinery_inventory.py --check` still fails with the same 2 regrowth failures over the same two scripts (`scripts/quota_sources.py`, `scripts/reconcile_execute_plan_handoff.py`); row remains open, no repair witnessed since filing.

@@ -5,6 +5,7 @@ Status: open
 Priority: medium (cost/coherence; gated on a mature tmp tree actually paying the cost)
 Severity: Low
 Origin: code review r1 of plan `docs/history/plans/2026-11-01-docs-tmp-retention-redesign.md` (design-simplicity, architecture#per-arm-hold-reacquisition).
+- **Cluster:** docs/history/backlog/2026-11-02-docs-tmp-drain-stale-registration-snapshot.md
 
 ## Problem
 

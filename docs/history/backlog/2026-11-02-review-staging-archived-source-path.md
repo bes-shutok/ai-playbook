@@ -1,4 +1,4 @@
-Status: open
+Status: covered (docs/history/plans/2026-11-02-review-staging-archived-plan-source-identity.md)
 Priority: high
 Class: fix-class
 Origin class: self-serving

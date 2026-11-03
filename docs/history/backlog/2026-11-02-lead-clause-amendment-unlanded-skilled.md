@@ -20,3 +20,5 @@ The covering landing `e42a0ac786` and its completion pass `d4374b9b2` touched on
 ## Expected
 
 The lead Solution line gets the covering plan's amendment (scoped so it does not contradict the tracked project-local sub-section), landed by the session that owns that plan's records or a successor; verify against the covering plan's task text before landing.
+
+Cluster: docs/history/backlog/2026-11-02-wrong-location-lead-clause-r3-residuals.md (sibling on the wrong-location lead-clause surface of agents/skills/how-to-write-skills/SKILL.md)

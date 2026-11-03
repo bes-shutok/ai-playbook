@@ -18,6 +18,8 @@ The plan `docs/history/plans/2026-11-02-wrong-location-lead-clause-contradiction
 
 Plan text with no dangling comparators and a fallback arm that names a concrete carrier or reports unsatisfied instead of flipping the origin row's Status.
 
+Resolution note (2026-11-03): the race this row's residual 2 warned about materialized — the referenced plan executed and landed (ef52887c4) without this plan's lead-line bullet, this plan was archived with a disposition folding its deleted origin row, and the live SKILL.md lead-line amendment is owned by the sibling row `docs/history/backlog/2026-11-02-lead-clause-amendment-unlanded-skilled.md`. The plan-text residuals below are archive-trail context; no further work is owned here beyond the sibling row's fix.
+
 ## Suggested change
 
 Fix both residuals in a plan-update round: restate the expected set in the Run bullet directly, and narrow the fallback arm to "report the ask as unsatisfied by this plan and leave the origin row open (or re-point it at the referenced plan's tracked residual list)".
@@ -25,3 +27,5 @@ Fix both residuals in a plan-update round: restate the expected set in the Run b
 ## Dedup probe
 
 Searched open backlog rows for `fallback arm`, `commit bullet`, and `wrong-location-lead-clause`; no other open row covers these residuals. Source: overflow manifest of the r3 record above.
+
+Cluster: docs/history/backlog/2026-11-02-lead-clause-amendment-unlanded-skilled.md (sibling on the wrong-location lead-clause surface of agents/skills/how-to-write-skills/SKILL.md)

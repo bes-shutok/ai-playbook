@@ -8,6 +8,9 @@ Quarantine: 2026-10-27
 - **Class:** fix-class
 - **Driving force:** code-quality (r2 design lens findings of docs/history/plans/2026-10-18-review-runtime-sibling-module-deployment.md)
 - **Cluster:** docs/history/backlog/2026-10-21-runtime-deployer-test-pin-gaps.md; docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md; docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md (shared runtime deployment scripts and verifier)
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-deployer-test-pin-gaps.md
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md
+- **Cluster:** docs/history/backlog/2026-10-21-sync-runtime-scripts-prefixed-manifest-lines.md
 
 ## Problem
 

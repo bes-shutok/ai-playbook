@@ -5,6 +5,7 @@
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)
+- **Cluster:** docs/history/backlog/2026-10-23-dirt-gate-head-pinned-after-classification-window.md
 
 ## What is owed
 
