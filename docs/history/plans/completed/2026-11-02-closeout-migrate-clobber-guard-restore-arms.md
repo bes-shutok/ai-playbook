@@ -125,13 +125,13 @@ Files:
 Primary class anchors:
 - `_prevent_tracked_clobbers` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] `_prevent_tracked_clobbers` delivers unmerged-entry routing: given an owned path at index stages 1-3 (mid-merge), expects the report-only foreign-path line naming the unmerged state and zero restore spawns; given an index-absent owned path (staged deletion), expects the deletion restore arm still to run (discrimination via `git ls-files -u`, per lesson 370's index-membership oracle rule) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Both restore arms deliver reclassify-then-restore: given a peer restage between the classification read and the restore decision, expects report-only with the peer's bytes intact; given a restore subprocess failure or a post-restore re-read mismatch, expects a report line and no re-restore [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness: given any foreign staged shape (not in the ownership set), expects zero mutations of that entry [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the unmerged-routing pin and the interception pin (the r3 F6 subprocess-run interception restaging recipe) fail against the current guard [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: discriminate unmerged entries and share the reclassify-then-restore sequence in the clobber guard` [class: IMPLEMENTATION_REQUIRED]
+- [x] `_prevent_tracked_clobbers` delivers unmerged-entry routing: given an owned path at index stages 1-3 (mid-merge), expects the report-only foreign-path line naming the unmerged state and zero restore spawns; given an index-absent owned path (staged deletion), expects the deletion restore arm still to run (discrimination via `git ls-files -u`, per lesson 370's index-membership oracle rule) [class: IMPLEMENTATION_REQUIRED]
+- [x] Both restore arms deliver reclassify-then-restore: given a peer restage between the classification read and the restore decision, expects report-only with the peer's bytes intact; given a restore subprocess failure or a post-restore re-read mismatch, expects a report line and no re-restore [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness: given any foreign staged shape (not in the ownership set), expects zero mutations of that entry [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the unmerged-routing pin and the interception pin (the r3 F6 subprocess-run interception restaging recipe) fail against the current guard [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `fix: discriminate unmerged entries and share the reclassify-then-restore sequence in the clobber guard` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: new pins red before the fix, green after; full guard suite passes.
 
@@ -147,12 +147,12 @@ Primary class anchors:
 - `_prevent_tracked_clobbers` in `scripts/worktree_closeout_migrate.py`
 - `cmd_migrate` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] `cmd_migrate` delivers delivered-blob capture: given a run carrying migrated/replaced paths, expects an in-memory rel-to-delivered-blob map (blob shas via `git hash-object`, computed during the carry loop, before the manifest append) passed into the guard pass and recorded additively as `delivered_blob` on the run's own migrated/replaced manifest rows [class: IMPLEMENTATION_REQUIRED]
-- [ ] `_prevent_tracked_clobbers` delivers the tightened owned-vintage signature: given an owned path staged at a historical vintage whose blob differs from the rel's in-memory delivered blob, expects the rewind restore; given a staged blob equal to the delivered blob, expects leave-untouched with a report line; given no in-memory delivered blob for the rel (defensive absence rule, never a manifest read), expects the current vintage-only signature [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the new staged-equals-delivered fixture (rewound HEAD plus re-staged delivered bytes, authored new - no existing fixture holds this shape) fails against the current guard [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: restore owned rewound vintages only off the run's delivered blobs` [class: IMPLEMENTATION_REQUIRED]
+- [x] `cmd_migrate` delivers delivered-blob capture: given a run carrying migrated/replaced paths, expects an in-memory rel-to-delivered-blob map (blob shas via `git hash-object`, computed during the carry loop, before the manifest append) passed into the guard pass and recorded additively as `delivered_blob` on the run's own migrated/replaced manifest rows [class: IMPLEMENTATION_REQUIRED]
+- [x] `_prevent_tracked_clobbers` delivers the tightened owned-vintage signature: given an owned path staged at a historical vintage whose blob differs from the rel's in-memory delivered blob, expects the rewind restore; given a staged blob equal to the delivered blob, expects leave-untouched with a report line; given no in-memory delivered blob for the rel (defensive absence rule, never a manifest read), expects the current vintage-only signature [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the new staged-equals-delivered fixture (rewound HEAD plus re-staged delivered bytes, authored new - no existing fixture holds this shape) fails against the current guard [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `fix: restore owned rewound vintages only off the run's delivered blobs` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: the new fixture documents the semantic decision (naming the origin row's pricing and the r2-direction deviation recorded in Assumptions); suite passes.
 
@@ -167,12 +167,12 @@ Files:
 Primary class anchors:
 - `_prevent_tracked_clobbers` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] `_prevent_tracked_clobbers` delivers full walked-shape emission: given a staged new file absent at HEAD (the `head_blob is None` skip), expects a prevented-clobber-check line naming staged-new-at-target; given an owned path staged with brand-new bytes (the fall-past branch), expects the line naming staged-new-bytes-on-a-carried-path; given a staged blob equal to HEAD (including mode-only changes), expects a line naming the no-op restage [class: IMPLEMENTATION_REQUIRED]
-- [ ] The three doc surfaces match the emitted lines: the `_prevent_tracked_clobbers` docstring ("reported, never touched" span), the module header paragraph describing the post-run guard, and the `migrate` subcommand help - the help currently carries no claim, so the alignment there is an add of the claim text, stated as such [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the two silent-branch pins and the equals-HEAD emission pin fail against the current guard [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: emit report lines for every walked clobber-guard shape and align the doc claims` [class: IMPLEMENTATION_REQUIRED]
+- [x] `_prevent_tracked_clobbers` delivers full walked-shape emission: given a staged new file absent at HEAD (the `head_blob is None` skip), expects a prevented-clobber-check line naming staged-new-at-target; given an owned path staged with brand-new bytes (the fall-past branch), expects the line naming staged-new-bytes-on-a-carried-path; given a staged blob equal to HEAD (including mode-only changes), expects a line naming the no-op restage [class: IMPLEMENTATION_REQUIRED]
+- [x] The three doc surfaces match the emitted lines: the `_prevent_tracked_clobbers` docstring ("reported, never touched" span), the module header paragraph describing the post-run guard, and the `migrate` subcommand help - the help currently carries no claim, so the alignment there is an add of the claim text, stated as such [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the two silent-branch pins and the equals-HEAD emission pin fail against the current guard [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `fix: emit report lines for every walked clobber-guard shape and align the doc claims` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: no conflict, vintage, or new-bytes shape produces zero output; pins green; each doc surface read against the line it documents (docstring ↔ the walk's report lines; module header ↔ the guard's contract; migrate help ↔ the guard's foreign-work reporting).
 
@@ -187,12 +187,20 @@ Files:
 Primary class anchors:
 - `cmd_gate_removal` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] `cmd_gate_removal` delivers the prevented-clobbers summary: given a manifest whose adjudicated run's rows include non-empty prevented_clobbers, expects a report-only summary line naming the restored paths and the operator-decide note, no hold [class: IMPLEMENTATION_REQUIRED]
-- [ ] Prior-run prevented rows stay foreign: given prevented rows from prior runs' manifest rows, expects them reported as foreign, never attributed to the adjudicated run (deliberate in-plan addition matching the existing unattributable-rows report-only demotion shape, priced here because silent attribution of another run's prevented rows would misstate the adjudicated run's teardown evidence) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the teardown pin (a manifest carrying a prevented entry) fails against the current gate-removal [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: surface prevented clobbers at the gate-removal teardown decision` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Full readiness gate over the final assembled series exits 0 [class: REPOSITORY_TEST]
+- [x] `cmd_gate_removal` delivers the prevented-clobbers summary: given a manifest whose adjudicated run's rows include non-empty prevented_clobbers, expects a report-only summary line naming the restored paths and the operator-decide note, no hold [class: IMPLEMENTATION_REQUIRED]
+- [x] Prior-run prevented rows stay foreign: given prevented rows from prior runs' manifest rows, expects them reported as foreign, never attributed to the adjudicated run (deliberate in-plan addition matching the existing unattributable-rows report-only demotion shape, priced here because silent attribution of another run's prevented rows would misstate the adjudicated run's teardown evidence) [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the teardown pin (a manifest carrying a prevented entry) fails against the current gate-removal [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: surface prevented clobbers at the gate-removal teardown decision` [class: IMPLEMENTATION_REQUIRED]
+- [x] Full readiness gate over the final assembled series exits 0 [class: REPOSITORY_TEST]
 
 Evidence: pin green; `python3 scripts/plan_readiness.py <plan>` exit 0 over the final series.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-02-closeout-migrate-deletion-arm-recheck-parity.md: covered by this plan (Task 1; unmerged-entry routing via the ls-files -u discriminator, deletion arm retained for index-absent entries), origin row deleted in the execution landing.
+- docs/history/backlog/2026-11-02-closeout-migrate-owned-vintage-restore-signature.md: covered by this plan (Task 2; delivered-blob signature, delivered-equal staged bytes left untouched with a report line), origin row deleted in the execution landing.
+- docs/history/backlog/2026-11-02-closeout-migrate-foreign-staged-report-coverage.md: covered by this plan (Task 3; every walked shape emits, doc surfaces aligned), origin row deleted in the execution landing.
+- docs/history/backlog/2026-11-02-closeout-migrate-prevented-clobber-teardown-consumer.md: covered by this plan (Task 4; gate-removal prevented-clobbers report-only summary with prior-run-foreign attribution), origin row deleted in the execution landing.
+- Execution residuals captured as docs/history/backlog/2026-11-04-clobber-guard-phase3-review-residuals.md, docs/history/backlog/2026-11-04-gate-removal-prevented-attribution-pin-residuals.md, and docs/history/backlog/2026-11-04-clobber-guard-report-line-wording-residuals.md (all reviewed, non-blocking).

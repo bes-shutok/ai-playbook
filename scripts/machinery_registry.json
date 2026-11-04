@@ -546,6 +546,22 @@
     },
     {
       "disposition": "keep",
+      "id": "script:dispatch_admission.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks; the target-disjointness dispatch admission check the maintenance deciding turn consults before creating a child or beginning an in-session run of either lane (delivered by plan docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (archived at its landing; durable home: docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md) Tasks 1 and 4). Machinery admission (the repository guidelines' Machinery admission protocol): concrete incident = the witnessed serialization stand-downs, session records 2026-11-04 (0/1) and 2026-11-01 (0/2, fleet cap + unlanded peer runs), recorded in docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (the origin row covered, folded, and deleted by this plan's archive commit per the AGENTS.md fold-then-delete rule; this archived plan is the row's durable home); expected catch frequency = every dispatch decision whose candidate owned-path set intersects an outstanding run's recorded set, plus the disjoint candidates the retired gate wrongly refused (the capacity the zero-outstanding gate idled behind one live peer strand); false-positive cost = one deferred dispatch: a conservative verdict (an outstanding run with an empty recorded owned-path set or no done-setup manifest) or an exit-3 tool_error resolution parks the candidate behind the pending_dispatch record for one turn and re-consults, never a silent pass; promotion is immediate: the check is blocking at landing because it replaces an existing blocker in the same change, its paying sibling the retired zero-outstanding dispatch gate (removals row protocol:zero-outstanding-dispatch-gate), per the protocol's replace-an-existing-blocker arm; review date: 2027-02-02 (90 days from landing); removal criteria pre-registered for that review: demote or remove only with a complete firing census of admission refusals, and only in a change that keeps an equivalent dispatch admission standing",
+      "paths": [
+        "scripts/dispatch_admission.py"
+      ],
+      "tests": [
+        "scripts/test_dispatch_admission.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_dispatch_admission.py"
+      }
+    },
+    {
+      "disposition": "keep",
       "id": "script:doc_registry_validator.py",
       "kind": "script",
       "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
@@ -2072,6 +2088,50 @@
         "class": "origin-kept-set",
         "ref": "docs/history/plans/completed/2026-10-26-release-privacy-gate-diagnostics-and-replay.md"
       }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:doing-code-review-pre-post-scope-check",
+      "kind": "protocol",
+      "note": "Witness: docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md Task 1 (stale review posted after PR head advanced). Expected catch frequency is unknown (one witnessed instance). False-positive cost: posting pauses for one retry and a current full or verified-delta successor review. Non-blocking metadata and operator checks only. Review by 2026-12-02; remove if no continuing need or promote only after a true catch under the Machinery admission protocol.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_sources.py",
+      "kind": "script",
+      "note": "plain-imported sibling of the admitted quota pair (quota_governor.py and quota_window_probe.py both import RUNTIME_SOURCES from it); introduction commit 44f9499a545a5efb7bf84d2383b06d927b23d4b3 (execute-plan: land runtime-native maintenance quota adapters); incident witness docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (origin docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md)",
+      "paths": [
+        "scripts/quota_sources.py"
+      ],
+      "tests": [
+        "scripts/test_quota_governor.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:reconcile_execute_plan_handoff.py",
+      "kind": "script",
+      "note": "execute-plan handoff reconciler of record (the execute-plan skill's task-scope digest derivation and done-pending reconciliation resolve it); introduction commit 137c50ebda8f568e5a677a55e29df53fe887a97f (execute-plan: land digest-handoff-drift strand); incident witness docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (origin docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md)",
+      "paths": [
+        "scripts/reconcile_execute_plan_handoff.py"
+      ],
+      "tests": [
+        "scripts/test_reconcile_execute_plan_handoff.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md"
+      }
     }
   ],
   "removals": [
@@ -2329,6 +2389,42 @@
       "witness": {
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-10-18-release-merge-history-recovery.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:doing-code-review-pre-post-scope-check",
+      "kind": "protocol",
+      "note": "Pre-registered removal set: Task 1-2 PR scope capture, pre-post verification, retry, moved-scope recovery, and legacy-record fallback; review-staging base/head identity and moved-scope Metadata lines; companion maintenance pins; and both registry rows (entry and this removal). Review/sunset by 2026-12-02: remove if no continuing need, or promote only after a true catch under the Machinery admission protocol.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:zero-outstanding-dispatch-gate",
+      "kind": "protocol",
+      "note": "retired by plan docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (archived at its landing; durable home: docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md) Tasks 1 and 4: the maintenance SKILL.md Invariants gate that required zero outstanding unlanded runs before any new child dispatch is replaced by the target-disjointness admission consult (script:dispatch_admission.py, the paying sibling landed in the same change, cited as the gate's registry-removal row at the skill-text gate sites); witnessed incidents named in the same change: the serialization stand-downs of session records 2026-11-04 (0/1) and 2026-11-01 (0/2, fleet cap + unlanded peer runs), recorded in docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (the origin row covered, folded, and deleted by this plan's archive commit per the AGENTS.md fold-then-delete rule; this archived plan is the row's durable home); sunset = immediate: the replacement's promotion is immediate because it replaces an existing blocker in the same change (the Machinery admission protocol's replace-an-existing-blocker arm), so no warning-only phase stands between; review date: 2027-02-02, shared with the paying sibling's admission row",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:base-move-stand-down-trigger",
+      "kind": "protocol",
+      "note": "retired by plan docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (archived at its landing; durable home: docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md) Tasks 3 and 4: the worktree-first blueprint's landing rule that treated a mid-run base move (a stale-base refusal or a compare-and-swap old-value mismatch during landing composition) as a stand-down trigger is replaced by the bounded mechanical rebase duty (base churn) in agents/skills/execute-plan/worktree-first.md (rebase onto the moved tip inside the run worktree, refresh the base pin, re-run the pre-lock gates, retry; bounded at two failed passes per convergence cycle, exhaustion standing down with the pending_landing record written); the duty is procedural, adding no new refusal class, so the retirement removes a trigger without adding a blocker (the Machinery admission protocol's fewer-blockers arm) and carries no separate admission row; witnessed-incident note: no base-move stand-down was witnessed for this trigger, the change's cost basis is the serialization witness set (the 2026-11-04 0/1 and 2026-11-01 0/2 stand-downs in the origin backlog row named in the gate removal row), so this retirement is plan-directed; no protection is dropped with the trigger: the rebase churn's validator and pins signals stay live (the duty re-runs the pre-lock gate sequence on retry)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md"
       }
     }
   ],

@@ -1465,16 +1465,29 @@ def cmd_check_claim_fence(args):
 
 # --- check-single-commit: the landing-residue sweep -------------------------
 #
-# Landing-claim grammar (single definition; the plan document
-# docs/history/plans/2026-10-03-single-commit-per-lane-event.md "Terms" is its
-# prose home): a commit subject starting with "plans: land " is an authoring
-# lane event and one starting with "done: execute " is an execution lane
-# event. Every lane event lands exactly one main commit; closeout riders land
+# Landing-claim grammar (single definition; the prose home
+# docs/history/plans/2026-10-03-single-commit-per-lane-event.md "Terms" is
+# immutable history, so the operative classification lives in
+# LANDING_CLAIM_PREFIXES and the rename-boundary split below per plan
+# docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
+# Task 1: "plans: file " and "author: land " are authoring lane events, a
+# "plans: land " subject classifies per the rename-boundary split, and one
+# starting with "done: execute " is an execution lane event. Every lane event lands exactly one main commit; closeout riders land
 # as commits on the landing branch before the critical section, so any
 # follow-up commit on main after a landing is residue this sweep flags.
 
 # Trust-on-subject class: a non-landing commit whose subject carries a recognized prefix can terminate a residue window early and mask follow-up residue from the closeout receipts.
+# Authoring rename boundary (plan
+# docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
+# Task 1): "plans: file " is the post-rename authoring verb; "plans: land " is
+# retired for authoring and never adopted as an execution verb. A "plans: land "
+# commit predating the first "plans: file " commit in walked history classifies
+# authoring by verb; a post-rename one classifies by diff composition
+# (plans-only diff -> authoring; operative diff -> execution; inconclusive ->
+# authoring). The boundary resolves once into AUTHORING_RENAME_BOUNDARY (a sha
+# or None) and fixture code may set the module constant directly.
 LANDING_CLAIM_PREFIXES = (
+    ("plans: file ", "authoring"),
     ("plans: land ", "authoring"),
     ("done: execute ", "execution"),
     ("execute-plan: land ", "execution"),
@@ -1514,6 +1527,69 @@ def anchor_kind(subject):
         if subject.startswith(prefix):
             return kind
     return None
+
+
+# The resolved rename boundary: the first commit in walked history (newest
+# first) whose subject starts with "plans: file "; None before resolution,
+# and None when no such commit exists (pre-rename history: classify by verb).
+AUTHORING_RENAME_BOUNDARY = None
+_rename_boundary_resolved = False
+
+
+def resolve_authoring_rename_boundary(root):
+    global AUTHORING_RENAME_BOUNDARY, _rename_boundary_resolved
+    if _rename_boundary_resolved:
+        return AUTHORING_RENAME_BOUNDARY
+    try:
+        records = load_subjects(root, "-%d HEAD" % PREV_LANDING_MAX,
+                                "rename boundary walk")
+    except ToolError:
+        records = []
+    for sha, subject, _body in records:
+        if subject.startswith("plans: file "):
+            # newest-first walk: keep the oldest match, the chronologically
+            # first rename landing, the boundary pre-rename commits precede.
+            AUTHORING_RENAME_BOUNDARY = sha
+    _rename_boundary_resolved = True
+    return AUTHORING_RENAME_BOUNDARY
+
+
+def operative_paths(paths):
+    """The paths-based half of the diff-composition classifier (one
+    classifier serving the scan-time rename-boundary split and the
+    compose-time grammar-notice mismatch leg): the subset of ``paths``
+    outside the plan/history byte scopes."""
+    return [path for path in paths if not path.startswith("docs/history/")]
+
+
+def diff_is_plans_only(root, sha):
+    """True when the commit's changed paths are all plan/history bytes;
+    an empty diff is inconclusive and reads plans-only (authoring)."""
+    out = run_git(["git", "-C", root, "show", "--name-only", "--format=",
+                   sha], "diff composition read").decode("utf-8", "replace")
+    paths = [line for line in out.splitlines() if line.strip()]
+    return not operative_paths(paths)
+
+
+def classify_anchor(root, sha, subject):
+    """The anchor's lane kind under the rename-boundary split: a "plans: land "
+    subject classifies by verb before the boundary and by diff composition
+    after it; every other prefix classifies by verb unchanged."""
+    kind = anchor_kind(subject)
+    if not subject.startswith("plans: land "):
+        return kind
+    boundary = resolve_authoring_rename_boundary(root)
+    if boundary is None:
+        return "authoring"  # pre-rename history: classify by verb
+    try:
+        run_git(["git", "-C", root, "merge-base", "--is-ancestor",
+                 boundary, sha],
+                "rename boundary ancestor probe")
+    except ToolError:
+        return "authoring"  # the sha precedes the boundary: classify by verb
+    if diff_is_plans_only(root, sha):
+        return "authoring"
+    return "execution"
 
 
 def linkage_signals(message, anchor_subject, anchor_sha):
@@ -1639,7 +1715,7 @@ def cmd_check_single_commit(args):
             return 2
         resolved = resolve_anchor(root, args)
         anchor_sha, anchor_subject = resolved
-        kind = anchor_kind(anchor_subject)
+        kind = classify_anchor(root, anchor_sha, anchor_subject)
         if kind is None:
             print("fail: anchor %s is not a landing-claiming commit "
                   "(subject: %s)" % (anchor_sha[:12], anchor_subject))
@@ -1678,7 +1754,8 @@ def cmd_check_single_commit_batch(args, root):
         scanned, closed_early, bounds = sweep_window(
             root, anchor_sha, anchor_subject, until_sha, args.max_window)
         findings = classify_followups(
-            anchor_kind(anchor_subject), anchor_subject, anchor_sha, scanned)
+            classify_anchor(root, anchor_sha, anchor_subject),
+            anchor_subject, anchor_sha, scanned)
         print("anchor %s %s" % (anchor_sha[:12], anchor_subject))
         for sha, subject, cls, signals in findings:
             line = "finding %s %s [%s] linkage: %s" % (

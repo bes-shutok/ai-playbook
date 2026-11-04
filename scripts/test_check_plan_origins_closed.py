@@ -998,8 +998,12 @@ class TestOriginCoverage(unittest.TestCase):
         proc = self._mark("docs/history/plans/2026-01-01-a.md")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        # The writer emits the pending token by default (plan
+        # docs/history/plans/2026-11-04-execution-lane-authored-plans-
+        # misread-as-landed.md Task 3).
         self.assertIn(
-            "Status: covered (docs/history/plans/2026-01-01-a.md)", item
+            "Status: covered-pending-execution"
+            " (docs/history/plans/2026-01-01-a.md)", item
         )
 
     def test_mark_covered_flips_bullet_bold_shape(self) -> None:
@@ -1012,7 +1016,8 @@ class TestOriginCoverage(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         text = item.read_text(encoding="utf-8")
         self.assertIn(
-            "- **Status:** covered (docs/history/plans/2026-01-01-a.md)", text
+            "- **Status:** covered-pending-execution"
+            " (docs/history/plans/2026-01-01-a.md)", text
         )
         # The classification must now read covered (same-plan re-run stays
         # idempotent instead of re-flipping a corrupted line).
@@ -1055,6 +1060,127 @@ class TestOriginCoverage(unittest.TestCase):
         self.assertIn(f"skip: {BETA}: rejected", combined)
         self.assertIn(f"skip: {ALPHA}: closed", combined)
         self.assertIn(f"skip: {missing}: missing", combined)
+
+    def test_mark_covered_execution_flip_writes_legacy_token_and_executed(self):
+        # The execution branch (plan docs/history/plans/2026-11-04-execution-
+        # lane-authored-plans-misread-as-landed.md Task 3): the row flips to
+        # the legacy covered witness and the plan-header Executed field
+        # flips to yes (<recorded tip>).
+        self._open_top(ALPHA)
+        self._write(
+            self.active / "2026-01-01-a.md",
+            "# Plan: a\n\nExecuted: no\n\nBacklog origins (scope of record): "
+            f"`docs/history/backlog/{ALPHA}`.\n",
+        )
+        proc = self._run(
+            "--mark-covered", "docs/history/plans/2026-01-01-a.md",
+            "--execution-flip", "--recorded-tip", "abc123def456",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        self.assertIn(
+            "Status: covered (docs/history/plans/2026-01-01-a.md)", item
+        )
+        plan = (self.active / "2026-01-01-a.md").read_text(encoding="utf-8")
+        self.assertIn("Executed: yes (abc123def456)", plan)
+
+    def test_mark_covered_execution_flip_without_executed_line_is_noop(self):
+        # A field-less plan (the metadata-retrofit rule) flips no Executed
+        # line; the row flip still writes the legacy token.
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._run(
+            "--mark-covered", "docs/history/plans/2026-01-01-a.md",
+            "--execution-flip", "--recorded-tip", "abc123def456",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        self.assertIn(
+            "Status: covered (docs/history/plans/2026-01-01-a.md)", item
+        )
+
+    def test_mark_covered_sequence_pending_then_execution_flip(self):
+        # The r5 F1 sequence: the authoring flip writes the pending token;
+        # a same-witness execution flip then retokenizes the row to the
+        # legacy covered witness (never the silent already-covered pass).
+        self._open_top(ALPHA)
+        self._write(
+            self.active / "2026-01-01-a.md",
+            "# Plan: a\n\nExecuted: no\n\nBacklog origins (scope of record): "
+            f"`docs/history/backlog/{ALPHA}`.\n",
+        )
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        self.assertIn("covered-pending-execution", item)
+        proc = self._run(
+            "--mark-covered", "docs/history/plans/2026-01-01-a.md",
+            "--execution-flip", "--recorded-tip", "abc123def456",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        self.assertIn(
+            "Status: covered (docs/history/plans/2026-01-01-a.md)", item
+        )
+        self.assertNotIn("covered-pending-execution", item)
+        plan = (self.active / "2026-01-01-a.md").read_text(encoding="utf-8")
+        self.assertIn("Executed: yes (abc123def456)", plan)
+
+    def test_execution_flip_requires_recorded_tip(self):
+        # The r5 F3 pairing gate: a tip-less execution flip is a usage
+        # refusal, never a silent row-only half-state.
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._run(
+            "--mark-covered", "docs/history/plans/2026-01-01-a.md",
+            "--execution-flip",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--recorded-tip", proc.stdout + proc.stderr)
+
+    def test_classify_covered_pending_status(self) -> None:
+        # The pending token classifies covered (non-closed, plan-witnessed).
+        self._open_top(ALPHA, "covered-pending-execution"
+                              " (docs/history/plans/2026-01-01-a.md)")
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn(f"origin {ALPHA} unresolved", proc.stdout)
+        self.assertNotIn("closed in place", proc.stdout)
+
+    def test_covered_pending_without_existing_witness_fails_closed(self) -> None:
+        # Safety witness: the pending token admits nothing on its own — a
+        # witness naming no existing plan file keeps the straggler remedy
+        # exactly like the legacy token (plan-mode over an archived plan
+        # citing the origin).
+        self._open_top(ALPHA, "covered-pending-execution"
+                              " (docs/history/plans/2026-01-01-ghost.md)")
+        self._archived_plan("2026-01-01-citing.md", ALPHA)
+        proc = self._run("--plan",
+                         "docs/history/plans/completed/2026-01-01-citing.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"straggler: {ALPHA}", proc.stdout)
+        self.assertIn("fold a `## Disposition", proc.stdout)
+
+    def test_corpus_covered_pending_with_live_plan_quiet(self) -> None:
+        # Corpus verdict for the pending token: quiet while the covering
+        # plan is top-level-active, the no-longer-top-level warning once it
+        # completes (matching the plain-covered behavior).
+        self._open_top(ALPHA, "covered-pending-execution"
+                              " (docs/history/plans/2026-01-01-a.md)")
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        self._archived_plan("2026-01-01-old.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("no longer top-level", proc.stdout)
+
+    def test_corpus_covered_pending_without_live_plan_warns(self) -> None:
+        self._open_top(ALPHA, "covered-pending-execution"
+                              " (docs/history/plans/2026-01-01-a.md)")
+        self._archived_plan("2026-01-01-old.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("no longer top-level", proc.stdout)
 
     def test_corpus_covered_with_live_plan_quiet(self) -> None:
         self._open_top(ALPHA, "covered (docs/history/plans/2026-01-01-a.md)")

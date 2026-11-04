@@ -401,6 +401,40 @@ class BaseReflogAuditTest(unittest.TestCase):
             self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
             self.assertTrue(proc.stdout.rstrip().endswith("OUTCOME: pass"))
 
+    def test_landed_receipt_plans_file_subject_clean_and_empty(self):
+        # The renamed authoring verb joins LANDING_PHRASED's authoring
+        # coverage (plan docs/history/plans/2026-11-04-execution-lane-
+        # authored-plans-misread-as-landed.md Task 2): a content-bearing
+        # `plans: file <slug>` landing audits clean, and an empty-tree
+        # authoring landing under the verb produces the empty-receipt row.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            (root / "docs" / "history" / "plans").mkdir(parents=True)
+            (root / "docs" / "history" / "plans" / "filed-plan.md").write_text(
+                "# Plan: filed\n", encoding="utf-8")
+            git(root, "add", "-A")
+            git(root, "commit", "-q",
+                "-m", "plans: file filed-plan (authored plan; execution pending)")
+            proc = run_audit("landed-receipt", "--repo", str(root),
+                             "--base-branch", "main")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(receipt_rows(proc), [])
+            self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(Path(tmp) / "repo")
+            base = git(root, "rev-parse", "HEAD")
+            empty = commit_tree(root, "plans: file fixture",
+                                head_tree(root), base)
+            git(root, "update-ref", "refs/heads/main", empty)
+            proc = run_audit("landed-receipt", "--repo", str(root),
+                             "--base-branch", "main")
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertEqual(
+                receipt_rows(proc),
+                ["empty-receipt: %s plans: file fixture (repair: a corrective"
+                 " commit naming the content-bearing sha, never an amend)"
+                 % empty])
+
     def test_landed_receipt_root_commit_indeterminate(self):
         # A landing-phrased root commit inside the window: it has no parent,
         # so its receipt cannot be checked; the root is named and the run is

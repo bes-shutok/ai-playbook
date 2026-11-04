@@ -110,6 +110,8 @@ CONTEXT CHECKPOINTS, a standing duty for every step block of this run: after eac
 
 TASK-BOUNDARY CHECKPOINT, a standing duty at every green task boundary of this run: the duty at every green task boundary is the durable checkpoint state (the task's plain boundary commit landed with its `task_boundary:` manifest row written, the session manifest updated, the execute-plan Step 1.4 verification gate passed), so host-managed or adapter-directed compaction can only land on resumable state; follow the active runtime adapter for context actions; the manifest (workflow_state, task checkboxes, execution record) is the resume source of truth, never the transcript summary; the boundary telemetry record duty is unchanged.
 
+CANDIDATE DERIVATION (mirror; the owning rule is D1's Executed-field dispatch input bullet in agents/skills/maintenance/decisions.md): the execution candidate set derives from the plans root plus execution claims plus the plan-header `Executed:` field, never from landing-commit surface; the maintenance lane's `done: execute` closeout flips the executed plan's `Executed:` field (to `yes (<recorded tip>)`, the pre-squash branch tip sha) in its completion-archival text, both execution lanes owning their terminal-state writer.
+
 Execute {some_plan} via the execute-plan skill: inside the run's own ad-hoc
 worktree that the PER-EXECUTION WORKTREE duty created before any plan work,
 on the worktree's own branch (the worktree's own branch already satisfies
@@ -155,21 +157,25 @@ locks are keyed per-worktree on --show-toplevel,
 so the run's done lock is its own (stand down if a peer holds that worktree's
 done lock); commit only this session's files (leave foreign staged files and
 peer changes alone); the merge landing lock stays repo-keyed and is acquired
-at the landing critical section as prescribed. Finally squash merge to the repository's default branch (the canonical Base-branch resolution rule resolves the per-project base for worktree creation and the execute-plan and plans landings; the default branch is this payload's landing target, and equals the resolved base in a default-branch-integration project; a
+at the landing critical section as prescribed (by the landing helper itself,
+never held by the session). Finally squash merge to the repository's default branch (the canonical Base-branch resolution rule resolves the per-project base for worktree creation and the execute-plan and plans landings; the default branch is this payload's landing target, and equals the resolved base in a default-branch-integration project; a
 checkout-flow project's resolved base differs from this landing target, and
 the mismatch guard in the landing critical section fails the landing closed
 naming both refs):
-first acquire the merge landing
-lock (bash scripts/done-lock.sh merge-wait-acquire --label execution-final-merge
---max-wait 300; on timeout (the outcome contract's `OUTCOME: fail`) take the
-lock-acquire timeout path: stand down
+the landing composes and invokes its helper WITHOUT holding any merge lock
+(holding one across the helper invocation is the contention the helper's
+bounded wait reports; the session never acquires a merge lock itself,
+never holds MERGE_LOCK_DIR/MERGE_LOCK_TOKEN exports, and runs no release arm:
+the helper acquires the merge landing lock itself at the swap critical
+section, per the Worktree arm below, and releases it on every exit path; on
+the helper's lock-contention `OUTCOME: fail` after its bounded wait take the
+deferred-landing path: stand down
 keeping the branch and, before any report, write the deferred-landing record
 and note per the deferred-landing record duty below; an `OUTCOME:
 indeterminate` (ambiguous holder) or `OUTCOME: tool_error` result, including
 a run with no final `OUTCOME:` line, takes the same stand-down path and is
-reported, never read as acquired) and hold
-the acquired MERGE_LOCK_DIR/MERGE_LOCK_TOKEN exports across the whole landing:
-inside the critical section the landing is worktree-complete, the rebase onto the current default tip inside the run worktree and
+reported, never read as landed):
+the composition runs pre-lock, the rebase onto the current default tip inside the run worktree and
 the squash merge there build the landing, the primary checkout receives only
 the final squash commit through one compare-and-swap ref update, the landing
 never writes the primary checkout's index or working tree, and staging
@@ -197,7 +203,16 @@ landed_path. `Severed-ancestry landing rule (diff-based landing):` prescribing, 
 worktree): the helper invocation is the only sanctioned composition, and the failure-path prose below never authorizes a hand-composed equivalent; when the repository-local helper is absent, record a deployment gap naming the probed paths and defer the landing (no alternate helper copy or hand-composed substitute is authorized). The landing is one mechanical operation, the helper invocation
 `bash scripts/land_squash.sh land-worktree --branch <branch> --expected-tip <sha>
 --message <text>` (plus `--expected-base <sha>` whenever the run records a base
-pin) run under the acquired merge lock; the helper owns the class's gates (tree
+pin) run with NO caller-held merge lock (the helper acquires the merge lock
+itself at the swap critical section: its bounded-wait `merge-wait-acquire`
+spans the parentage verification, the compare-and-swap, the post-landing
+gate, and the reconcile tail, releasing on every exit path, while the rebase
+duty and the pre-lock gates (base freshness, the prompt-log prune audit, the
+composition, the tree equality, the plans-egress check-archive) run before
+the lock in this worktree; holding a merge lock across the invocation is the
+contention the bounded wait reports; lock span narrowed 2026-11-04, plan
+docs/history/plans/2026-11-04-parallel-execution-landing-serialization-blockers.md
+Task 2); the helper owns the class's gates (tree
 equality between the squashed branch tip and the landing commit, base freshness
 (the reverse-squash guard's check-landing), the parentage pre-swap and
 post-landing invocations, and the two-value compare-and-swap ref update of the
@@ -207,8 +222,9 @@ checkout staying a landing-gate violation. Before the invocation the run's own
 duties hold as policy: the pre-landing gate set (the PII check + hygiene scan
 (exit 0 required), the peer-byte guard, and the gmail-author check) runs here
 as this blueprint's own pre-landing duty, and any rebase onto a moved default
-tip runs per the landing step's implementations in the Worktree-first standard
-(agents/skills/execute-plan/worktree-first.md), and a sanctioned rebase ends by
+tip runs per the bounded mechanical rebase duty (base churn) in the
+Worktree-first standard (agents/skills/execute-plan/worktree-first.md), and a
+sanctioned rebase ends by
 refreshing the recorded base pin per the standard's
 refresh duty (the manifest's run_base and the claim's `base:` line) so the
 helper's parentage base arguments find no mismatch; every landing shell pipeline
@@ -217,7 +233,14 @@ the landing before any staging or ref move. The landing routes solely on the
 helper's outcome contract (the final `OUTCOME:` line per
 scripts/OUTCOME_CONTRACT.md): `OUTCOME: pass` keeps the landing (a kept
 post-landing origin divergence carries only the gate's informational note:
-the divergence predates the landing, with no operator follow-up); `OUTCOME: fail` takes the deferred-landing path
+the divergence predates the landing, with no operator follow-up); an
+`OUTCOME: fail` whose output names a base move (the check-landing stale-base
+refusal, or the compare-and-swap old-value mismatch naming both the verified
+base tip and the value the ref now reads) is not a stand-down trigger: it runs
+the bounded mechanical rebase duty (base churn) per
+agents/skills/execute-plan/worktree-first.md, and the exhaustion arm
+takes the deferred-landing path below; any other `OUTCOME: fail` takes the
+deferred-landing path
 keeping the branch and worktree, writing the deferred-landing record and note
 per the deferred-landing record duty below; `OUTCOME: indeterminate` and
 `OUTCOME: tool_error` stop and report, never read as pass or refusal, and a run
@@ -269,25 +292,20 @@ evaluating shell command text from raw path bytes is prohibited;
 `--base` without path operands is a command-construction usage error): a dirt regression finding is remedied in place (the
 regressed file is restored from HEAD and the merge summary carries one line
 per restored file naming the regression); it is NOT a gate failure and does
-not trigger the release/keep-branch abort; the gate reports the outcome contract's four outcomes (scripts/OUTCOME_CONTRACT.md, final `OUTCOME:` line): a finding is fail (remedy in place as above); an indeterminate or tool-error result stops the merge step (do not delete the branch, do not report the merge complete; take the gate-failure release arm: release via merge-release-repo with the acquired exports, keep the branch, and report): report the gate's lines and re-derive the landed tree from disk outside the held critical section before retrying; only a determinate pass or fail verdict proceeds to branch deletion; a run that emits no final `OUTCOME:` line is tool error under the contract and stops the merge step the same way; then verify the landed commit on the repository's default branch:
+not trigger the release/keep-branch abort; the gate reports the outcome contract's four outcomes (scripts/OUTCOME_CONTRACT.md, final `OUTCOME:` line): a finding is fail (remedy in place as above); an indeterminate or tool-error result stops the merge step (do not delete the branch, do not report the merge complete; take the gate-failure arm: keep the branch, and report; no session-held merge lock exists to release, the helper's swap lock lived only inside its invocation): report the gate's lines and re-derive the landed tree from disk before retrying; only a determinate pass or fail verdict proceeds to branch deletion; a run that emits no final `OUTCOME:` line is tool error under the contract and stops the merge step the same way; then verify the landed commit on the repository's default branch:
 run the landed-commit test for the run's archived plan path
 (`git cat-file -e refs/heads/<default>:<archived-plan-path>`); when it passes,
-the landing is confirmed and the critical section continues to the branch
-deletion and release; when it fails (a deferred, refused, or silently dropped
+the landing is confirmed and the closeout continues to the branch
+deletion; when it fails (a deferred, refused, or silently dropped
 squash), clean any conflicted squash state with `git reset --merge` first, then
 write the deferred-landing record and note (the deferred-landing record duty
-below) before releasing the lock via `merge-release-repo` with the acquired
-exports, keep the branch and any worktree, and end the session chaining
-nothing; on the pass path, the branch deletion; any gate failure releases via
-merge-release-repo with the acquired exports, keeps the branch, and reports;
-release the lock only after the branch is deleted. After the release, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md) (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record); the landing closeout ends only when that reconciliation is verified or a named block is recorded. The closeout records the reconcile receipt (the invocation's exit code and its row summary in the run's session notes); a skipped or failed reconcile fails the closeout. If any release
-attempt itself fails (the gate-failure release included, not only the final
-post-deletion release; read through the outcome contract: `OUTCOME: fail` and
-`OUTCOME: tool_error` both take this fallback, and a release run with no
-final `OUTCOME:` line is tool error under it), re-export the lock variables
-from your acquire output
-and retry that release once, then explicitly report the stranded lock label
-(execution-final-merge) and MERGE_LOCK_DIR. If the
+below), keep the branch and any worktree, and end the session chaining
+nothing (no session-held merge lock exists to release); on the pass path, the
+branch deletion; any gate failure keeps the branch and reports. Reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md) (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record); the landing closeout ends only when that reconciliation is verified or a named block is recorded. The closeout records the reconcile receipt (the invocation's exit code and its row summary in the run's session notes); a skipped or failed reconcile fails the closeout. If the helper's
+exit-path release warned of a failed swap-lock release (the warning line names
+the lock dir; the session ran no release arm, so this is the only
+stranded-lock class left), report the stranded lock label (land-squash-swap)
+and the MERGE_LOCK_DIR that warning names. If the
 execution ran in an ad-hoc worktree, then before removing that worktree, move
 every review staging doc and .stats.json sidecar the run wrote under the
 worktree's .ai-playbook/reviews/ into the primary checkout's .ai-playbook/reviews/ (.ai-playbook/reviews/
@@ -300,7 +318,7 @@ duty's delete arm, and may then run the claim gateway's sweep arm
 (`bash scripts/execution_claim.sh sweep --session <id>`) to clear peer
 claims the same closeout shape has already spent. Deferred-landing
 record duty (applying on the gate-failure path, the verification-failure path,
-and the lock-acquire timeout path alike): write `pending_landing` with
+and the lock-contention path alike): write `pending_landing` with
 "lane": "execute" filled from the run's own facts (the plan path, the branch
 name, the branch tip sha, the worktree path when one exists, the archived plan
 path as landed_path, the recorded-at timestamp, and the deferral reason in
@@ -308,8 +326,10 @@ note) as one targeted state edit addressed to the primary checkout's
 `.ai-playbook/scheduler-state.json` (the recorded primary checkout root in an
 explicit-rooted form, the claim duty's precedent; a cwd-relative edit from an
 ad-hoc worktree would write a per-worktree gitignored file no reader reads)
-immediately when the deferral is known, before releasing the lock and before
-any report; the occupied-field rule applies: a write finding the field already set
+immediately when the deferral is known, before
+any report (the write no longer orders before releasing the lock: the session
+holds no merge lock, and the helper's swap-lock release ran inside its own
+invocation); the occupied-field rule applies: a write finding the field already set
 never overwrites an existing record (it writes the per-run note only and reports the collision), and a
 record-write loss or undetermined outcome still writes the per-run note (the
 note is the recovery input, its write is unconditional on the record write's

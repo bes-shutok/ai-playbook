@@ -17,7 +17,7 @@ Expected: when a plan is explicitly based on multi-finding review feedback, read
 ## Exact location
 
 - agents/skills/plans/SKILL.md, Phase 1 requirements discovery and Exploration discipline.
-- The review-driven plan is docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md.
+- The review-driven plan is docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md.
 
 ## Reproduction evidence
 
@@ -45,7 +45,7 @@ The certified plan addresses the consumer code-review gaps. This is a separate p
 
 ## Dedup probe
 
-Searched open backlog filenames and problem bodies for review-finding inventories, review-driven plans, and source-to-plan coverage. The nearest item is docs/history/backlog/2026-11-02-review-freshness-and-code-coverage-gaps.md, now covered by the plan named above; it fixes current-head freshness and reviewer evidence for code findings, but does not require plans to close a multi-finding source inventory before drafting. The open docs/history/backlog/2026-11-02-review-freshness-plan-certification-residuals.md covers wording and plan-structure residuals from a later review round, not source inventory. The completed docs/history/plans/completed/2026-10-01-plans-tracker-source-reconciliation.md requires live tracker and linked-contract sources, not review-thread inventories. These are adjacent but distinct failure modes.
+Searched open backlog filenames and problem bodies for review-finding inventories, review-driven plans, and source-to-plan coverage. The nearest item is docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md, now covered by the plan named above; it fixes current-head freshness and reviewer evidence for code findings, but does not require plans to close a multi-finding source inventory before drafting. The open docs/history/backlog/2026-11-02-review-freshness-plan-certification-residuals.md covers wording and plan-structure residuals from a later review round, not source inventory. The completed docs/history/plans/completed/2026-10-01-plans-tracker-source-reconciliation.md requires live tracker and linked-contract sources, not review-thread inventories. These are adjacent but distinct failure modes.
 
 Environment: Codex desktop, 2026-11-03; repository skill source, with the shared runtime path resolving to the same file.
 Capture hygiene: scan-public-hygiene --files pass; check-no-em-dash.sh file pass.

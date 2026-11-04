@@ -2096,6 +2096,7 @@ class TestExecutionClaim(unittest.TestCase):
         # main-history leg exactly as the legacy `check: land ` form does.
         base = self._git_out("rev-parse", "HEAD")
         for prefix in (
+            "plans: file ",
             "plans: land ",
             "done: execute ",
             "execute-plan: land ",
@@ -2169,6 +2170,31 @@ class TestExecutionClaim(unittest.TestCase):
             self.claim.read_text(encoding="utf-8"),
             before,
             "the parked-plan claim was modified by the sweep",
+        )
+
+    def test_sweep_skips_plan_parked_under_plans_root_plans_file_subject(self):
+        # The parked-plan guard under the renamed authoring verb (plan
+        # docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-
+        # as-landed.md Task 2): a `plans: file <slug>` subject naming the
+        # slug while the plan sits parked at the plans root outside the
+        # completed archive skips the claim untouched, claim bytes unchanged.
+        parked = self.repo / "docs" / "history" / "plans" / "parked"
+        parked.mkdir(parents=True)
+        (parked / PLAN_NAME).write_text("# parked plan\n", encoding="utf-8")
+        self._git(
+            "commit", "--allow-empty", "-q", "-m",
+            f"plans: file {SLUG} (authored plan; execution pending)",
+        )
+        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._sweep()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(f"sweep: skipped {self._physical_claim()}:", proc.stdout)
+        self.assertEqual(
+            self.claim.read_text(encoding="utf-8"),
+            before,
+            "the parked plans: file claim was modified by the sweep",
         )
 
     def test_sweep_absolute_plans_dir_fact_is_not_double_prefixed(self):

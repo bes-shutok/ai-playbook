@@ -14,13 +14,13 @@ Rules for PR description/stats authoring, splitting a branch diff into appropria
 
 ## Project-scope and remote-operation gate
 
-Before running any command that reads or changes a remote (including `git fetch`/`pull`, `gh` queries, PR operations, pushes, merges, or remote-branch deletion), resolve the project scope from the applicable facts document.
+Before running any command that reads or changes a remote (including `git fetch`/`pull`, `gh` queries, PR operations, pushes, merges, or remote-branch deletion), resolve the project scope from the facts document for the repository being operated on. In a shared skill checkout, use the reviewed PR's target repository facts, not the repository where this skill is installed. If those facts are not in the current checkout, locate the target repository's local checkout or worktree and read its facts before deciding whether remote access is allowed. If the target repository or its facts cannot be resolved, continue with local inspection and report the missing input before remote access.
 
-- **Personal or pet project:** stop before remote access. Agents must keep the work local; the operator handles remote operations. This remains true when the user asks the agent to push, open or merge a PR, or delete a remote branch. Continue with local inspection and changes when possible, then report the local state and the exact operator action needed.
+- **Personal or pet project:** keep remote writes operator-only. An explicit user request in this session to recover stale refs for an active PR review authorizes only read-only queries for that PR and fetching needed base/head refs into temporary local refs. This exception does not apply to passive review (`receiving-review`) and never authorizes pushing, creating or merging a PR, or deleting a remote branch. Without that request, stay local-only.
 - **Company project:** follow that project's ownership and authorization rules before remote access.
 - **Unknown scope:** do not infer that remote access is allowed. Continue locally if possible and ask for the missing scope information before a remote operation.
 
-A stack executor may consume this gate after resolving the facts-defined project scope. Team reviewer configuration does not alter the gate or authorize access. For a personal or pet project, use the checked-out local base branch when a base is needed. Do not fetch or replace it with `origin/<base>`. The user-level `AGENTS.md` project-scope rule is authoritative; this gate applies to all consumers of this shared PR workflow, including `doing-code-review` and `receiving-review`.
+A stack executor may consume this gate after resolving the facts-defined project scope. Team reviewer configuration does not alter the gate. For ordinary local work on a personal or pet project, use the checked-out base; an authorized freshness fetch writes only temporary refs, never `origin/<base>` or a local branch. The user-level `AGENTS.md` project-scope rule is authoritative for all consumers, including `doing-code-review` and `receiving-review`.
 
 ## Routing Boundary
 
@@ -54,11 +54,23 @@ Use these primitives from review skills instead of duplicating GitHub details th
 ### Resolve PR context
 ```bash
 # Current branch PR
-gh pr list --head $(git branch --show-current) --json number,title,url,baseRefName,headRefName
+gh pr list --head $(git branch --show-current) --json number,title,url,baseRefName,headRefName,baseRefOid,headRefOid
 
 # PR URL or number
-gh pr view <PR_URL_OR_NUMBER> --json number,title,url,baseRefName,headRefName,author,state,mergeable,headRefOid
+gh pr view <PR_URL_OR_NUMBER> --json number,title,url,baseRefName,headRefName,author,state,mergeable,baseRefOid,headRefOid
 ```
+
+#### Capture and recheck PR scope
+
+This extends **Resolve PR context**: its query identifies the PR before review, while this check re-resolves identity after review and immediately before posting.
+
+Before workers start, compare local diff OIDs with PR `baseRefOid` and `headRefOid`. On mismatch, after resolving the target repository's project-scope gate, fetch `refs/heads/<baseRefName>` and `refs/pull/<PR>/head` into temporary review refs without changing the checked-out branch, HEAD, index, or working tree; re-resolve PR context and recompute the diff once from those refs. Confirm the refreshed OIDs equal the newly resolved PR OIDs before launching workers. Launch workers on a matching refreshed pair; otherwise start Task 2 successor recovery automatically, without waiting for operator approval.
+
+When both OID pairs match, capture the pair, each OID's resolution time, and the existing `Source digest` for the reviewed scope. Staged reviews write that baseline to Metadata before posting. Direct Mode retains it in run state until it writes the same baseline to the staging record after submission.
+
+Immediately before every PR post, re-resolve both OIDs, recompute the digest, and compare Staged Mode Metadata when present. On mismatch, use the same fetch and re-resolution above once, then route to Task 2 successor recovery. Submit the captured `headRefOid` as the review API's `commit_id`; do not rely on its default to bind the review to the latest commit. Verify the returned review `commit_id` equals the captured head, then re-resolve both PR OIDs after submission. Return a `current` disposition only when the response binding and both post-submission OIDs match the captured baseline; otherwise return `stale` and enter Task 2 successor recovery. The consumer records the disposition, keeps findings pending on `stale`, and uses the `STALE (scope moved after submission; successor required)` status. A later base or head move is a subsequent scope change. This check is a required procedure, not an automated gate.
+
+`doing-code-review` uses this procedure before workers and at each posting call; it owns mode selection, findings, and staging-record updates.
 
 ### Fetch changed files and diff
 ```bash
@@ -89,6 +101,7 @@ gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
 `review.json` shape:
 ```json
 {
+  "commit_id": "<captured headRefOid>",
   "event": "COMMENT",
   "body": "",
   "comments": [
@@ -107,77 +120,41 @@ Use `path`, `line`, and `side: "RIGHT"` on the PR head commit. Do not parse the 
 Post with `event: "COMMENT"` unless `doing-code-review` marks a Critical or High severity issue with clear production risk.
 
 ### Fetch review threads for passive review feedback
-Use this when `receiving-review` needs to triage existing Copilot or human reviewer threads:
-Fetch every page of the thread inventory and every page of each thread's comments before classifying feedback. Parent comments contain the original request; replies may contain an answer, a changed request, or a later disposition. Do not treat a parent as still open based only on its body or `isResolved` value. The example prints every comment on the first page, labels the parent and replies, and exposes pagination state. If `hasNextPage` is true, fetch that thread's remaining comment pages using its thread ID and `endCursor` before deciding what remains open.
-```bash
-gh api graphql -f query='
-{
+Use this when `receiving-review` triages existing feedback. Fetch every page of the thread inventory and each thread's comments before classifying. Read parent and replies in `createdAt` order; `isResolved` alone is not a disposition. Keep thread/comment IDs, author, body, path, line, outdated state, total count, and pagination cursors.
+
+```graphql
+query {
   repository(owner: "OWNER", name: "REPO") {
     pullRequest(number: PR_NUMBER) {
       reviewThreads(first: 100) {
-        nodes {
-          id
-          isResolved
-          comments(first: 100) {
-            nodes {
-              id
-              author { login }
-              body
-              path
-              line
-              outdated
-              createdAt
-            }
-            totalCount
-            pageInfo { hasNextPage endCursor }
-          }
-        }
+        nodes { id isResolved comments(first: 100) {
+          nodes { id author { login } body path line outdated createdAt }
+          totalCount pageInfo { hasNextPage endCursor }
+        } }
         pageInfo { hasNextPage endCursor }
       }
     }
   }
-}' | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-threads = data['data']['repository']['pullRequest']['reviewThreads']['nodes']
-for i, thread in enumerate(threads):
-    connection = thread['comments']
-    comments = sorted(connection['nodes'], key=lambda comment: comment['createdAt'])
-    if not comments:
-        continue
-    thread_id = thread['id']
-    resolved = thread['isResolved']
-    total_count = connection['totalCount']
-    print(f'=== Thread {i+1} | id={thread_id} | resolved={resolved} | comments={total_count} ===')
-    for j, comment in enumerate(comments):
-        role = 'PARENT' if j == 0 else 'REPLY'
-        created_at = comment['createdAt']
-        author = comment['author']['login']
-        comment_id = comment['id']
-        print(f'{role} | {created_at} | author={author} | comment_id={comment_id}')
-        print('Path: {} | Line: {} | Outdated: {}'.format(comment.get('path'), comment.get('line'), comment.get('outdated')))
-        print('Body: {}'.format(comment['body']))
-    page = connection['pageInfo']
-    if page['hasNextPage']:
-        print('INCOMPLETE: fetch remaining comments for thread {} after cursor {}'.format(thread_id, page['endCursor']))
-    print()
-thread_page = data['data']['repository']['pullRequest']['reviewThreads']['pageInfo']
-if thread_page['hasNextPage']:
-    print('INCOMPLETE: fetch remaining review threads after cursor {}'.format(thread_page['endCursor']))
-"
+}
 ```
 
-Replace `OWNER`, `REPO`, and `PR_NUMBER` with values from the PR context.
+Replace the placeholders. When a connection has `hasNextPage`, repeat it with `after` set to its returned `endCursor`; paginate the thread inventory and each comment connection separately until complete. For a thread with another comment page, continue that thread by its own ID and cursor:
 
-For an incomplete thread, continue its `comments` connection by querying the thread node with `comments(first: 100, after: "<endCursor>")` and the same comment fields plus `pageInfo`. Repeat until `hasNextPage` is false. If the review-thread inventory itself is incomplete, continue its `reviewThreads` connection with `first: 100`, `after: "<endCursor>"`, and `pageInfo`. Preserve comment order by `createdAt` when assessing the sequence, and keep the stable thread ID with the comments so replies and resolution target the correct parent.
-
-Passive review work must also fetch top-level PR Conversation comments because they are separate from inline review threads:
-
-```bash
-gh api repos/{owner}/{repo}/issues/{pr}/comments --paginate
+```graphql
+query {
+  node(id: "PRRT_THREAD_ID") {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: "THREAD_END_CURSOR") {
+        nodes { id author { login } body path line outdated createdAt }
+        totalCount
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
 ```
 
-Classify each finding as an inline review thread or a top-level Conversation comment before replying. Do not assume the reply operation is interchangeable between them.
+Do not triage partial results. Fetch top-level Conversation comments separately with `gh api repos/{owner}/{repo}/issues/{pr}/comments --paginate` before passive-review triage.
 
 ### Reply to review threads
 Reply in the thread, not as a top-level PR comment:
@@ -386,4 +363,4 @@ Owns refreshing an open stacked chain when trunk advances. During that restack i
 Consumer of the shared GitHub PR operations for passive review feedback: complete thread and reply inventory, `verify_thread_attachment`, reply/resolution mechanics, and the deletion rules this skill owns. This skill references `receiving-review`'s "Misplaced reply correction" protocol as the only sanctioned delete-and-repost path for the agent's own misplaced inline-thread reply. See `../receiving-review/SKILL.md`.
 
 ### With `doing-code-review`
-Consumer of the shared GitHub PR operations for active review: its review flow inherits the Project-scope and remote-operation gate.
+Consumer of the shared GitHub PR operations for active review: its review flow inherits the Project-scope and remote-operation gate. It owns orchestration and captured-baseline lifecycle; this skill supplies the PR OID and digest capture/recheck procedure before worker launch and at each posting call.

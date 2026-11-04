@@ -6,6 +6,7 @@
 - **Workflow:** plan-worthy
 - **Class:** fix-class
 - **Origin class:** self-serving
+- **Quarantine:** 2026-11-04
 - **Severity:** Low
 - **Driving force:** observability
 - **Cluster:** docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md (the clobber-guard cluster's 2026-11-01 row was deleted at its ad-hoc landing)

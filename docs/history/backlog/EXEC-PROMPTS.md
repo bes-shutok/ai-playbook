@@ -1,9 +1,34 @@
 Ready ad-hoc entries, most urgent first, consumed by exec-mode sessions. Prompt-emission owner: `agents/skills/investigate/SKILL.md`, Stage 4.
 
+Receipt vocabulary going forward (added 2026-11-04, plan docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md Task 5; descriptive lifecycle wording only, the receipt formats pinned in the logs' rules stay unchanged): an authoring-landed receipt states `origin row covered-pending-execution (<plan>)`; an execution-completed receipt states the execution form (`origin row covered (<plan>)` with the plan-header Executed flip, or the completion fold-and-delete).
+
+EXEC-PROMPTS-PRUNE: machinery-inventory-regrowth-two-runtime-scripts -> docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (covered by Task 5; the missed additional-origin disposition is recorded in the archived plan)
 EXEC-PROMPTS-PRUNE: staging-preflight-shared-span-row-closeout -> docs/history/plans/2026-11-02-shared-seam-prescription-fence.md (collateral served prune at the covering plan's landing: the entry's sole origin docs/history/backlog/2026-10-06-staging-preflight-done-readiness-shared-payload-span.md is covered by the plan at the token path, which the removal commit's tree carries; entry section removed in this same change)
 EXEC-PROMPTS-PRUNE: closeout-migrate-baseline-tracked-clobber -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py's baseline-relative migrate gained the two witnessed-clobber guards - the pre-flight refusal that keeps a whole-file carry from overwriting a destination-tracked path whose committed HEAD bytes differ (named paths plus the re-capture-the-baseline remediation, exit 2 before the merge-lock span and before any copy) and the post-run staged-set ownership check that restores a carried path's between-snapshot staged rewind from HEAD as a prevented clobber while foreign staged work stays untouched report-only (both guards inert on non-git targets); both arms pinned in the focused migrate suite (359 passed + 25 subtests incl. the ten BaselineClobberGuardTest pins); full five-worker r1 panel over the branch delta: the one blocking High (the guard's owned set compared absolute manifest destinations against repo-relative staged names, so the owned-restore arm never fired end to end) folded with twelve non-blocking findings in-change (staged-deletion classification by ownership, compare-then-act restore, pre-flight skip-rule mirror via the shared baseline predicate, bytes-safe -z decode, in-process GIT_* env strip, remedy reword, docstring citations, three extra pins, and the merge-lock ordering assertion), four consequence-bearing residuals deferred to backlog rows, r2 confirm; em-dash added-lines gate and public hygiene scan and pins suite pass; origin row deleted per the covered-row rule with the three sibling Cluster pointers tidied and this entry section removed in the same change)
 
 EXEC-PROMPTS-PRUNE: stranded-doc-pointer-edit-orphan -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py gained the warning-only check-stranded-pointers subcommand - a landing touching a markdown file under projects/.ai-playbook/ while docs/AGENTS.md holds uncommitted edits reports would-strand rows at file granularity (pairing by bare file name in the index text), plus the reverse arm for index rows landed while index edits remain uncommitted; exits 0 on every audited outcome, never blocks a closeout gate, never commits (machinery admission: warning-only first, witness landing 44f9499a5); twelve pins in the focused migrate suite (371 passed + 26 subtests) plus the closeout runbook invocation line carrying the landing-parent base token and the recorded-disposition clause; focused three-worker r1 panel (16 raw, zero blocking): eight findings folded in-change (file-granularity WARN wording, class prose broadened to the predicate, landing-parent runbook token, would-strand disposition clause, scoped exit contract, six pins including the two discriminating kills), two residuals deferred to rows, r2 confirm over the fold; focused r2 panel over the folded bytes: seven non-blocking findings routed to three closeout rows, verdict yes; origin row deleted per the covered-row rule with the sibling Cluster pointer tidied and this entry section removed in the same change)
+## review-record-anticipatory-panel-fence
+
+Added: 2026-11-04, learn+investigate over the closeout-clobber-guard authoring session (anchored on the session's filed row)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the origin row carries a body-named single-surface fix with no open design choice (the fence sentence in the record-statistics step plus the interruption remedy beside it); tracked skill surfaces only, never a guard-bearing path, no new dependency, no state-schema or machinery change.
+
+Origins:
+- docs/history/backlog/2026-11-04-review-record-staged-before-worker-dispatch.md
+
+Urgency: high - the anticipatory shape can ratify a false certification in an unattended session because no rule or validator distinguishes a panel row claiming completion from a worker that returned; the witnessed catch rode the staging session's own re-check, which is diligence rather than machinery, and the shape recurs at every review-round dispatch boundary where a dispatch can stall on a quota or provider wall.
+
+Scope arms: one bounded skill-text session: (1) add the fence sentence to the review-plan record-statistics step and the review-staging record grammar: a staged record's Panel rows, counts, and verdict describe only workers that actually returned; (2) document the usage-wall interruption remedy beside it (dispatch-then-amend with the real dispatch evidence, or relabel the panel row to the honest blocked state); the origin row's Evidence section carries the witnessed remedy pattern as the wording source. Both edits are text-only; the two skills' existing counts-parity and validator duties are untouched.
+
+Orientation: origin row whole; agents/skills/review-plan/SKILL.md record-statistics step and the validator-owns-counts-parity paragraph beside it; the step's founding commit 023487558 (the staging-gate hardening landed the step without staging-timing language; history search found no later addition); agents/skills/review-staging/SKILL.md record grammar.
+
+Rejected alternatives:
+- Add a staging-validator arm comparing panel-completion claims against per-worker dispatch evidence: rejected for missing machinery admission - no witnessed incident beyond the single in-session catch, which the session's own re-check caught at zero added-gate cost, and a validator's false-positive cost (refusing honest records whose dispatch evidence is not machine-readable) is unpriced (evidence basis: docs/history/backlog/2026-11-04-review-record-staged-before-worker-dispatch.md, Suspected root area section, which scopes the validator arm out until the admission protocol's true-catch bar is met).
+- Remove or narrow the existing record-statistics step: rejected - the step's counts-parity duty has its own witnessed catch (a 13-claimed/12-itemized staged-count slip that rode a round record into its certification round) and this fix completes the step's missing complement rather than removing a protective mechanism (evidence basis: agents/skills/review-plan/SKILL.md, the validator-owns-counts-parity paragraph).
+- Mandate dispatch-before-stage ordering in the runtime overlay only: rejected - an overlay-only mandate is runtime-specific and duplicates what one skill-text fence states for every runtime; witnessed anti-pattern per the guideline text cited in this entry's Orientation (evidence basis: AGENTS.md, Skill Design Guidelines, tool-agnostic design bullet).
+
+Machinery admission: nothing added; the machinery-shaped arm is rejected above with the missing-incident absence named (no witnessed incident of a false certification escaping the staging session's own re-check).
+
 ## missing-review-record-reconstruction-duties
 
 Added: 2026-11-03, investigate over the rolling-log-write-foreign-staged-remedy exec carrier session (landing ee084c125; witness: its done finalize's missing-review-record scan)
@@ -95,11 +120,39 @@ Rejected alternatives:
 - Remove the existing plan-review panel so source inventory is the only completeness check: rejected - the panel caught the omitted finding in the witnessed case, so removing it drops a demonstrated catch instead of completing the earlier authoring step (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
 - Keep the panel unchanged and rely on its later review alone: rejected - the witnessed omission was found only in a corrective round before certification, preserving avoidable authoring and review rework (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
 - Keep and narrow the panel to findings already mapped by the author: rejected - that would exempt the exact class of omitted finding this case exposed, and the evidence does not identify a safe lens to remove (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
-- Keep and widen the panel with a new worker or mandatory corrective round: rejected - the panel already caught the omission; the missing complement is a source inventory during Phase 1, before the later review consumes it (docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md)
+- Keep and widen the panel with a new worker or mandatory corrective round: rejected - the panel already caught the omission; the missing complement is a source inventory during Phase 1, before the later review consumes it (docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md)
 - Widen the inventory duty to every plan, regardless of source: rejected - the observed gap arises only when a plan is derived from multiple review findings, and no witnessed incident shows other plans need this review-specific source mapping (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
 - Require a validator for all plans without a structured inventory: rejected - the source inventory is conditional to multi-finding review plans, and no witnessed incident supports a universal gate; false refusals would burden plans without that source set (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
 
 Machinery admission: no validator, gate, ledger, worker, or required review round is added; the universal-validator arm is rejected because no witnessed incident shows a review-finding inventory is needed for plans without multi-finding review input, and a false refusal would block otherwise valid plan authoring (docs/history/backlog/2026-11-03-plans-review-finding-inventory.md)
+
+## plan-stack-companion-repo-trigger
+
+Added: 2026-11-04, learn Step 1.8 investigate over a cross-repository plan authoring correction
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): one cross-reference sentence in the tracked `plans` skill, no open design choice after the correction, no guard-bearing path, no new dependency, no state-schema or guard change, and no machinery removal.
+
+Origins:
+- docs/history/backlog/2026-11-04-plan-stack-companion-repo-trigger.md
+
+Group roster:
+- docs/history/backlog/2026-11-04-plan-stack-companion-repo-trigger.md (single origin; no sibling shares the same skill-selection mechanism)
+
+Urgency: medium - a user correction was needed after the stack workflow was applied to only one repository plan; the cost is an extra clarification and inconsistent plan structure, while the cross-repository task-shape clause was already present and does not justify a validator.
+
+Scope arms: add one concise cross-reference to the `plans` skill's existing stack-selection sentence, stating that once `plan-stack` is selected for a cross-repository stack, it applies to every repository plan in that stack; point to the existing per-repository clause in `plan-stack` for the task shape. Keep lifecycle and requirements ownership in `plans`.
+
+Orientation: `agents/skills/plans/SKILL.md` Writing skill selection; `agents/skills/plan-stack/SKILL.md` Authoring contract and Integration Points; commit `d5b131730989b81314e18a08fe7a4471c6b19877` (the cross-repository clause added the day before this correction); `docs/history/plans/completed/2026-10-29-stacked-pr-plan-execution.md` (the originating stack-plan contract).
+
+Rejected alternatives:
+- Remove or narrow the cross-repository clause in `plan-stack`: rejected - the user correction demonstrates that separate repository plans in one agreed stack need the stack task shape, and commit `d5b131730989b81314e18a08fe7a4471c6b19877` added the clause to make that scope explicit.
+- Repeat the full task-shape rule in `plans`: rejected - the plan-stack authoring contract is its existing single home; a pointer from the consumer skill fixes discovery without creating a second definition, as witnessed by the current single-home clause (`agents/skills/plan-stack/SKILL.md).
+- Add a validator requiring every repository plan to record a selected stack skill: rejected - the observed failure is a missed routing decision, not malformed plan bytes, and one witness does not establish a recurring catch rate; a false refusal would block ordinary plans that are not part of a cross-repository stack, as witnessed by the ordinary-plan default (`agents/skills/plans/SKILL.md).
+- Change the project branch or worktree policy as the remedy: rejected - those choices govern placement after a plan workflow is selected and do not explain why the ordinary plans workflow was assigned to one member of the stack, as witnessed by the stack-shape contract (`agents/skills/plan-stack/SKILL.md).
+
+Machinery admission: the recommendation is a cross-reference sentence and adds no gate, validator, lock, ledger, or required ceremony; the rejected validator arm has one witness, unknown catch frequency, and a false-positive cost of blocking ordinary plan authoring for a stack-only selection omission.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add the one-line cross-reference to `agents/skills/plans/SKILL.md`'s Writing skill selection so selecting `plan-stack` for a cross-repository stack carries through every repository plan, while `plans` retains requirements discovery and lifecycle ownership; point to `agents/skills/plan-stack/SKILL.md` for the existing shape rule, do not duplicate that rule, and honor the repository's skill-text anti-growth rules.
 
 ## learn-multi-witness-triage-route
 
@@ -294,9 +347,9 @@ Origins:
 
 Urgency: medium - the residuals are cosmetic now but two carry real consequences if left: the co-removal set omission (the 2026-12-02 sunset executing the removals row as written leaves the Task 1 capture span ownerless) and the Task 2 pins companion omission (an executor following Files: blocks lands the pre-post-check spans unpinned, which the pins suite cannot detect because it checks moved pins, never missing ones).
 
-Scope: run the plans skill's classified plan-edit route (delta classifier, correction rows, digest re-bind) over the landed plan docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md applying the eight residuals from the origin row: renumber Task 4 to Task 6 in the Machinery admission paragraph; add the companion-pins file to Task 2's Files block and the (Task 2) annotation to the Review Scope pins line; add the Task 1 capture span to the Task 6 co-removal set; specify the unknown-field fill for the check's cannot-verify arm; fix the Gate delta line's declaration attribution; narrow the orphan-half routing to review-staging's repair routing; pick one carrier for the cannot-verify disposition fields; open the Review Scope Tests line's gate enumeration.
+Scope: run the plans skill's classified plan-edit route (delta classifier, correction rows, digest re-bind) over the landed plan docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md applying the eight residuals from the origin row: renumber Task 4 to Task 6 in the Machinery admission paragraph; add the companion-pins file to Task 2's Files block and the (Task 2) annotation to the Review Scope pins line; add the Task 1 capture span to the Task 6 co-removal set; specify the unknown-field fill for the check's cannot-verify arm; fix the Gate delta line's declaration attribution; narrow the orphan-half routing to review-staging's repair routing; pick one carrier for the cannot-verify disposition fields; open the Review Scope Tests line's gate enumeration.
 
-Orientation: the origin row (all eight residuals with their pattern ids and worker attributions); docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md (the corrections-chain target); agents/skills/plans/SKILL.md (the classified plan-edit route and digest re-bind); the r5 review record series .ai-playbook/reviews/2026-11-02-plan-review-review-freshness-and-code-coverage-gaps-p5bcb951b-r5.md (the certification evidence the corrections must not invalidate).
+Orientation: the origin row (all eight residuals with their pattern ids and worker attributions); docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (the corrections-chain target); agents/skills/plans/SKILL.md (the classified plan-edit route and digest re-bind); the r5 review record series .ai-playbook/reviews/2026-11-02-plan-review-review-freshness-and-code-coverage-gaps-p5bcb951b-r5.md (the certification evidence the corrections must not invalidate).
 
 Rejected alternatives:
 - Leave the residuals in the backlog row as witness-only: rejected - the co-removal-set omission has a dated consequence (the 2026-12-02 sunset) and the pins-companion omission silently degrades the landing's own guard coverage; the row records them but nothing executes a row without a log entry (docs/history/backlog/2026-11-02-review-freshness-plan-certification-residuals.md)
@@ -306,28 +359,6 @@ Rejected alternatives:
 Machinery admission: no machinery added; the run uses the existing corrections chain and the existing registry rows unchanged.
 
 Standing pre-authorization: none (the corrections chain's digest re-bind is operator-visible by contract; the run reports the re-bound digest and the correction rows).
-
-## machinery-inventory-regrowth-two-runtime-scripts
-
-Added: 2026-11-02, learn Step 1.9 investigate over the interactive authoring session (plan docs/history/plans/2026-11-02-shared-seam-prescription-fence.md landed ccd293471; the residual was recorded in the run's closeout rather than repaired out of scope)
-
-Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the item passes the bounded single-surface-fix clause - registering two script paths as registry entries (or witnessing their removal), no open design choice, no dependency, no schema change, no plan-scale surface; removal-shaped, so no machinery admission wording applies.
-
-Origins:
-- docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md
-
-Cluster: docs/history/backlog/EXEC-PROMPTS.md##machinery-inventory-baseline-red-repair (same check surface; that entry owns the baseline-red noise that masked regrowth, this one owns the first regrowth pair visible now that the baseline is clean); docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md (covered sibling instance of the same regrowth class; durable home docs/history/plans/completed/2026-10-31-baseline-red-gates-regreen.md, which covered only its own two scripts)
-
-Urgency: low-medium - `scripts/machinery_inventory.py --check` exits 1 with exactly 2 regrowth failures (both scripts introduced 2026-11-02 by peer landings), so the baseline is finally clean and the gate signal usable; every day the red stands, the next unregistered script accumulates onto it and re-creates the masking the baseline-red entry was filed to fix.
-
-Scope arms: (1) register `scripts/quota_sources.py` and `scripts/reconcile_execute_plan_handoff.py` in `scripts/machinery_registry.json` using the entry shape the registry's own schema carries (id, kind, disposition, paths, tests, witness naming the introducing landing); (2) alternatively witness a planned removal if either script is retired before the fix runs.
-
-Orientation: `scripts/machinery_inventory.py` (the `--check` regrowth arm), `scripts/machinery_registry.json`, and the origin row.
-
-Rejected alternatives:
-- Remove the scripts: rejected - both are live and referenced (`scripts/quota_governor.py` and `scripts/quota_window_probe.py` import the first; `scripts/check_maintenance_pins.sh` and `agents/skills/execute-plan/SKILL.md` reference the second), introduced 2026-11-02 by landings 44f9499a5 and 137c50ebd
-- Narrow the check with a path exclusion list for these two: rejected - the regrowth arm's value is that every unregistered script is a failure; an allowlist re-creates the masking class the baseline-red entry documents (scripts/machinery_inventory.py regrowth arm)
-- Add a commit-time registration gate: rejected - no witnessed incident of a lane blocked by unregistered scripts (the check has been advisory report-only so far), so net blocker growth without an admission-protocol incident (repository guidelines' Machinery admission protocol section)
 
 EXEC-PROMPTS-PRUNE: closeout-baseline-capture-placement-remedy -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py's migrate baseline-missing refusal gained the primary-checkout remedy clause - check the primary checkout's same-slug session dir for closeout-baseline.json and copy it in before recapturing, a recapture recorded as a late-baseline capture-failure deviation - and the capture success output now names the checkout it captured in so a wrong-checkout Phase 0 capture is visible; both message shapes pinned (focused migrate suite 288 passed + 17 subtests, wrapper suite 178 passed + 2 subtests), em-dash added-lines gate and public hygiene scan pass; origin row deleted per the covered-row rule with both Cluster pointers tidied and this entry section removed in the same change)
 
@@ -1682,3 +1713,100 @@ Rejected alternatives:
 - Adopt the amendment by re-deriving it from the covering plan during the clobber restore: rejected - the peer's content belongs to its owning lane; the restore carried only the own-side bytes and the amendment is tracked for its owner (origin row, restore commit 4dc1ffabe, lesson 377)
 - Reopen the covering plan to re-certify the amendment against the current file: rejected - the plan is archived with its certification ready=yes; the delta since certification is the restored sub-section the amendment already scopes against, a wording-verification step inside this entry's arm, not a re-certification round (covering plan's completion fold, docs/history/plans/completed/2026-11-02-wrong-location-lead-clause-contradiction.md)
 - A landing-order gate preventing peers from landing shared skill files while another lane holds a claim: rejected - no witnessed incident beyond this single stale-checkout landing (machinery admission protocol, repository guidelines; the missing-incident absence is the evidence basis), and the per-lane claim + post-landing HEAD-content grep discipline (lesson 377) prices the prevention at zero new machinery
+
+## merge-lock-acquire-exports-capture-discipline
+
+Added: 2026-11-04, investigate over the 2026-11-03 23:14 auth carrier session (witness: its authoring self-landing's release refusal and orphaned reclaim)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): a body-named single-surface fix (one capture-discipline sentence beside the existing done-lock witness prescription in the maintenance overlay's Merge landing lock bullet), no open design choice, tracked skill surface outside the arm's mechanical denylist.
+
+Origins:
+- docs/history/backlog/2026-11-04-merge-lock-acquire-exports-lost-across-tool-call-shells.md
+
+Cluster: docs/history/backlog/2026-10-30-done-lock-hold-overbroad-commit-stop.md (same done-lock script surface; different defect: that row's commit-stop scope, not the merge acquire's export capture)
+
+Urgency: low - one witnessed instance, self-recovered in the same turn through the sanctioned orphaned arm (recorded holder verified dead at age 85s); no lane blocked, and the recovery path of record already works.
+
+Scope arms: (1) one sentence in the maintenance overlay's Merge landing lock bullet (`agents/skills/maintenance/zcode.md`, mirrored runtime copy) directing the merge-acquire caller to retain the lock directory and a fingerprint of the token in session context at acquire time, beside the done-lock Step 0 witness prescription, and to name in the report which release leg ran (re-export or verified-dead orphaned) when a later shell releases; (2) no lock-semantics change: `merge-release-repo` stays token-fenced from the environment and the orphaned arm stays the verified-dead-gated recovery of record.
+
+Orientation: `agents/skills/maintenance/zcode.md` Merge landing lock bullet; `agents/skills/done/SKILL.md` Step 0 (the retain-the-witness prescription this arm mirrors for the merge lock); development_lessons.md #261 and #389 (the orphaned-arm and once-per-generation recovery family the discipline complements).
+
+Rejected alternatives:
+- Relax `merge-release-repo` to session-load the token from the lock directory: rejected - the env fencing is deliberate; a session-loaded token would mask lost-generation boundaries the token fence exists to expose, and re-running the acquire verb in a later shell is already the witnessed mint-a-new-generation trap (agents/skills/maintenance/zcode.md Merge landing lock bullet; development_lessons.md #389)
+- Teach `release-repo` to accept a lock-dir operand without a token: rejected - that duplicates the orphaned arm's verified-dead authority on the live path and erodes the live-generation guard without a witnessed incident needing it (scripts/done-lock.sh release-repo gate: parse)
+- Add a validator or gate enforcing the capture: rejected under the machinery admission protocol - one self-recovered instance, no lane blocked, no witnessed incident a gate would prevent ("no witnessed incident" of an unrecoverable release; the orphaned arm is the recovery of record)
+
+Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arm is one prose sentence; the gate and operand alternatives are rejected above with the missing-incident absence named.
+
+## exec-landing-certified-record-status-unbound
+
+Added: 2026-11-04, investigate over the automation-18a7c17d exec takeover session (landing 7d4d3f7a2; witness: the landed plan's authoritative review record left STAGED through a fully green landing)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): one decision plus at most one status-transition duty in the existing landing tail, no open design surface beyond the pinned either/or the origin row states, no new gate necessarily (the decision may be documentation-only), no schema change.
+
+Origins:
+- docs/history/backlog/2026-11-04-exec-landing-certified-record-status-unbound.md
+
+Cluster: docs/history/backlog/2026-11-03-review-plan-cap-closure-seal-anchor-composition.md (review-record lifecycle versus landing verification; complementary spans)
+
+Urgency: medium - every execution landing of a plan whose final review round ended staged lands the same unbound state silently; the count grows with each exec landing and the done finalize's record scans do not currently flag it.
+
+Scope arms: (1) decide the sanctioned terminal state for execution-lane certified-final plan-review records and pin it: either a landing-tail status transition through the record-selection helper's vocabulary or an explicit STAGED-is-terminal decision recorded where the done finalize's scans read; (2) update the done finalize's record scans to enforce the pinned state; (3) no gate/validator addition without a witnessed catch per the Machinery admission protocol - a warning-only first landing is the default shape.
+
+Orientation: scripts/land_squash.sh (the landing tail), scripts/review_record_selection.py (the status vocabulary), scripts/done_run.sh finalize (the record scans), the origin row (the witnessed landing).
+
+Rejected alternatives:
+- Require a posted/consumed status as a hard landing gate: rejected for now - no incident shows a landed run harmed by the staged-final state (the witnessed landing passed every gate and the content was certified), so a blocking gate fails the admission protocol's no-incident rule; revisit only after a true catch, per the origin row's scope arms
+- Retroactively mark the witnessed landing's r22 record consumed: rejected - record bytes are immutable once staged (the supersession/mark rules own transitions), and the witnessed landing's record is not the repair surface; the row owns the forward duty
+
+Machinery admission: the recommendation lands warning-only or decision-only by default; any promotion to a blocking check needs a true catch and a pre-registered removal row.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): decide and pin the terminal state per the origin row's What-is-owed, editing only the landing-tail and finalize-scan surfaces the scope arms name; honor the admission rule (warning-only default, no blocker without a witnessed catch).
+
+## lock-acquire-export-capture-census
+
+Added: 2026-11-04, investigate over the 24h session-pattern harvest (window 2026-11-03 07:13 to 2026-11-04 07:13)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the no-open-design-choice clause admits it, because the surface inventory is enumerated in the origin row and each surface classifies to an existing arm (pinning when already compliant, the cluster sibling's retain-and-fingerprint sentence when not) with the probe method fixed by corpus lesson 391; no guard-bearing path, no new dependency, no state-schema change.
+
+Origins:
+- docs/history/backlog/2026-11-04-lock-acquire-export-capture-census.md
+
+Cluster: docs/history/backlog/2026-11-04-merge-lock-acquire-exports-lost-across-tool-call-shells.md (same mechanism, the acquire-time export-capture discipline; that row owns the merge-landing lock arm, this entry owns the family-wide census)
+
+Urgency: medium - the family re-arms one surface at a time (three field failures in four days, each found at field-failure time), while every failure has a working recovery arm and no lane is blocked.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): run the origin row's census pass over scripts/done-lock.sh, scripts/done_run.sh, scripts/land_squash.sh, scripts/release-authoring.sh, scripts/release-rewrite.sh, and scripts/execution_claim.sh lock and export surfaces plus the prescribing paragraphs (agents/skills/done/SKILL.md Step 0 and the maintenance overlay's Merge landing lock bullet), run the lesson-391 measured probe against every named surface, and convert each surface to a pinning (characterization) arm when already compliant or the cluster sibling's retain-and-fingerprint sentence shape when not, folding the sibling's merge-lock arm into the same pass; no lock semantics change (token fencing and the verified-dead recovery arms stay as landed).
+
+Rejected alternatives:
+- Extend the one-sentence capture fix per surface as each fails: rejected, the witnessed cost is exactly this per-surface reaction loop, three field failures in four days (docs/history/backlog/2026-11-04-merge-lock-acquire-exports-lost-across-tool-call-shells.md)
+- Add a landing validator that fails a landing when an acquire's exports lack a session capture: rejected machinery arm with the missing-incident absence named, no witnessed incident shows a landing a capture-checking gate would have caught (scripts/done-lock.sh)
+- Move the capture into the lock scripts as auto-written state: rejected, session-scoped capture belongs to the session record and the scratch-capture shape already works when applied (docs/maintenance/development_lessons.md)
+
+Machinery admission: the census pass is read-only probing plus text and pinning arms; the gate arm is rejected above with the missing-incident absence named.
+
+## memory-index-consolidation-plan-archive-residue
+
+Added: 2026-11-04, investigate over the interactive maintenance exec session stand-down survey (learn Step 1.9 anchored on the same-session row)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the body-named-single-surface-fix-with-no-open-design-choice clause admits it, because the fix is one mechanical archive move whose exact steps the plans skill's Plan Lifecycle archive shape already prescribes (including the archive-egress hash rules), tracked docs surfaces only, no guard-bearing path, no new dependency, no state-schema or guard change, no machinery removal.
+
+Origins:
+- docs/history/backlog/2026-11-04-memory-index-consolidation-plan-archive-residue.md
+
+Cluster: docs/history/backlog/2026-11-02-review-freshness-and-code-coverage-gaps.md (same defect class: a landed plan whose completion pass stranded before the completed twin existed; that row's strand is peer-claimed as of 2026-11-04, this entry covers only the unowned memory-index residue)
+
+Urgency: low - pure paperkeeping residue; the stranded open-plans listing costs survey turns a re-derivation pass each but blocks no lane, and the work is already recorded complete (covering commit `cf8acd26b`, 2026-11-03).
+
+Scope arms: (1) archive `docs/history/plans/2026-11-02-memory-index-load-budget-consolidation.md` byte-preserving to `docs/history/plans/completed/2026-11-02-memory-index-load-budget-consolidation.md`, folding a `## Disposition of migrated backlog items` section naming covering commit `cf8acd26b`, then delete the living plan path (two-command re-derivation before the write: the file exists at the plans root and is absent from `completed/`, re-probed at entry-write time); (2) retarget the origin row's witness citation to the completed twin per the covered-row precedence rule, or delete the row when no other record cites it; (3) do not touch the review-freshness strand named in the Cluster line (peer-owned, live execution claim).
+
+Orientation: docs/history/plans/2026-11-02-memory-index-load-budget-consolidation.md (the unarchived landed plan), docs/history/backlog/2026-10-31-memory-index-load-budget-consolidation.md (the flipped origin row), commit `cf8acd26b` (the covering landing), the plans skill's Plan Lifecycle and archive-egress rules.
+
+Rejected alternatives:
+- Leave the plan at the plans root with a note that it is done: rejected, the durable-home precedence rule routes covered-row citations to the `completed/` twin, so a root-resident landed plan keeps re-entering every exec survey's candidate set as a false pick (repository guidelines' backlog-row landing rules; the witnessed cost is this session's own survey re-derivation, docs/history/backlog/2026-11-04-memory-index-consolidation-plan-archive-residue.md)
+- Add a validator that fails a landing commit when the plan file is not simultaneously archived: rejected machinery arm with the missing-incident absence named - the witnessed strand predates any landing-gate surface and one manual paperkeeping pass closes it; a second witness would be the admission input, not a pre-emptive gate (docs/history/plans/completed/ archive corpus)
+- Redo the consolidation run itself: rejected, the run is recorded complete with its operator-authorized cap closure and its own do-not-redo record (memory index entry, landing `cf8acd26b`)
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony (one archive move plus a citation retarget); the gate arm is rejected above with the missing-incident absence named.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): perform the archive move, disposition fold, living-path deletion, and origin-row witness retarget per the Scope arms, following the plans skill's archive-egress hash rules; skip and report if the review-freshness Cluster sibling's resolution lands a shared cleanup first.

@@ -2093,7 +2093,7 @@ check(n >= 5, f"pending_landing count {n} < 5 across the split corpus")
 # Revisions ledger entry, so they are pinned region-scoped to their owning
 # regions (Step 5, State file section, Step 3) rather than whole-file
 a = s.index("\n### Step 5: scheduling"); b = s.index("\n### Step 6: state update")
-check("pre-dispatch landing gate" in s[a:b], "Step 5 region missing: pre-dispatch landing gate")
+check("pre-dispatch admission consult" in s[a:b], "Step 5 region missing: pre-dispatch admission consult")
 a = s.index("Each non-turn write is a targeted field edit"); b = s.index("- The `children` array")
 check("re-evaluate their precondition" in s[a:b], "State file region missing: re-evaluate their precondition")
 a = s.index("\n### Step 3: decision"); b = s.index("\n### Step 4: quota leg")
@@ -2105,8 +2105,8 @@ for needle in ["temporary worktree", "git reset --merge"]:
 # heading that follows it in the operative file
 a = s.index("## Invariants"); b = s.index("## Integration Points")
 inv = s[a:b]
-for needle in ["post-review, pre-landed state", "zero outstanding unlanded runs",
-               "no surviving repo-matching"]:
+for needle in ["post-review, pre-landed state", "target-disjointness admission consult",
+               "treated as intersecting"]:
     check(needle in inv, "Invariants region missing: " + needle)
 # Step 1-region needles (the read-back and reconciliation bullets live only there)
 a = s.index("\n### Step 1: survey"); b = s.index("\n### Step 2: guards")
@@ -2128,7 +2128,7 @@ a = s.index("\n### Step 3: decision"); b = s.index("\n### Step 4: quota leg")
 st3 = s[a:b]
 for needle in ["landing-completion",
                "pending-landing (primary occupied by peer session)",
-               "pending-landing (outstanding unlanded run)",
+               "pending-landing (unlanded run)",
                "pending-landing-stuck", "pending-landing-stash-left",
                "re-runs the same gate set"]:
     check(needle in st3, "Step 3 region missing: " + needle)
@@ -3457,6 +3457,14 @@ pin "mode-coupled effort pairing marker" grep -qF 'Mode-coupled effort pairing:'
 pin "ad-hoc child marker catalog entry in overlay" grep -qF 'Ad-hoc child (added 2026-10-06' "$Z"
 pin "ad-hoc child marker occupancy span in overlay" grep -qF "a prompt containing \`ad-hoc backlog lane\` plus the resolved repository root" "$Z"
 pin "staging digest field present" grep -qF 'Source digest' "$RS"
+pin "staging PR base identity Metadata format" grep -qF 'Reviewed PR base identity: local=<OID>, PR baseRefOid=<OID>' "$RS"
+pin "staging PR head identity Metadata format" grep -qF 'Reviewed PR head identity: local=<OID>, PR headRefOid=<OID>' "$RS"
+pin "staging moved-scope disposition Metadata format" grep -qF 'Moved-scope disposition: old base/head=' "$RS"
+pin "staging unresolved moved-scope disposition requires reason and full review" grep -qF 'Moved-scope disposition: unresolved; reason=' "$RS"
+pin "staging unresolved disposition covers unverifiable digest" grep -qF 'identity pair or the reviewed-scope digest cannot be resolved or verified' "$RS"
+pin "staging unresolved disposition names identity and digest failure" grep -qF 'unclassifiable identity-or-digest failure' "$RS"
+pin "staging unresolved identity cannot post prior record" grep -qF 'never permits posting the prior record as current' "$RS"
+pin "staging unresolved form overrides resolved recovery fields" grep -qF "exception to \`doing-code-review\`'s resolved-recovery OID-pair and \`full|verified-delta\` fields" "$RS"
 pin "doing-code-review ad-hoc integration span" grep -qF 'ad-hoc backlog arm' "$DCR"
 
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
@@ -3627,8 +3635,18 @@ for f in "$GPW" "$DCR" "$RR"; do
 done
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
 pin "remote-operation gate section anchored" grep -qF '## Project-scope and remote-operation gate' "$GPW"
-pin "doing-code-review gate pointer wired" grep -qF 'Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, and the operator alone handles remote operations.' "$DCR"
+pin "doing-code-review gate pointer wired" grep -qF 'scope gate: remote writes remain operator-only for personal and pet projects; explicit user direction to recover stale review context permits only read-only PR metadata queries and temporary-ref fetches.' "$DCR"
 pin "receiving-review gate pointer wired" grep -qF 'Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, leaving remote operations to the operator.' "$RR"
+
+# --- active-review PR scope binding pins (plan
+# docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md, Task 1) ---
+# Guard the initial OID-pair binding and the per-post scope recheck in both
+# the shared PR procedure and its active-review consumer.
+pin "PR context resolves both OIDs" grep -qF 'baseRefOid,headRefOid' "$GPW"
+pin "shared PR scope capture and per-post recheck" grep -qF 'Immediately before every PR post, re-resolve both OIDs, recompute the digest' "$GPW"
+pin "active review binds PR scope before worker launch" grep -qF 'fetch current PR refs into temporary refs (no checkout change), re-resolve context, and recompute once before launching workers' "$DCR"
+pin "active review rechecks staged and Direct PR posts" grep -qF 'PR scope recheck against the captured baseline' "$DCR"
+pin "active review moved-scope recovery binds successor identity" grep -qF 'record `Moved-scope disposition:` in its Metadata with the old and new base/head OID pairs' "$DCR"
 
 # --- review-loop-round-budget pins (plan 2026-10-09-review-loop-round-budget, Task 1) ---
 # Count-gated pins for the plans-skill spans the same plan's Task 1 landed in

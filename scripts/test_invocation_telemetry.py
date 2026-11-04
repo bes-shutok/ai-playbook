@@ -100,14 +100,25 @@ VRS_SUCCESS = {
 # The refusal probe's stderr: one deterministic eight-line block for an
 # undated invalid staging record (an undated filename keeps the date-gated
 # freshness errors out of the baseline, so the block is content-only).
+# Re-baselined 2026-11-04 (producer code-family record arm plan, Task 3):
+# the three record-grammar diagnostics gained the grammar-home citation
+# (GRAMMAR_HOME_CITATION in scripts/validate_review_staging.py) beside the
+# Panel line's existing skill-pointer parenthetical; every other line and
+# the line count are unchanged.
 VRS_REFUSAL_LINES = [
-    "WARN: missing ### Counts or Agents launched row",
-    "WARN: missing ### Triage outcomes or Pending triage placeholder",
+    "WARN: missing ### Counts or Agents launched row"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)",
+    "WARN: missing ### Triage outcomes or Pending triage placeholder"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)",
     # Each ERROR line now names its provenance source (the review-staging
     # SKILL.md rule it enforces); re-baselined to the current CLI.
     "ERROR: missing ## Metadata (review-staging SKILL.md)",
     "ERROR: missing ## Review Statistics (review-staging SKILL.md)",
     "ERROR: missing ### Panel under Review Statistics"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)"
     " (review-staging SKILL.md, Output discipline)",
     "ERROR: clear round still requires ## Review Statistics"
     " (review-staging SKILL.md)",

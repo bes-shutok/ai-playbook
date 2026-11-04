@@ -230,7 +230,15 @@ STATUS_LINE_RE = re.compile(
 )
 # served status VALUES; a hyphenated continuation such as ``done-phony``
 # is not a done declaration (mirrors the backlog corpus gate).
-SERVED_STATUS_RE = re.compile(r"^(?:done|covered)(?![A-Za-z0-9_-])", re.IGNORECASE)
+# The pending token joins the served class (plan docs/history/plans/
+# 2026-11-04-execution-lane-authored-plans-misread-as-landed.md Task 3):
+# an all-pending entry goes stale at the authoring flip and owes its
+# prune; the execution flip is staleness-preserving (both tokens
+# served), unstaling only via prune or the completion fold-and-delete.
+SERVED_STATUS_RE = re.compile(
+    r"^(?:done|covered-pending-execution|covered)(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
 
 # The prune-audit mode's patch hunk header (unified diff): the 1-based
 # old and new start lines drive the per-hunk fence-state bootstrap.

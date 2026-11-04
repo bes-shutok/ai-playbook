@@ -153,7 +153,7 @@ Modes:
            under the plans root's completed/ archive, or the plan is
            absent from the whole plans root while a landing commit subject
            (the repository's landing-subject grammar: the recognized
-           LANDING_CLAIM_PREFIXES forms `plans: land `, `done: execute `,
+           LANDING_CLAIM_PREFIXES forms `plans: file `, `plans: land ` (retired authoring verb), `done: execute `,
            `execute-plan: land `, `author: land `, plus the legacy
            `check: land ...` form) on the main-history
            branch names the claim's slug) AND its recorded branch line
@@ -1950,8 +1950,9 @@ sweep_landing_subject_names_slug() {
   # True when the named branch's history carries a landing-shaped commit
   # subject (the repository's landing-subject grammar: the recognized
   # prefixes of LANDING_CLAIM_PREFIXES in scripts/reverse_squash_guard.py -
-  # `plans: land `, `done: execute `, `execute-plan: land `, `author: land `
-  # - plus the legacy `check: land ...` form)
+  # `plans: file `, `plans: land ` (retired authoring verb), `done: execute `,
+  # `execute-plan: land `, `author: land ` - plus the legacy `check: land ...`
+  # form)
   # naming the kebab-case slug as a hyphen-bounded segment (never as the
   # prefix or suffix of a longer token, so a longer slug cannot vouch for
   # its prefix). Subjects are captured whole before the match and matched
@@ -1962,7 +1963,7 @@ sweep_landing_subject_names_slug() {
   subjects="$(git -C "$anchor" log --format=%s "$ref" -- 2>/dev/null)" || return 1
   while IFS= read -r subject; do
     case "$subject" in
-      "check: land "*|"plans: land "*|"done: execute "*|"execute-plan: land "*|"author: land "*)
+      "check: land "*|"plans: file "*|"plans: land "*|"done: execute "*|"execute-plan: land "*|"author: land "*)
         re="(^|[^a-z0-9-])${slug}([^a-z0-9-]|\$)"
         if [[ "$subject" =~ $re ]]; then
           return 0

@@ -6802,6 +6802,92 @@ class GateRemovalAttributionScopeTest(_BranchCloseoutFixture, unittest.TestCase)
         )
 
 
+class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The teardown summary line at gate-removal
+    (plan 2026-11-02-closeout-migrate-clobber-guard-restore-arms Task 4):
+    the adjudicated run's non-empty prevented_clobbers manifest rows surface
+    as a report-only summary naming the restored paths and the
+    operator-decide note, never a hold (warning-first per the machinery
+    admission protocol); prevented rows stamped for prior runs' branch
+    records report as foreign, never attributed to the adjudicated run's
+    teardown evidence (the unattributable-rows report-only demotion
+    shape)."""
+
+    PREVENTED_REL = "docs/tmp/execute-plan/x/rewound-record.md"
+
+    def _prevented_row(self, index: int | None) -> dict:
+        """One prevented_clobbers row in the producer's shape: the absolute
+        destination the guard records ((target / rel).as_posix()) and the
+        run-attribution stamp (None models a legacy row written before the
+        stamp existed)."""
+        row = {
+            "destination": (self.primary / self.PREVENTED_REL).as_posix(),
+            "action": "restored-from-HEAD",
+        }
+        if index is not None:
+            row["record_index"] = index
+        return row
+
+    def _two_records(self) -> list[dict]:
+        """Two branch records for the same worktree/branch: the re-run shape
+        the shared canonical session slug produces (record 0 is the prior
+        run, record 1 the adjudicated run)."""
+        return [
+            {"branch": "wt-run", "source": str(self.worktree)},
+            {"branch": "wt-run", "source": str(self.worktree)},
+        ]
+
+    def _author_manifest(self, prevented: list[dict]) -> Path:
+        """Rewrite the seeded fixture manifest's prevented_clobbers rows and
+        extend it to two branch records, keeping the git/citation/accounting
+        setup untouched."""
+        manifest_path = self._seed_migration_manifest(landed=True)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["prevented_clobbers"] = prevented
+        manifest["branch"] = self._two_records()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return manifest_path
+
+    def test_adjudicated_run_prevented_rows_surface_report_only(self):
+        # The adjudicated run's own stamped prevented row (record index 1,
+        # the manifest's last branch record) surfaces at the teardown
+        # decision: a report-only summary naming the restored path and the
+        # operator-decide note, the removal authorization still printed, no
+        # hold, and no foreign note (nothing unattributed).
+        self._author_manifest([self._prevented_row(1)])
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("removal: git worktree remove", out)
+        self.assertIn("branch-closeout: prevented clobber(s) this run restored from HEAD", out)
+        self.assertIn((self.primary / self.PREVENTED_REL).as_posix(), out)
+        self.assertIn("the operator decides", out)
+        self.assertNotIn("held:", out)
+        self.assertNotIn("never this run's teardown evidence", out)
+        self.assertTrue(Path(self.worktree).is_dir())
+
+    def test_prior_run_prevented_rows_report_foreign(self):
+        # A prevented row stamped for the prior run (record index 0) reports
+        # as foreign: the foreign note names it, the adjudicated-run summary
+        # line never prints, and the row is never attributed to this run's
+        # teardown evidence.
+        self._author_manifest([self._prevented_row(0)])
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("removal: git worktree remove", out)
+        self.assertIn(
+            "branch-closeout: prevented clobber(s) attributed to prior "
+            "run(s) in the shared manifest",
+            out,
+        )
+        self.assertIn((self.primary / self.PREVENTED_REL).as_posix(), out)
+        self.assertIn("never this run's teardown evidence", out)
+        self.assertNotIn("prevented clobber(s) this run restored from HEAD", out)
+        self.assertNotIn("held:", out)
+        self.assertTrue(Path(self.worktree).is_dir())
+
+
 class ManifestRecordIndexStampTest(unittest.TestCase):
     """[class: REPOSITORY_TEST] The run-attribution stamp at the manifest
     persistence choke point (plan
@@ -8806,9 +8892,22 @@ class ScopedInventoryMigrateTest(unittest.TestCase):
             # stamp (plan 2026-11-01-gate-removal-inherited-manifest-rows):
             # the append carries a branch section, so every appended row is
             # stamped with the incoming record's index (1, after the
-            # producer's own record).
+            # producer's own record). The delivered_blob field is the
+            # clobber guard's additive per-row capture (plan
+            # 2026-11-02-closeout-migrate-clobber-guard-restore-arms); the
+            # primary is a git target, so the sha is recorded.
             self.assertEqual(
-                sorted(entry), ["destination", "record_index", "source", "verified"]
+                sorted(entry),
+                ["delivered_blob", "destination", "record_index", "source", "verified"],
+            )
+            expected_blob = subprocess.run(
+                ["git", "-C", str(primary), "hash-object", "--", rel],
+                capture_output=True, text=True, check=True,
+                env=_hermetic_lock_env(self.root),
+            ).stdout.strip()
+            self.assertEqual(
+                entry["delivered_blob"], expected_blob,
+                "the migrated row must carry the delivered blob sha",
             )
             self.assertEqual(entry["record_index"], 1)
         self.assertEqual(data.get("failed"), [])
@@ -10681,6 +10780,252 @@ class BaselineClobberGuardTest(unittest.TestCase):
         )
         self.assertEqual((target / self.REL).read_bytes(), self.V2)
 
+    # ---- Task 1 pins (plan 2026-11-02-closeout-migrate-clobber-guard-
+    # restore-arms): index-membership routing and the shared reclassify-
+    # then-restore helper. The interception recipe is the r3 record's F6
+    # pin recipe of record (.ai-playbook/reviews/2026-11-02-closeout-
+    # migrate-baseline-tracked-clobber-code-review-r3.md): intercept the
+    # module's subprocess.run so a restage lands after the classification
+    # rev-parse returns, then assert the downgrade.
+
+    def _peer_restage(self, target: Path, blob: str) -> None:
+        """The peer's restage primitive: put one blob at stage 0 of the
+        target index (update-index plumbing, the same shape _stage_rewind
+        uses)."""
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--add", "--cacheinfo",
+             f"100644,{blob},{self.REL}"],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+
+    def _unmerged_target(self, name: str) -> Path:
+        """A target repo whose REL sits at index stages 1-3 (a live
+        content merge left conflicted in the worktree), with everything
+        else committed-clean."""
+        target = self._target_repo(name)
+        branch = self._git(target, "rev-parse", "--abbrev-ref", "HEAD")
+        self._git(target, "checkout", "-q", "-b", "peer-merge", "HEAD~1")
+        self._write_rel(target, b"corpus peer-side edit\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "peer-side edit")
+        self._git(target, "checkout", "-q", branch)
+        merge = subprocess.run(
+            ["git", "-C", str(target), "merge", "peer-merge"],
+            capture_output=True, text=True, check=False,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        self.assertNotEqual(
+            merge.returncode, 0, "fixture precondition: the merge must conflict",
+        )
+        self.assertNotEqual(
+            self._git(target, "ls-files", "-u", "--", self.REL), "",
+            "fixture precondition: the owned path must sit at stages 1-3",
+        )
+        return target
+
+    def test_postrun_guard_routes_unmerged_owned_entry_report_only(self):
+        """[class: REPOSITORY_TEST] An owned path sitting at index stages
+        1-3 (mid-merge) is unmerged foreign state, not a staged deletion:
+        the guard reports it report-only naming the unmerged state, spawns
+        zero restores, and leaves the conflict - index stages and worktree
+        markers - untouched."""
+        target = self._unmerged_target("target")
+        restore_spawns = {"n": 0}
+        real_run = subprocess.run
+
+        def counting_run(argv, *a, **k):
+            if "restore" in argv:
+                restore_spawns["n"] += 1
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=counting_run):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        self.assertEqual(prevented, [])
+        out = captured.getvalue()
+        self.assertIn(f"prevented-clobber check: {self.REL}", out)
+        self.assertIn("unmerged", out, "the report line must name the unmerged state")
+        self.assertIn("left untouched", out)
+        self.assertEqual(
+            restore_spawns["n"], 0,
+            "an unmerged entry must spawn zero restores",
+        )
+        self.assertEqual(
+            len(self._git(target, "ls-files", "-u", "--", self.REL).splitlines()),
+            3, "all three index stages must survive the guard",
+        )
+        self.assertIn(
+            "<<<<<<<",
+            (target / self.REL).read_text(encoding="utf-8", errors="replace"),
+            "the worktree conflict markers must survive the guard",
+        )
+
+    def test_postrun_guard_downgrades_when_peer_restages_during_owned_deletion(self):
+        """[class: REPOSITORY_TEST] The deletion restore arm runs the shared
+        reclassify-then-restore helper (still-absent means unchanged): a
+        peer restage of HEAD bytes landing after the classification read
+        (the r3 F6 subprocess-run interception recipe) downgrades the arm
+        to report-only - no restore, the changed-under-guard line, and the
+        peer's restaged blob left in the index."""
+        target = self._target_repo("target")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "--cached", self.REL)
+        real_run = subprocess.run
+        classification_reads = {"n": 0}
+
+        def restaging_run(argv, *a, **k):
+            is_classification_read = "rev-parse" in argv and f":{self.REL}" in argv
+            result = real_run(argv, *a, **k)
+            if is_classification_read:
+                classification_reads["n"] += 1
+                if classification_reads["n"] == 1:
+                    self._peer_restage(target, head_blob)
+            return result
+
+        with mock.patch.object(MODULE.subprocess, "run", new=restaging_run):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        self.assertGreaterEqual(
+            classification_reads["n"], 1,
+            "fixture precondition: the classification read ran",
+        )
+        self.assertEqual(
+            prevented, [],
+            "the peer restage must downgrade the arm to report-only",
+        )
+        self.assertIn(
+            "changed under the guard between classification and restore",
+            captured.getvalue(),
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            head_blob,
+            "the peer's restaged blob must survive the guard",
+        )
+        self.assertEqual((target / self.REL).read_bytes(), self.V2)
+
+    def test_postrun_guard_downgrades_when_peer_restages_during_owned_vintage(self):
+        """[class: REPOSITORY_TEST] The vintage restore arm keeps its
+        compare-then-act downgrade (the r3 F6 pin recipe of record,
+        generalized into the shared helper): a peer restage of HEAD bytes
+        landing after the classification read downgrades to report-only -
+        no restore, the changed-under-guard line, the peer's restaged blob
+        left in the index."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self.assertNotEqual(v0_blob, head_blob)
+        self._stage_rewind(target, v0_blob)
+        real_run = subprocess.run
+        classification_reads = {"n": 0}
+
+        def restaging_run(argv, *a, **k):
+            is_classification_read = "rev-parse" in argv and f":{self.REL}" in argv
+            result = real_run(argv, *a, **k)
+            if is_classification_read:
+                classification_reads["n"] += 1
+                if classification_reads["n"] == 1:
+                    self._peer_restage(target, head_blob)
+            return result
+
+        with mock.patch.object(MODULE.subprocess, "run", new=restaging_run):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        self.assertEqual(
+            prevented, [],
+            "the peer restage must downgrade the arm to report-only",
+        )
+        self.assertIn(
+            "changed under the guard between classification and restore",
+            captured.getvalue(),
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            head_blob,
+            "the peer's restaged blob must survive the guard",
+        )
+        self.assertEqual((target / self.REL).read_bytes(), self.V2)
+
+    def test_postrun_guard_reports_failed_restore_without_re_restoring(self):
+        """[class: REPOSITORY_TEST] A restore subprocess failure is a report
+        line, not a retry: the guard prints the restore-failure WARN,
+        records no prevented path, spawns exactly one restore, and leaves
+        the staged rewind in place."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        self._stage_rewind(target, v0_blob)
+        real_run = subprocess.run
+        restore_spawns = {"n": 0}
+
+        def failing_restore_run(argv, *a, **k):
+            if "restore" in argv:
+                restore_spawns["n"] += 1
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "simulated restore failure",
+                )
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=failing_restore_run):
+            captured = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(err):
+                prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        self.assertEqual(prevented, [])
+        self.assertIn(f"prevented-clobber restore failed for {self.REL}", err.getvalue())
+        self.assertIn("simulated restore failure", err.getvalue())
+        self.assertEqual(
+            restore_spawns["n"], 1, "a failed restore must not be retried",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), v0_blob,
+            "the staged rewind must stay after the failed restore",
+        )
+
+    def test_postrun_guard_reports_post_restore_mismatch_without_re_restoring(self):
+        """[class: REPOSITORY_TEST] The helper verifies the restore outcome:
+        a peer blob restaged in the window after the restore subprocess
+        returns makes the post-restore re-read mismatch HEAD - a report
+        line and no re-restore, the peer's bytes surviving."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        self._stage_rewind(target, v0_blob)
+        _write(target / "docs/tmp/peer-restage-scratch.md", b"corpus restaged after the restore ran\n")
+        peer_blob = self._git(
+            target, "hash-object", "-w", "--", "docs/tmp/peer-restage-scratch.md",
+        )
+        (target / "docs/tmp/peer-restage-scratch.md").unlink()
+        real_run = subprocess.run
+        restore_spawns = {"n": 0}
+
+        def restaging_run(argv, *a, **k):
+            if "restore" in argv:
+                restore_spawns["n"] += 1
+                result = real_run(argv, *a, **k)
+                self._peer_restage(target, peer_blob)
+                return result
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=restaging_run):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        self.assertEqual(prevented, [])
+        out = captured.getvalue()
+        self.assertIn(f"prevented-clobber check: {self.REL}", out)
+        self.assertIn("did not hold HEAD after the restore", out)
+        self.assertEqual(
+            restore_spawns["n"], 1,
+            "a post-restore mismatch must not trigger a re-restore",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), peer_blob,
+            "the peer's post-restore bytes must survive (no re-restore)",
+        )
+
     def test_migrate_scoped_inventory_route_bypasses_the_preflight(self):
         """[class: REPOSITORY_TEST] The baseline-less scoped-inventory route
         has no baseline to move backward: a carried path tracked at the git
@@ -10706,6 +11051,289 @@ class BaselineClobberGuardTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertNotIn("baseline clobber pre-flight", proc.stderr)
         self.assertIn("COLLISION", proc.stdout + proc.stderr)
+
+    # ---- Task 2 pins (plan 2026-11-02-closeout-migrate-clobber-guard-
+    # restore-arms): the delivered-blob owned signature. The guard's vintage
+    # decision compares the staged blob against the in-memory delivered blob
+    # captured during the carry loop (never a manifest read); a rel absent
+    # from the map keeps the vintage-only signature (the defensive absence
+    # rule). The deliberate-reversal residual stands: a revert staged at a
+    # committed historical vintage differing from the delivered blob still
+    # restores; r2 F6's restore-only-on-delivered-match direction is
+    # rejected (plan Assumptions).
+
+    def test_migrate_records_delivered_blob_and_leaves_owned_staged_delivered_bytes(self):
+        """[class: REPOSITORY_TEST] The staged-equals-delivered shape: the
+        run delivers the older committed vintage's bytes (the scoped route
+        rides past the pre-flight that would refuse the backward carry) and
+        the staged entry then holds exactly those delivered bytes; the
+        guard compares against the in-memory delivered blob recorded on the
+        migrated row, leaves the run's own delivered bytes untouched with a
+        report line, and restores nothing - the pre-fix guard destroyed the
+        run's output by restoring HEAD (origin row
+        2026-11-02-closeout-migrate-owned-vintage-restore-signature)."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self.assertNotEqual(v0_blob, head_blob)
+        self._git(target, "rm", "-q", self.REL)
+        self._stage_rewind(target, v0_blob)
+        self.assertFalse(
+            (target / self.REL).exists(),
+            "fixture precondition: the worktree copy is absent so the run carries the path",
+        )
+        source = self.root / "source"
+        self._write_rel(source, self.V0)
+        inventory = self.root / "scoped-inventory.json"
+        inventory.write_text(json.dumps({"files": [self.REL]}), encoding="utf-8")
+        manifest = self.root / "migration.json"
+        proc = subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH), "migrate",
+                "--inventory", str(inventory),
+                "--source", str(source),
+                "--target", str(target),
+                "--manifest", str(manifest),
+            ],
+            capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = proc.stdout
+        self.assertIn(
+            f"prevented-clobber check: {self.REL} staged bytes equal the "
+            "bytes this run delivered",
+            out,
+            "the delivered-equal staged shape must be reported",
+        )
+        self.assertIn("left untouched", out)
+        self.assertNotIn(
+            f"prevented clobber: {self.REL}",
+            out,
+            "the delivered-equal staged bytes must not be restored",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            v0_blob,
+            "the staged delivered bytes must survive in the index",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(),
+            self.V0,
+            "the run's own delivered bytes must survive in the worktree",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        migrated = [
+            entry for entry in data["migrated"] if entry["source"] == self.REL
+        ]
+        self.assertEqual(len(migrated), 1, data["migrated"])
+        self.assertEqual(
+            migrated[0]["delivered_blob"], v0_blob,
+            "the migrated row must record the delivered blob captured "
+            "during the carry loop",
+        )
+        self.assertEqual(data["prevented_clobbers"], [])
+
+    def test_postrun_guard_restores_owned_rewind_when_staged_blob_differs_from_delivered(self):
+        """[class: REPOSITORY_TEST] The tightened signature keeps the
+        between-snapshot rewind catch: an owned staged vintage whose blob
+        differs from the rel's in-memory delivered blob (the run delivered
+        HEAD's bytes; the staged entry rewound to the older vintage) still
+        restores from HEAD in index and worktree."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self.assertNotEqual(v0_blob, head_blob)
+        self._stage_rewind(target, v0_blob)
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: head_blob},
+            )
+        self.assertEqual(prevented, [self.REL])
+        self.assertIn(f"prevented clobber: {self.REL}", captured.getvalue())
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            head_blob,
+            "the index must hold HEAD after the restore",
+        )
+        self.assertEqual((target / self.REL).read_bytes(), self.V2)
+
+    def test_postrun_guard_absent_delivered_blob_keeps_vintage_only_signature(self):
+        """[class: REPOSITORY_TEST] The defensive absence rule: a rel with
+        no entry in the in-memory delivered-blob map (an empty map, or one
+        naming only other rels) keeps the current vintage-only signature -
+        the owned rewind restores from HEAD. The decision never reads the
+        manifest."""
+        for label, delivered in (
+            ("empty-map", {}),
+            ("other-rels-only", {"docs/tmp/ledger.md": "0" * 40}),
+        ):
+            with self.subTest(map=label):
+                target = self._target_repo(f"target-{label}")
+                v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+                head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+                self.assertNotEqual(v0_blob, head_blob)
+                self._stage_rewind(target, v0_blob)
+                captured = io.StringIO()
+                with contextlib.redirect_stdout(captured):
+                    prevented = MODULE._prevent_tracked_clobbers(
+                        target, {self.REL}, delivered,
+                    )
+                self.assertEqual(prevented, [self.REL])
+                self.assertIn(f"prevented clobber: {self.REL}", captured.getvalue())
+                self.assertEqual(
+                    self._git(target, "rev-parse", f":{self.REL}"),
+                    head_blob,
+                    "the index must hold HEAD after the restore",
+                )
+                self.assertEqual((target / self.REL).read_bytes(), self.V2)
+
+    def test_migrate_records_delivered_blob_on_replaced_manifest_row(self):
+        """[class: REPOSITORY_TEST] The receipt-proven replacement arm
+        records the delivered blob too: the replaced manifest row carries
+        the delivered_blob sha of the incoming bytes, computed during the
+        carry loop before the manifest append (an untracked target path
+        keeps the pre-flight inert so the replacement route runs)."""
+        target = self._target_repo("target")
+        note_rel = "docs/tmp/mirror-note.md"
+        prior = b"mirror note v1\n"
+        incoming = b"mirror note v2\n"
+        _write(target / note_rel, prior)
+        source = self.root / "source"
+        _write(source / note_rel, prior)
+        session_dir = source / "docs/tmp/execute-plan/mirror-fixture"
+        row = (
+            "task_boundary: task 1 commit abc1234 verification: pass; "
+            "mirror_status=complete mirror_receipts="
+            f"{_receipts_token([_file_receipt(note_rel, _digest(prior))])}"
+        )
+        _write_session_manifest(
+            session_dir / "manifest.md", [row], run_worktree=str(source.resolve()),
+        )
+        baseline = session_dir / "closeout-baseline.json"
+        _capture_baseline(source, baseline)
+        _write(source / note_rel, incoming)
+        manifest = self.root / "migration.json"
+        proc = self._run_migrate(source.resolve(), baseline, manifest, target)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # The delivered blob the capture must record, derived independently
+        # of the migrated file (hash a scratch copy of the incoming bytes).
+        scratch = target / "docs/tmp/incoming-scratch.md"
+        _write(scratch, incoming)
+        incoming_blob = self._git(
+            target, "hash-object", "--", "docs/tmp/incoming-scratch.md",
+        )
+        scratch.unlink()
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        replaced = [
+            entry for entry in data["replaced"] if entry["source"] == note_rel
+        ]
+        self.assertEqual(len(replaced), 1, proc.stdout + proc.stderr)
+        self.assertEqual(
+            replaced[0]["delivered_blob"], incoming_blob,
+            "the replaced row must record the delivered blob captured "
+            "during the carry loop",
+        )
+        self.assertEqual((target / note_rel).read_bytes(), incoming)
+        self.assertEqual(data["prevented_clobbers"], [])
+
+    def test_postrun_guard_emits_for_staged_new_file_absent_at_head(self):
+        """[class: REPOSITORY_TEST] The staged-new-at-target shape (plan
+        closeout-migrate-clobber-guard-restore-arms Task 3): a staged new
+        file absent at HEAD - the head_blob-is-None skip - emits a
+        prevented-clobber-check line and stays untouched, owned or foreign;
+        the pre-fix walk passed the shape silently."""
+        for label, owned in (
+            ("foreign", set()),
+            ("owned", {self.REL}),
+        ):
+            with self.subTest(ownership=label):
+                target = self._target_repo(f"target-new-at-target-{label}")
+                new_rel = "docs/tmp/staged-new.md"
+                _write(target / new_rel, b"staged new bytes never committed\n")
+                self._git(target, "add", "-A", new_rel)
+                new_blob = self._git(target, "rev-parse", f":{new_rel}")
+                captured = io.StringIO()
+                with contextlib.redirect_stdout(captured):
+                    prevented = MODULE._prevent_tracked_clobbers(target, owned)
+                out = captured.getvalue()
+                self.assertEqual(prevented, [])
+                self.assertIn(
+                    f"prevented-clobber check: {new_rel} is "
+                    "staged-new-at-target",
+                    out,
+                    "the staged-new-at-target shape must emit",
+                )
+                self.assertIn("left untouched", out)
+                self.assertEqual(
+                    self._git(target, "rev-parse", f":{new_rel}"),
+                    new_blob,
+                    "the staged new file must stay staged",
+                )
+
+    def test_postrun_guard_emits_for_owned_staged_brand_new_bytes(self):
+        """[class: REPOSITORY_TEST] The fall-past branch (plan closeout-
+        migrate-clobber-guard-restore-arms Task 3): an owned path staged
+        with brand-new bytes (a blob that is not a committed vintage in
+        HEAD's history, so the delivered-blob vintage arm never reaches it)
+        emits a prevented-clobber-check line naming
+        staged-new-bytes-on-a-carried-path and stays untouched; the pre-fix
+        walk fell past the report silently."""
+        target = self._target_repo("target-new-bytes-carried")
+        _write(target / self.REL, b"brand-new bytes never committed\n")
+        self._git(target, "add", self.REL)
+        staged = self._git(target, "rev-parse", f":{self.REL}")
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: "f" * 40},
+            )
+        out = captured.getvalue()
+        self.assertEqual(prevented, [])
+        self.assertIn(
+            f"prevented-clobber check: {self.REL} is staged-new-bytes-"
+            "on-a-carried-path",
+            out,
+            "the owned brand-new-bytes shape must emit",
+        )
+        self.assertIn("left untouched", out)
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            staged,
+            "the brand-new staged bytes must stay staged",
+        )
+
+    def test_postrun_guard_emits_for_staged_bytes_equal_to_head(self):
+        """[class: REPOSITORY_TEST] The equals-HEAD shape (plan closeout-
+        migrate-clobber-guard-restore-arms Task 3): a staged blob equal to
+        HEAD - reachable at the walk through a mode-only change, which
+        diff --cached lists even though the blob is unchanged - emits a line
+        naming the no-op restage and leaves the staged entry untouched; the
+        pre-fix walk passed the shape silently."""
+        target = self._target_repo("target-noop-restage")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(
+            target, "update-index", "--add", "--cacheinfo",
+            f"100755,{head_blob},{self.REL}",
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(target, {self.REL})
+        out = captured.getvalue()
+        self.assertEqual(prevented, [])
+        self.assertIn(
+            f"prevented-clobber check: {self.REL} staged bytes equal HEAD",
+            out,
+            "the equals-HEAD shape must emit",
+        )
+        self.assertIn("no-op restage", out)
+        self.assertIn("left untouched", out)
+        self.assertEqual(
+            self._git(target, "ls-files", "-s", "--", self.REL),
+            f"100755 {head_blob} 0\t{self.REL}",
+            "the mode-only restage must stay staged untouched",
+        )
 
 
 class StrandedPointerCheckTest(unittest.TestCase):

@@ -32,6 +32,10 @@ Review code for security vulnerabilities and unsafe practices.
 4. System identifiers (entity IDs, revision IDs) are NOT PII - do not flag them
 5. Debug endpoints disabled or protected in production
 
+For a possible response-body leak, first show that sensitive content can be in the
+body and trace that content to a log sink; without this evidence, keep the concern
+conditional.
+
 ## Authentication and Authorization
 
 1. Auth checks present on all protected endpoints
@@ -46,6 +50,10 @@ Review code for security vulnerabilities and unsafe practices.
 1. PII encrypted at rest and in transit
 2. Minimal data retention - do not store what is not needed
 3. Audit logging for access to sensitive data
+
+For sensitive-data changes, trace protected fields through conversion,
+serialization, outbound payloads, and failure and log sinks. Inspect throwable
+rendering and name each reachable path; use the trace as evidence for leakage claims.
 
 ## Resource Identifiers
 

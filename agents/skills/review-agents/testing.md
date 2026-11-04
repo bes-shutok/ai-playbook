@@ -44,6 +44,8 @@ When building or reviewing a mutator / failure-mode matrix (or equivalent covera
 1. A cell that cites a test which constructs the boundary component with a raw constructor (or other out-of-container fixture) cannot mark production registration or wiring as proven.
 2. Mark the claim unchecked, or stage `testing#coverage-claim-unchecked`, until a full-context harness proof exists per Harness Fidelity above.
 3. When a sibling component in the same repo already has a full-context harness test, cite that sibling path as the expected pattern; still resolve naming from the Guideline Pack, not from this catalog.
+4. For changed mapping, fallback, identifier, sensitive-data transformation, or serialization behavior, list each contract-relevant input and accepted runtime representation, including blank, absent, and accepted non-string forms; a happy-path value alone proves no partition.
+5. For every claimed partition, cite a named test and its assertion using the Evidence requirement below, or mark it uncovered. Compare assertions against the contract; an assertion expecting recognized PII to pass unprotected or another contract-violating outcome is unsafe and cannot count as evidence.
 
 ## Plan gate-needle discrimination (doc/skill-only plans)
 

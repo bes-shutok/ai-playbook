@@ -210,6 +210,22 @@ def test_prompt_log_origins_clean_log_exits_zero(tmp_path):
     assert "LIVE: second-entry -> 2026-10-01-other-live.md" in proc.stdout
 
 
+def test_prompt_log_origins_pending_token_served(tmp_path):
+    # The covered-pending-execution token joins the served class (plan
+    # docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-
+    # as-landed.md Task 3): an all-pending entry goes stale at the authoring
+    # flip and owes its prune; the execution flip is staleness-preserving.
+    write_origin(tmp_path, "2026-10-01-pending-origin.md",
+                 "Status: covered-pending-execution"
+                 " (docs/history/plans/2026-01-01-p.md)")
+    log = write_log(tmp_path, [
+        entry("pending-entry", ["2026-10-01-pending-origin.md"]),
+    ])
+    proc = run_checker(log)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "STALE" in proc.stdout
+
+
 def test_prompt_log_origins_frozen_entry_still_checked(tmp_path):
     write_origin(tmp_path, "2026-10-01-served-origin.md", "Status: done")
     log = write_log(

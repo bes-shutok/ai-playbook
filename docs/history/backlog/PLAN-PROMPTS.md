@@ -1,5 +1,8 @@
 Tracked rolling log of ready-to-dispatch plan-creation prompts, most urgent first.
 
+PLAN-PROMPTS-PRUNE: execution-lane-authored-plans-misread-as-landed -> docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
+PLAN-PROMPTS-PRUNE: machinery-regrowth-unregistered-script-pair -> docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (covered by Task 5; the missed additional-origin disposition is recorded in the archived plan)
+PLAN-PROMPTS-PRUNE: done-lock-hold-overbroad-commit-stop -> docs/history/plans/2026-11-04-done-lock-hold-overbroad-commit-stop.md (own frozen entry pruned at the authoring landing; origin row stays open pending execution)
 PLAN-PROMPTS-PRUNE: authoring-empty-diff-closeout-route -> docs/history/plans/2026-11-02-empty-diff-closeout-route.md
 PLAN-PROMPTS-PRUNE: review-staging-archived-plan-source-identity -> docs/history/plans/2026-11-02-review-staging-archived-plan-source-identity.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
 PLAN-PROMPTS-PRUNE: certification-gates-full-violation-reporting -> docs/history/plans/2026-11-03-certification-gates-full-violation-reporting.md (own frozen entry pruned at the authoring landing; origin row covered by the covering plan)
@@ -117,6 +120,7 @@ Standing rules:
 - Write boundary rule: a log write that commits in the primary checkout (the monitor's prune, freeze, or investigate write, a Phase 0 freeze commit, a primary-placement checkpoint touching a log) acquires or reuses the primary done lock (the repository's `scripts/done-lock.sh` done lock), before any staging or index write and before the final log read, holding it through the commit and failure recovery; the caller selects the intended symbolic ref and starting OID after lock acquisition, verifies the selected pair against primary `HEAD` under the done lock before the final log read or edit, and on a mismatch recovers before changing the log; the write then passes the selected pair to the runner's ref-bound captured-tree transaction (`scripts/done_run.sh`) and never takes the repo-wide merge lock (the merge-lock acquisition refusal for primary log writes is retired 2026-10-28, plan `docs/history/plans/2026-10-25-primary-log-branch-drift-at-commit.md`). The runner refuses before staging when either rolling-log path already has a staged delta (the caller-side pre-staged-owned-path refusal is retired; the runner owns the two-path check), stages and commits only the declared owned paths through that transaction, and on every refusal before the captured-ref compare-and-swap succeeds the runner's cleanup unstages and verifies only this writer's declared owned delta before release (recovery that cannot be verified blocks later primary writes and reports through the existing recovery path); after the compare-and-swap succeeds, a later ledger-append or post-commit-hook error reports that the landed commit stands and never rolls it back. Done-lock acquisition failure does no work. A session working from a worktree keys the primary done lock from primary-checkout context (the Phase 0 freeze included); worktree branch commits stay isolated under the existing merge-lock guard, and no new lock is added. When the runner's pre-stage guard (the staged-set enumeration) refuses the transaction naming a foreign staged path (staged in the shared primary index by a session other than this writer, outside the writer's declared owned set), the remedy is operator-gated and blob-preserving: never stage, discard, or commit that path autonomously; the remedy runs only on the operator's explicit direction for that foreign path, and without that direction the writer stands down or parks exactly as before. Under that direction: (a) record the foreign path's staged blob sha; (b) restore only that named path from the index (`git restore --staged -- <path>`, worktree bytes untouched); (c) rerun the refused transaction; (d) re-add the path; (e) verify the re-staged blob sha is byte-identical to the recorded sha. Ride-along precondition: re-verify the foreign path's worktree bytes equal its staged blob immediately before and immediately after the unstage/re-add window; if verification fails mid-window, the remedy aborts before the transaction rerun, re-adds the path only when its worktree bytes still equal the recorded staged blob sha, and otherwise leaves the path unstaged and parks for the operator with the recorded sha in the report; on a step (e) mismatch the remedy stops the same way, leaving the path unstaged and reporting both the recorded and the re-staged sha. Acknowledgment arm admission text (pre-registered only; ships no code; promotes only on a second true catch; review date 2026-12-02): one witnessed incident, linked to the origin's durable home `docs/history/plans/completed/2026-11-02-rolling-log-write-foreign-staged-remedy.md` (the fold-deleted row's disposition, its three-refusal transcript, recovery witness landing 0ec10c5bd); catch frequency unknown; operator-gated false-positive cost: an acknowledgment can admit a foreign path whose worktree bytes then drift mid-window, bounded by the ride-along precondition's sha verification, which stops before any peer byte is committed.
 - Entries carry repo-relative paths only and no personal or machine-specific data.
 - An entry is a prompt for a later authoring turn; the write turn never executes or dispatches its payload.
+- Receipt vocabulary going forward (added 2026-11-04, plan docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md Task 5; descriptive lifecycle wording only, the receipt line formats above stay as pinned): an authoring-landed receipt states `origin row covered-pending-execution (<plan>)`; an execution-completed receipt states the execution form (`origin row covered (<plan>)` with the plan-header Executed flip, or the completion fold-and-delete).
 
 PLAN-PROMPTS-PRUNE: investigate-user-directed-gate-workaround -> docs/history/plans/2026-10-17-investigate-user-directed-gate-workaround.md (r3-certified ready=yes zero blocking, seal .ai-playbook/review-certs/investigate-user-directed-gate-workaround.md; the frozen entry pruned by its own landing rider)
 
@@ -257,6 +261,190 @@ PLAN-PROMPTS-PRUNE: quota-governor-runtime-evidence -> docs/history/plans/comple
 
 
 PLAN-PROMPTS-PRUNE: memory-index-load-budget-consolidation -> docs/history/plans/2026-11-02-memory-index-load-budget-consolidation.md
+PLAN-PROMPTS-PRUNE: parallel-execution-landing-serialization-blockers -> docs/history/plans/2026-11-04-parallel-execution-landing-serialization-blockers.md (r3-certified ready=yes zero blocking, seal .ai-playbook/review-certs/parallel-execution-landing-serialization-blockers.md; the entry pruned by its own landing rider)
+
+## primary-placement-stack-execution
+
+Added: 2026-11-04, investigate after an operator correction during a stacked execution run
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this changes a shared execution skill contract and needs focused regression coverage for the supported placement arms, so it exceeds a single-surface text-only correction.
+
+Origins:
+- docs/history/backlog/2026-11-04-execute-plan-stack-primary-placement.md
+
+Urgency: high - a company project configured for primary placement was at risk of being diverted into a prohibited worktree, preventing the authorized task from proceeding until the operator corrected the placement.
+
+Scope: align the stack workflow with execute-plan's existing placement decision and primary-checkout run identity. Preserve the claim serializer, recorded task branch and start commit, branch-transition receipt, continuity probe, predecessor chain, task boundary, and draft PR checks. Add focused coverage that exercises the primary placement alongside the existing worktree placement.
+
+Orientation: `agents/skills/execute-plan-stack/SKILL.md` Workflow steps 2 and 4; `agents/skills/execute-plan/SKILL.md` Phase 0 primary-placement arm and Stack-task entry; `agents/skills/execute-plan/runtime-contract.md` Stack-task entry point; `agents/skills/execute-plan/worktree-first.md` Project worktree policy and continuity probe; `scripts/execution_claim.sh`; `scripts/check_run_continuity.py`; completed plans `docs/history/plans/completed/2026-10-29-stacked-pr-plan-execution.md` and `docs/history/plans/completed/2026-10-02-project-configurable-worktree-policy.md`.
+
+Continuity disposition: retain the primary-checkout serialization claim and identity checks because they protect concurrent run ownership and were not the source of the placement misread. Make the setup language accept the resolved primary placement and its recorded task branch, and retain the same transition and continuity evidence used by the worktree lane.
+
+Scope arms:
+1. Use the resolved placement in stack setup (recommended): reuse execute-plan's recorded primary checkout or registered worktree, then perform the same verified task-branch transition and task-only entry. The primary lane records `run_worktree: primary checkout (no run worktree)` and the chosen task branch plus start commit.
+2. Keep the stack procedure worktree-only: rejected because `agents/skills/execute-plan/worktree-first.md` explicitly resolves all plan lanes to primary when project facts select that policy.
+3. Add a second primary-only claim and branch-transition protocol: rejected because `agents/skills/execute-plan/SKILL.md` and `agents/skills/execute-plan/runtime-contract.md` already define the primary claim and stack-task adoption contract.
+4. Remove primary placement from plan execution: rejected because the configurable worktree policy plan intentionally supports primary placement across plan authoring and execution.
+
+Machinery admission: the recommended change adds no gate, validator, lock, or ledger; its regression coverage uses existing test infrastructure.
+
+Rejected alternatives:
+- Create a worktree whenever stack execution starts: rejected because it conflicts with the primary resolution in the affected project policy (`agents/skills/execute-plan/worktree-first.md`)
+- Remove the execution claim or relax branch identity checks: rejected because the shared contract uses them to serialize primary runs and bind a task branch to its run (`agents/skills/execute-plan/SKILL.md`)
+- Add a new primary-only execution path: rejected because the existing Phase 0 and Stack-task contracts already express the required claim and branch transition (`agents/skills/execute-plan/runtime-contract.md`)
+
+Prompt: Author a focused plan from this origin. Trace the current stack setup against both worktree and primary placement, including execution-claim fields, manifest identity, branch transition, continuity probe arguments, and stack-task adoption. Choose the smallest wording and regression-test changes that make both supported placements executable while preserving claim serialization, predecessor bases, task evidence, and draft PR verification. Check skill pins and the established test conventions for the affected skills. Keep the implementation limited to this workflow gap.
+
+
+## execution-resume-authoring-claim-identity-confusion
+
+Added: 2026-11-04, investigate over the operator-directed recovery of an execution session that selected an authoring claim for a different plan
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this requires resolving the source-of-truth ordering across execute-plan resume, authoring claims, execution manifests, and worktree adoption, so it is not a bounded single-surface repair.
+
+Origins:
+- docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md
+
+Cluster: docs/history/backlog/2026-11-04-execution-lane-authored-plans-misread-as-landed.md (both involve authoring state being read as execution state, but this row owns resume worktree identity while that row owns queue completion classification); docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md (shared cross-turn resume and resource-ownership surface; this row owns selecting the execution run, that covered row owns terminal disposition of inventoried resources)
+
+Urgency: high - a resumed execute-plan session used an authoring claim for a different backlog item to create its worktree, then initialized closeout for the originally requested plan in that mismatched worktree; the preserved branch contains unrelated dirty work.
+
+Scope: establish a stable identity source and recovery order for execute-plan resume. Compare the requested plan path, immutable execution manifest, execution claim, authoring claim, and current Git worktree registration. Specify how resume handles missing or inconsistent records while preserving the existing work and requiring an exact identity match before adopting or creating a worktree. Keep queue classification and resource teardown as adjacent contracts, not ownership of this selector.
+
+Orientation: the initiating request names the review-freshness plan; the observed mismatched worktree is named for machinery-inventory authoring; `agents/skills/execute-plan/SKILL.md` Phase 0 and `agents/skills/execute-plan/worktree-first.md` already prescribe resume identity checks; `agents/skills/plans/SKILL.md` owns authoring claim identity; the new origin records the specific mismatch.
+
+Rejected alternatives:
+- Select the newest same-session claim: rejected because the observed authoring claim belonged to another backlog item and did not identify the requested execution run (docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md)
+- Prefer only the requested plan path and ignore execution records: rejected because the existing worktree may contain resumable changes whose exact run identity must be recovered before adoption (agents/skills/execute-plan/worktree-first.md)
+- Add a new global run ledger: rejected because the manifest, execution claim, authoring claim, and Git registration already provide distinct evidence; first define their ordering and recovery behavior (docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md)
+- Treat the event only as an authoring-claim defect: rejected because the wrong claim was applied while resuming an explicitly requested execution plan, so the selector crosses workflow boundaries (docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md)
+
+Prompt: Author a focused plan from this origin. Re-derive execute-plan Phase 0, the worktree-first adoption contract, plans' authoring claim identity, the existing execution manifest and claim shapes, and the current Git registration rules. Define an explicit precedence rule that binds resume to the exact requested plan and its immutable execution identity, including a recovery route when one record is missing or inconsistent. Ensure authoring claims can identify authoring runs only; they cannot select an execution worktree for another plan. Preserve mismatched worktrees and report the identity evidence needed to continue. Prefer clarifying the current record contracts over introducing a new ledger, validator, or lock; any machinery proposal must satisfy the repository admission protocol with this incident as evidence. Keep execution queue classification and terminal resource cleanup within their existing scopes.
+
+## authoring-continuation-owner-attribution
+
+Added: 2026-11-04, learn Step 1.8 and investigate over an operator-corrected continuation of an existing authoring run
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix crosses plan authoring's claim lifecycle, self-heal's caller-authority boundary, and the existing attribution lesson's recall path, so it is not a body-named single-surface repair.
+
+Origins:
+- docs/history/backlog/2026-11-04-authoring-continuation-owner-attribution.md
+
+Cluster: docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md (same claim/session identity surface; that row owns execute-plan worktree selection, this row owns authoring-run continuation); docs/history/backlog/2026-11-04-authoring-claim-discovery-filename-convention.md (same claim lifecycle, but that row owns peer-claim discovery before parallel authoring begins)
+
+Urgency: high - the user had to correct an unauthorized ownership attribution after the session continued work whose plan marker named a different originating run, despite an existing claim lifecycle and an attribution lesson.
+
+Scope: define the minimum source-of-truth order for continuing an authoring run across sessions or agents. Keep user authorization to work on a plan separate from proof that this run owns an existing claim, worktree, or branch. Reuse the claim lifecycle and provenance already present; make ambiguous ownership preserve the work and route to an owner-recognized transfer or operator decision.
+
+Orientation: `agents/skills/plans/SKILL.md` Phase 0 Authoring claim and Continuation discipline; the AUTHORING CLAIM procedure in `agents/skills/maintenance/template-authoring.md`; `agents/skills/self-heal/SKILL.md` Recovery steps 3-5; `docs/maintenance/development_lessons.md` #229; and the origin row's evidence. Re-derive the plan's permanent authoring marker and the current claim's `session` field, then trace the claim contract's introduction and current readers before recommending a change.
+
+Rejected alternatives:
+- Treat the current claim or the user's request to finish the plan as ownership proof: rejected because the plan's permanent marker named another originating run and the user explicitly corrected the attribution; witnessed in `docs/history/backlog/2026-11-04-authoring-continuation-owner-attribution.md`.
+- Stop every cross-session continuation: rejected because the existing claim lifecycle already defines authorized continuation and transfer state; the correction requires exact attribution, not a permanent prohibition (`agents/skills/maintenance/template-authoring.md`)
+- Add a global ownership ledger or new blocking validator: rejected because current plan provenance, claim state, and session-store evidence provide existing sources to order; no witnessed incident shows they cannot represent ownership (`docs/history/backlog/2026-11-04-authoring-continuation-owner-attribution.md`).
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony. The new-ledger and blocking-validator arms are rejected for lack of a witnessed incident showing the existing artifacts cannot represent ownership or transfer.
+
+Prompt: Author a focused plan from this origin. Trace the current plan authoring claim and continuation paths through `plans`, the AUTHORING CLAIM template, and `self-heal`; identify which durable record proves original ownership and which record authorizes transfer. Re-derive and apply the existing session-store attribution lesson at that handoff. State a concise precedence and recovery rule that preserves an ambiguous run without adopting or mutating it, while allowing an owner-recognized transfer. Keep claim discovery for parallel-origin races and execute-plan resume selection within their separate contracts. Prefer clarifying and cross-referencing existing evidence over adding a new state surface or blocker.
+
+## self-heal-closeout-workaround-must-preserve-landed-tree
+
+Added: 2026-11-04, learn and investigate over operator-directed recovery after branch closeout refused removal
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): deciding whether recovery needs a self-heal instruction change or a landing-helper diagnostic crosses the recovery and closeout contracts, and any change to the branch-accounting or landing helper touches guard-bearing behavior; it is not a bounded single-surface wording repair.
+
+Origins:
+- docs/history/backlog/2026-11-04-self-heal-closeout-workaround-must-preserve-landed-tree.md
+
+Urgency: high - a branch-removal refusal was followed by two tree-identical commits instead of proof that the source tree landed; the source tip had a different tree and its worktree and ref were then removed.
+
+Scope: determine the smallest contract correction across self-heal's user-directed recovery boundary, done's operator branch-closeout sequence, and execute-plan's `land-worktree` handoff. Define a valid recovery by the actual resulting source and destination trees, require the unchanged branch-accounting gate to pass after a valid landing, and retain the source worktree/ref when those proofs do not pass. Diagnose why existing applicable lessons did not influence the recovery, and decide whether one concise instruction or retrieval pointer at the recovery handoff is sufficient or whether the existing landing helper needs a clearer refusal report. Do not invent a new landing receipt or alternate deletion route.
+
+Orientation: the origin's exact parent and tree evidence for `e7c14aa8` and `eaca3b03`; `agents/skills/self-heal/SKILL.md` Recovery 3-4; `agents/skills/done/SKILL.md` Operator branch closeout; `agents/skills/execute-plan/worktree-first.md` landing lifecycle; `scripts/land_squash.sh` `land-worktree`; `scripts/worktree_closeout_migrate.py` branch-accounting gate; `docs/maintenance/development_lessons.md` lessons #6, #264, and #450; the covered base-drift plan's instruction not to manufacture ancestry.
+
+Rejected alternatives:
+- Remove the branch-accounting gate so operator-directed cleanup always completes: rejected because the gate retains branches with unproven content, and the source tree differed from the destination in this incident (`docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md`)
+- Treat an explicit workaround request as permission to create a merge or empty squash marker: rejected because both resulting commits had the destination tree while the source tip had a different tree (e7c14aa8, eaca3b03)
+- Add a blocking validator for every empty landing: rejected because no witnessed incident shows the sanctioned helper accepting a wrong tree; this incident used a hand-created commit outside that helper, and a new refusal could block a valid empty source delta (origin Evidence; `scripts/land_squash.sh`).
+
+Machinery admission: no new gate, validator, lock, ledger, or required ceremony is proposed. The validator alternative is rejected because there is no witnessed incident of `land_squash.sh` accepting a tree-identical result when its source tree differs; the witnessed failure bypassed the helper, and the false-positive cost is refusal of a valid empty landing.
+
+Prompt: Author a focused plan from this origin and investigation. Re-derive the recorded commit parents and trees, the source branch's tree delta, the existing self-heal recovery boundary, the done branch-closeout proof, the `land-worktree` helper's actual behavior, and lessons #6, #264, and #450. Explain why the existing guidance was not applied and decide whether a compact instruction or retrieval pointer at the recovery handoff is enough to keep an operator-directed workaround inside existing authority, or whether the helper's refusal report needs clarification. A landing counts only when the resulting tree carries the intended source content and the existing branch-accounting gate passes; a tree-identical no-op does not account for a different source tree. Preserve the branch and worktree on any unresolved refusal. Compare removal, retention, narrowing, and widening of the existing guard, and prefer using or clarifying current machinery over duplicating a lesson or adding another blocker. Do not reconstruct or rewrite history in the authoring pass.
+
+## land-worktree-staged-primary-desync
+
+Added: 2026-11-04, investigate over the operator-directed recovery of the 2026-11-04 foreign staged hunk in the primary checkout (witness: the 14:38:55 stranded catalog entry plus the 14:39:30 land-worktree CAS desync that displayed the landing's own rider edits as a staged resurrection; second witness of the class preserved at blob 0ae014837 from the 2026-10-28 teardown)
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the guard-bearing-path exclusion denies the ad-hoc route - the primary arm adds a refusal to `scripts/land_squash.sh` (a guard-bearing script with its own lock authenticity, pre-refusal, and outcome-contract machinery), and the secondary arm is a protocol duty at the closeout boundary, not a single-surface edit.
+
+Origins:
+- docs/history/backlog/2026-11-04-land-worktree-staged-primary-desync.md
+
+Cluster: docs/history/plans/2026-11-04-parallel-execution-landing-serialization-blockers.md (same landing critical section; that plan owns dispatch serialization and the ref-lock span, this entry owns the primary-index state the CAS ignores)
+
+Urgency: high - the desync is silent at landing time and its harm surfaces later as a working-view commit that lands pre-landing bytes over the landing's rider (the closeout-clobber family's shape); the mechanism has sat in the standard landing path since 2026-10-18 (f3894756d) and has now been witnessed twice in three weeks.
+
+Scope arms: (1) a pre-CAS primary-index guard in land-worktree: a read-only porcelain check refusing the landing when a staged or locally-dirty tracked path intersects the landing's changed-path set, the refusal naming the intersecting paths and exiting fail per the outcome contract's modeled-refusal class; (2) a session-end staged-state census duty in the primary-checkout closeout arms: a session that staged state in the primary commits or restores it before its boundary; (3) suite cells in `scripts/test_land_squash.py`: an intersecting staged path expects the named refusal, a non-intersecting staged path expects the landing to proceed.
+
+Orientation: `scripts/land_squash.sh` (the land-worktree usage text names the omission: "land's snapshot, staged-state and dirty-intersection pre-refusals, and restore machinery are omitted"), `scripts/test_land_squash.py` (the fixture layer), `scripts/OUTCOME_CONTRACT.md` (the fail class), `agents/skills/execute-plan/worktree-first.md` (the closeout boundary the census duty rides).
+
+Rejected alternatives:
+- Copy land's blanket staged-state refusal into land-worktree: rejected - land-worktree is the standard landing path for authoring and exec work, and a blanket refusal parks every landing whenever any unrelated staged state exists in the primary; the peer session today deliberately quarantined and restored the foreign staged state rather than dropping it, so long-lived staged states are a standing reality the guard must tolerate (evidence basis: the land mode's own refusal scope, `scripts/land_squash.sh`; the preserved foreign-staged-dirt stash entries from 2026-10-28 and 2026-10-31)
+- A post-CAS auto-restore arm that resets desynced primary paths to the new tip: rejected - restoring a staged path destroys the other session's staged bytes, and land_squash's restore machinery is path-exclusive precisely against that destruction class; the recovery would re-introduce the blanket-restore shape the tool forbids (evidence basis: the restore arms' path-exclusive contract, `scripts/land_squash.sh`)
+- A document-only warning in the landing protocol text with no guard: rejected - the desync produces no landing-time signal, so a warning reaches a session only after the CAS, and the downstream clobber surface already carries post-hoc guards (the closeout-clobber-guard trio landed 96eb2ac5c); the smallest effective arm is the pre-CAS check, not a later warning (evidence basis: the witnessed 14:39:30 desync produced no landing-time signal; `scripts/land_squash.sh` land-worktree mode)
+
+Machinery admission: the guard arm adds one refusal to a guard-bearing script; concrete incident: docs/history/backlog/2026-11-04-land-worktree-staged-primary-desync.md (the 2026-11-04 desync witness, second of the class); expected catch frequency: witnessed twice in the mechanism's first three weeks (2026-10-28, 2026-11-04); false-positive cost: a landing refused while unrelated staged state exists, bounded because the refusal names the intersecting paths and the retry follows parking or committing them; review date: 2026-12-04. The census arm is protocol text at an existing boundary and removes latent work rather than adding a blocker.
+
+## execute-plan-project-test-policy-scope
+
+Added: 2026-11-04, investigate anchored on the project test-policy backlog after the operator corrected the distinction between plan-specific validation and project-wide final validation
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this changes shared execute-plan and plans authoring contracts plus the target project's test-guidance source, and it has open policy choices about policy resolution, final versus task boundaries, and conflict handling; it fails the body-named single-surface-fix clause.
+
+Origins:
+- docs/history/backlog/2026-11-04-execute-plan-project-test-policy-scope.md
+
+Cluster: docs/history/backlog/2026-10-24-liveness-pin-plans-archive-twin-span-missing.md (the witnessed suite catch that motivated the universal rule; preserve focused regression coverage while narrowing its scope)
+
+Urgency: high - company projects need a complete repository suite before final completion, while this repository must never run its whole suite; execute-plan currently applies the complete suite to every ordinary plan and every stack-task boundary, so the next execution can spend time outside policy or repeat the suite before the required final boundary.
+
+Scope arms: (1) establish how execute-plan resolves the target repository's authoritative suite policy without guessing organization or project identity; require the complete suite before final Done for company-scoped projects, prohibit whole-suite execution for this skills repository, and define the explicit-policy and missing-policy behavior for other targets; (2) keep plan-specific validation commands distinct from project-wide final validation, run the plan's named checks at their prescribed task boundaries, and run the company project's complete suite before final completion; do not repeat a whole suite at every stack-task boundary unless the target project's policy or that plan explicitly requires that boundary; (3) when a plan instruction conflicts with the target policy (especially a whole-suite instruction for this repository), surface the exact conflict to the operator before execution or certification rather than silently choosing one; (4) preserve focused regression coverage for the liveness incident and keep language migration out of scope absent a measured profile.
+
+Orientation: `agents/skills/execute-plan/SKILL.md` Phase 2 and stack-task entry, `agents/skills/execute-plan/runtime-contract.md` corresponding boundaries, `agents/skills/plans/validation-authoring-rules.md`, `projects/.ai-playbook/coding_guidelines.md`, `docs/history/plans/completed/2026-10-29-stacked-pr-plan-execution.md`, and the liveness origin `docs/history/backlog/2026-10-24-liveness-pin-plans-archive-twin-span-missing.md`.
+
+Rejected alternatives:
+- Remove complete-suite validation from every project: rejected because the operator requires it before final completion on company projects, and the stacked-execution plan introduced it after the witnessed liveness regression (`docs/history/plans/completed/2026-10-29-stacked-pr-plan-execution.md`)
+- Keep the complete suite mandatory for every repository and every stack-task boundary: rejected because it overrides the operator's explicit ai-playbook prohibition and runs beyond the company-project final boundary (`agents/skills/execute-plan/SKILL.md`)
+- Treat plan-specific commands as a substitute for project-wide policy, or treat the two lists as conflicting by default: rejected because the archived review-freshness plan records them in separate `Validation Commands` and `Done when` sections, and the operator confirmed they are separate obligations (`docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md`)
+- Rewrite the suite in Rust or Go before profiling: rejected because the 84-file inventory is not runtime evidence and no profile identifies interpreter overhead as the bottleneck (`docs/history/backlog/2026-11-04-execute-plan-project-test-policy-scope.md`)
+- Add a mandatory suite-policy registry or blocking validator: rejected; no witnessed incident shows that a new machinery gate is needed when existing project guidance and plan-authoring surfaces can carry the policy (repository guidelines, Machinery admission protocol)
+
+Prompt: Author a focused plan from this origin and investigation. Re-derive the current execute-plan and plans contracts, the operator's company-project full-suite requirement, the ai-playbook whole-suite prohibition, the plan-specific validation commands, and the 2026-10-24 liveness incident from their durable sources. Decide where each target repository declares its project-wide suite policy and how the executor resolves it without hardcoding organization or project identities into shared skills. Keep plan-specific tests and project-wide final validation as distinct obligations: company projects run their complete repository-standard suite before final Done and also run each plan's named checks at the plan-prescribed boundary; this repository never runs its whole suite during ordinary, stack-task, or recovery execution and instead runs the relevant focused tests plus named repository gates. Do not repeat the complete suite at every stack-task boundary unless an explicit target-policy or plan instruction requires that exact boundary. If a plan explicitly asks for a whole-suite run that conflicts with this repository's policy, surface the exact conflict to the operator before execution or certification and do not silently run it. Define the fallback for other or missing project policies without silently treating focused plan commands as the suite policy. Preserve the liveness regression through focused tests. Do not add a registry, validator, lock, or required ceremony without a concrete incident and machinery-admission case. Do not propose Rust or Go migration unless a reproducible profile first shows language-runtime overhead dominates.
+
+## budget-resume-carrier-gc
+
+Added: 2026-11-04, investigate over the 2026-11-04 interactive auth cycle (witness: the cycle's closeout held five loaded budget-resume carriers from finished lineages, one exiting 127; the cycle's own carrier was discharged by hand)
+
+Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the guard-bearing-path exclusion denies the ad-hoc route - the duty edits the quota-policy pause arms and the worktree-first closeout (guard-bearing protocol text governing pause and resume), and the fix is a protocol duty, not a single-surface edit.
+
+Origins:
+- docs/history/backlog/2026-11-04-budget-resume-carrier-gc.md
+
+Cluster: docs/history/backlog/2026-10-14-execute-plan-dispatch-era-dangling-pointers.md (same stale-record family; different defect class - that row owns dangling record pointers, this entry owns the armed launchd carriers themselves)
+
+Urgency: medium - every quota-pause run that resumes off-carrier or dies leaves a loaded launchd job that fires once into a dead context (the witnessed 127 exit is a payload that can no longer resolve its paths); the noise is bounded per fire but the accumulation is monotonic and invisible - no census names the carrier list, and the cost lands as spurious session starts at unpredictable times.
+
+Scope arms: (1) a standing discharge duty in the pause protocol's resume and closeout arms: a run that resumes by any route other than its own carrier's fire, or reaches its closeout boundary with its own carrier still armed, boots out the job and removes its runtime job dir, the discharge riding the closeout's existing receipt surface; (2) a read-only carrier census in the maintenance survey's existing consult set (the survey never repairs): the census lists loaded budget-resume labels with their fired-marker state so accumulation stays visible per survey; (3) no reaper: no arm deletes another lineage's carrier autonomously - a stale foreign carrier is named in the census and removed only under operator direction.
+
+Orientation: agents/skills/plans/SKILL.md (the Budget gate pause protocol's watcher arm), agents/skills/maintenance/quota-policy.md (the quota leg's park and resume arms), agents/skills/execute-plan/worktree-first.md (the closeout boundary the discharge duty rides), the runtime launchd job dir layout under the runtime root (label `ai-playbook.budget-resume.<id>`, sentinel and fired-marker siblings).
+
+Rejected alternatives:
+- Remove the launchd carrier mechanism (resume by manual probe only): rejected - the reset-boundary resume is load-bearing; witnessed quota-pause recoveries (the 2026-11-02 and 2026-11-03 paused runs) rode carrier fires to completion, and a probe-only resume re-introduces the silent-stall shape the watcher replaced (evidence basis: the standing resume watcher introduced in 7baa8ce18, agents/skills/plans/SKILL.md Budget gate resume watcher arm)
+- A reaper job that GCs other lineages' armed carriers autonomously: rejected - cross-session deletion of an armed carrier can kill a legitimately paused run's only resume path; the falsified-shape cost (a paused run silently losing its wake) outweighs the noise cost the reaper removes (evidence basis: the carrier contract's own placement-owned discharge boundary, agents/skills/execute-plan/worktree-first.md)
+- Do nothing (the accumulation self-limits because each job fires once): rejected - each fire spawns a full session start that reads a dead context and exits, the 127-exit class fails silently with no surface naming it, and the pause protocol's closeout already holds the natural discharge point, so the smallest arm is a duty at a boundary that exists (evidence basis: the 2026-11-04 closeout witness, five loaded stale carriers in the runtime list, docs/history/backlog/2026-11-04-budget-resume-carrier-gc.md)
+
+Machinery admission: the census arm is read-only report-only and carries no refusal; the discharge duty removes latent work rather than adding a blocker; concrete incident: the 2026-11-04 accumulation witness (link: docs/history/backlog/2026-11-04-budget-resume-carrier-gc.md); expected catch frequency: one stale carrier per off-carrier resume or dead pause run; false-positive cost: a census row naming a live paused run's carrier, bounded because the census never repairs and the discharge is placement-owned; review date: 2026-12-04.
+
 ## codex-quota-reset-wake
 
 Added: 2026-11-01, investigation of the Codex quota-boundary continuation
@@ -292,58 +480,59 @@ Rejected alternatives:
 Prompt: Author a future Codex-specific plan from this origin and investigation. Verify the current Codex task and automation primitives before selecting a wake mechanism. Preserve the exact target and phase across a genuine primary five-hour pause, schedule or resume immediately after the reported reset, and re-probe before continuing. Keep the weekly secondary window, false cross-runtime exhaustion, same-session compaction, explicit stop, and empty-queue behavior separate. If Codex exposes no timed wake, state the verified limitation and supported fallback without inventing host scheduling machinery or claiming indefinite unattended reset resumption.
 
 
+PLAN-PROMPTS-PRUNE: closeout-clobber-guard-review-residual-trio -> docs/history/plans/2026-11-04-closeout-clobber-guard-review-residual-trio.md
+
 PLAN-PROMPTS-PRUNE: dispatch-ladder-rearm-joint-hardening -> docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md (r4-certified ready=yes zero blocking, seal .ai-playbook/review-certs/dispatch-ladder-rearm-joint-hardening.md; the entry pruned by its own landing rider)
 
-## done-run-setup-stdout-export-emission-split
-Frozen: authoring claim done-run-setup-stdout-export-emission-split.md (session sess_0579a3dc-7408-418d-bdf3-b7eea257a06e), 2026-11-03
+PLAN-PROMPTS-PRUNE: done-run-setup-stdout-export-emission-split -> docs/history/plans/2026-11-03-done-run-setup-stdout-export-emission-split.md (r2-certified ready=yes zero blocking, seal .ai-playbook/review-certs/done-run-setup-stdout-export-emission-split.md; the entry pruned by its own landing rider)
 
-Added: 2026-11-03, learn Step 1.8 capture and investigate over the authoring-closeout session (second field failure of the emission shape)
+## authoring-claim-discovery-filename-convention
 
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix spans the done lock machinery's own scripts (`scripts/done_run.sh`, `scripts/done-lock.sh`), whose focused test suites pin the current output shapes, and the eligibility test's guard-bearing-path exclusion keeps the lock scripts on the plan route even though the change is behavioral output reshaping only.
+Added: 2026-11-04, investigation of the 2026-11-03 twin authoring collision (18:13 WET auth session)
 
-Origins:
-- docs/history/backlog/2026-11-03-done-run-setup-stdout-export-emission-split.md
-
-Cluster: docs/history/backlog/2026-10-30-done-lock-hold-overbroad-commit-stop.md (same done-lock script surface; different defect: that row's commit-stop scope, not the acquisition stdout shape)
-
-Urgency: medium - two witnessed field failures of the same trap (the tee-source abort of 2026-10-26/27, lesson #261's witness; the whole-stdout eval parse error of 2026-11-03, lesson #387's incident), and each failure leaked an acquired hold plus a partial boundary that a later invocation had to re-enter or orphan-release; the skill text's evaluate-only-export-lines prescription alone has not prevented the trap.
-
-Scope arms: (1) split the acquisition emission in `scripts/done_run.sh` setup and the `scripts/done-lock.sh` acquire/wait-acquire echo: assignment lines alone on stdout, status/advisory/diagnostic lines on stderr, payload lines byte-identical; (2) update the focused suites pinning the current shapes (`scripts/test_done_run_wrapper.py`, `scripts/test_done_lock_holder_visibility.sh`) and any consumer parsing the banner; (3) one sentence in the done skill's Step 0 noting stdout is now eval-safe while the filter-the-export-lines rule stays as the consumer-side guard.
-
-Orientation: `scripts/done_run.sh` setup contract comment ("one status line on stdout followed by eval-able export lines") and its export echo; `agents/skills/done/SKILL.md` Step 0 (the evaluate-only-export-lines prescription and the blocked-acquire report shape); lessons #261 and #387 (the two witnesses).
-
-Rejected alternatives:
-- Restate or harden the filter prescription in the skill text alone: rejected - the prescription already exists and both field failures happened anyway; the trap is the emission shape, not the documentation (evidence basis: lessons #261 and #387 in docs/maintenance/development_lessons.md, agents/skills/done/SKILL.md Step 0)
-- Add a validator or gate refusing a non-assignment line on the acquisition stdout: rejected - a gate would only re-detect what the split eliminates at the source, and no witnessed incident needs a standing blocker beyond the split itself (machinery admission: no incident for a new gate; repository guidelines Machinery admission protocol section)
-- Move the status lines into the run manifest instead of stderr: rejected - the status output is the operator's acquire-time confirmation, the holder evidence the blocked-acquire report consumes, and burying it in a file adds a read step to every acquire (evidence basis: agents/skills/done/SKILL.md Step 0 blocked-acquire reporting shape)
-
-Prompt: Author a focused plan from this entry and its origin. Split the acquisition emission so stdout carries only eval-able assignment lines and stderr carries status and advisory lines, across `scripts/done_run.sh` setup and the `scripts/done-lock.sh` acquire/wait-acquire echo; update the focused suites for the new shapes; align the done skill's Step 0 sentence. Verify no consumer parses the removed stdout lines (grep scripts and tests for the banner patterns), run the focused suites green, and keep every payload line byte-identical between the old and new surfaces.
-
-## machinery-regrowth-unregistered-script-pair
-
-Added: 2026-11-03, learn Step 1.9 investigate anchored on the origin row's same-day second witness (the interactive scheduler-turn survey's machinery-inventory consult)
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix's single surface is `scripts/machinery_registry.json`, a whole path on the eligibility test's mechanical denylist, so the row cannot route ad-hoc; registering the scripts is a registry edit by definition.
+Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix spans the claim-discovery call sites across the authoring lifecycle plus an open convention choice (two-key matching versus one canonical filename), so it fails the test's body-named-single-surface-fix clause and routes to the plan lane.
 
 Origins:
-- docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md
+- docs/history/backlog/2026-11-04-authoring-claim-discovery-filename-convention.md
 
-Cluster: docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md (same defect class, covered pair; durable home docs/history/plans/completed/2026-10-31-baseline-red-gates-regreen.md covering only its own two scripts)
+Urgency: moderate-high - the loop's twin-slot carrier pattern (two carriers firing the same minute, witnessed repeatedly across the 2026-11-03/04 window) makes duplicate-origin authoring races routine, and each undetected race burns a full review series on text that can never land.
 
-Urgency: medium - the inventory check has held a red baseline since 2026-11-02 and the 2026-11-03 scheduler-turn survey consult re-witnessed the same two failures, muting the check's signal for genuinely new regrowth; no lane is blocked.
+Scope: make claim discovery convention-independent. The canonical claim filename is the backlog-item basename (the AUTHORING CLAIM duty in `agents/skills/maintenance/prompt-templates.md`), but the directory carries off-convention files in practice, and a noclobber create guards the filename, not the origin. Read the claims directory unfiltered and match on both existing keys (the entry slug and the origin row basename), or enforce the canonical convention with a same-change migration of the discovery call sites; run the collision disposition (stand down, adopt, or first-landed-wins) before authoring starts; keep the duplicate-origin coverage gate and its first-landed-wins resolution unchanged as the landing-time backstop.
 
-Scope arms: (1) register `scripts/quota_sources.py` and `scripts/reconcile_execute_plan_handoff.py` in `scripts/machinery_registry.json` with their consuming witnesses, restoring `python3 scripts/machinery_inventory.py --check` to green; (2) keep the check's enforcing arm unchanged.
+Orientation: the claims directory convention home `docs/tmp/authoring-claims/` and the AUTHORING CLAIM duty (`agents/skills/maintenance/prompt-templates.md`); the consult-wiring archaeology (docs/history/plans/completed/2026-09-30-authoring-claim-cross-session-visibility.md, the prior same-class collision witness); the authoring-claim lifecycle plan's completed twin (docs/history/plans/completed/2026-10-22-authoring-claim-marker-and-closeout-lifecycle.md); the landed activation plan's authoring-time collision Assumption (docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md); lessons 393-394 (docs/maintenance/development_lessons.md).
 
-Orientation: both scripts are live consumers (scripts/quota_governor.py and scripts/quota_window_probe.py import the quota source identity; scripts/test_execute_plan_resume_watcher.py imports the reconciliation module), so removal is not on the table; the check is witnessed protective (it caught the 2026-10-31 release-script pair and this pair), so this is a keep-and-restore change, not gate surgery. Arm 1 is a registry data row: no machinery added or removed, no admission test applies.
-
-Prompt: Author a focused plan registering the two unregistered runtime scripts in the machinery registry. Read scripts/machinery_registry.json (entry shape and witness requirements, per the machinery-witness-ref-validation plan docs/history/plans/completed/2026-10-30-machinery-witness-ref-validation.md lineage), the scripts' consuming importers and their landing commits as witnesses, and the origin row. Restore `python3 scripts/machinery_inventory.py --check` to exit 0 and pin that green with the suite. No skill-text changes.
+Machinery admission: no new gate, validator, lock, or ledger - the arm widens an existing read-only discovery scan or renames a convention. Witnessed incident: the 2026-11-03 twin collision (docs/history/backlog/2026-11-04-authoring-claim-discovery-filename-convention.md; loser's r1-r4 series burned, winner landed 78a05db85), the second witness of the same-origin-collision class after the 2026-09-30 lanes race (docs/history/plans/completed/2026-09-30-authoring-claim-cross-session-visibility.md). Expected catch: every future duplicate-origin authoring race, before authoring starts instead of at landing. False-positive cost: one stand-down disposition against a directory listing, negligible. Review: at the next witnessed race or one month of carriers, whichever first.
 
 Rejected alternatives:
-- Remove the two scripts to clear the red: rejected because both are live consumers with working-tree import witnesses (scripts/quota_governor.py; scripts/test_execute_plan_resume_watcher.py)
-- Demote the inventory check to warn-only to stop the baseline churn: rejected because the check's two true catches in nine days are its admission basis (docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md; docs/history/backlog/2026-11-02-machinery-inventory-regrowth-two-runtime-scripts.md)
-- Auto-register unregistered scripts at scan time: rejected machinery arm with the missing-incident absence named - no witnessed incident shows a registration-time false positive the registry data rows do not already address
+- Rely on the duplicate-origin coverage gate alone: rejected - it fires at landing time after both review series are already spent, the exact burned-series cost this origin witnesses (docs/history/backlog/2026-11-04-authoring-claim-discovery-filename-convention.md)
+- Forbid twin carriers in the same slot: rejected - the twin slots are operator-armed schedule records outside the loop's ownership, and the collision witness names both carriers firing the same minute from separate arms (docs/history/backlog/2026-11-04-authoring-claim-discovery-filename-convention.md)
+- Add a per-runtime claim-filename convention registry: rejected - a ledger ahead of a second consumer; the two-key listing covers both witnessed conventions without new state, the machinery admission test's missing-incident absence for registry machinery (no witnessed incident requiring it beyond the scan fix itself)
 
-Machinery admission: arm 1 adds no gate, validator, lock, ledger, or ceremony (a registry data row restoring an existing check's green); the auto-register alternative is rejected above with the missing-incident absence named.
+Prompt: Author the claim-discovery convention plan from this origin. Survey every claim-presence call site in the authoring lifecycle first, choose two-key matching or canonical normalization by simplest-design comparison, keep the duplicate-origin coverage gate and first-landed-wins untouched as the backstop, and carry companion pin rows for any skill-text change in the same commit.
+
+## clocked-order-fire-launch-leg-residual
+
+Added: 2026-11-04, investigation of the conceded duplicate authoring branch's extracted insights (18:13 WET auth session)
+
+Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the arm reorders the chain fire path's launch and discharge steps in runtime scripts and the launch-receipt definition is an open design choice, so it fails the test's body-named-single-surface-fix clause and routes to the plan lane.
+
+Origins:
+- docs/history/backlog/2026-11-04-clocked-order-fire-launch-leg-residual.md
+
+Urgency: low - trigger-gated: the 2026-11-03 activation plan prices this residual through the warning-only detector family by design, and the row's adoption trigger (a witnessed chain misfire or a recorded verify-successor catch) has not fired; this entry exists so the structural fix is ready to dispatch the day the trigger fires.
+
+Scope: reorder the clocked-order fire path to launch-before-discharge with the launch receipt as the discharge precondition; on launch failure record a failure event and let the existing `clocked-order-due` detector mark the order. Re-derive the current fire-path shape from `scripts/execute_plan_resume_watcher.py` and `scripts/execute_plan_runtime.py` at authoring time; keep the chain's activation posture and all skill texts unchanged.
+
+Orientation: the activation plan's Edge cases sentence (docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md); the silent-strand row's completed twin (docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md); the chain's introduction story in the completed guard plan (docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md).
+
+Machinery admission: no new gate, lock, or ledger - the arm reorders an existing path and reuses the existing `clocked-order-due` detector for failure marking. Witnessed incident: the fire-boundary silent-strand class (docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md), currently priced as accepted residual by the activation plan. Expected catch: only on a witnessed misfire, which is itself the adoption trigger. False-positive cost: a held discharge delays one carrier by a retry window. Sunset: this entry self-expires if still undispatched when the 2027-01-18 verify-successor decision date re-reviews the detector family.
+
+Rejected alternatives:
+- Land the structural fix now, ahead of any misfire: rejected - the certified activation scope prices the residual through the detector family and names its re-open trigger, so pre-emption re-litigates a sealed decision without new evidence (docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md)
+- Extend the verify-successor consult to cover the fire boundary instead: rejected - the arm stays warning-only on zero recorded catches per the same sealed decision and it verifies after the loss, not before the discharge (docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md)
+- Record discharge events as provisional and reconcile later: rejected - a two-phase ledger state adds schema surface the launch-before-discharge ordering avoids, the smallest arm that removes the witnessed cost (docs/history/backlog/2026-11-04-clocked-order-fire-launch-leg-residual.md)
+
+Prompt: When the adoption trigger fires (a witnessed chain misfire or a recorded verify-successor catch), author the launch-leg plan from this origin: re-derive the fire path from current watcher and runtime sources, reorder to launch-before-discharge with a receipt-gated discharge, route launch failures into the existing clocked-order-due marking, and keep skill texts and the activation posture unchanged.
 
 ## doing-code-review-staging-doc-scaffold-pointer
 
@@ -368,17 +557,17 @@ Rejected alternatives:
 Machinery admission: no gate, validator, lock, ledger, or ceremony is added; the arm is one prose cross-reference; the validator-side alternative is rejected above with the missing-incident absence named.
 
 ## producer-code-family-record-arm
+
 Added: 2026-10-30, learn Step 1.8 investigate over the producer followups witness append
 
 Work-type verdict: plan-worthy; the maintenance skill's Ad-hoc backlog arm requires a body-named single-surface fix with no open design choice, and this item's fix shape is open on three axes (producer arm versus canonical template versus verifier widening, the emitted record-token grammar, and the producer's mode-narrowing bullets) across two scripts (`scripts/produce_exec_review_record.py`, `scripts/validate_review_staging.py`), so it fails the single-surface clause (`agents/skills/maintenance/decisions.md`).
 
 Origins:
-- docs/history/backlog/2026-10-22-producer-review-findings-followups.md
 - docs/history/backlog/2026-10-22-producer-self-heal-chain-grammar-dedup.md
 
 Urgency: medium - every run that needs a code-family review record pair hand-builds it, and the witnessed closeout spent multiple produce-validate cycles re-deriving the record markdown grammar from a validator test docstring; the friction recurs per closeout but blocks no lane.
 
-Scope arms: add a producer code-family arm (`--range <base>...<head>`) emitting a `-code-review` record pair digested over the reviewed diff bytes; single-home the clear-record markdown grammar beside the validator's usage text and cite that home from staging refusals; narrow `--review-mode` or drop `--review-type` to the truths the builder renders; widen the verifier's accepted digest domain; move the producer's chain-grammar pre-flights behind a shared validator seam.
+Scope arms: move the producer's chain-grammar pre-flights behind a shared validator seam.
 
 Orientation: the producer stays the single record-writing tool and the validator stays the grammar's enforcement point. The landed digest-family routing note already names the split (`scripts/produce_exec_review_record.py` module docstring); the missing complement is the capability itself, so completing the producer arm is preferred over a template or verifier change alone. The arm adds no gate, validator, lock, ledger, or required ceremony, so it carries no machinery admission burden.
 
@@ -389,35 +578,7 @@ Rejected alternatives:
 - Keep the test-docstring example as the grammar's only home and change nothing: rejected because the witnessed hand-built pair satisfied the sidecar schema yet failed staging validation repeatedly on markdown sub-sections no schema document names (`scripts/validate_review_staging.py`)
 - Remove the code-family record requirement so runs write only seals: rejected because the landing sweep's review-staging gate validates the record markdown itself, so a record-less route fails closed (`scripts/done_sweep_gates_lib.py`)
 
-## agent-resource-cleanup-disposition
-
-Added: 2026-11-02, investigation of a repeated user-directed worktree cleanup request
-
-Work-type verdict: plan-worthy under the maintenance Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the new origin has no evidenced single-surface correction because `self-heal` already requires verifying the caller's complete terminal conditions, while its failure crossed self-heal, execute-plan, and done ownership boundaries; the clustered branch-retention origin edits the guard-bearing `scripts/worktree_closeout_migrate.py`, which the test excludes from the ad-hoc route. The group therefore routes uniformly to this plan-creation log.
-
-Origins:
-- docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md
-- docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md
-
-Group roster:
-- docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md (cross-turn inventory and full user-request disposition)
-- docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md (branch-retention gate's base-history proof)
-
-Urgency: medium - the user repeated cleanup direction after only a subset had received a disposition; the fresh write-window inventory found one and four unmerged commits on the two workflow-owned branches, so indiscriminate deletion risks losing work; the authoring branch advanced during the cleanup sequence. The witnessed cost is operator rework and unclear closure, not data loss. The neighboring gate false-negative has its own origin and must not be mistaken for the response-level scope gap.
-
-Scope arms: determine whether one owner handoff can reuse the existing run/claim records and Git inventory to bind each resource to its originating workflow, distinguish safe cleanup from retained unmerged work, and continue each in-scope owned closeout to its terminal state; separately evaluate whether the base-history proof false positive needs a coordinated gate change or stays a narrow sibling plan. Define the completion report so it accounts for every in-scope worktree and branch and never calls a partial disposal complete. Preserve active-owner and unmerged-work retention. Do not execute cleanup from the authoring plan.
-
-Orientation: `agents/skills/self-heal/SKILL.md` Recovery 1-4; `agents/skills/execute-plan/SKILL.md` worktree closeout; `agents/skills/done/SKILL.md` final report and worktree removal; `agents/skills/plans/SKILL.md` final worktree landing; `docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md`; `docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`; both origin rows and current `git worktree list --porcelain` / `git rev-list` evidence.
-
-Prompt: Author a focused plan from both origins. Reconstruct how the user's cleanup intent, worktree registrations, branch refs, and existing run/claim records were interpreted across turns. Distinguish the response-level failure to inventory and disposition the full request from the separate closeout gate's base-history false negative. Decide whether the smallest correction is to enforce the existing self-heal terminal-condition duty at cleanup handoff, clarify the shared resource inventory/disposition contract, or add a runtime-specific evidence adaptor; keep agent-specific lookup details outside the shared skill. Specify the exact owner and terminal action for current-run resources, and the preserve/report action for foreign or active claims. Acceptance evidence must include a request spanning multiple workflow-owned resources with both landed and unmerged branches: every in-scope item receives a verified removal, completed closeout, or named retention disposition, and the final report's completion claim matches that inventory. Do not delete resources during authoring.
-
-Rejected alternatives:
-- Delete every registered worktree and local branch ref: rejected because the fresh write-window inventory found one and four commits outside `main`, and the authoring branch advanced during cleanup; the completed owner contract retains unaccounted or unmerged work (docs/history/plans/completed/2026-10-24-ad-hoc-worktree-lifecycle-owner-gap.md)
-- Stop once resources are classified as workflow-managed: rejected because the witnessed operator correction followed the assistant's subset-only result (new origin Problem).
-- Add a global resource ledger or blocking cleanup validator: rejected because no witnessed incident shows that the current Git inventory and owning run/claim records cannot support an on-demand disposition; the Codex task-resource investigation also rejects a new ledger absent a proven owner/correlation need (`docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`).
-- Expand the Codex task-attachment plan to own project worktrees: rejected because its completed investigation found no exact app-managed attachment or supported callback and explicitly keeps project-run closeout in its existing owner workflow (`docs/history/plans/completed/2026-10-14-codex-task-resource-cleanup-evidence-recovery.md`)
-
-Machinery admission: no new gate, validator, ledger, or required ceremony is recommended; the proposed plan must first test whether existing inventory and owner records suffice. Any future machinery arm must name a witnessed incident and its false-positive cost under the repository Machinery admission protocol.
+PLAN-PROMPTS-PRUNE: agent-resource-cleanup-disposition -> docs/history/plans/2026-11-04-agent-resource-cleanup-disposition.md (own frozen entry pruned at the authoring landing; origin rows covered by the covering plan)
 
 ## execute-plan-sequential-trace-harness
 Added: 2026-10-12, investigate pass over the remaining sequential-behavior witness
@@ -458,29 +619,6 @@ PLAN-PROMPTS-PRUNE: execute-plan-step-3-4-primary-cadence -> docs/history/plans/
 PLAN-PROMPTS-PRUNE: code-family-certification-digest-scope-and-tip-moves -> docs/history/plans/2026-10-24-code-family-cert-digest-scope.md (landed plan authoring record ba477eb80054f8d0a50e560c66b562d6bc335cda, review r5 ready=yes zero blocking, seal .ai-playbook/review-certs/code-family-cert-digest-scope.md; own entry pruned with its plan landing; origin row archived to completed/ with the covered flip in the same change)
 
 PLAN-PROMPTS-PRUNE: done-commit-foreign-manifest-binding-recovery -> docs/history/plans/2026-10-29-done-run-commit-manifest-binding-refusal.md
-
-## done-lock-hold-overbroad-commit-stop
-
-Added: 2026-10-30, operator-directed investigation over the deferred diagnostics-ledger commit
-
-Work-type verdict: plan-worthy under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): this needs a policy decision about which commit surfaces require the done lock and how a blocked closeout relates to unrelated authorized commits; the scope crosses the done workflow and primary rolling-log transaction, so it is not a body-named single-surface fix with no open design choice.
-
-Origins:
-- docs/history/backlog/2026-10-30-done-lock-hold-overbroad-commit-stop.md
-
-Urgency: low - the two-line receipt was delayed and then committed as `4a8b4a22`; no bytes were lost, and the evidence does not establish that the holder was dead at the first blocked decision.
-
-Scope arms: keep the rolling-log write serialized under the existing primary done lock; decide whether the done skill needs a narrow statement distinguishing its blocked closeout from unrelated authorized path-scoped commits; separately assess the 90-second agent wait, five-second verified-dead grace, and 1800-second stale-clean threshold against measured hold-state transitions. Do not change the stale-clean threshold unless evidence shows it is the relevant delay.
-
-Orientation: `agents/skills/done/SKILL.md` Step 0 says a blocked done acquire returns blocked and does not commit; the same skill's separate-checkout continuation preserves unrelated work after that closeout stop. `docs/history/backlog/PLAN-PROMPTS.md` `Write boundary rule` scopes mandatory locking to primary rolling-log writes and sends them through the ref-bound `scripts/done_run.sh` transaction. In `scripts/done-lock.sh`, a holder is reclaimable on acquire only when independently verified dead and past `DONE_LOCK_DEAD_HOLDER_GRACE_SECS` (default 5); `DONE_LOCK_STALE_SECS` (default 1800) governs the explicit stale-clean path, which protects a live session-fenced lock. `scripts/done_run.sh` sets the done agent wait to 90 seconds. History search found the dead-holder/stale distinction in `f3894756d`; the completed closeout plan `docs/history/plans/completed/2026-10-24-done-run-lock-span-and-append-ordering.md` keeps the primary rolling-log transaction serialized and accepted the separate plain-landing commit window. Session evidence: earlier lock checks reported the holder alive and a later check reported it dead; its death time is unknown, then verified-dead recovery freed the hold and the receipt landed in `4a8b4a22`.
-
-Rejected alternatives:
-- Lower `DONE_LOCK_STALE_SECS` as the immediate fix: rejected because the value governs explicit stale-clean, not verified-dead auto-recovery, and a shorter threshold could expose a still-live fenced writer to premature cleanup (`scripts/done-lock.sh`)
-- Let any blocked commit proceed or auto-clear a live or ambiguous hold: rejected because it could overlap a live writer, while the rolling-log boundary explicitly requires serialization and captured-ref validation (`docs/history/backlog/PLAN-PROMPTS.md`)
-- Remove done-lock serialization from primary prompt-log writes: rejected because it would drop the boundary that protects the shared rolling logs' owned-path commit and ref compare-and-swap (`docs/history/backlog/PLAN-PROMPTS.md`)
-- Require every unrelated write to move to a separate checkout: rejected as broader than the done skill's separate-checkout remedy for unrelated work after a blocked closeout; first classify whether the proposed write is actually lock-bound (`agents/skills/done/SKILL.md`)
-
-Prompt: Author a focused plan from this entry and its origin. Trace the user-visible deferral through the done skill, the primary rolling-log Write boundary rule, the done-lock acquire/status/stale-clean branches, and the completed closeout lock-span plan. Decide and state which commit classes require the primary done lock, preserving rolling-log serialization and the verified-dead recovery rule. Determine whether the observed deferral was caused by misapplying the done-closeout stop to an unrelated record commit or by a lock-state transition; do not claim the holder was dead earlier than the evidence shows. Evaluate the 90-second wait, five-second dead-holder grace, and 1800-second stale-clean threshold as separate controls. If changing only one skill sentence resolves the misclassification, keep the change there and leave timeout values unchanged; otherwise specify the smallest policy split and its acceptance evidence. Do not automatically clear live or ambiguous holds, add a lock/validator/required ceremony, or route every unrelated write to a separate checkout without a demonstrated need.
 
 ## malformed-closeout-baseline-json-refusal
 

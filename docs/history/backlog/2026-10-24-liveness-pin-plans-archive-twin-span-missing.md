@@ -10,6 +10,7 @@ Quarantine: 2026-10-27
 - **Driving force:** correctness
 - **Skill/step:** `scripts/test_authoring_plans_liveness.py` (`test_preserved_anchors_stay_pinned`, the `plans-archive-twin` span) against `agents/skills/done/SKILL.md`
 - **Cluster:** docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-skill-text-polish.md (same suite, cosmetic polish items)
+- **Cluster:** docs/history/backlog/2026-11-04-execute-plan-project-test-policy-scope.md (the suite policy introduced to catch this incident; preserve this focused regression when narrowing ai-playbook execution validation)
 
 ## Problem
 

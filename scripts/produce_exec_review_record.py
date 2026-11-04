@@ -8,11 +8,15 @@ validator's current grammar: the fixture builders ``_current_finding`` and
 ``_current_findings_markdown`` in ``scripts/validate_review_staging.py``
 and the witnessed real-record shape under ``.ai-playbook/reviews/``. The
 producer owns no validation rule of its own; a pair is a success only when
-the validator says so. Family boundary: this producer emits plan-family
-records only (the ``-plan-review-`` series whose source digest hashes the
-plan bytes), while ``scripts/review_record_selection.py verify-digest``
-checks code-family records (the SHA-256 of the ``git diff <base>...<head>``
-bytes) and never accepts a producer record.
+the validator says so. Family boundary: this producer emits both record
+families — plan-family records (the ``-plan-review-`` series whose source
+digest hashes the plan bytes, via ``--plan``) and code-family records (the
+``-code-review-`` series whose source digest is the SHA-256 of
+``corrections_record.reviewed_scope_bytes()`` over the recorded ``--range``
+— the git-layer branch diff with the ``docs/history/backlog/``
+bookkeeping prefix excluded, never a raw ``git diff`` hash) — so
+``scripts/review_record_selection.py verify-digest`` recomputes and
+accepts a range-mode record's digest unchanged.
 
 Current-dated records (post-window): a record dated today arms every date
 fence the validator pins on a canonical record, so the producer emits the
@@ -24,7 +28,10 @@ pair (clean over the full five-worker lens set), the usage mint pair
 ``extensions.convergence.self_heal_attempt`` chain state (unused for
 round 1; a valid prior round's state carried verbatim for higher rounds;
 unknown when no valid prior round evidence exists in the output
-directory).
+directory). Range-mode records carry the same post-window contract with
+two family-specific sidecar surfaces: the sidecar declares
+``source_kind: "code"`` and ``extensions.certified_range`` recording the
+resolved ``{base, head}`` range.
 
 Success contract (criterion: the validator's final outcome, not the exit
 code, is the gate): the producer reports success only when its validation
@@ -68,10 +75,22 @@ Usage:
         [--artifact-slug SLUG] [--last-fix-commit SHA] \
         [--prior-findings-filter yes|no]
 
+    # The code-family arm (--plan and --range are mutually exclusive and
+    # one is required; --artifact-slug is required in range mode):
+
+    python3 scripts/produce_exec_review_record.py \
+        --out-dir DIR --session SESSION --range BASE...HEAD \
+        --findings-json FINDINGS.json \
+        --review-run-id <32-char lowercase hex> \
+        --review-started-at-ms <positive integer> \
+        --artifact-slug SLUG \
+        [--review-mode MODE] [--round N] [--date YYYY-MM-DD] \
+        [--last-fix-commit SHA] [--prior-findings-filter yes|no]
+
 The findings JSON schema:
 
     {
-      "plan": "<repo-relative plan path, optional, cross-checked>",
+      "plan": "<repo-relative plan path, optional; cross-checked with --plan, ignored with --range>",
       "review_round": <int, optional>,
       "review_mode": "<enum, optional>",
       "findings": [
@@ -110,13 +129,24 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import corrections_record  # noqa: E402
 import review_plan_identity  # noqa: E402
 import validate_review_staging as vrs  # noqa: E402
 
 OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 
 SEVERITY_ORDER = vrs.SEVERITY_ORDER
-VALID_REVIEW_MODES = sorted(vrs.VALID_REVIEW_MODES)
+# The narrowed --review-mode set: exactly the modes the builder truthfully
+# renders for findings-bearing rounds (each renders the same full-panel
+# findings shape the validator accepts in hard mode). The set is pinned
+# here instead of projected from the validator's enum so the flag surface
+# cannot drift wider than the rendered truth. Clean-round contradictions
+# are NOT owned by this set: the last-fix freshness gate (below) refuses a
+# last-fix-carrying clean round under a non-fresh-adversarial mode
+# pre-write, and the validator's clean-verdict contradiction refuses the
+# residual no-last-fix subset (verification-only) post-write; duplicating
+# either here would widen the producer's own rule surface.
+SUPPORTED_REVIEW_MODES = ("fresh-adversarial", "targeted", "verification-only")
 DEFAULT_PATTERN = "quality#edge-case"
 DEFAULT_WORKERS = ["correctness-completeness"]
 DEFAULT_BLAST_RADIUS = "single-service"
@@ -124,6 +154,33 @@ DEFAULT_REACHABILITY = "plausible-edge"
 DEFAULT_CONFIDENCE = "strong-evidence"
 RESOLVED_TRIAGE_VALUES = sorted(vrs.RESOLVED_TRIAGE_VALUES)
 VALID_TRIAGE_VALUES = ["pending", "deferred"] + RESOLVED_TRIAGE_VALUES
+
+# The five worker/lens associations, single-homed: the Markdown panel rows
+# and the sidecar panel entries both project this one ordered constant.
+# Worker order rides ``vrs.REQUIRED_PANEL_LENSES``' canonical insertion
+# order; each worker's lens frozenset is normalized to sorted tuple order
+# because a frozenset's iteration order is process-randomized for str
+# members and the emitted bytes must be deterministic.
+PANEL_WORKER_LENSES = tuple(
+    (worker, tuple(sorted(lenses)))
+    for worker, lenses in vrs.REQUIRED_PANEL_LENSES.items()
+)
+
+# The record-family labels: the plan-family truth (the ``-plan-review-``
+# series whose source digest hashes the plan bytes) and the code-family
+# truth (the range arm below). Each family renders its own fixed label on
+# the title and ``- Type:`` lines; the free ``--review-type`` flag is gone,
+# so a label the builder does not emit can no longer be requested.
+PLAN_FAMILY_LABEL = "Plan Review"
+CODE_FAMILY_LABEL = "Code Review"
+# The code-family truth (range arm): the fixed record label, filename
+# token, and the range separator, rendered for --range invocations. The
+# digest derives through corrections_record.reviewed_scope_bytes (the
+# git-layer branch diff with the bookkeeping prefix excluded), never a
+# raw git diff hash, so the selection verifier's recomputation accepts
+# the emitted Source digest unchanged.
+CODE_FAMILY_FILENAME_SUFFIX = "-code-review"
+RANGE_SEPARATOR = "..."
 
 # The identity-qualified filename tail (-p<8 hex>-rN.md) binds the record
 # filename to a plan identity token; a slug ending in that shape would trip
@@ -291,6 +348,96 @@ def _default_artifact_slug(plan_path: Path) -> str:
     return _kebab_slug(plan_path.stem)
 
 
+def _existing_anchor(path: Path) -> Path:
+    """The nearest existing ancestor of ``path`` (the path itself when it
+    exists): the probe a repository resolution anchors on when the
+    output directory is created only later, by the pair write."""
+    probe = path
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
+            break
+        probe = parent
+    return probe
+
+
+def _resolve_range_source(args: argparse.Namespace, range_spec: str) -> dict:
+    """Resolve the ``--range <base>...<head>`` value into the recorded
+    base/head commits and the reviewed-scope digest. Raises
+    ``ProducerToolError`` (exit 3) on every refusal.
+
+    The order is load-bearing: the option-shaped and unresolvable-half
+    refusals (the established missing-input class) fire before the first
+    ``reviewed_scope_bytes`` call, so no git diff over the range ever
+    runs for a malformed range. A range whose delta filters to zero
+    reviewed-scope bytes (``SCOPE_BOOKKEEPING_ONLY``) or carries no delta
+    at all (equal base and head or otherwise zero filtered bytes) refuses
+    pre-write too: a digest over empty bytes is never minted. The
+    repository root resolves from the output-directory anchor, never the
+    ambient cwd, and the digest derives through
+    ``corrections_record.reviewed_scope_bytes`` (the bookkeeping prefix
+    excluded at the git layer), never a raw ``git diff`` hash."""
+    base_half, separator, head_half = range_spec.partition(RANGE_SEPARATOR)
+    if not separator or not base_half.strip() or not head_half.strip():
+        raise ProducerToolError(
+            f"--range {range_spec!r} must be <base>...<head> with both "
+            "halves non-empty"
+        )
+    for role, half in (("base", base_half), ("head", head_half)):
+        if half.startswith("-"):
+            raise ProducerToolError(
+                f"--range {role} half {half!r} is option-shaped (it begins "
+                "with '-'); the range arm refuses option-shaped halves "
+                "before any git call, pass a resolvable commit ref"
+            )
+    repo_root = review_plan_identity.repository_root(
+        _existing_anchor(Path(args.out_dir))
+    )
+    if repo_root is None:
+        raise ProducerToolError(
+            f"cannot resolve the repository root from the output directory "
+            f"{Path(args.out_dir)}; the range arm anchors repository "
+            "resolution on the out-dir, never the ambient cwd"
+        )
+    commits = {}
+    for role, half in (("base", base_half), ("head", head_half)):
+        resolved = corrections_record.resolve_commit(repo_root, half)
+        if resolved is None:
+            raise ProducerToolError(
+                f"--range {role} half {half!r} does not resolve to a commit "
+                f"in the repository at {repo_root}; the range arm refuses "
+                "unresolvable halves before any git diff call"
+            )
+        commits[role] = resolved
+    range_ref = f"{commits['base']}{RANGE_SEPARATOR}{commits['head']}"
+    outcome, scope_bytes = corrections_record.reviewed_scope_bytes(
+        repo_root, commits["base"], commits["head"]
+    )
+    if outcome == corrections_record.SCOPE_UNRESOLVED:
+        raise ProducerToolError(
+            f"cannot derive the reviewed scope: git plumbing failed over "
+            f"the range {range_ref}"
+        )
+    if outcome == corrections_record.SCOPE_BOOKKEEPING_ONLY:
+        raise ProducerToolError(
+            f"refusing the bookkeeping-only range {range_ref}: its delta "
+            "filters to zero reviewed-scope bytes, and a digest is never "
+            "minted over it"
+        )
+    if not scope_bytes:
+        raise ProducerToolError(
+            f"refusing the empty reviewed scope {range_ref}: the range "
+            "carries no delta (equal base and head or otherwise zero "
+            "filtered bytes), and a digest over empty bytes is never minted"
+        )
+    return {
+        "base": commits["base"],
+        "head": commits["head"],
+        "range_ref": range_ref,
+        "digest": corrections_record.sha256_hex(scope_bytes),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Record and sidecar builders
 # ---------------------------------------------------------------------------
@@ -370,41 +517,54 @@ def build_markdown(ctx: dict) -> str:
     solo = sum(1 for row in findings if len(row["workers"]) == 1)
     echo = sum(1 for row in findings if len(row["workers"]) > 1)
     panel_rows = []
-    for worker, lenses in (
-        ("correctness-completeness", "quality, implementation"),
-        ("testing", "testing"),
-        ("design-simplicity", "architecture, simplification"),
-        ("contract-docs", "documentation"),
-        ("risk", "security"),
-    ):
+    for worker, lenses in PANEL_WORKER_LENSES:
         attributed = [row for row in findings if worker in row["workers"]]
         row_solo = sum(1 for row in attributed if len(row["workers"]) == 1)
         row_echo = sum(1 for row in attributed if len(row["workers"]) > 1)
         panel_rows.append(
-            f"| {worker} | {lenses} | none | complete | {len(attributed)} "
+            f"| {worker} | {', '.join(lenses)} | none | complete | {len(attributed)} "
             f"| {row_solo} | {row_echo} | no |"
         )
     if findings:
         verdict_line = f"{medium_plus} Medium+ findings accepted for fix"
-        verdict_field = "no"
         triage_section = "Pending triage."
     else:
         # The canonical clean-round shape; the freshness contradiction
         # gates demand the mode/filter/last-fix preconditions the CLI
         # already enforces.
         verdict_line = "0 Medium+ findings; clear round"
-        verdict_field = "yes"
         triage_section = (
             "| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |\n"
             "|--------|------|--------|-------|---------|----------|---------|\n"
         )
+    if ctx["range_ref"] is not None:
+        # The code-family truth: every identification line derives from
+        # the recorded base and head; no plan reference is rendered.
+        title_line = (
+            f"# {CODE_FAMILY_LABEL}: {ctx['session']} (range {ctx['range_ref']})"
+        )
+        type_line = f"- Type: {CODE_FAMILY_LABEL}"
+        artifact_line = f"- URL or Artifact: {ctx['range_ref']}"
+        digest_line = (
+            f"- Source digest: {ctx['source_digest']} "
+            f"(sha256 of reviewed-scope bytes {ctx['range_ref']})"
+        )
+    else:
+        title_line = (
+            f"# {PLAN_FAMILY_LABEL}: {ctx['session']} (plan: {ctx['plan_ref']})"
+        )
+        type_line = f"- Type: {ctx['review_type']}"
+        artifact_line = f"- URL or Artifact: {ctx['plan_ref']}"
+        digest_line = (
+            f"- Source digest: {ctx['source_digest']} (sha256 of {ctx['plan_ref']})"
+        )
     meta_lines = [
-        f"# Plan Review: {ctx['session']} (plan: {ctx['plan_ref']})",
+        title_line,
         "## Metadata",
-        f"- Type: {ctx['review_type']}",
+        type_line,
         "- Record kind: canonical",
         f"- Date: {ctx['date']}",
-        f"- URL or Artifact: {ctx['plan_ref']}",
+        artifact_line,
         f"- Round: r{ctx['round']}",
         f"- Review mode: {ctx['review_mode']}",
         "- Changed-risk signals: none",
@@ -418,7 +578,7 @@ def build_markdown(ctx: dict) -> str:
     meta_lines.extend(
         [
             "- Panel mode: full",
-            f"- Source digest: {ctx['source_digest']} (sha256 of {ctx['plan_ref']})",
+            digest_line,
             f"- review-run-id: {ctx['review_run_id']}",
             f"- review-started-at-ms: {ctx['review_started_at_ms']}",
             f"- Findings: {findings_count}",
@@ -457,7 +617,6 @@ def build_markdown(ctx: dict) -> str:
             "",
         ]
     )
-    ctx["verdict_field"] = verdict_field
     return "\n".join(meta_lines)
 
 
@@ -483,13 +642,7 @@ def build_payload(ctx: dict) -> dict:
         )
     ]
     panel = []
-    for worker, lenses in (
-        ("correctness-completeness", ["quality", "implementation"]),
-        ("testing", ["testing"]),
-        ("design-simplicity", ["architecture", "simplification"]),
-        ("contract-docs", ["documentation"]),
-        ("risk", ["security"]),
-    ):
+    for worker, lenses in PANEL_WORKER_LENSES:
         attributed = [row for row in ctx["findings"] if worker in row["workers"]]
         panel.append(
             {
@@ -507,6 +660,16 @@ def build_payload(ctx: dict) -> dict:
     material_lens_set = sorted(
         {lens for lenses in vrs.REQUIRED_PANEL_LENSES.values() for lens in lenses}
     )
+    extensions = {
+        "convergence": {"self_heal_attempt": ctx["self_heal_state"]},
+    }
+    if ctx["range_base"] is not None and ctx["range_head"] is not None:
+        # The existing optional version-1 sidecar field records the range
+        # the emitted digest certifies (no schema change).
+        extensions["certified_range"] = {
+            "base": ctx["range_base"],
+            "head": ctx["range_head"],
+        }
     return {
         "schema_version": 1,
         "review_type": ctx["review_type"],
@@ -515,7 +678,7 @@ def build_payload(ctx: dict) -> dict:
         "round": f"r{ctx['round']}",
         "panel_mode": "full",
         "selection_reason": None,
-        "source_kind": "plan",
+        "source_kind": ctx["source_kind"],
         "source_digest": ctx["source_digest"],
         "escalation_reason": None,
         "counts": {
@@ -546,9 +709,7 @@ def build_payload(ctx: dict) -> dict:
             "completed": material_lens_set,
             "missing": [],
         },
-        "extensions": {
-            "convergence": {"self_heal_attempt": ctx["self_heal_state"]},
-        },
+        "extensions": extensions,
     }
 
 
@@ -740,24 +901,37 @@ def validate_generated_pair(record_path: Path) -> tuple[bool, str, str]:
 def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
     """Cross-check the CLI flags against the JSON input and assemble the
     normalized record context. Raises ``ProducerToolError`` on malformed
-    input and ``ProducerRefusal`` on existing-record conflicts."""
-    plan_path = Path(args.plan).expanduser()
-    if not plan_path.is_file():
-        raise ProducerToolError(f"plan file not found: {plan_path}")
-    try:
-        plan_bytes = plan_path.read_bytes()
-    except OSError as exc:
-        raise ProducerToolError(f"cannot read plan file {plan_path}: {exc}")
+    input and ``ProducerRefusal`` on existing-record conflicts.
 
-    json_plan = findings_input.get("plan")
-    if json_plan is not None:
-        if not isinstance(json_plan, str) or not json_plan.strip():
-            raise ProducerToolError("findings JSON 'plan' must be a non-empty string when present")
-        if Path(json_plan).resolve() != plan_path.resolve():
-            raise ProducerToolError(
-                f"plan mismatch: --plan {plan_path} does not match the "
-                f"findings JSON 'plan' {json_plan!r}"
-            )
+    The source flag selects the record family: ``--plan`` builds the
+    plan-family context exactly as before, while ``--range`` builds the
+    code-family context (the digest resolved through
+    ``_resolve_range_source``, the fixed code-family label, and no plan
+    reference on any rendered line; the findings JSON ``plan`` key is
+    relaxed there, cross-checked only in plan mode)."""
+    range_source = None
+    plan_bytes = None
+    range_spec = getattr(args, "range", None)
+    if range_spec is not None:
+        range_source = _resolve_range_source(args, range_spec)
+    else:
+        plan_path = Path(args.plan).expanduser()
+        if not plan_path.is_file():
+            raise ProducerToolError(f"plan file not found: {plan_path}")
+        try:
+            plan_bytes = plan_path.read_bytes()
+        except OSError as exc:
+            raise ProducerToolError(f"cannot read plan file {plan_path}: {exc}")
+
+        json_plan = findings_input.get("plan")
+        if json_plan is not None:
+            if not isinstance(json_plan, str) or not json_plan.strip():
+                raise ProducerToolError("findings JSON 'plan' must be a non-empty string when present")
+            if Path(json_plan).resolve() != plan_path.resolve():
+                raise ProducerToolError(
+                    f"plan mismatch: --plan {plan_path} does not match the "
+                    f"findings JSON 'plan' {json_plan!r}"
+                )
 
     review_mode = args.review_mode
     json_mode = findings_input.get("review_mode")
@@ -768,9 +942,12 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         )
     if review_mode is None:
         review_mode = json_mode if json_mode is not None else "targeted"
-    if review_mode not in vrs.VALID_REVIEW_MODES:
+    if review_mode not in SUPPORTED_REVIEW_MODES:
+        # The single enforcement site for the narrowed mode set (the funnel
+        # both surfaces share); the argparse --review-mode choices derive
+        # from the same constant, so both refusals name one set.
         raise ProducerToolError(
-            f"review mode {review_mode!r} must be one of {VALID_REVIEW_MODES}"
+            f"review mode {review_mode!r} must be one of {SUPPORTED_REVIEW_MODES}"
         )
 
     round_value = args.round
@@ -829,7 +1006,16 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
             f"requires --review-mode fresh-adversarial; got {review_mode!r}"
         )
 
-    slug = args.artifact_slug or _default_artifact_slug(plan_path)
+    if range_source is not None:
+        slug = args.artifact_slug
+        if slug is None:
+            raise ProducerToolError(
+                "--artifact-slug is required in range mode: the range arm "
+                "has no plan filename to derive a slug from, name the "
+                "artifact explicitly"
+            )
+    else:
+        slug = args.artifact_slug or _default_artifact_slug(plan_path)
     if _IDENTITY_QUALIFIED_TAIL_RE.search(slug):
         raise ProducerToolError(
             f"artifact slug {slug!r} ends in the identity-qualified tail "
@@ -842,21 +1028,36 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
             "digits, hyphens)"
         )
 
-    repo_root = review_plan_identity.repository_root(plan_path.parent)
-    plan_ref = (
-        review_plan_identity.normalize_plan_path(plan_path, repo_root)
-        if repo_root is not None
-        else plan_path.as_posix()
-    )
-    if plan_ref is None:
-        plan_ref = plan_path.as_posix()
+    if range_source is not None:
+        record_name = (
+            f"{date_value}-{slug}{CODE_FAMILY_FILENAME_SUFFIX}"
+            f"-r{round_value}.md"
+        )
+        review_type = CODE_FAMILY_LABEL
+        source_kind = "code"
+        source_digest = range_source["digest"]
+    else:
+        repo_root = review_plan_identity.repository_root(plan_path.parent)
+        plan_ref = (
+            review_plan_identity.normalize_plan_path(plan_path, repo_root)
+            if repo_root is not None
+            else plan_path.as_posix()
+        )
+        if plan_ref is None:
+            plan_ref = plan_path.as_posix()
+        record_name = f"{date_value}-plan-review-{slug}-r{round_value}.md"
+        review_type = PLAN_FAMILY_LABEL
+        source_kind = "plan"
+        source_digest = vrs.compute_source_digest("plan", plan_bytes)
 
-    record_name = f"{date_value}-plan-review-{slug}-r{round_value}.md"
     record_path = Path(args.out_dir) / record_name
     coverage_outcome = "clean"
     ctx = {
         "session": args.session,
-        "plan_ref": plan_ref,
+        "plan_ref": None if range_source is not None else plan_ref,
+        "range_base": None if range_source is None else range_source["base"],
+        "range_head": None if range_source is None else range_source["head"],
+        "range_ref": None if range_source is None else range_source["range_ref"],
         "date": date_value,
         "round": round_value,
         "review_mode": review_mode,
@@ -864,15 +1065,18 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         "last_fix_commit": last_fix,
         "review_run_id": run_id,
         "review_started_at_ms": started_at,
-        "review_type": args.review_type,
+        "review_type": review_type,
+        "source_kind": source_kind,
         "artifact_slug": slug,
-        "source_digest": vrs.compute_source_digest("plan", plan_bytes),
+        "source_digest": source_digest,
         "coverage_outcome": coverage_outcome,
+        # The verdict field both builders read: computed once here so
+        # build_markdown and build_payload are pure readers and the call
+        # order between them is not load-bearing.
+        "verdict_field": "no" if findings else "yes",
         "findings": findings,
         "record_path": record_path,
     }
-    # build_markdown resolves the verdict field the payload needs; keep the
-    # call order explicit so the two builders stay in sync by construction.
     ctx["self_heal_state"] = self_heal_chain_state(record_path, run_id)
     return ctx
 
@@ -916,8 +1120,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--out-dir", required=True, help="directory to write the pair into")
     parser.add_argument("--session", required=True, help="session identifier for the record title")
-    parser.add_argument(
-        "--plan", required=True, help="reviewed plan file; its bytes' SHA-256 becomes source_digest"
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--plan", default=None, help="reviewed plan file; its bytes' SHA-256 becomes source_digest"
+    )
+    source_group.add_argument(
+        "--range",
+        default=None,
+        metavar="BASE...HEAD",
+        help=(
+            "reviewed commit range; the code-family record whose "
+            "source_digest is the SHA-256 of "
+            "corrections_record.reviewed_scope_bytes over base...head "
+            "(an explicit --artifact-slug is required in range mode)"
+        ),
     )
     parser.add_argument(
         "--findings-json",
@@ -931,7 +1147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--review-mode",
         default=None,
-        choices=VALID_REVIEW_MODES,
+        choices=SUPPORTED_REVIEW_MODES,
         help="review mode (default: the JSON review_mode, else targeted)",
     )
     parser.add_argument(
@@ -970,11 +1186,6 @@ def main(argv: list[str] | None = None) -> int:
         "--prior-findings-filter",
         default="no",
         help="whether prior findings were supplied as filter: yes or no (default no)",
-    )
-    parser.add_argument(
-        "--review-type",
-        default="Plan Review",
-        help="review type label (default: Plan Review)",
     )
     args = parser.parse_args(argv)
     try:

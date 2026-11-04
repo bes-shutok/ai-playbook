@@ -2621,6 +2621,180 @@ class SingleCommitSweepTest(unittest.TestCase):
         self.assertIn("one commit", out)
         self.assertIn("NOT check-landed", out)
 
+    # Authoring rename boundary (plan
+    # docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
+    # Task 1): "plans: file " joins the authoring family; a "plans: land "
+    # anchor classifies by verb pre-rename and by diff composition post-rename.
+
+    def test_plans_file_prefix_recognized_and_authoring(self):
+        self.assertTrue(
+            rsg.is_landing_claim("plans: file witnessed-plan "
+                                 "(authored plan; execution pending)"))
+        self.assertEqual(
+            rsg.anchor_kind("plans: file witnessed-plan "
+                            "(authored plan; execution pending)"),
+            "authoring")
+
+    def _boundary_repo(self, with_rename):
+        """Repo whose history optionally contains a `plans: file` rename
+        landing before the `plans: land` anchor under test."""
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        if with_rename:
+            repo.write("docs/history/plans/2026-01-01-filed-plan.md",
+                       "# Plan: filed\n")
+            repo.commit_all("plans: file filed-plan (authored plan; "
+                            "execution pending; no operative changes)")
+        return repo
+
+    def test_pre_rename_plans_land_mixed_diff_classifies_authoring(self):
+        # Safety witness: a pre-rename `plans: land` anchor of any diff
+        # composition classifies authoring by verb (never execution), so no
+        # historical authoring anchor loses its residue sweep.
+        repo = self._boundary_repo(with_rename=False)
+        repo.write("docs/history/plans/2026-01-02-old-plan.md", "# old\n")
+        repo.write("scripts/operative.py", "x = 1\n")
+        landing = repo.commit_all("plans: land old-plan (mixed landing)")
+        repo.write("a.txt", "a\n")
+        flip = repo.commit_all(
+            "done: mark old-plan origin covered by the landed old-plan plan")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[flip]", out)
+        self.assertIn(flip[:12], out)
+
+    def test_post_rename_plans_land_operative_diff_classifies_execution(self):
+        repo = self._boundary_repo(with_rename=True)
+        repo.write("docs/history/plans/2026-01-03-queued-plan.md", "# q\n")
+        repo.write("scripts/operative.py", "x = 1\n")
+        landing = repo.commit_all("plans: land queued-plan (combined landing)")
+        repo.write("b.txt", "b\n")
+        hit = repo.commit_all("done: archive queued-plan to completed")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[archive]", out)
+        self.assertIn(hit[:12], out)
+        self.assertNotIn("[flip]", out)
+        self.assertNotIn("[prune]", out)
+
+    def test_post_rename_plans_land_plans_only_diff_classifies_authoring(self):
+        repo = self._boundary_repo(with_rename=True)
+        repo.write("docs/history/plans/2026-01-04-authored-plan.md", "# a\n")
+        landing = repo.commit_all("plans: land authored-plan (authored plan; "
+                                  "execution pending)")
+        repo.write("c.txt", "c\n")
+        flip = repo.commit_all(
+            "done: mark authored-plan origin covered by the landed plan")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[flip]", out)
+        self.assertIn(flip[:12], out)
+        self.assertNotIn("[archive]", out)
+
+    def test_same_date_commit_preceding_boundary_classifies_by_verb(self):
+        # The r5 F6 boundary-edge cell: a commit sharing the rename
+        # landing's date but preceding the resolved boundary classifies
+        # authoring by verb (the split is ancestry-based, never date-based).
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        date = "2026-02-01T12:00:00+00:00"
+        env_date = ("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)
+        def dated_commit(repo, message, writes):
+            for rel, text in writes:
+                repo.write(rel, text)
+            subprocess.run(["git", "-C", str(repo.root), "add", "-A"],
+                           check=True, capture_output=True, env=guard_env())
+            env = guard_env()
+            env.update(dict(env_date))
+            subprocess.run(["git", "-C", str(repo.root), "commit", "-qm",
+                            message],
+                           check=True, capture_output=True, env=env)
+            return subprocess.run(
+                ["git", "-C", str(repo.root), "rev-parse", "HEAD"],
+                check=True, capture_output=True, env=guard_env()
+            ).stdout.decode().strip()
+
+        landing = dated_commit(
+            repo, "plans: land same-date-plan (mixed landing)",
+            [("docs/history/plans/2026-02-01-same-date-plan.md", "# s\n"),
+             ("scripts/operative.py", "x = 1\n")])
+        boundary = dated_commit(
+            repo, "plans: file same-date-plan (filed)",
+            [("docs/history/plans/2026-02-01-filed.md", "# f\n")])
+        saved = (rsg.AUTHORING_RENAME_BOUNDARY, rsg._rename_boundary_resolved)
+        try:
+            rsg.AUTHORING_RENAME_BOUNDARY = boundary
+            rsg._rename_boundary_resolved = True
+            self.assertEqual(
+                rsg.classify_anchor(str(repo.root), landing,
+                                    "plans: land same-date-plan"),
+                "authoring")
+        finally:
+            rsg.AUTHORING_RENAME_BOUNDARY, rsg._rename_boundary_resolved = saved
+
+    def test_rename_boundary_module_constant_controls_classification(self):
+        # Fixture control: the resolved AUTHORING_RENAME_BOUNDARY module
+        # constant decides the split; a set boundary forces post-rename
+        # diff-composition classification, None forces verb classification.
+        repo = self._boundary_repo(with_rename=True)
+        base_sha = git(repo.root, "rev-parse", "HEAD").strip()
+        repo.write("docs/history/plans/2026-01-05-late-plan.md", "# l\n")
+        repo.write("scripts/operative.py", "x = 2\n")
+        landing = repo.commit_all("plans: land late-plan (mixed landing)")
+        repo.write("docs/history/plans/2026-01-07-filed-plan.md", "# f\n")
+        repo.commit_all("plans: file earlier-plan (filed)")
+        saved = (rsg.AUTHORING_RENAME_BOUNDARY, rsg._rename_boundary_resolved)
+        try:
+            rsg.AUTHORING_RENAME_BOUNDARY = None
+            rsg._rename_boundary_resolved = True
+            self.assertEqual(
+                rsg.classify_anchor(str(repo.root), landing,
+                                    "plans: land late-plan"), "authoring")
+            rsg.AUTHORING_RENAME_BOUNDARY = base_sha
+            self.assertEqual(
+                rsg.classify_anchor(str(repo.root), landing,
+                                    "plans: land late-plan"), "execution")
+        finally:
+            rsg.AUTHORING_RENAME_BOUNDARY, rsg._rename_boundary_resolved = saved
+
+    def test_plans_land_stays_recognized_with_residue_findings(self):
+        # `plans: land ` stays in LANDING_CLAIM_PREFIXES: recognition and the
+        # walk/batch scans are unchanged; only the classification splits.
+        repo = self._boundary_repo(with_rename=False)
+        repo.write("docs/history/plans/2026-01-06-hist-plan.md", "# h\n")
+        landing = repo.commit_all("plans: land hist-plan (the landing)")
+        repo.write("d.txt", "d\n")
+        prune = repo.commit_all("plans: prune hist-plan entry (landed)")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[prune]", out)
+        self.assertIn(prune[:12], out)
+        proc = run_guard("check-single-commit", "--scan-window", "5",
+                         "--repo", str(repo.root))
+        self.assertIn("anchor", proc.stdout.decode())
+
+    def test_empty_diff_plans_land_reads_authoring(self):
+        # Inconclusive (empty) diff defaults to authoring.
+        repo = self._boundary_repo(with_rename=True)
+        repo.write("seed.txt", "seed\n")
+        repo.commit_all("seed commit")
+        git(repo.root, "commit", "-q", "--allow-empty",
+            "-m", "plans: land empty-plan (authored plan)")
+        landing = git(repo.root, "rev-parse", "HEAD").strip()
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode())
+
 
 if __name__ == "__main__":
     unittest.main()

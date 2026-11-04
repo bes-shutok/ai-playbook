@@ -5,7 +5,7 @@ Priority: low
 Origin class: process-residual
 Class: fence-class
 Driving force: code-quality
-Added: 2026-11-02, certification-residual capture from the r5 terminal review round of docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md (r5 verdict ready=yes, zero blocking; these residuals are recorded here per the certification-residual routing and never force a re-round or a plan fold)
+Added: 2026-11-02, certification-residual capture from the r5 terminal review round of docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md (r5 verdict ready=yes, zero blocking; these residuals are recorded here per the certification-residual routing and never force a re-round or a plan fold)
 
 ## Residuals
 

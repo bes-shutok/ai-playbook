@@ -24,6 +24,7 @@ Expected: one gate pass enumerates every violation with its evidence before exit
 - Session-scan receipts (2026-11-03 harvest subagent outputs over the window's session records): four of seven small sessions hit the run-id rejection; one session's later round lists four record-side adaptations in a single round; a plan was mechanically refused at r3 on the byte cap after the prior fold missed a second over-cap item.
 - Corpus witnesses in window: lessons 321 and 376 fourth witness (commit 21f2cd2ce), lesson 374 (commit bf6e14189), lesson 379 (commit 981c62cc3 lineage).
 - In-window landing subjects carrying multi-round certification churn: a8116afe2 (certified r3), e42a0ac78 (r3 after r1 full-fold 6, r2 fold 4), ec4e61e39 (r5 ready=yes), plus an r8-round run recorded standing at r7 blocking.
+- Fresh witness 2026-11-04 (playbook repo, authoring run, pre-round plan_readiness before review r1): successive probe cycles surfaced one violation class at a time: missing `[class: ...]` tags on TDD items, then malformed Files-coverage annotations (`(Tasks 1-2)` where the grammar wants the single-task form plus an explicit `*(edit; ...)*` coverage note), then two backticked repo-path literals inside checklist-item prose parsed as undeclared edit-target declarations (reworded without backticks), then three over-cap checklist items each split into independently verifiable items. Arms 1 (fail-all-at-once) and arm 3 (authoring-time preflight) would have collapsed this into one probe cycle.
 
 ## Suspected root area
 

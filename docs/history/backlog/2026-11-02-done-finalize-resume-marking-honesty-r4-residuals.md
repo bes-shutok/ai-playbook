@@ -1,6 +1,8 @@
 # done-finalize-resume-marking-honesty r4 certification residuals
 
-Added: 2026-11-02, the plan-review r4 certification round (review record .ai-playbook/reviews/2026-11-02-plan-review-done-finalize-resume-marking-honesty-p786745a1-r4.md; verdict ready=yes, zero blocking; certification-residual routing).
+Added: 2026-11-02, the plan-review r4 certification round
+
+Cluster: docs/history/backlog/2026-11-04-review-record-staged-before-worker-dispatch.md (record-marking honesty family) (review record .ai-playbook/reviews/2026-11-02-plan-review-done-finalize-resume-marking-honesty-p786745a1-r4.md; verdict ready=yes, zero blocking; certification-residual routing).
 
 Dedup probe: no existing open row covers the finalize line's run_id=unbound assertion or the refused-plus-release-failure composition case; the origin plan is docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md.
 

@@ -1,7 +1,7 @@
 # Backlog: done_run setup mixes status lines into the eval-able export stdout
 
 - **Filed:** 2026-11-03, learn Step 1.8 skill-usage capture (authoring closeout session)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-03-done-run-setup-stdout-export-emission-split.md)
 Cluster: docs/maintenance/development_lessons.md #261 (the tee-source field failure of the same emission shape; the orphaned-release recovery)
 - **Workflow:** backlog
 - **Priority:** high

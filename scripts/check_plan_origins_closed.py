@@ -121,7 +121,7 @@ STATUS_CLOSED_VALUE_RE = re.compile(
 # never a closed one: a covered-not-yet-executed origin still owes the
 # execution-time fold, so it stays outside PASS_STATES.
 STATUS_COVERED_VALUE_RE = re.compile(
-    r"^covered\s*\(([^)]+)\)", re.IGNORECASE
+    r"^covered(?:-pending-execution)?\s*\(([^)]+)\)", re.IGNORECASE
 )
 
 # The covered straggler's remedy detail (the self-witness and the
@@ -966,10 +966,15 @@ def run_check_coverage_mode(
     return 0
 
 
-def _flip_status_line(text: str, witness: str) -> tuple[str, bool]:
-    """Rewrite the first header ``Status:`` line's value to the covered
-    witness, preserving the line's non-status prefix. Returns
-    (new text, flipped)."""
+def _flip_status_line(
+    text: str, witness: str, token: str = "covered-pending-execution"
+) -> tuple[str, bool]:
+    """Rewrite the first header ``Status:`` line's value to the covering
+    witness under ``token`` (the authoring flip's default
+    ``covered-pending-execution``; the execution flip passes ``covered``),
+    preserving the line's non-status prefix. The idempotency and
+    different-witness conflict arms classify both the pending and the
+    legacy token. Returns (new text, flipped)."""
     for line in text.splitlines()[:STATUS_HEADER_LINES]:
         match = STATUS_LINE_RE.match(line)
         if not match:
@@ -980,7 +985,58 @@ def _flip_status_line(text: str, witness: str) -> tuple[str, bool]:
             return text, False  # idempotent: same-plan witness already present
         if covered:
             return text, False  # caller reports the conflict
-        new_line = line[: match.start(1)] + f"covered ({witness})"
+        new_line = line[: match.start(1)] + f"{token} ({witness})"
+        return text.replace(line, new_line, 1), True
+    return text, False
+
+
+# The plan-header ``Executed:`` field line (the execution-status writer's
+# plan-side surface; plan docs/history/plans/2026-11-04-execution-lane-
+# authored-plans-misread-as-landed.md Task 3).
+EXECUTED_LINE_RE = re.compile(
+    r"^(?P<prefix>\s*(?:[-*+]\s*)?(?:Executed:)\s*)(?P<value>.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def top_read(name: str, backlog_dir: Path) -> str:
+    """Read a top-level backlog item's bytes (same read semantics as the
+    open-state arm's inline read; OSError propagates to the caller's skip
+    arm)."""
+    return (backlog_dir / name).read_text(encoding="utf-8", errors="replace")
+
+
+def _retokenize_pending_to_covered(text: str, witness: str) -> tuple[str, bool]:
+    """Execution-direction retokenize: a row already carrying this plan's
+    witness under the pending token rewrites the token to ``covered`` with
+    the witness unchanged (the stranded field-yes/pending-row half-state's
+    writer-side remedy; plan docs/history/plans/2026-11-04-execution-lane-
+    authored-plans-misread-as-landed.md review r5 F1). Returns
+    (new text, retokenized)."""
+    for line in text.splitlines()[:STATUS_HEADER_LINES]:
+        match = STATUS_LINE_RE.match(line)
+        if not match:
+            continue
+        value = match.group(1)
+        covered = STATUS_COVERED_VALUE_RE.match(value)
+        if not covered or covered.group(1).strip() != witness:
+            continue
+        if value.lower().startswith("covered-pending-execution"):
+            new_line = line[: match.start(1)] + f"covered ({witness})"
+            return text.replace(line, new_line, 1), True
+        return text, False  # already the legacy token: idempotent
+    return text, False
+
+
+def _flip_executed_field(text: str, recorded_tip: str) -> tuple[str, bool]:
+    """Flip the plan header's ``Executed:`` field to
+    ``yes (<recorded tip>)``; an absent line stays absent (the field's
+    metadata-retrofit rule), no flip reported. Returns (new text, flipped)."""
+    for line in text.splitlines()[:STATUS_HEADER_LINES]:
+        match = EXECUTED_LINE_RE.match(line)
+        if not match:
+            continue
+        new_line = match.group("prefix") + f"yes ({recorded_tip})"
         return text.replace(line, new_line, 1), True
     return text, False
 
@@ -990,6 +1046,8 @@ def run_mark_covered_mode(
     backlog_dir: Path,
     completed_dir: Path,
     repo_root: Path,
+    execution_flip: bool = False,
+    recorded_tip: str | None = None,
 ) -> int:
     """Landing-closeout covered flip: each named open top-level origin's
     header Status becomes ``covered (<repo-relative plan path>)``. Exit 0
@@ -997,7 +1055,12 @@ def run_mark_covered_mode(
     (bytes unchanged), 2 indeterminate when an origin is unreadable at
     classification time, 3 on tool error. A directory operand's witness
     is the directory path (the natural slug form ``<plans-root>/<slug>``),
-    read from the charter."""
+    read from the charter. The writer emits the pending token
+    ``covered-pending-execution (<witness>)`` by default; on the execution
+    branch (``execution_flip``, plan docs/history/plans/2026-11-04-
+    execution-lane-authored-plans-misread-as-landed.md Task 3) it writes the
+    legacy ``covered (<witness>)`` witness and flips the executed plan's own
+    header ``Executed:`` field to ``yes (<recorded tip>)``."""
     try:
         text = _plan_text(plan_path)
     except OSError as exc:
@@ -1028,7 +1091,29 @@ def run_mark_covered_mode(
         if state == "covered":
             covering = detail[len("covered by "):].strip()
             if covering == witness:
-                print(f"already covered by this plan: {name}")
+                if execution_flip:
+                    # The execution-direction retokenize (review r5 F1): a
+                    # pending-token row with this plan's witness flips to the
+                    # legacy covered witness instead of reporting a silent
+                    # half-state pass.
+                    try:
+                        item_text = top_read(name, backlog_dir)
+                    except OSError as exc:
+                        print(f"skip: {name}: unreadable ({exc})")
+                        continue
+                    new_text, did = _retokenize_pending_to_covered(
+                        item_text, witness
+                    )
+                    if did:
+                        (backlog_dir / name).write_text(
+                            new_text, encoding="utf-8"
+                        )
+                        flipped += 1
+                        print(f"covered: {name} (by {witness}; retokenized)")
+                    else:
+                        print(f"already covered by this plan: {name}")
+                else:
+                    print(f"already covered by this plan: {name}")
                 continue
             print(
                 f"refusing to mark covered: {name} is already covered by "
@@ -1042,7 +1127,12 @@ def run_mark_covered_mode(
             except OSError as exc:
                 print(f"skip: {name}: unreadable ({exc})")
                 continue
-            new_text, did = _flip_status_line(item_text, witness)
+            new_text, did = _flip_status_line(
+                item_text,
+                witness,
+                token="covered" if execution_flip
+                else "covered-pending-execution",
+            )
             if did:
                 top.write_text(new_text, encoding="utf-8")
                 flipped += 1
@@ -1051,6 +1141,20 @@ def run_mark_covered_mode(
                 print(f"skip: {name}: no open status header line found")
         else:
             print(f"skip: {name}: {state} ({detail})")
+    if execution_flip and recorded_tip:
+        try:
+            plan_text = _plan_text(plan_path)
+            new_plan_text, executed_did = _flip_executed_field(
+                plan_text, recorded_tip
+            )
+            if executed_did:
+                plan_path.write_text(new_plan_text, encoding="utf-8")
+                print(
+                    f"executed: {plan_path.name} "
+                    f"(Executed: yes ({recorded_tip}))"
+                )
+        except OSError as exc:
+            print(f"skip: executed-field flip unreadable ({exc})")
     print(f"check_plan_origins_closed: marked {flipped} origin(s) covered")
     if indeterminate:
         print(
@@ -1121,7 +1225,38 @@ def main(argv: list[str] | None = None) -> int:
         dest="mark_covered",
         help="plan file whose named open origins flip to covered",
     )
+    parser.add_argument(
+        "--execution-flip",
+        dest="execution_flip",
+        action="store_true",
+        help=(
+            "mark-covered runs on the execution branch: the row token is "
+            "the legacy covered witness and the plan-header Executed field "
+            "flips to yes (<recorded tip>)"
+        ),
+    )
+    parser.add_argument(
+        "--recorded-tip",
+        dest="recorded_tip",
+        help=(
+            "the executed branch's pre-squash tip sha, recorded into the "
+            "Executed field on the execution flip"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.execution_flip and not args.recorded_tip:
+        parser.error(
+            "--execution-flip requires --recorded-tip (the executed "
+            "branch's pre-squash tip sha); a tip-less execution flip "
+            "composes the row-covered/field-pending half-state"
+        )
+    if args.recorded_tip and not args.execution_flip:
+        _warn(
+            "--recorded-tip is ignored without --execution-flip "
+            "(the recorded tip only feeds the execution-direction "
+            "Executed-field flip)"
+        )
 
     repo_root = resolve_repo_root(args.repo_root)
     backlog_dir = resolve_dir(
@@ -1142,7 +1277,12 @@ def main(argv: list[str] | None = None) -> int:
         _require_plan_operand(parser, plan_path, "plan file not found")
         if args.mark_covered:
             code = run_mark_covered_mode(
-                plan_path, backlog_dir, completed_dir, repo_root
+                plan_path,
+                backlog_dir,
+                completed_dir,
+                repo_root,
+                execution_flip=args.execution_flip,
+                recorded_tip=args.recorded_tip,
             )
         else:
             active_plans_dir = resolve_dir(

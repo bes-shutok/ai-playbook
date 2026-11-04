@@ -82,6 +82,14 @@ terminal routing, build a path matrix before declaring lifecycle safety:
    `security#lifecycle-ownership-path-unchecked` when the matrix cannot be
    completed from code and tests.
 
+For batched broker callbacks, extend this matrix with the broker decision and
+replay behavior: distinguish `MQMessage.retryTimes` from broker reconsume
+attempts, and cite pinned client behavior for callback failure, acknowledgement,
+replay, and retry limits or mark them unknown. When one item fails after a
+sibling's side effect, trace execution order and require replay evidence plus an
+idempotency guard for each replayable effect; otherwise mark replay or the guard
+unknown. Batch size and retry thresholds alone prove neither replay nor safety.
+
 ## Persistent state-machine race matrix
 
 For compare-and-set updates, deduplication, reconciliation, or job queues:

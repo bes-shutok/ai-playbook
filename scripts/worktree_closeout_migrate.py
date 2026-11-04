@@ -52,8 +52,12 @@ Subcommands:
            and that this run carried is restored from HEAD and reported as a
            prevented clobber (the between-snapshot rewind window), while
            staged entries this run did not carry are reported only and never
-           touched. Non-git targets have no committed bytes to compare, so
-           both guards are inert there.
+           touched; every staged shape the post-run guard walks emits a
+           line - a staged new file absent at HEAD, a staged blob equal to
+           HEAD (a no-op restage), and brand-new bytes on a carried path
+           report and stay untouched like the foreign shapes, so no walked
+           shape passes silently. Non-git targets have no committed bytes to
+           compare, so both guards are inert there.
   boundary-mirror  Mirror one task boundary's records from the run worktree
            to the primary checkout and append the boundary's task_boundary
            receipt row in one operation: a try-once merge-acquire of the
@@ -1141,6 +1145,23 @@ def _worktree_blob(repo: Path, path: Path) -> str | None:
     return proc.stdout.strip() or None
 
 
+def _record_delivered_blob(
+    delivered_blobs: dict[str, str], target: Path, rel: str, delivered: Path,
+) -> str | None:
+    """Delivered-blob capture for the post-run clobber guard (plan
+    closeout-migrate-clobber-guard-restore-arms, Terms): hash the bytes this
+    run actually delivered for a carried rel into the in-memory rel-to-blob
+    map the guard pass compares against - computed during the carry loop,
+    before the manifest append, which records the sha additively as
+    delivered_blob on the run's own migrated/replaced rows. A failed hash
+    probe (a non-git target) records nothing: the guard's absence rule then
+    keeps the vintage-only signature for that rel."""
+    blob = _worktree_blob(target, delivered)
+    if blob:
+        delivered_blobs[rel] = blob
+    return blob
+
+
 def _unchanged_since_baseline(src: Path, rel: str, baseline_files: dict[str, str]) -> bool:
     """The carry loop's baseline-identical skip rule, shared with the clobber
     pre-flight so both surfaces evaluate one path set (entry closeout-
@@ -1173,14 +1194,102 @@ def _baseline_clobber_preflight(
     return offenders
 
 
-def _prevent_tracked_clobbers(target: Path, owned: set[str]) -> list[str]:
+def _read_staged_entry(target: Path, rel: str) -> tuple[str | None, bool]:
+    """One index entry's classification read (lesson 370's index-membership
+    oracle rule): the stage-0 blob id via rev-parse, with git ls-files -u
+    discriminating the two shapes rev-parse alone collapses - it exits 128
+    for both an unmerged entry and an index-absent one. Returns (blob,
+    unmerged): (blob, False) is a stage-0 entry, (None, True) is unmerged
+    (stages 1-3 present), (None, False) is index-absent (a staged
+    deletion)."""
+    proc = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", f":{rel}"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        blob = proc.stdout.strip()
+        if blob:
+            return blob, False
+    stages = subprocess.run(
+        ["git", "-C", str(target), "ls-files", "-u", "--", rel],
+        capture_output=True, text=True,
+    )
+    unmerged = stages.returncode == 0 and bool(stages.stdout.strip())
+    return None, unmerged
+
+
+def _reclassify_then_restore(
+    target: Path, rel: str, expected_blob: str | None, restored_reason: str,
+) -> bool:
+    """The reclassify-then-restore sequence both restore arms run (plan
+    closeout-migrate-clobber-guard-restore-arms, Terms): re-read the staged
+    entry immediately before the restore decision, act only when the
+    re-read matches the classification read (expected_blob None means the
+    entry was classified index-absent - still-absent means unchanged), and
+    verify the restore outcome after it. A peer restage between the
+    classification read and this re-read downgrades to a report-only pass;
+    a restore subprocess failure or a post-restore re-read mismatch is
+    reported without a re-restore. The window between this re-read and the
+    restore subprocess stays a bounded silent-drop window. Returns True
+    when the restore landed and held."""
+    blob, unmerged = _read_staged_entry(target, rel)
+    if unmerged or blob != expected_blob:
+        print(
+            f"prevented-clobber check: {rel} changed under the "
+            "guard between classification and restore; left "
+            "untouched"
+        )
+        return False
+    restore = subprocess.run(
+        ["git", "-C", str(target), "restore", "--source=HEAD",
+         "--staged", "--worktree", "--", rel],
+        capture_output=True, text=True,
+    )
+    if restore.returncode != 0:
+        print(
+            f"WARN: prevented-clobber restore failed for {rel}: "
+            f"{restore.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return False
+    head_blob = _head_blob(target, rel)
+    final_blob, final_unmerged = _read_staged_entry(target, rel)
+    if final_unmerged or head_blob is None or final_blob != head_blob:
+        print(
+            f"prevented-clobber check: {rel} did not hold HEAD after "
+            "the restore (staged entry re-read differs); reported, "
+            "not re-restored"
+        )
+        return False
+    print(f"prevented clobber: {rel} ({restored_reason})")
+    return True
+
+
+def _prevent_tracked_clobbers(
+    target: Path, owned: set[str],
+    delivered_blobs: dict[str, str] | None = None,
+) -> list[str]:
     """Post-run staged-set ownership check (entry closeout-migrate-baseline-
     tracked-clobber): a staged tracked entry whose staged bytes are an older
     committed vintage of the file and that this run carried is the
     between-snapshot rewind - restore it from HEAD and report it as a
-    prevented clobber. Staged entries this run did not carry are foreign
-    work: reported, never touched. Returns the prevented paths. Vintage
-    detection is its own small probe beside the concept owner
+    prevented clobber. The owned vintage arm compares the staged blob
+    against the run's in-memory delivered blob for the rel (plan closeout-
+    migrate-clobber-guard-restore-arms): staged bytes equal to the delivered
+    bytes are the run's own output staged back and stay untouched with a
+    report line; a rel with no in-memory delivered blob keeps the current
+    vintage-only signature (a defensive absence rule - the decision never
+    reads the manifest). An owned entry sitting unmerged at index stages 1-3
+    is a live merge, not a rewind: report-only, never restored. Both
+    restore arms run the shared reclassify-then-restore helper
+    (_reclassify_then_restore). Staged entries this run did not carry are
+    foreign work: reported, never touched. Every walked shape emits: a
+    staged new file absent at HEAD (staged-new-at-target), a staged blob
+    equal to HEAD including a mode-only change (a no-op restage), and
+    brand-new bytes on a carried path (staged-new-bytes-on-a-carried-path)
+    all report and stay untouched - no walked shape passes silently.
+    Returns the prevented paths.
+    Vintage detection is its own small probe beside the concept owner
     scripts/revert_set_classifier.py; the report lines borrow that
     classifier's foreign-versus-reversal vocabulary."""
     prevented: list[str] = []
@@ -1199,35 +1308,27 @@ def _prevent_tracked_clobbers(target: Path, owned: set[str]) -> list[str]:
         rel = os.fsdecode(raw)
         if not rel:
             continue
-        staged_proc = subprocess.run(
-            ["git", "-C", str(target), "rev-parse", f":{rel}"],
-            capture_output=True, text=True,
-        )
-        staged_blob = staged_proc.stdout.strip() if staged_proc.returncode == 0 else None
+        staged_blob, unmerged = _read_staged_entry(target, rel)
+        if unmerged:
+            print(
+                f"prevented-clobber check: {rel} is unmerged in the "
+                "index (stages 1-3, a merge this run did not stage); "
+                "foreign staged work, left untouched"
+            )
+            continue
         if staged_blob is None:
-            # A staged deletion (the rewind deleting the entry outright) has
-            # no index blob to compare: an owned deletion is the same
+            # A staged deletion (index-absent; the unmerged shape is routed
+            # above) has no index blob to compare: an owned deletion is the
             # between-snapshot rewind in its most destructive shape and
             # restores from HEAD; a foreign deletion is reported and never
             # touched.
             if rel in owned:
-                restore = subprocess.run(
-                    ["git", "-C", str(target), "restore", "--source=HEAD",
-                     "--staged", "--worktree", "--", rel],
-                    capture_output=True, text=True,
-                )
-                if restore.returncode == 0:
+                if _reclassify_then_restore(
+                    target, rel, None,
+                    "staged deletion of a tracked file this run "
+                    "carried; restored from HEAD",
+                ):
                     prevented.append(rel)
-                    print(
-                        f"prevented clobber: {rel} (staged deletion of a "
-                        "tracked file this run carried; restored from HEAD)"
-                    )
-                else:
-                    print(
-                        f"WARN: prevented-clobber restore failed for {rel}: "
-                        f"{restore.stderr.strip()}",
-                        file=sys.stderr,
-                    )
             else:
                 print(
                     f"prevented-clobber check: {rel} is a staged deletion "
@@ -1236,53 +1337,69 @@ def _prevent_tracked_clobbers(target: Path, owned: set[str]) -> list[str]:
                 )
             continue
         head_blob = _head_blob(target, rel)
-        if head_blob is None or staged_blob == head_blob:
+        if head_blob is None:
+            # A staged new file absent at HEAD has no committed bytes to
+            # compare or restore: report the shape and leave the entry
+            # untouched.
+            print(
+                f"prevented-clobber check: {rel} is staged-new-at-target "
+                "(a staged new file, absent at HEAD; no committed bytes "
+                "to compare); left untouched"
+            )
+            continue
+        if staged_blob == head_blob:
+            # The staged blob matches HEAD (diff --cached lists the path on
+            # a mode-only change even though the bytes are unchanged): a
+            # no-op restage, reported and left untouched.
+            print(
+                f"prevented-clobber check: {rel} staged bytes equal HEAD "
+                "(a no-op restage, including a mode-only change); "
+                "left untouched"
+            )
             continue
         if _blob_in_head_history(target, rel, staged_blob):
-            if rel in owned:
-                # Compare-then-act: re-read the staged blob immediately
-                # before the restore so a peer restaging the path between
-                # the classification read and this point downgrades to a
-                # report-only pass instead of dropping their bytes.
-                recheck = subprocess.run(
-                    ["git", "-C", str(target), "rev-parse", f":{rel}"],
-                    capture_output=True, text=True,
-                )
-                if recheck.returncode != 0 or recheck.stdout.strip() != staged_blob:
-                    print(
-                        f"prevented-clobber check: {rel} changed under the "
-                        "guard between classification and restore; left "
-                        "untouched"
-                    )
-                    continue
-                restore = subprocess.run(
-                    ["git", "-C", str(target), "restore", "--source=HEAD",
-                     "--staged", "--worktree", "--", rel],
-                    capture_output=True, text=True,
-                )
-                if restore.returncode == 0:
-                    prevented.append(rel)
-                    print(
-                        f"prevented clobber: {rel} (staged bytes are an older "
-                        "committed vintage of a tracked file this run carried; "
-                        "restored from HEAD)"
-                    )
-                else:
-                    print(
-                        f"WARN: prevented-clobber restore failed for {rel}: "
-                        f"{restore.stderr.strip()}",
-                        file=sys.stderr,
-                    )
-            else:
+            delivered_blob = (delivered_blobs or {}).get(rel)
+            if rel not in owned:
                 print(
                     f"prevented-clobber check: {rel} holds a rewound staged "
                     "vintage this run did not carry (foreign staged work); "
                     "left untouched for the operator's revert-set machinery"
                 )
+            elif staged_blob == delivered_blob:
+                # The staged bytes are this run's own delivered bytes staged
+                # back (a committed vintage equal to what the run delivered):
+                # restoring HEAD here would destroy the run's output, so the
+                # entry stays untouched and the shape is reported.
+                print(
+                    f"prevented-clobber check: {rel} staged bytes equal the "
+                    "bytes this run delivered (delivered blob "
+                    f"{delivered_blob[:12]}); left untouched"
+                )
+            else:
+                # The staged blob differs from the delivered blob (or no
+                # in-memory delivered blob is known for the rel - the
+                # defensive absence rule keeps the vintage-only signature):
+                # an older committed vintage staged over the run's output is
+                # the between-snapshot rewind, restored from HEAD.
+                if _reclassify_then_restore(
+                    target, rel, staged_blob,
+                    "staged bytes are an older committed vintage of a "
+                    "tracked file this run carried; restored from HEAD",
+                ):
+                    prevented.append(rel)
         elif rel not in owned:
             print(
                 f"prevented-clobber check: {rel} is staged outside this run's "
                 "carried outputs (foreign staged work); left untouched"
+            )
+        else:
+            # Brand-new bytes (not a committed vintage) staged on a path
+            # this run carried: not a rewind to restore, reported and left
+            # untouched.
+            print(
+                f"prevented-clobber check: {rel} is staged-new-bytes-"
+                "on-a-carried-path (brand-new bytes on a path this run "
+                "carried, not a committed vintage); left untouched"
             )
     return prevented
 
@@ -1565,6 +1682,11 @@ def _cmd_migrate_transfer(
     # Staged tracked entries the post-run guard restored from HEAD (entry
     # closeout-migrate-baseline-tracked-clobber); recorded in the manifest.
     prevented: list[dict] = []
+    # In-memory rel-to-delivered-blob map for the post-run clobber guard
+    # (plan closeout-migrate-clobber-guard-restore-arms): filled during the
+    # carry loop below, passed into the guard pass, and recorded additively
+    # as delivered_blob on the run's own migrated/replaced manifest rows.
+    delivered_blobs: dict[str, str] = {}
     # Prior-target siblings retained by replacements until the migration
     # manifest carrying their replaced disposition is atomically installed.
     priors: list[tuple[Path, Path]] = []
@@ -1633,13 +1755,15 @@ def _cmd_migrate_transfer(
                         # destination (the skipped disposition would leave the
                         # gate's presence check and the sweep's retention with
                         # no reference) without rewriting identical bytes.
-                        migrated.append(
-                            {
-                                "source": rel,
-                                "destination": dst.as_posix(),
-                                "verified": True,
-                            }
-                        )
+                        entry = {
+                            "source": rel,
+                            "destination": dst.as_posix(),
+                            "verified": True,
+                        }
+                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
+                        if blob:
+                            entry["delivered_blob"] = blob
+                        migrated.append(entry)
                         continue
                     receipt = receipts.get(rel)
                     if receipt is not None and _target_matches_receipt(dst, receipt):
@@ -1653,13 +1777,15 @@ def _cmd_migrate_transfer(
                         # reference - records it without rewriting identical
                         # bytes. A path with no valid receipt keeps the
                         # skipped row unchanged.
-                        migrated.append(
-                            {
-                                "source": rel,
-                                "destination": dst.as_posix(),
-                                "verified": True,
-                            }
-                        )
+                        entry = {
+                            "source": rel,
+                            "destination": dst.as_posix(),
+                            "verified": True,
+                        }
+                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
+                        if blob:
+                            entry["delivered_blob"] = blob
+                        migrated.append(entry)
                         continue
                     skipped.append(
                         {
@@ -1677,6 +1803,9 @@ def _cmd_migrate_transfer(
                     )
                     if status == "replaced":
                         replaced.append(payload["entry"])
+                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
+                        if blob:
+                            payload["entry"]["delivered_blob"] = blob
                         priors.append((dst, payload["prior_tmp"]))
                         print(f"REPLACED: {rel} (receipt-proven same-run mirror)")
                         continue
@@ -1711,6 +1840,9 @@ def _cmd_migrate_transfer(
                         f"(incoming {_sha256(src)[:12]} / existing {collision_dst_digest[:12]})"
                     )
                 else:
+                    blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
+                    if blob:
+                        entry["delivered_blob"] = blob
                     migrated.append(entry)
             else:
                 failed.append(
@@ -1743,7 +1875,7 @@ def _cmd_migrate_transfer(
                 | {entry["destination"] for entry in replaced}
                 if dest.startswith(prefix)
             }
-            for rel in _prevent_tracked_clobbers(target, owned_rels):
+            for rel in _prevent_tracked_clobbers(target, owned_rels, delivered_blobs):
                 prevented.append(
                     {
                         "destination": (target / rel).as_posix(),
@@ -3961,6 +4093,13 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
       2026-11-01-gate-removal-inherited-manifest-rows), so the gate can
       read each row's run-attribution stamp; additive only, no consumer
       outside the gate reads it.
+    - ``prevented_rows``: every dictionary row of ``prevented_clobbers``
+      with a truthy ``destination``, in manifest order (plan
+      2026-11-02-closeout-migrate-clobber-guard-restore-arms Task 4), so
+      the gate can read each row's run-attribution stamp for the teardown
+      summary; a non-iterable section sets ``destinations_error`` like the
+      migrated/renamed reads; additive only, no consumer outside the gate
+      reads it.
     - ``destinations_error``: the TypeError a non-iterable section raises
       at destination extraction, else None, discarding any partial
       collection (both ``verified_destinations`` and ``verified_rows``
@@ -3980,6 +4119,7 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         "recorded": None,
         "verified_destinations": [],
         "verified_rows": [],
+        "prevented_rows": [],
         "destinations_error": None,
     }
     try:
@@ -4008,6 +4148,15 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
                 ):
                     state["verified_rows"].append(entry)
                     state["verified_destinations"].append(entry["destination"])
+        # Teardown evidence rows (plan
+        # 2026-11-02-closeout-migrate-clobber-guard-restore-arms Task 4):
+        # every dictionary prevented_clobbers row with a truthy
+        # destination; read inside the same TypeError guard, so a
+        # non-iterable section reaches the caught tool-error class like the
+        # migrated/renamed reads, no new error surface.
+        for entry in manifest.get("prevented_clobbers", []):
+            if isinstance(entry, dict) and entry.get("destination"):
+                state["prevented_rows"].append(entry)
     except TypeError as exc:
         state["destinations_error"] = exc
         state["verified_destinations"] = []
@@ -4046,6 +4195,11 @@ def _gate_branch_closeout(
     unattributable rows in multi-record manifests demote to a report-only
     foreign note naming the missing destinations and the
     attributed/unattributed counts, and the manifest is never rewritten.
+    The adjudicated run's prevented_clobbers rows surface beside that
+    adjudication as a report-only teardown summary (restored paths,
+    operator-decide; prior runs' rows report as foreign), warning-first
+    per the machinery admission protocol (plan
+    2026-11-02-closeout-migrate-clobber-guard-restore-arms Task 4).
 
     Content accounting: an ancestry-accounted tip (an ancestor of
     destination history) is landed; a tip whose complete tree equals any
@@ -4266,6 +4420,44 @@ def _gate_branch_closeout(
             f"{len(hold_missing) + len(expired_missing)}; unattributed: "
             f"{len(unattributed_missing)})"
         )
+    # Teardown evidence (plan 2026-11-02-closeout-migrate-clobber-guard-
+    # restore-arms Task 4): the run's prevented_clobbers rows surface at the
+    # teardown decision, report-only and warning-first per the machinery
+    # admission protocol - never a hold. Attribution rides the same stamp
+    # the missing-destination hold reads: rows stamped for the adjudicated
+    # branch record (all rows of a single-record legacy manifest) are this
+    # run's restored paths; prior runs' stamped rows and unattributable rows
+    # report as foreign, never attributed to the adjudicated run's teardown
+    # evidence.
+    prevented_restored: list[str] = []
+    prevented_foreign: list[str] = []
+    for row in state["prevented_rows"]:
+        index = row.get("record_index")
+        stamped = isinstance(index, int) and not isinstance(index, bool)
+        if not stamped:
+            attributed = len(records) == 1
+        else:
+            attributed = index == adjudicated_index
+        if attributed:
+            prevented_restored.append(row["destination"])
+        else:
+            prevented_foreign.append(row["destination"])
+    prevented_notes: list[str] = []
+    if prevented_restored:
+        prevented_notes.append(
+            "branch-closeout: prevented clobber(s) this run restored from "
+            "HEAD (report-only, the operator decides whether any restored "
+            "path needs re-staging): "
+            + ", ".join(prevented_restored[:5])
+        )
+    if prevented_foreign:
+        prevented_notes.append(
+            "branch-closeout: prevented clobber(s) attributed to prior "
+            "run(s) in the shared manifest (report-only; rows the manifest "
+            "does not attribute to the adjudicated branch record are never "
+            "this run's teardown evidence): "
+            + ", ".join(prevented_foreign[:5])
+        )
 
     # Capture ONE proven tip OID for the ancestry/tree checks.
     proven_oid, capture_err = _capture_branch_oid(target, recorded)
@@ -4378,7 +4570,7 @@ def _gate_branch_closeout(
         )
         disposition = _disposition("retained", proven_oid, reasons)
         disposition["removal_blocked"] = guard_failed
-        return None, lines + foreign_notes, disposition
+        return None, lines + foreign_notes + prevented_notes, disposition
     if accounted == "exact-tree-accounted":
         return None, [
             f"branch-closeout: branch {recorded} exact-tree-accounted at "
@@ -4389,7 +4581,7 @@ def _gate_branch_closeout(
             f"closeout may delete it at expected OID {proven_oid} only "
             "after the documented quiesce-and-reconcile sequence while "
             "writers stay stopped",
-        ] + foreign_notes, _disposition("exact-tree-accounted", proven_oid, [])
+        ] + foreign_notes + prevented_notes, _disposition("exact-tree-accounted", proven_oid, [])
     # The ancestry statement carries only the branch evidence the gate
     # itself proves (branch, proven OID, ancestry result): branch-only mode
     # has no linked worktree, and worktree/artifact facts stay with the
@@ -4403,7 +4595,7 @@ def _gate_branch_closeout(
         f"expected OID {proven_oid} after the documented quiesce-and-"
         "reconcile sequence (plain git branch -d must print deletable; "
         "never force while a linked worktree remains)",
-    ] + foreign_notes, _disposition("ancestry-accounted", proven_oid, [])
+    ] + foreign_notes + prevented_notes, _disposition("ancestry-accounted", proven_oid, [])
 
 
 # ---------------------------------------------------------------------------
@@ -5486,7 +5678,14 @@ def build_parser() -> argparse.ArgumentParser:
     capture.set_defaults(func=cmd_capture)
 
     migrate = subparsers.add_parser(
-        "migrate", help="Copy new and modified files into the target worktree."
+        "migrate",
+        help=(
+            "Copy new and modified files into the target worktree; after "
+            "the carry, the post-run staged-ownership guard restores an "
+            "owned between-snapshot rewind from HEAD and reports every "
+            "other staged shape it walks - foreign staged work is "
+            "reported, never touched."
+        ),
     )
     # Transfer operands (plan 2026-10-29-done-gate-report-retention Task 3):
     # exactly one of the canonical baseline arm and the baseline-less scoped

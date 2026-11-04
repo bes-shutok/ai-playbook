@@ -26,12 +26,17 @@
 #   land-worktree --branch <source-branch> --expected-tip <sha>
 #                 --message <text> [--expected-base <sha>]
 #                 [--ack-egress <path>]
-#       The worktree-complete landing: the source worktree is addressed
-#       through the worktree list, the squash composes in a temp index
-#       reading the source worktree's working-tree bytes, and the primary
-#       checkout receives only the final squash commit through one
-#       compare-and-swap ref update; its index and working tree are never
-#       written and no arm runs porcelain or restore against it.
+#       The worktree-complete landing under the narrowed ref-only lock
+#       span: the source worktree is addressed through the worktree list,
+#       the squash composes in a temp index reading the source worktree's
+#       working-tree bytes (with the base-freshness, prompt-log prune-audit,
+#       and plans-egress gates) all PRE-LOCK, and the primary checkout
+#       receives only the final squash commit through one compare-and-swap
+#       ref update taken under the merge lock the mode acquires itself
+#       around the swap critical section (parentage verification,
+#       compare-and-swap, post-landing gate, reconcile tail); the primary
+#       checkout's index and working tree are never written and no arm runs
+#       porcelain or restore against it.
 #
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): born-conformant; every
 # non-metadata run ends with exactly one final `OUTCOME: <pass|fail|
@@ -102,9 +107,9 @@ Modes:
           refs/remotes/origin/<resolved-base-branch>, and the final new-tip
           report with its first-parent diffstat.
   land-worktree
-          The worktree-complete landing: the same lock authenticity and
-          base-branch resolution as land (the invocation runs from the
-          primary checkout), with the source worktree addressed through
+          The worktree-complete landing under the narrowed ref-only lock
+          span: base-branch resolution as land (the invocation runs from
+          the primary checkout), with the source worktree addressed through
           the worktree list by --branch. Verifies the source worktree's
           branch ref and checked-out HEAD against --expected-tip (there
           --expected-tip carries the expected source tip, never the base
@@ -125,19 +130,36 @@ Modes:
           the squash in a GIT_INDEX_FILE-scoped temp index seeded from
           the verified base tip over the branch's changed paths, reading
           the source worktree's working-tree bytes, asserts tree equality
-          against the source branch tip, runs the wired plans-egress
+          against the source branch tip, and runs the wired plans-egress
           check-archive gate over the built landing commit anchored at the
-          source worktree, runs the parentage gate's pre-swap invocation
-          (with the optional --expected-base passthrough), and moves the
-          base branch by one two-value compare-and-swap whose old-value is
-          the base tip resolved after check-landing passes. Never writes the
-          primary checkout's index or working tree and never runs porcelain
-          or restore against it (land's snapshot, staged-state and
-          dirty-intersection pre-refusals, and restore machinery are
-          omitted; the interleaved-tip arm keeps the inverse compare-and-swap
-          without any restore call). --ack-egress forwards the
-          operator-directed-archive ack to check-archive; the matching
-          Archive-egress-ack: <path> trailer rides --message.
+          source worktree - all of that PRE-LOCK in the source worktree
+          (the rebase duty runs there too, before the invocation). The mode
+          then acquires the repository merge lock itself via the sibling
+          done-lock.sh merge-wait-acquire (bounded wait,
+          LAND_SQUASH_SWAP_LOCK_WAIT_SECS, default 300s; keyed to the
+          primary checkout root; a held lock after the wait is a fail
+          naming the holder), and the lock spans the parentage gate's
+          pre-swap invocation (with the optional --expected-base
+          passthrough), the two-value compare-and-swap whose old-value is
+          the base tip resolved after check-landing passes, the parentage
+          gate's post-landing invocation, and the landing-tail reconcile,
+          releasing on every exit path. The compare-and-swap refusal names
+          both the verified base tip and the value the ref now reads (the
+          base tip moved between the pre-lock gates and the swap; the
+          remedy is the rebase duty: rebase onto the moved tip, refresh
+          the base pin, re-run the pre-lock gates, retry). The caller's
+          MERGE_LOCK_DIR / MERGE_LOCK_TOKEN exports play no role in this
+          mode (lock authenticity is by construction: the helper holds a
+          lock it just acquired; do not hold a merge lock around the
+          invocation - that hold is the contention the bounded wait
+          reports). Never writes the primary checkout's index or working
+          tree and never runs porcelain or restore against it (land's
+          snapshot, staged-state and dirty-intersection pre-refusals, and
+          restore machinery are omitted; the interleaved-tip arm keeps the
+          inverse compare-and-swap without any restore call).
+          --ack-egress forwards the operator-directed-archive ack to
+          check-archive; the matching Archive-egress-ack: <path> trailer
+          rides --message.
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md): every non-metadata run ends
 with exactly one final `OUTCOME: <pass|fail|indeterminate|tool_error>` line
@@ -146,12 +168,17 @@ the prechecks, the tip-moved class, the tree-equality assertion, or a
 propagated gate fail; in land-worktree the source-worktree tip refusals, the
 tree-inequality assertion, the wired check-landing and check-archive
 refusals, the prompt-log prune-audit receipt-less-removal refusal, the
-compare-and-swap refusal, or a propagated parentage-gate fail);
+compare-and-swap refusal, the swap-critical-section lock-contention refusal,
+or a propagated parentage-gate fail);
 2 indeterminate (in land a land-time merge failure, the interleaved-tip
 refusal, or a mid-restore pipeline failure naming the unrestored paths; in
-land-worktree the interleaved-tip refusal); 3 tool error (lock authenticity,
-detached HEAD, an unresolvable ref, a wired guard's tool failure, or the
-prompt-log prune audit's tool error).
+land-worktree the interleaved-tip refusal and the ambiguous swap-lock holder
+state after the bounded wait); 3 tool error (lock authenticity in land,
+detached HEAD, an unresolvable ref, a wired guard's tool failure, the
+prompt-log prune audit's tool error, or a missing sibling done-lock.sh, an
+export-less swap-lock acquire, or a done-lock.sh exit 3 (its usage,
+environment, or unsupported lock data) from the swap-lock acquire in
+land-worktree).
 --help is a metadata exit and emits no OUTCOME line.
 
 Test-only fault seam (fixtures only; production never sets these; every
@@ -191,29 +218,56 @@ emit_grammar_notice() {
   # (the constant is the grammar's single source; no copy of the prefix set
   # lives here). A non-conformant subject prints one warning line naming the
   # recognized prefixes; a conformant one prints nothing; a guard import
-  # failure prints one note line and continues. The notice never changes an
-  # exit code or an outcome.
+  # failure prints one note line and continues. The verb/diff mismatch arm
+  # (plan docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
+  # Task 2): an authoring-family subject (any LANDING_CLAIM_PREFIXES authoring
+  # kind) whose landing diff carries operative-scope bytes outside
+  # docs/history/ prints one mismatch warning;
+  # warning-only, the outcome and exit code unchanged. The mismatch leg
+  # consumes the guard's diff-composition classifier (the same classifier the
+  # scan-time rename-boundary split uses), one classifier serving both
+  # surfaces.
   local first_line notice_out
   first_line="${MESSAGE%%$'\n'*}"
-  notice_out="$(python3 - "$REVERSE_GUARD" "$first_line" 2>/dev/null <<'PY'
+  local delta_paths=""
+  if git -C "$REPO_ROOT" rev-parse --verify --quiet \
+      "refs/heads/${SOURCE_BRANCH}" >/dev/null 2>&1; then
+    delta_paths="$(git -C "$REPO_ROOT" diff --name-only \
+      "$(git -C "$REPO_ROOT" merge-base HEAD "refs/heads/${SOURCE_BRANCH}")" \
+      "refs/heads/${SOURCE_BRANCH}" 2>/dev/null || true)"
+  fi
+  notice_out="$(DELTA_PATHS="$delta_paths" python3 - "$REVERSE_GUARD" "$first_line" 2>/dev/null <<'PY'
 import importlib.util
+import os
 import sys
 
 spec = importlib.util.spec_from_file_location(
     "reverse_squash_guard", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-if module.is_landing_claim(sys.argv[2]):
-    print("conformant")
-else:
+subject = sys.argv[2]
+paths = [line for line in os.environ.get("DELTA_PATHS", "").splitlines()
+         if line.strip()]
+operative = module.operative_paths(paths)
+authoring_prefixes = tuple(prefix for prefix, kind in
+                           module.LANDING_CLAIM_PREFIXES
+                           if kind == "authoring")
+if not module.is_landing_claim(subject):
     print("grammar: " + ", ".join(
         repr(prefix) for prefix, _kind in module.LANDING_CLAIM_PREFIXES))
+elif operative and subject.startswith(authoring_prefixes):
+    print("mismatch: " + ", ".join(operative[:5]))
+else:
+    print("conformant")
 PY
 )" || true
   case "$notice_out" in
     conformant) : ;;
     "grammar: "*)
       echo "warning: landing message subject matches no recognized landing-claim grammar prefix (recognized: ${notice_out#grammar: }); rephrase the --message subject into the grammar before the landing commit is composed"
+      ;;
+    "mismatch: "*)
+      echo "warning: landing-claim verb/diff mismatch: the subject claims the authoring family but the landing diff carries operative-scope bytes (${notice_out#mismatch: }); the execution-status writers complete the execution-direction flips at the closeout"
       ;;
     *)
       echo "note: the landing-claim grammar notice could not import the guard module (${REVERSE_GUARD}); the landing proceeds without the grammar warning"
@@ -685,32 +739,34 @@ fi
 # The worktree-complete landing class: the squash composes inside the source
 # worktree's class shape while the primary checkout receives only the final
 # squash commit through one two-value compare-and-swap ref update of the base
-# branch ref. The mode reuses land's lock verification, base-branch
-# resolution, parentage pre-swap and post-landing invocations, and the
-# two-value compare-and-swap form unchanged, and wires two existing gate
-# implementations as declared re-homings: check-landing (the class prose's
-# mandatory base-freshness gate; the mode's tree equality is staleness-blind
-# by composition, so check-landing is the load-bearing stale-base guard) and
-# check-archive over the built landing commit. The mode omits land's
-# restore machinery entirely: no arm runs porcelain or restore against the
-# primary checkout, whose index and working tree are never written.
+# branch ref. The narrowed lock span (ref-only class): the rebase duty, the
+# wired check-landing base-freshness gate, the wired prompt-log prune audit,
+# the composition, the tree-equality assertion, and the wired check-archive
+# gate over the built landing commit all run PRE-LOCK in the source worktree;
+# the mode itself then acquires the repository merge lock (bounded wait via
+# the sibling done-lock.sh, keyed to this repository's primary checkout
+# root) and the lock spans the parentage verification, the compare-and-swap
+# ref update, the post-landing gate, and the reconcile tail, releasing on
+# every exit path. Because the mode holds a lock it just acquired, lock
+# authenticity is by construction and the caller's MERGE_LOCK_DIR /
+# MERGE_LOCK_TOKEN exports play no role here. The mode reuses land's
+# base-branch resolution, parentage pre-swap and post-landing invocations,
+# and the two-value compare-and-swap form unchanged, and wires two existing
+# gate implementations as declared re-homings: check-landing (the class
+# prose's mandatory base-freshness gate; the mode's tree equality is
+# staleness-blind by composition, so check-landing is the load-bearing
+# stale-base guard) and check-archive over the built landing commit. The
+# mode omits land's restore machinery entirely: no arm runs porcelain or
+# restore against the primary checkout, whose index and working tree are
+# never written.
 
 if [[ "$MODE" == "land-worktree" ]]; then
-  # Lock verification: identical to land's (the merge lock is verified,
-  # never assumed).
-  LOCK_DIR="${MERGE_LOCK_DIR:-}"
-  LOCK_TOKEN="${MERGE_LOCK_TOKEN:-}"
-  [[ -n "$LOCK_DIR" ]] || tool_error "land-worktree requires MERGE_LOCK_DIR set and non-empty (the merge lock is verified, never assumed)"
-  [[ -n "$LOCK_TOKEN" ]] || tool_error "land-worktree requires MERGE_LOCK_TOKEN set and non-empty (the merge lock is verified, never assumed)"
-  [[ -d "$LOCK_DIR" ]] || tool_error "merge lock directory does not exist: ${LOCK_DIR}"
-  LOCK_META="${LOCK_DIR}/meta.env"
-  [[ -f "$LOCK_META" ]] || tool_error "merge lock record meta.env is missing: ${LOCK_DIR}"
-  META_TOKEN="$(meta_field "$LOCK_META" lock_token)"
-  META_REPO="$(meta_field "$LOCK_META" repo_root)"
-  [[ -n "$META_TOKEN" ]] || tool_error "merge lock record carries an empty lock_token: ${LOCK_META}"
-  [[ "$LOCK_TOKEN" == "$META_TOKEN" ]] || tool_error "MERGE_LOCK_TOKEN does not equal the record's lock_token (a stale generation or a fabricated environment)"
+  # The primary checkout root resolves first (the swap lock keys through
+  # the same root), then the sibling lock script: a done-lock.sh absent
+  # from the resolved scripts directory is a deployment gap, never a skip.
   resolve_repo_root
-  [[ "$META_REPO" == "$REPO_ROOT" ]] || tool_error "merge lock record repo_root '${META_REPO}' does not equal this repository's primary checkout root '${REPO_ROOT}' (a stale sibling-repo environment)"
+  SWAP_LOCK_SCRIPT="$SCRIPT_DIR/done-lock.sh"
+  [[ -f "$SWAP_LOCK_SCRIPT" ]] || tool_error "done-lock.sh is missing beside the helper (${SCRIPT_DIR}); the land-worktree swap-critical-section merge lock cannot be acquired - record a deployment gap naming the probed path and defer the landing"
 
   # Base-branch resolution: the primary checkout's checked-out branch; the
   # source worktree is addressed through the worktree list by --branch.
@@ -756,7 +812,9 @@ if [[ "$MODE" == "land-worktree" ]]; then
     exit 1
   fi
 
-  # Temp files for the two wired guard runs and the composition front-end.
+  # Temp files for the two wired guard runs, the composition front-end,
+  # and the swap-lock acquire evidence (the acquire stderr file is born
+  # here so the EXIT trap covers the pre-acquire contention exits too).
   WTCL_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtcl.XXXXXX")"
   WTCL_ERR="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtcle.XXXXXX")"
   WTCA_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wtca.XXXXXX")"
@@ -766,7 +824,8 @@ if [[ "$MODE" == "land-worktree" ]]; then
   WT_TOUCH_OUT="$(mktemp "${TMPDIR:-/tmp}/land-squash-wttouch.XXXXXX")"
   WT_INDEX="$(mktemp "${TMPDIR:-/tmp}/land-squash-wt-index.XXXXXX")"
   WT_CHANGED="$(mktemp "${TMPDIR:-/tmp}/land-squash-wt-ch.XXXXXX")"
-  trap 'rm -f "$WTCL_OUT" "$WTCL_ERR" "$WTCA_OUT" "$WTCA_ERR" "$WTPA_OUT" "$WTPA_ERR" "$WT_TOUCH_OUT" "$WT_INDEX" "$WT_CHANGED"' EXIT
+  SWAP_ACQ_ERR="$(mktemp "${TMPDIR:-/tmp}/land-squash-swap-acq.XXXXXX")"
+  trap 'rm -f "$WTCL_OUT" "$WTCL_ERR" "$WTCA_OUT" "$WTCA_ERR" "$WTPA_OUT" "$WTPA_ERR" "$WT_TOUCH_OUT" "$WT_INDEX" "$WT_CHANGED" "$SWAP_ACQ_ERR"' EXIT
 
   # The wired check-landing base-freshness gate, resolved adjacent to the
   # helper (the $SCRIPT_DIR precedent the parentage gate sets): guard exit 1
@@ -925,6 +984,64 @@ if [[ "$MODE" == "land-worktree" ]]; then
   fi
   [[ "$WTGUARD_RC" -eq 0 ]] || tool_error "check-archive failed (exit ${WTGUARD_RC})"
 
+  # ==== swap critical section: acquire the merge lock ====================
+  # Everything above ran pre-lock in the source worktree. The lock spans
+  # the parentage verification, the compare-and-swap ref update, the
+  # post-landing gate, and the reconcile tail, and releases on every exit
+  # path through the EXIT trap installed after a successful acquire. The
+  # bounded wait keeps an intersecting landing queued behind the holder's
+  # swap critical section only, never behind its whole composition.
+  SWAP_WAIT="${LAND_SQUASH_SWAP_LOCK_WAIT_SECS:-300}"
+  case "$SWAP_WAIT" in ''|*[!0-9]*) SWAP_WAIT=300 ;; esac
+  echo "swap lock: acquiring the merge lock for the swap critical section (parentage verification, compare-and-swap, post-landing gate, reconcile tail; bounded wait ${SWAP_WAIT}s)"
+  SWAP_ACQ_RC=0
+  SWAP_ACQ_OUT="$(cd "$REPO_ROOT" && MERGE_LOCK_HOLDER_PID="$$" \
+    bash "$SWAP_LOCK_SCRIPT" merge-wait-acquire \
+    --label land-squash-swap --max-wait "$SWAP_WAIT" 2> "$SWAP_ACQ_ERR")" || SWAP_ACQ_RC=$?
+  sed 's/^/  swap-lock: /' "$SWAP_ACQ_ERR" || true
+  if [[ "$SWAP_ACQ_RC" -ne 0 ]]; then
+    if [[ "$SWAP_ACQ_RC" -eq 2 ]]; then
+      echo "refuse: the swap-critical-section merge lock state is ambiguous after the bounded wait (${SWAP_WAIT}s); re-derive the holder state via done-lock.sh merge-status and retry the landing"
+      emit_outcome indeterminate
+      exit 2
+    fi
+    if [[ "$SWAP_ACQ_RC" -eq 3 ]]; then
+      # done-lock.sh's rc 3 is its usage/environment/lock-data tool error,
+      # never a held lock: the held-after-wait fail prose would model a
+      # retryable contention that no retry can clear.
+      echo "refuse: the swap-critical-section lock acquire failed as a done-lock.sh tool error (exit 3: usage, environment, or unsupported lock data); the swap-lock: evidence lines above carry the acquire's diagnostics"
+      emit_outcome tool_error
+      exit 3
+    fi
+    echo "refuse: the swap-critical-section merge lock is held after the bounded wait (${SWAP_WAIT}s); the composition above already ran pre-lock, so retry the landing once the holder releases (the retry re-runs the full pre-lock gate sequence)"
+    emit_outcome fail
+    exit 1
+  fi
+  # The acquire's eval-consumed export block: the sanctioned consumption
+  # form, so the %q-quoted values resolve exactly as done-lock.sh printed
+  # them (a stale caller MERGE_LOCK_DIR/MERGE_LOCK_TOKEN export is
+  # overwritten here and plays no gate role).
+  eval "$SWAP_ACQ_OUT"
+  SWAP_LOCK_DIR="${MERGE_LOCK_DIR:-}"
+  SWAP_LOCK_TOKEN="${MERGE_LOCK_TOKEN:-}"
+  SWAP_LOCK_RELEASED=0
+  release_swap_lock() {
+    # Idempotent: the EXIT trap is the single release point on every exit
+    # path from the critical section; a failed release is a loud warning,
+    # never a silent pass and never an outcome flip (the landing may
+    # already stand).
+    [[ "$SWAP_LOCK_RELEASED" -eq 0 ]] || return 0
+    [[ -n "$SWAP_LOCK_DIR" && -n "$SWAP_LOCK_TOKEN" ]] || return 0
+    SWAP_LOCK_RELEASED=1
+    if ! MERGE_LOCK_DIR="$SWAP_LOCK_DIR" MERGE_LOCK_TOKEN="$SWAP_LOCK_TOKEN" \
+        bash "$SWAP_LOCK_SCRIPT" merge-release >/dev/null 2>&1; then
+      echo "warning: the swap-critical-section merge lock release failed (lock dir ${SWAP_LOCK_DIR}); release it via done-lock.sh merge-release before continuing" >&2
+    fi
+  }
+  trap 'rm -f "$WTCL_OUT" "$WTCL_ERR" "$WTCA_OUT" "$WTCA_ERR" "$WTPA_OUT" "$WTPA_ERR" "$WT_TOUCH_OUT" "$WT_INDEX" "$WT_CHANGED" "$SWAP_ACQ_ERR"; release_swap_lock' EXIT
+  [[ -n "$SWAP_LOCK_DIR" && -n "$SWAP_LOCK_TOKEN" ]] || \
+    tool_error "the swap-critical-section acquire produced no lock exports (a done-lock.sh contract drift); stop and re-derive from disk"
+
   # The parentage gate's pre-swap invocation, always with --source-branch,
   # the pre-tip fed from the verified base tip, and the optional
   # --expected-base passthrough.
@@ -947,12 +1064,17 @@ if [[ "$MODE" == "land-worktree" ]]; then
   print_gate_evidence "$GATE_OUT"
 
   # The two-value compare-and-swap ref move: the old-value is the verified
-  # base tip; a refusal is the base-tip-moved fail class.
+  # base tip resolved after the pre-lock gates passed; a refusal is the
+  # base-tip-moved fail class, evidenced with both the verified base tip
+  # and the value the ref actually reads now (the peer's move), so the
+  # retry's rebase duty re-derives onto the moved tip without a second
+  # probe.
   CAS_RC=0
   git -C "$REPO_ROOT" update-ref "refs/heads/${BASE_BRANCH}" "$LANDING_COMMIT" "$BASE_TIP" || CAS_RC=$?
   if [[ "$CAS_RC" -ne 0 ]]; then
-    echo "refuse: the compare-and-swap ref move refused: refs/heads/${BASE_BRANCH} no longer reads ${BASE_TIP} (the base tip moved between the check-landing pass and the compare-and-swap)"
-    echo "remedy: re-derive the landing from the new tip and retry"
+    SWAP_CURRENT_BASE="$(git -C "$REPO_ROOT" rev-parse --verify "refs/heads/${BASE_BRANCH}" 2>/dev/null || echo unresolvable)"
+    echo "refuse: the compare-and-swap ref move refused: refs/heads/${BASE_BRANCH} no longer reads the verified base tip ${BASE_TIP} and now reads ${SWAP_CURRENT_BASE} (the base tip moved between the check-landing pass and the compare-and-swap)"
+    echo "remedy: rebase the source branch onto the moved tip ${SWAP_CURRENT_BASE}, refresh the recorded base pin, re-run the full pre-lock gate sequence, and retry the landing"
     emit_outcome fail
     exit 1
   fi

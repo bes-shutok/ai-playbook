@@ -125,6 +125,179 @@ class OutcomeArgumentParser(argparse.ArgumentParser):
         sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
         raise SystemExit(3)
 
+
+# ---------------------------------------------------------------------------
+# The clear-record grammar home (producer code-family record arm plan,
+# Task 3): the minimal validating record shape (the `### Panel` /
+# `### Counts` / `### Triage outcomes` sub-sections under
+# `## Review Statistics` and their parity fields) is documented by one
+# complete worked example pair, rendered by `_grammar_home_example_pair()`
+# from this module's own fixture builders (`_current_clear_markdown` /
+# `_current_clear_payload`), so the home cannot drift from the grammar the
+# validator accepts: the example's `## Review Statistics` block is the
+# builders' bytes verbatim, and the standing grammar-home selftest cell
+# re-validates the whole pair through `validate_staging_file` on every
+# `--selftest` run. `_main` mounts the rendered pair on the parser epilog,
+# so `--help` prints it as usage text, and the three record-grammar
+# diagnostics (`missing ### Panel under Review Statistics`, `missing
+# ### Counts or Agents launched row`, `missing ### Triage outcomes or
+# Pending triage placeholder`) cite it by the repo-relative path in
+# GRAMMAR_HOME_CITATION below: only the Panel ERROR carries the hard-mode
+# skill-pointer parenthetical and joins the citation beside it, while the
+# two or-gated WARN lines carry no pointer, so the citation is their sole
+# appended text.
+#
+# The example carries the current-dated contract shape: the composer dates
+# the pair today (UTC), so every active date fence is on and the example
+# always shows the full post-fence obligations, annotated per fence:
+#   - on or after EXTENDED_SIDECAR_MIN_DATE (2026-09-09): the Metadata
+#     carries the four freshness lines (`Review mode`, `Changed-risk
+#     signals`, `Prior findings supplied as filter`, `Last fix commit`),
+#     and the sidecar carries the four extended fields (`review_mode`,
+#     `risk_signals`, `prior_findings_filter`, `last_fix_commit`) plus
+#     `verdict`;
+#   - on or after COVERAGE_SIDECAR_MIN_DATE (2026-09-16): the sidecar
+#     carries the `coverage` object and the Markdown the `- Coverage:`
+#     twin line;
+#   - on or after RECORD_KIND_SIDECAR_MIN_DATE (2026-09-20): the sidecar
+#     declares `record_kind: canonical` and the Metadata carries the
+#     `Record kind:` twin line;
+#   - on or after SOFTEN_WATCHLIST_PARITY_MIN_DATE (2026-10-03): the
+#     sidecar carries `soften_watchlist`;
+#   - on or after USAGE_MINT_PAIR_MIN_DATE (2026-10-06): the Metadata
+#     carries the mint pair (`review-run-id`, `review-started-at-ms`), so
+#     the post-fence self-heal chain state has its run binding;
+#   - on or after SELF_HEAL_STATE_MIN_DATE (2026-10-09): the sidecar
+#     carries `extensions.convergence.self_heal_attempt`.
+# ---------------------------------------------------------------------------
+GRAMMAR_HOME_CITATION = (
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)"
+)
+
+
+def _grammar_home_example_pair() -> tuple[str, str]:
+    """Render the grammar-home example pair (record Markdown, sidecar JSON).
+
+    Built from the fixture builders' rendering: the `## Review Statistics`
+    block and the `## Findings` / verdict tail are `_current_clear_markdown`'s
+    bytes verbatim (the standing selftest cell pins this), and only the
+    Metadata block is upgraded from the builder's pre-fence minimal shape to
+    the current-dated contract annotated beside ``GRAMMAR_HOME_CITATION``.
+    The sidecar composes ``_current_clear_payload`` with the post-fence
+    fields the date fences demand. Date fences move only forward, so a
+    future fence's obligations surface here the day it lands: the standing
+    selftest cell validates this exact pair through ``validate_staging_file``
+    and fails loudly instead of letting the home rot silently.
+    """
+    import datetime
+
+    date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    # Stable example literals (never derived at runtime): the digest is the
+    # SHA-256 of b"example reviewed bytes", the mint pair is a plausible
+    # review_usage_capture.py mint output.
+    digest = "04d5b358cb422860ed25ce45627e811a60a850b3940224400dc7691600f6d34c"
+    run_id = "0123456789abcdef0123456789abcdef"
+    started_at_ms = "1730000000000"
+    record_md = (
+        "# Branch Review: clear-record grammar example\n"
+        "## Metadata\n"
+        "- Type: plan-review\n"
+        # RECORD_KIND_SIDECAR_MIN_DATE twin of the sidecar's record_kind.
+        "- Record kind: canonical\n"
+        f"- Date: {date}\n"
+        "- URL or Artifact: docs/history/plans/example.md\n"
+        "- Round: r1\n"
+        # EXTENDED_SIDECAR_MIN_DATE freshness lines (all four required).
+        "- Review mode: fresh-adversarial\n"
+        "- Changed-risk signals: none\n"
+        "- Prior findings supplied as filter: no\n"
+        "- Last fix commit: none\n"
+        "- Panel mode: full\n"
+        f"- Source digest: {digest}"
+        " (sha256 of docs/history/plans/example.md)\n"
+        # USAGE_MINT_PAIR_MIN_DATE mint pair (review_usage_capture.py mint).
+        f"- review-run-id: {run_id}\n"
+        f"- review-started-at-ms: {started_at_ms}\n"
+        "- Findings: 0\n"
+        "- Staged findings: 0\n"
+        # COVERAGE_SIDECAR_MIN_DATE twin of the sidecar's coverage outcome.
+        "- Coverage: clean\n"
+        "- Status: STAGED\n"
+    )
+    # The builders' bytes verbatim from here through the verdict tail.
+    record_md += "## Review Statistics" + _current_clear_markdown(
+        "clear-record grammar example"
+    ).split("## Review Statistics", 1)[1]
+    material_lens_set = sorted(
+        {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    )
+    payload = _current_clear_payload()
+    payload.update(
+        {
+            "schema_version": 1,
+            "review_type": "plan-review",
+            "date": date,
+            "artifact_slug": "clear-record-example",
+            "round": "r1",
+            "source_kind": "plan",
+            "source_digest": digest,
+            # EXTENDED_SIDECAR_MIN_DATE extended fields plus verdict.
+            "verdict": "no",
+            "review_mode": "fresh-adversarial",
+            "risk_signals": [],
+            "prior_findings_filter": False,
+            "last_fix_commit": None,
+            # RECORD_KIND_SIDECAR_MIN_DATE.
+            "record_kind": "canonical",
+            # SOFTEN_WATCHLIST_PARITY_MIN_DATE.
+            "soften_watchlist": [],
+            "triage_outcomes": [],
+            "deduplication_groups": [],
+            "discarded": [],
+            "severity_calibration": [],
+            # COVERAGE_SIDECAR_MIN_DATE (clean over the full five-worker
+            # lens set).
+            "coverage": {
+                "outcome": "clean",
+                "material_lens_set": material_lens_set,
+                "completed": material_lens_set,
+                "missing": [],
+            },
+            # SELF_HEAL_STATE_MIN_DATE chain state (round 1 mints unused,
+            # bound to the record's own review-run-id).
+            "extensions": {
+                "convergence": {
+                    "self_heal_attempt": {"status": "unused", "run_id": run_id},
+                },
+            },
+        }
+    )
+    return record_md, json.dumps(payload)
+
+
+def _grammar_home_epilog() -> str:
+    """The parser epilog: the fence annotations plus the rendered example
+    pair, so `--help` carries the grammar home as usage text."""
+    record_md, sidecar_json = _grammar_home_example_pair()
+    return (
+        "Clear-record grammar example (the minimal validating record pair;\n"
+        "the ## Review Statistics block is this module's fixture-builder\n"
+        "bytes; the Metadata lines annotated in the module beside\n"
+        "GRAMMAR_HOME_CITATION carry the current-dated contract shape: the\n"
+        "EXTENDED_SIDECAR_MIN_DATE / COVERAGE_SIDECAR_MIN_DATE /\n"
+        "RECORD_KIND_SIDECAR_MIN_DATE / SOFTEN_WATCHLIST_PARITY_MIN_DATE /\n"
+        "USAGE_MINT_PAIR_MIN_DATE / SELF_HEAL_STATE_MIN_DATE obligations the\n"
+        "record's current date arms):\n"
+        "\n"
+        "<record path: <YYYY-MM-DD>-branch-review-<artifact-slug>-r1.md>\n"
+        + record_md
+        + "\n<sidecar path: the record path with .stats.json suffix>\n"
+        + sidecar_json
+        + "\n"
+    )
+
+
 STAGING_NAME_RE = re.compile(
     r"^(?:\d{4}-\d{2}-\d{2}-)?"
     r"(?:"
@@ -6669,7 +6842,15 @@ def validate_staging_file(
             result.add_error(f"missing {heading}")
 
     if "### Panel" not in content:
-        result.add_error("missing ### Panel under Review Statistics")
+        # The citation joins beside the hard-mode skill-pointer parenthetical
+        # (grammar home, producer code-family record arm plan, Task 3): the
+        # SKILL_CLAUSE_POINTERS table and its exact-suffix mapping pin stay
+        # unchanged because the marker "missing ### Panel" still matches the
+        # message head. This and the two or-gated warnings below are the
+        # three record-grammar diagnostics; the warnings stay warnings.
+        result.add_error(
+            "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION
+        )
 
     # Legacy anti-Solo check. Current five-worker panels validate from sidecars.
     if "### Panel" in content and detect_solo_collapse(path, content):
@@ -6681,10 +6862,15 @@ def validate_staging_file(
         )
 
     if "### Counts" not in content and "Agents launched" not in content:
-        result.add_warning("missing ### Counts or Agents launched row")
+        result.add_warning(
+            "missing ### Counts or Agents launched row" + GRAMMAR_HOME_CITATION
+        )
 
     if "### Triage outcomes" not in content and "Pending triage" not in content:
-        result.add_warning("missing ### Triage outcomes or Pending triage placeholder")
+        result.add_warning(
+            "missing ### Triage outcomes or Pending triage placeholder"
+            + GRAMMAR_HOME_CITATION
+        )
 
     medium_plus = extract_medium_plus_count(content)
     staged_count = extract_staged_count(content)
@@ -6914,6 +7100,11 @@ def _current_clear_payload() -> dict:
 
 
 def _current_clear_markdown(title: str = "current") -> str:
+    # Fixture-side pointer (grammar home, producer code-family record arm
+    # plan, Task 3): this builder's rendering is the source of the
+    # clear-record grammar home housed in the usage-text region
+    # (`_grammar_home_example_pair`, cited by GRAMMAR_HOME_CITATION); edit
+    # this builder's record grammar only together with that home.
     import textwrap
 
     return textwrap.dedent(
@@ -7056,6 +7247,13 @@ def _current_findings_markdown(findings: list[dict], *, title: str = "conservati
     shared ``_current_finding_block`` builder (Severity, Blocking, Pattern when
     declared, and Triage bullets). The Markdown mirrors the sidecar so the
     conservation cross-check can reconcile the two.
+
+    Fixture-side pointer (grammar home, producer code-family record arm
+    plan, Task 3): the findings-bearing half of the clear-record grammar is
+    this builder's rendering; the housed grammar home in the usage-text
+    region (``_grammar_home_example_pair``, cited by GRAMMAR_HOME_CITATION)
+    is built from ``_current_clear_markdown``, whose ``## Review Statistics``
+    block this builder shares byte-for-byte.
     """
     by_severity: dict[str, list[dict]] = {sev: [] for sev in SEVERITY_ORDER}
     for finding in findings:
@@ -19760,7 +19958,9 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
             "current sidecar source_digest must be a lowercase 64-char hex "
             "SHA-256; got an invalid or placeholder digest",
             "missing ## Metadata",
-            "missing ### Panel under Review Statistics",
+            # The Panel refusal carries the grammar-home citation beside its
+            # pointer (unpointed() strips only the skill-pointer suffix).
+            "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION,
             "staging filename dated 2026-10-05 (on or after "
             "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
             "Metadata line 'Changed-risk signals'",
@@ -20567,8 +20767,12 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         "hard malformed fixture reports the independent doc-level "
         "diagnostic first",
         emitted(err)[:1] == [
-            "missing ### Panel under Review Statistics "
-            "(review-staging SKILL.md, Output discipline)",
+            # The citation joins beside the skill-pointer parenthetical
+            # (grammar home, producer code-family record arm plan, Task 3);
+            # the pointer mapping pin above stays on the bare-message probe.
+            "missing ### Panel under Review Statistics"
+            + GRAMMAR_HOME_CITATION
+            + " (review-staging SKILL.md, Output discipline)",
         ],
     )
     check(
@@ -20597,7 +20801,162 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         rc == 1
         and json_payload.get("outcome") == "fail"
         and (json_payload.get("errors") or [""])[0]
-        == "missing ### Panel under Review Statistics",
+        == "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION,
+    )
+
+
+def _selftest_grammar_home(root: Path, check) -> None:
+    """Family: the clear-record grammar home (producer code-family record
+    arm plan, Task 3). The standing accepted-set witness for the home: the
+    housed usage-epilog example pair (``_grammar_home_example_pair``, cited
+    by ``GRAMMAR_HOME_CITATION``) passes ``validate_staging_file`` in hard
+    mode on every ``--selftest`` run, its ``## Review Statistics`` block
+    stays byte-pinned to ``_current_clear_markdown``'s rendering, and the
+    three record-grammar diagnostics carry the citation on the channels
+    that carried them before (ERROR for Panel, WARN for the other two)
+    with their or-gated disjunctions intact, and the ``--help`` surface
+    renders the example title beside the ``GRAMMAR_HOME_CITATION``
+    annotation (the epilog-mount pin: a dropped ``epilog=``/
+    ``formatter_class=`` fails this check while every validation gate
+    stays green)."""
+    call = _selftest_call
+
+    # 1. The housed example passes hard validation (the permanent
+    # accepted-set witness: a fence landing tomorrow fails this cell the
+    # day its obligation arms, so the home cannot rot silently).
+    record_md, sidecar_json = _grammar_home_example_pair()
+    record_date = record_md.split("- Date: ", 1)[1].split("\n", 1)[0]
+    housed = _write_staging(
+        root,
+        f"{record_date}-branch-review-clear-record-example-r1.md",
+        record_md,
+        sidecar_json,
+    )
+    housed_result = validate_staging_file(housed, hard=True)
+    check(
+        "grammar home: housed example passes validate_staging_file hard",
+        housed_result.ok and not housed_result.errors and not housed_result.warnings,
+    )
+    check(
+        "grammar home: housed example's Review Statistics block is "
+        "byte-pinned to the fixture builder",
+        record_md.split("## Review Statistics", 1)[1]
+        == _current_clear_markdown().split("## Review Statistics", 1)[1],
+    )
+    check(
+        "grammar home: citation names the validator file by repo-relative "
+        "path",
+        "scripts/validate_review_staging.py" in GRAMMAR_HOME_CITATION,
+    )
+    # 1b. The usage-text mount itself (Phase 3 r1 fix): --help renders the
+    # example title beside the GRAMMAR_HOME_CITATION annotation, so a
+    # dropped epilog= or formatter_class= loses the rendered example from
+    # the help surface even though every validation gate stays green.
+    rc, out, err = call(["--help"])
+    check(
+        "grammar home: --help surface renders the example title beside "
+        "the GRAMMAR_HOME_CITATION annotation",
+        rc == 0
+        and "# Branch Review: clear-record grammar example" in out
+        and "GRAMMAR_HOME_CITATION" in out,
+    )
+
+    # 2. Citation witness, the both-missing shape per site: the sub-section
+    # and its alternative absent, so all three diagnostics fire, each on
+    # the channel that carried the message before, each carrying the
+    # citation path. The undated filename keeps the date-gated freshness
+    # errors out of these arms (the telemetry-baseline trick).
+    witness_md = (
+        "# Branch Review: grammar witness\n"
+        "## Metadata\n"
+        "- Findings: 0\n"
+        "- Status: STAGED\n"
+        "## Review Statistics\n"
+        "## Findings\n"
+        "### Critical\n"
+        "None.\n"
+        "### High\n"
+        "None.\n"
+        "### Medium\n"
+        "None.\n"
+        "### Low\n"
+        "None.\n"
+        "## Verdict for this round (before fixes)\n"
+        "0 Medium+ findings; clear round\n"
+    )
+    witness = _write_staging(root, "plan-review-grammar-witness-r1.md", witness_md)
+    panel_line = (
+        "ERROR: missing ### Panel under Review Statistics"
+        + GRAMMAR_HOME_CITATION
+        + " (review-staging SKILL.md, Output discipline)"
+    )
+    counts_line = (
+        "WARN: missing ### Counts or Agents launched row" + GRAMMAR_HOME_CITATION
+    )
+    triage_line = (
+        "WARN: missing ### Triage outcomes or Pending triage placeholder"
+        + GRAMMAR_HOME_CITATION
+    )
+    rc, out, err = call(["--hard", str(witness)])
+    check(
+        "grammar home: Panel refusal stays an ERROR line carrying the "
+        "citation beside the skill pointer",
+        rc == 1 and panel_line in err.splitlines(),
+    )
+    rc, out, err = call([str(witness)])
+    check(
+        "grammar home: Counts refusal stays a WARN line carrying the "
+        "citation",
+        counts_line in err.splitlines(),
+    )
+    check(
+        "grammar home: Triage refusal stays a WARN line carrying the "
+        "citation",
+        triage_line in err.splitlines(),
+    )
+    rc, out, err = call(["--hard", str(witness)])
+    check(
+        "grammar home: the two refusals are never promoted to errors",
+        not any(
+            line.startswith("ERROR: missing ### Counts")
+            or line.startswith("ERROR: missing ### Triage")
+            for line in err.splitlines()
+        ),
+    )
+
+    # 3. Disjunction byte-intact witness: the alternative-present shapes
+    # emit no warning (the or-gates' accepted set is unchanged).
+    counts_alt = _write_staging(
+        root,
+        "plan-review-grammar-witness-counts-alt-r1.md",
+        witness_md.replace(
+            "## Review Statistics\n",
+            "## Review Statistics\n- Agents launched: 5\n",
+        ),
+    )
+    rc, out, err = call([str(counts_alt)])
+    check(
+        "grammar home: Agents launched alternative still satisfies the "
+        "Counts gate without a warning",
+        not any(
+            "missing ### Counts" in line for line in err.splitlines()
+        ),
+    )
+    triage_alt = _write_staging(
+        root,
+        "plan-review-grammar-witness-triage-alt-r1.md",
+        witness_md.replace(
+            "## Review Statistics\n",
+            "## Review Statistics\n- Pending triage: none\n",
+        ),
+    )
+    rc, out, err = call([str(triage_alt)])
+    check(
+        "grammar home: Pending triage alternative still satisfies the "
+        "Triage gate without a warning",
+        not any(
+            "missing ### Triage outcomes" in line for line in err.splitlines()
+        ),
     )
 
 
@@ -20706,6 +21065,10 @@ def _run_selftest_body() -> int:
             (
                 "hard_mode_diagnostics",
                 _selftest_hard_mode_diagnostics,
+            ),
+            (
+                "grammar_home",
+                _selftest_grammar_home,
             ),
         ):
             fn(root, check)
@@ -20974,7 +21337,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(argv: list[str] | None = None) -> int:
-    parser = OutcomeArgumentParser(description="Validate review staging markdown")
+    # The grammar home rides the usage text (producer code-family record arm
+    # plan, Task 3): RawDescriptionHelpFormatter renders the epilog's
+    # example pair verbatim on --help while leaving the usage line and the
+    # argument-help wrapping (and so every usage-error stderr byte) to the
+    # default HelpFormatter behavior.
+    parser = OutcomeArgumentParser(
+        description="Validate review staging markdown",
+        epilog=_grammar_home_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("path", nargs="?", help="Staging markdown file")
     parser.add_argument(
         "--hard",

@@ -115,6 +115,23 @@ def empty_config_home():
     return _EMPTY_CONFIG_HOME
 
 
+_SUITE_LOCK_ROOT = None
+
+
+def suite_lock_root():
+    """One merge-lock parent directory per suite run: the root the helper's
+    internal swap-critical-section acquire keys through (MERGE_LOCK_ROOT)
+    and the root the held-lock fixtures acquire against, so contention
+    between a fixture hold and a helper acquire lands on the same keyed
+    lock. Lock state keys per repo inside the root, so distinct scratch
+    repos never share a lock."""
+    global _SUITE_LOCK_ROOT
+    if _SUITE_LOCK_ROOT is None:
+        _SUITE_LOCK_ROOT = tempfile.mkdtemp(prefix="land-squash-lock-root-")
+        atexit.register(shutil.rmtree, _SUITE_LOCK_ROOT, True)
+    return _SUITE_LOCK_ROOT
+
+
 def base_env():
     """A clean environment: no inherited GIT_* or lock/seam variables.
     HOME and XDG_CONFIG_HOME are pinned to an empty directory (mirroring the
@@ -206,10 +223,12 @@ def force_track_ignored(root, *rel_paths):
     return rev(root, "HEAD")
 
 
-def acquire_merge_lock(repo, lock_root):
-    """Acquire a live merge lock on repo via done-lock.sh; returns (dir, token)."""
+def acquire_merge_lock(repo, lock_root=None):
+    """Acquire a live merge lock on repo via done-lock.sh; returns (dir, token).
+    The lock root defaults to the suite root so a held lock and the helper's
+    internal swap-critical-section acquire key identically."""
     env = base_env()
-    env["MERGE_LOCK_ROOT"] = str(lock_root)
+    env["MERGE_LOCK_ROOT"] = str(lock_root or suite_lock_root())
     env["MERGE_LOCK_HOLDER_PID"] = str(os.getpid())
     proc = subprocess.run(
         ["bash", str(DONE_LOCK), "merge-acquire", "--label", "fixture"],
@@ -296,13 +315,23 @@ def outcome_lines(proc):
 
 def run_helper(args, cwd, lock=None, fault=None, fault_path=None,
                lock_dir_override=None, lock_token_override=None,
-               with_lock_env=True, staged_wait=None, done_lock=None):
+               with_lock_env=True, staged_wait=None, done_lock=None,
+               lock_root=None, poll_secs=None, swap_wait=None):
     """Run the helper in the scratch repo; the lock env is injected only when
-    with_lock_env is true (probe runs without it, per its contract)."""
+    with_lock_env is true (probe runs without it, per its contract).
+    MERGE_LOCK_ROOT is always pinned to a suite-level scratch root so the
+    land-worktree mode's internal swap-critical-section acquire never keys
+    against the operator's real lock home; lock_root overrides it (a held
+    lock and the helper must share the root for contention tests)."""
     env = base_env()
     if with_lock_env and lock is not None:
         env["MERGE_LOCK_DIR"] = lock_dir_override if lock_dir_override is not None else lock[0]
         env["MERGE_LOCK_TOKEN"] = lock_token_override if lock_token_override is not None else lock[1]
+    env["MERGE_LOCK_ROOT"] = str(lock_root) if lock_root is not None else suite_lock_root()
+    if poll_secs is not None:
+        env["MERGE_LOCK_POLL_SECS"] = str(poll_secs)
+    if swap_wait is not None:
+        env["LAND_SQUASH_SWAP_LOCK_WAIT_SECS"] = str(swap_wait)
     if done_lock is not None:
         env["DONE_LOCK_DIR"] = done_lock[0]
         env["DONE_LOCK_TOKEN"] = done_lock[1]
@@ -325,6 +354,29 @@ def probe(root, branch):
     return run_helper(["probe", "--branch", branch], cwd=root, with_lock_env=False)
 
 
+def launch_helper(args, cwd, lock=None, fault=None, lock_root=None,
+                  poll_secs=None, swap_wait=None):
+    """Start the helper as a background process (the concurrency witness):
+    returns (Popen, output file). stdout and stderr interleave into the
+    file; poll it for markers while the process runs, then wait() and read."""
+    env = base_env()
+    if lock is not None:
+        env["MERGE_LOCK_DIR"] = lock[0]
+        env["MERGE_LOCK_TOKEN"] = lock[1]
+    env["MERGE_LOCK_ROOT"] = str(lock_root) if lock_root is not None else suite_lock_root()
+    if poll_secs is not None:
+        env["MERGE_LOCK_POLL_SECS"] = str(poll_secs)
+    if swap_wait is not None:
+        env["LAND_SQUASH_SWAP_LOCK_WAIT_SECS"] = str(swap_wait)
+    if fault is not None:
+        env["LAND_SQUASH_TEST_FAULT"] = fault
+    out = tempfile.TemporaryFile(mode="w+")
+    proc = subprocess.Popen(
+        ["bash", str(HELPER)] + args, stdout=out, stderr=subprocess.STDOUT,
+        cwd=str(cwd), env=env)
+    return proc, out
+
+
 def land(root, branch, expected_tip, message, expected_base=None,
          done_lock="auto", **kwargs):
     """Run the land mode. done_lock="auto" acquires a primary done lock on
@@ -345,7 +397,10 @@ def land(root, branch, expected_tip, message, expected_base=None,
 def land_worktree(root, branch, expected_tip, message, expected_base=None,
                   ack_egress=None, **kwargs):
     """Run the land-worktree mode from the primary checkout (cwd=root); the
-    source worktree is addressed through the worktree list by --branch."""
+    source worktree is addressed through the worktree list by --branch. The
+    mode acquires its own swap-critical-section merge lock internally, so
+    tests pass no caller-held lock env unless one is deliberately injected
+    (the env-ignored witness)."""
     args = ["land-worktree", "--branch", branch, "--expected-tip", expected_tip,
             "--message", message]
     if expected_base is not None:
@@ -374,12 +429,10 @@ class LandSquashHelperTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = Path(self._tmp.name)
-        self.locks = self.tmp / "locks"
-        self.locks.mkdir()
 
     def locked_repo(self, name="repo", extra_files=None):
         repo = make_repo(self.tmp / name, extra_files=extra_files)
-        lock = acquire_merge_lock(repo, self.locks)
+        lock = acquire_merge_lock(repo)
         return repo, lock
 
     def conflict_setup(self, repo):
@@ -693,15 +746,21 @@ class LandSquashHelperTest(unittest.TestCase):
 
     def test_land_grammar_message_no_warning(self):
         # a landing message whose first line carries a recognized prefix:
-        # no warning line and behavior identical to today
+        # no warning line and behavior identical to today. Post-remap
+        # expectation (plan docs/history/plans/2026-11-04-execution-lane-
+        # authored-plans-misread-as-landed.md Task 2): the authoring-verb
+        # subject is `plans: file` and its diff is plans-only, so neither
+        # the unrecognized-prefix warning nor the mismatch warning fires.
         repo, lock = self.locked_repo("grammar-conformant")
         tip = rev(repo, "refs/heads/main")
         git(repo, "checkout", "-q", "-b", "feature")
-        commit_file(repo, "landed.txt", "landed\n", "feature work")
+        commit_file(repo, "docs/history/plans/2026-10-23-widget-plan.md",
+                    "# Plan: widget\n", "feature work")
         git(repo, "checkout", "-q", "main")
 
         proc = land(repo, "feature", tip,
-                    "plans: land 2026-10-23-widget-plan (witness fixture)",
+                    "plans: file 2026-10-23-widget-plan (authored plan; "
+                    "execution pending)",
                     lock=lock)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
@@ -709,6 +768,68 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertNotIn("grammar notice", proc.stdout)
         landing = rev(repo, "refs/heads/main")
         self.assertEqual(rev(repo, "%s^" % landing), tip)
+
+    def test_land_grammar_mismatch_warning_authoring_verb_operative_diff(self):
+        # the verb/diff mismatch arm (warning-only): an authoring-family
+        # subject whose landing diff carries operative-scope bytes prints
+        # one mismatch warning; the landing outcome is unchanged
+        repo, lock = self.locked_repo("grammar-mismatch-authoring")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "docs/history/plans/2026-10-23-widget-plan.md",
+                    "# Plan: widget\n", "plan bytes")
+        commit_file(repo, "scripts/operative.py", "x = 1\n", "operative bytes")
+        git(repo, "checkout", "-q", "main")
+        branch_tree = rev(repo, "feature^{tree}")
+
+        proc = land(repo, "feature", tip,
+                    "plans: file 2026-10-23-widget-plan (authored plan)",
+                    lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(
+            proc.stdout.count("warning: landing-claim verb/diff mismatch"),
+            1, proc.stdout)
+        self.assertIn("scripts/operative.py", proc.stdout)
+        landing = rev(repo, "refs/heads/main")
+        self.assertEqual(rev(repo, "%s^{tree}" % landing), branch_tree)
+
+    def test_land_grammar_mismatch_warning_retired_verb_operative_diff(self):
+        # a retired-verb subject whose operative diff contradicts its
+        # family's expectation prints the same mismatch warning
+        repo, lock = self.locked_repo("grammar-mismatch-retired")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "scripts/operative.py", "x = 1\n", "operative bytes")
+        git(repo, "checkout", "-q", "main")
+
+        proc = land(repo, "feature", tip,
+                    "plans: land retired-plan (combined landing)",
+                    lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertEqual(
+            proc.stdout.count("warning: landing-claim verb/diff mismatch"),
+            1, proc.stdout)
+        landing = rev(repo, "refs/heads/main")
+        self.assertEqual(rev(repo, "%s^" % landing), tip)
+
+    def test_land_grammar_no_mismatch_for_execution_verbs(self):
+        # the execution verbs' operative diffs are their expectation: no
+        # mismatch warning
+        repo, lock = self.locked_repo("grammar-execution-conformant")
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "scripts/operative.py", "x = 1\n", "operative bytes")
+        git(repo, "checkout", "-q", "main")
+
+        proc = land(repo, "feature", tip,
+                    "execute-plan: land exec-plan-thing (the landing)",
+                    lock=lock)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertNotIn("warning: landing-claim verb/diff mismatch",
+                         proc.stdout)
 
     def test_land_guard_import_failure_note(self):
         # a missing guard copy at the notice point (land mode): one note
@@ -1156,15 +1277,16 @@ class LandSquashHelperTest(unittest.TestCase):
 
     def worktree_repo(self, name="wt-repo"):
         """A primary repo whose main carries one advance past the init commit
-        (so the verified base tip's parent exists for the fault seams), a
-        linked source worktree checked out on branch `feature`, and a live
-        merge lock keyed to the primary checkout."""
+        (so the verified base tip's parent exists for the fault seams) and a
+        linked source worktree checked out on branch `feature`. No merge lock
+        is pre-acquired: the land-worktree mode acquires its own
+        swap-critical-section lock internally, so a fixture-held lock would
+        contend with every invocation."""
         repo = make_repo(self.tmp / name)
         commit_file(repo, "main-base.txt", "main base\n", "main base work")
         wt = self.tmp / (name + "-source-wt")
         git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
-        lock = acquire_merge_lock(repo, self.locks)
-        return repo, wt, lock
+        return repo, wt
 
     def worktree_repo_with_logs(self, name, plan_entries, exec_entries,
                                 plan_text=None, exec_text=None):
@@ -1186,8 +1308,7 @@ class LandSquashHelperTest(unittest.TestCase):
         commit_file(repo, "main-base.txt", "main base\n", "main base work")
         wt = self.tmp / (name + "-source-wt")
         git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
-        lock = acquire_merge_lock(repo, self.locks)
-        return repo, wt, lock
+        return repo, wt
 
     def commit_log_change(self, wt, message):
         """Commit the source worktree's pending prompt-log edit; the
@@ -1198,7 +1319,7 @@ class LandSquashHelperTest(unittest.TestCase):
     def archive_fixture(self, name, plan_rel, plan_body):
         """A primary repo plus a source worktree whose branch renames a
         plans-root file into docs/history/plans/completed/ (the archive
-        ceremony's egress shape). Returns (repo, wt, lock, source_tip,
+        ceremony's egress shape). Returns (repo, wt, source_tip,
         completed_rel)."""
         repo = make_repo(self.tmp / name)
         commit_file(repo, "main-base.txt", "main base\n", "main base work")
@@ -1210,22 +1331,21 @@ class LandSquashHelperTest(unittest.TestCase):
         completed_path.parent.mkdir(parents=True, exist_ok=True)
         git(wt, "mv", plan_rel, completed_rel)
         git(wt, "commit", "-q", "-m", "archive the plan")
-        lock = acquire_merge_lock(repo, self.locks)
-        return repo, wt, lock, rev(wt, "HEAD"), completed_rel
+        return repo, wt, rev(wt, "HEAD"), completed_rel
 
     def test_land_worktree_green_path(self):
         # the worktree-complete landing: a verified merge lock, the source
         # worktree on the branch at the expected tip, a clean tree; the base
         # branch moves by one two-value compare-and-swap to a single-parent
         # commit whose tree equals the source branch tip's tree
-        repo, wt, lock = self.worktree_repo("wt-green")
+        repo, wt = self.worktree_repo("wt-green")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
         source_tip = rev(wt, "HEAD")
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
 
@@ -1252,19 +1372,22 @@ class LandSquashHelperTest(unittest.TestCase):
             "%s.txt" % landing)
         self.assertIn("exit code: 0", receipt.read_text())
         self.assertEqual(git(wt, "status", "--porcelain=v1").stdout, "")
+        # the swap-critical-section lock was acquired and released inside
+        # the invocation (no caller-held lock env existed)
+        self.assert_merge_lock_free(repo)
 
     def test_land_worktree_dirty_source_worktree_refused(self):
         # a source worktree whose working-tree bytes differ from the branch
         # tip: tree inequality refused before the ref move, both refs
         # untouched, the divergent condition named
-        repo, wt, lock = self.worktree_repo("wt-dirty")
+        repo, wt = self.worktree_repo("wt-dirty")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "f01.txt", "f01 branch\n", "branch edit")
         source_tip = rev(wt, "HEAD")
         (wt / "f01.txt").write_text("f01 dirty worktree bytes\n")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("tree inequality", proc.stdout)
@@ -1273,36 +1396,98 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertEqual(rev(repo, "feature"), source_tip)
         self.assertEqual(primary_state(repo), before)
 
-    def test_land_worktree_lock_mismatch_refused_before_composition(self):
-        # a lock record whose token does not match the invoking environment:
-        # the start is refused before any composition
-        repo, wt, lock = self.worktree_repo("wt-lock")
+    def test_land_worktree_stale_caller_lock_env_is_ignored(self):
+        # the narrowed span: the mode acquires its own swap-critical-section
+        # merge lock internally, so stale caller exports (a released lock
+        # directory and a forged token) play no role in the landing; the
+        # exclusivity the old env gate verified is provided by construction
+        # (the helper holds a lock it just acquired)
+        repo, wt = self.worktree_repo("wt-env-ignored")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
+
+        proc = land_worktree(repo, "feature", source_tip, "land it",
+                             lock_dir_override="/nonexistent/stale-lock-dir",
+                             lock_token_override="forged-token")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
+        landing = rev(repo, "refs/heads/main")
+        self.assertEqual(rev(repo, "%s^{tree}" % landing),
+                         rev(repo, "feature^{tree}"))
+        self.assertEqual(rev(repo, "%s^" % landing), base_tip)
+        self.assertEqual(rev(repo, "HEAD"), landing)
+        self.assertEqual(git(repo, "status", "--porcelain=v1").stdout, "")
+        self.assert_merge_lock_free(repo)
+
+    def assert_merge_lock_free(self, repo):
+        """merge-status over the suite lock root reports the repo free: the
+        helper released its swap-critical-section lock on the path taken."""
+        env = base_env()
+        env["MERGE_LOCK_ROOT"] = suite_lock_root()
+        status = subprocess.run(
+            ["bash", str(DONE_LOCK), "merge-status"], capture_output=True,
+            text=True, check=False, cwd=str(repo), env=env)
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertIn("free", status.stdout)
+
+    def test_land_worktree_swap_lock_contention_refused(self):
+        # a merge lock already held when the helper reaches its swap
+        # critical section: every pre-lock gate (check-landing, the wired
+        # prune audit position, composition, tree equality, check-archive)
+        # has already run, the bounded wait exhausts, and the refusal names
+        # the holder with the primary checkout untouched; after the holder
+        # releases, the same invocation lands
+        repo, wt = self.worktree_repo("wt-swap-contention")
+        base_tip = rev(repo, "refs/heads/main")
+        commit_file(wt, "landed.txt", "landed\n", "feature work")
+        source_tip = rev(wt, "HEAD")
+        held = acquire_merge_lock(repo)
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             lock=lock, lock_token_override="forged-token")
-        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
-        self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
-        self.assertIn("lock_token", proc.stdout)
+                             swap_wait=1, poll_secs=1)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
+        # the pre-lock gates ran before the bounded wait: the composition
+        # evidence precedes the lock refusal
+        self.assertIn("check-landing:", proc.stdout)
+        self.assertIn("check-archive:", proc.stdout)
+        self.assertIn("swap", proc.stdout)
+        self.assertIn(held[0], proc.stdout)
         self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
         self.assertEqual(rev(repo, "feature"), source_tip)
         self.assertEqual(primary_state(repo), before)
+
+        # the holder releases; the retry acquires and lands
+        env = base_env()
+        env["MERGE_LOCK_DIR"] = held[0]
+        env["MERGE_LOCK_TOKEN"] = held[1]
+        env["MERGE_LOCK_ROOT"] = suite_lock_root()
+        release = subprocess.run(
+            ["bash", str(DONE_LOCK), "merge-release"], capture_output=True,
+            text=True, check=False, cwd=str(repo), env=env)
+        self.assertEqual(release.returncode, 0, release.stdout + release.stderr)
+        retry = land_worktree(repo, "feature", source_tip, "land it",
+                              expected_base=base_tip)
+        self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
+        self.assertEqual(outcome_lines(retry), ["OUTCOME: pass"])
+        self.assertEqual(rev(repo, "%s^{tree}" % rev(repo, "refs/heads/main")),
+                         rev(repo, "feature^{tree}"))
+        self.assert_merge_lock_free(repo)
 
     def test_land_worktree_stale_base_check_landing_refused(self):
         # a source branch tip that does not contain the recorded base: the
         # wired check-landing refusal names the stale merge base and the
         # would-delete paths, and the landing is deferred
-        repo, wt, lock = self.worktree_repo("wt-stale")
+        repo, wt = self.worktree_repo("wt-stale")
         fork_point = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
         main_tip = commit_file(repo, "main-file.txt", "main\n", "main advance")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("stale base", proc.stdout)
@@ -1318,12 +1503,12 @@ class LandSquashHelperTest(unittest.TestCase):
         # evidence: check-archive refuses before the ref move with the
         # egress findings named
         plan_rel = "docs/history/plans/2026-01-01-widget.md"
-        repo, wt, lock, source_tip, completed_rel = self.archive_fixture(
+        repo, wt, source_tip, completed_rel = self.archive_fixture(
             "wt-egress", plan_rel, "# Plan: widget\n\nWork complete.\n")
         base_tip = rev(repo, "refs/heads/main")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("check-archive", proc.stdout)
@@ -1340,7 +1525,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # in the run worktree's reviews home; check-archive passes and the
         # landing completes
         plan_rel = "docs/history/plans/2026-01-01-widget.md"
-        repo, wt, lock, source_tip, completed_rel = self.archive_fixture(
+        repo, wt, source_tip, completed_rel = self.archive_fixture(
             "wt-sanctioned", plan_rel, "# Plan: widget\n\nWork complete.\n")
         base_tip = rev(repo, "refs/heads/main")
         digest = hashlib.sha256((wt / completed_rel).read_bytes()).hexdigest()
@@ -1354,7 +1539,7 @@ class LandSquashHelperTest(unittest.TestCase):
 
         proc = land_worktree(repo, "feature", source_tip,
                              "land the sanctioned archive",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
 
@@ -1371,13 +1556,13 @@ class LandSquashHelperTest(unittest.TestCase):
     def test_land_worktree_code_only_range_skips_prune_audit(self):
         # a branch that touches no prompt log: the landing follows the
         # existing path and the receipt carries no audit section at all
-        repo, wt, lock = self.worktree_repo("wt-no-log")
+        repo, wt = self.worktree_repo("wt-no-log")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertNotIn("prune-audit:", proc.stdout)
@@ -1388,7 +1573,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # a receipted log removal: exactly one audit call, its passing
         # summary in the receipt, the PRUNE-OK line retained, the landing
         # completes
-        repo, wt, lock = self.worktree_repo_with_logs("wt-receipt", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-receipt", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
             prompt_log_ledger_text(
@@ -1397,7 +1582,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertIn("prune-audit:", proc.stdout)
@@ -1408,7 +1593,7 @@ class LandSquashHelperTest(unittest.TestCase):
     def test_land_worktree_audit_pins_verified_source_tip(self):
         # the receipt names the audited range as <merge-base>..<source-tip>,
         # the pinned upper endpoint the helper passes, never a HEAD form
-        repo, wt, lock = self.worktree_repo_with_logs("wt-pinned", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-pinned", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
             prompt_log_ledger_text(
@@ -1419,14 +1604,14 @@ class LandSquashHelperTest(unittest.TestCase):
                          "feature").stdout.strip()
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("in %s..%s" % (merge_base, source_tip), proc.stdout)
 
     def test_land_worktree_receiptless_removal_refused_before_ref_move(self):
         # a receipt-less removal: the audit's finding is preserved, the
         # refusal names the single direct repair, and no ref moves
-        repo, wt, lock = self.worktree_repo_with_logs("wt-refused", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-refused", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(prompt_log_text([]))
         self.commit_log_change(wt, "prune wt-entry without any receipt")
@@ -1434,7 +1619,7 @@ class LandSquashHelperTest(unittest.TestCase):
         short = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("prune-audit:", proc.stdout)
@@ -1453,7 +1638,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # a log edit later reverted: commit history still shows the touch,
         # the audit runs exactly once, and the receipted removal keeps the
         # landing green
-        repo, wt, lock = self.worktree_repo_with_logs("wt-revert", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-revert", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
             prompt_log_ledger_text(
@@ -1475,7 +1660,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
@@ -1488,7 +1673,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # beside it, the audit's receipt-loss class fires (the removal
         # commit carries no witness), the refusal names the single direct
         # repair, and no ref moves
-        repo, wt, lock = self.worktree_repo_with_logs(
+        repo, wt = self.worktree_repo_with_logs(
             "wt-receipt-revert", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
@@ -1506,7 +1691,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("prune-audit:", proc.stdout)
@@ -1525,7 +1710,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # a rename is a touch with rename detection disabled: the audit
         # runs over the renamed log's whole-file removal, witnessed by the
         # ad-hoc receipt class in the rename commit's message
-        repo, wt, lock = self.worktree_repo_with_logs("wt-rename", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-rename", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         renamed_rel = "docs/history/backlog/PLAN-PROMPTS-renamed.md"
         git(wt, "mv", PROMPT_LOG_PLAN_REL, renamed_rel)
@@ -1535,7 +1720,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
@@ -1544,7 +1729,7 @@ class LandSquashHelperTest(unittest.TestCase):
     def test_land_worktree_both_logs_touched_one_audit_call(self):
         # both logs touched by one range: a single invocation audits both,
         # both PRUNE-OK lines land in the receipt
-        repo, wt, lock = self.worktree_repo_with_logs(
+        repo, wt = self.worktree_repo_with_logs(
             "wt-both", ["plan-entry"], ["exec-entry"])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
@@ -1557,7 +1742,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
@@ -1568,7 +1753,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # the touched log was deleted in the range: the audit anchors on
         # the surviving sibling (anchoring on the deleted path would be the
         # checker's missing-log tool error and the landing would fail)
-        repo, wt, lock = self.worktree_repo_with_logs("wt-sibling", [], ["exec-entry"])
+        repo, wt = self.worktree_repo_with_logs("wt-sibling", [], ["exec-entry"])
         base_tip = rev(repo, "refs/heads/main")
         git(wt, "rm", "-q", "--", PROMPT_LOG_PLAN_REL)
         (wt / PROMPT_LOG_EXEC_REL).write_text(
@@ -1578,7 +1763,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertEqual(proc.stdout.count("prune-audit summary:"), 1)
@@ -1591,7 +1776,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # a non-UTF-8 log blob inside the range is the checker's modeled
         # tool error: the diagnostics are preserved in the receipt, the
         # outcome is the named tool error, and no ref moves
-        repo, wt, lock = self.worktree_repo_with_logs("wt-tool-error", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-tool-error", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_bytes(
             prompt_log_text([prompt_log_entry("wt-entry")]).encode("utf-8")
@@ -1600,7 +1785,7 @@ class LandSquashHelperTest(unittest.TestCase):
         source_tip = rev(wt, "HEAD")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
         self.assertIn("prompt-log prune audit failed (exit 3)", proc.stdout)
@@ -1613,7 +1798,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # an unclassified audit exit routes through the same named
         # tool-error arm with refs unchanged (the test-only seam
         # reclassifies a passing audit exit to 42)
-        repo, wt, lock = self.worktree_repo_with_logs("wt-unclassified", ["wt-entry"], [])
+        repo, wt = self.worktree_repo_with_logs("wt-unclassified", ["wt-entry"], [])
         base_tip = rev(repo, "refs/heads/main")
         (wt / PROMPT_LOG_PLAN_REL).write_text(
             prompt_log_ledger_text(
@@ -1623,7 +1808,7 @@ class LandSquashHelperTest(unittest.TestCase):
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             lock=lock, fault="prune-audit-unclassified")
+                             fault="prune-audit-unclassified")
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
         self.assertIn("prune-audit-unclassified", proc.stdout)
@@ -1647,12 +1832,12 @@ class LandSquashHelperTest(unittest.TestCase):
         # the flag without the matching Archive-egress-ack trailer in the
         # commit message: the trailer-mismatch refusal, both refs untouched
         plan_rel = "docs/history/plans/2026-01-01-ackme.md"
-        repo, wt, lock, source_tip, completed_rel = self.archive_fixture(
+        repo, wt, source_tip, completed_rel = self.archive_fixture(
             "wt-ack", plan_rel, "# Plan: ackme\n\nWork complete.\n")
         base_tip = rev(repo, "refs/heads/main")
         before = primary_state(repo)
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             ack_egress=plan_rel, lock=lock)
+                             ack_egress=plan_rel)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("is not verified by a matching", proc.stdout)
@@ -1666,7 +1851,7 @@ class LandSquashHelperTest(unittest.TestCase):
         message = ("land the acked archive\n\n"
                    "Archive-egress-ack: %s\n" % plan_rel)
         proc = land_worktree(repo, "feature", source_tip, message,
-                             ack_egress=plan_rel, lock=lock)
+                             ack_egress=plan_rel)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertIn("ok: acknowledged plan egress (operator ack): %s" % plan_rel,
@@ -1679,14 +1864,14 @@ class LandSquashHelperTest(unittest.TestCase):
         # shape 1: the source worktree's checked-out HEAD (an attached
         # checkout, so the source branch tip) is past the expected tip; the
         # tip refusal fires before any composition
-        repo, wt, lock = self.worktree_repo("wt-tip-ref")
+        repo, wt = self.worktree_repo("wt-tip-ref")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         first_tip = rev(wt, "HEAD")
         commit_file(wt, "more.txt", "more\n", "branch moved on")
         current_tip = rev(wt, "HEAD")
         before = primary_state(repo)
-        proc = land_worktree(repo, "feature", first_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", first_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("checked-out HEAD", proc.stdout)
@@ -1698,7 +1883,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # shape 2: the worktree detached from the branch carries no branch
         # mapping in the worktree list, so the source worktree cannot be
         # resolved; the class mirrors land's detached primary HEAD tool error
-        repo, wt, lock = self.worktree_repo("wt-tip-head")
+        repo, wt = self.worktree_repo("wt-tip-head")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         branch_tip = rev(wt, "HEAD")
@@ -1706,7 +1891,7 @@ class LandSquashHelperTest(unittest.TestCase):
         detached_head = rev(wt, "HEAD")
         self.assertNotEqual(detached_head, branch_tip)
         before = primary_state(repo)
-        proc = land_worktree(repo, "feature", branch_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", branch_tip, "land it")
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: tool_error"])
         self.assertIn("no worktree checked out on the source branch: feature",
@@ -1719,13 +1904,13 @@ class LandSquashHelperTest(unittest.TestCase):
         # the parentage pre-swap refusal propagates its outcome-contract line
         # with both refs untouched (the empty-diff branch: tree equality
         # holds, the pre-swap tree-identical leg refuses)
-        repo, wt, lock = self.worktree_repo("wt-preswap")
+        repo, wt = self.worktree_repo("wt-preswap")
         base_tip = rev(repo, "refs/heads/main")
         git(wt, "commit", "-q", "--allow-empty", "-m", "empty branch commit")
         source_tip = rev(wt, "HEAD")
         before = primary_state(repo)
 
-        proc = land_worktree(repo, "feature", source_tip, "land it", lock=lock)
+        proc = land_worktree(repo, "feature", source_tip, "land it")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("tree-identical", proc.stdout)
@@ -1736,8 +1921,10 @@ class LandSquashHelperTest(unittest.TestCase):
     def test_land_worktree_base_moved_before_cas_refused(self):
         # the fault seam's value: the base ref moved between the check-landing
         # pass and the compare-and-swap; the compare-and-swap refuses on the
-        # old-value mismatch, both refs stand as the peer left them
-        repo, wt, lock = self.worktree_repo("wt-base-mover")
+        # old-value mismatch naming the verified base tip AND the value the
+        # ref actually reads (the verified-base-tip evidence the retry's
+        # rebase duty re-derives from), both refs stand as the peer left them
+        repo, wt = self.worktree_repo("wt-base-mover")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
@@ -1745,23 +1932,139 @@ class LandSquashHelperTest(unittest.TestCase):
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             lock=lock, fault="base-mover")
+                             fault="base-mover")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
         self.assertIn("base-mover", proc.stdout)
         self.assertIn("compare-and-swap ref move refused", proc.stdout)
         self.assertIn(base_tip, proc.stdout)
+        # the strengthened evidence: the observed current tip is named, so
+        # the retry re-derives onto the moved tip without a second probe,
+        # and the remedy line names the rebase duty (rebase onto the moved
+        # tip, refresh the base pin, re-run the pre-lock gates, retry)
+        self.assertIn("now reads", proc.stdout)
+        self.assertIn(peer_tip, proc.stdout)
+        self.assertIn("remedy: rebase", proc.stdout)
+        self.assertIn("pre-lock gate sequence", proc.stdout)
         self.assertEqual(rev(repo, "refs/heads/main"), peer_tip)
         self.assertEqual(rev(repo, "feature"), source_tip)
         self.assertEqual(rev(repo, "HEAD"), peer_tip)
         self.assertEqual(primary_state(repo), before)
+        # the refusal path releases the swap-critical-section lock
+        self.assert_merge_lock_free(repo)
+
+    def test_land_worktree_swap_critical_section_serializes_disjoint_landings(self):
+        # the safety witness: two ref-only landings on disjoint path sets
+        # interleave their pre-lock composition and serialize their
+        # compare-and-swap moves through the exclusive swap-critical-section
+        # lock, with exactly one retry cycle on the loser. The loser's
+        # pre-lock phase completes while the winner's swap critical section
+        # holds the lock; the loser then acquires the lock, its CAS refuses
+        # on the stale old-value (the disjoint-case serialization point),
+        # and its single retry after the mechanical rebase lands it.
+        repo = make_repo(self.tmp / "wt-serialize")
+        commit_file(repo, "main-base.txt", "main base\n", "main base work")
+        base_tip = rev(repo, "refs/heads/main")
+        wt_a = self.tmp / "wt-serialize-a"
+        wt_b = self.tmp / "wt-serialize-b"
+        git(repo, "worktree", "add", "-q", "-b", "feature-a", str(wt_a))
+        git(repo, "worktree", "add", "-q", "-b", "feature-b", str(wt_b))
+        commit_file(wt_a, "a-file.txt", "a work\n", "a work")
+        commit_file(wt_b, "b-file.txt", "b work\n", "b work")
+        source_tip_b = rev(wt_b, "HEAD")
+        before = primary_state(repo)
+
+        # the winner's swap critical section holds the lock (modeled by the
+        # harness hold); the loser composes pre-lock and blocks on the
+        # bounded wait
+        held = acquire_merge_lock(repo)
+        loser_args = ["land-worktree", "--branch", "feature-b",
+                      "--expected-tip", source_tip_b,
+                      "--message", "land b", "--expected-base", base_tip]
+        proc, out = launch_helper(loser_args, cwd=repo, poll_secs=1,
+                                  swap_wait=120)
+        try:
+            deadline = time.time() + 60
+            composed_pre_lock = False
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                out.seek(0)
+                if "check-archive:" in out.read():
+                    composed_pre_lock = True
+                    break
+                time.sleep(0.1)
+            self.assertTrue(composed_pre_lock,
+                            "the loser never reached the post-composition "
+                            "check-archive gate pre-lock")
+            # the loser is composed and parked at the swap lock: the base
+            # ref still reads the pre-landing tip
+            self.assertEqual(rev(repo, "refs/heads/main"), base_tip)
+            # the winner's compare-and-swap inside its held critical section
+            a_tree = rev(repo, "feature-a^{tree}")
+            winner_landing = commit_tree(repo, a_tree, base_tip)
+            git(repo, "update-ref", "refs/heads/main", winner_landing,
+                base_tip)
+            env = base_env()
+            env["MERGE_LOCK_DIR"] = held[0]
+            env["MERGE_LOCK_TOKEN"] = held[1]
+            env["MERGE_LOCK_ROOT"] = suite_lock_root()
+            release = subprocess.run(
+                ["bash", str(DONE_LOCK), "merge-release"],
+                capture_output=True, text=True, check=False, cwd=str(repo),
+                env=env)
+            self.assertEqual(release.returncode, 0,
+                             release.stdout + release.stderr)
+        finally:
+            proc.wait(timeout=180)
+            out.seek(0)
+            loser_text = out.read()
+            out.close()
+
+        # the loser's single CAS refusal: the stale old-value check is the
+        # disjoint-case serialization point, naming the verified base tip
+        # and the winner's landed tip
+        self.assertEqual(proc.returncode, 1, loser_text)
+        self.assertIn("OUTCOME: fail", loser_text)
+        self.assertIn("compare-and-swap ref move refused", loser_text)
+        self.assertIn(base_tip, loser_text)
+        self.assertIn(winner_landing, loser_text)
+        self.assertIn("now reads", loser_text)
+        self.assertEqual(rev(repo, "refs/heads/main"), winner_landing)
+        self.assertEqual(rev(repo, "feature-b"), source_tip_b)
+        self.assertEqual(primary_state(repo), before)
+        self.assert_merge_lock_free(repo)
+
+        # the exactly-one retry cycle: mechanical rebase onto the moved
+        # tip (the Task 3 rebase duty, modeled mechanically), pre-lock
+        # gates re-run, and the landing completes under a fresh swap lock
+        git(wt_b, "rebase", "-q", "refs/heads/main")
+        retry_tip = rev(wt_b, "HEAD")
+        retry = land_worktree(repo, "feature-b", retry_tip, "land b",
+                              expected_base=winner_landing)
+        self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
+        self.assertEqual(outcome_lines(retry), ["OUTCOME: pass"])
+        # the retry re-ran the pre-lock gate sequence: the wired
+        # base-freshness gate's marker precedes the fresh swap-lock acquire
+        # on the retry output
+        self.assertIn("check-landing:", retry.stdout)
+        self.assertIn("swap lock: acquiring the merge lock", retry.stdout)
+        self.assertLess(retry.stdout.index("check-landing:"),
+                        retry.stdout.index("swap lock: acquiring the merge lock"))
+        landing = rev(repo, "refs/heads/main")
+        parents = git(repo, "rev-list", "--parents", "-n", "1",
+                      landing).stdout.split()
+        self.assertEqual(parents, [landing, winner_landing])
+        self.assertEqual(rev(repo, "%s^{tree}" % landing),
+                         rev(repo, "feature-b^{tree}"))
+        self.assert_merge_lock_free(repo)
 
     def test_land_worktree_diverge_origin_keeps_landing(self):
         # the diverge-origin post-landing state is informational: the landing
         # kept on the pass path, the gate's note stating the descent fact (the
         # divergence predates the landing), the base ref left at the landing
         # commit
-        repo, wt, lock = self.worktree_repo("wt-diverge")
+        repo, wt = self.worktree_repo("wt-diverge")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
@@ -1770,7 +2073,7 @@ class LandSquashHelperTest(unittest.TestCase):
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             lock=lock, fault="diverge-origin")
+                             fault="diverge-origin")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertIn("diverge-origin", proc.stdout)
@@ -1795,7 +2098,7 @@ class LandSquashHelperTest(unittest.TestCase):
         # refused inverse compare-and-swap keeps the peer's tip and names the
         # attempted rollback target; no restore-report lines; the primary
         # checkout's index and working tree unchanged
-        repo, wt, lock = self.worktree_repo("wt-backward-peer")
+        repo, wt = self.worktree_repo("wt-backward-peer")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
@@ -1803,7 +2106,7 @@ class LandSquashHelperTest(unittest.TestCase):
         before = primary_state(repo)
 
         proc = land_worktree(repo, "feature", source_tip, "land it",
-                             lock=lock, fault="backward-peer")
+                             fault="backward-peer")
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: indeterminate"])
         self.assertIn("backward-peer", proc.stdout)
@@ -1843,6 +2146,44 @@ class LandSquashHelperTest(unittest.TestCase):
                       "check-archive", "REVERSE_GUARD",
                       "--ack-egress", "worktree list"):
             self.assertIn(token, section)
+        # the narrowed span: the swap-critical-section acquire (the helper's
+        # own bounded-wait merge lock) sits after the check-archive wiring
+        # and before the parentage pre-swap invocation, so the rebase, the
+        # base-freshness gate, the prune audit, the composition, the tree
+        # equality, and the plans-egress gate all run pre-lock in the source
+        # worktree while the lock spans the parentage verification, the
+        # compare-and-swap, the post-landing gate, and the reconcile tail
+        self.assertLess(section.index("check-archive"),
+                        section.index("merge-wait-acquire"))
+        self.assertLess(section.index("merge-wait-acquire"),
+                        section.index("GATE_ARGS=(pre-swap"))
+        for token in ("merge-wait-acquire", "done-lock.sh",
+                      "LAND_SQUASH_SWAP_LOCK_WAIT_SECS", "merge-release"):
+            self.assertIn(token, section)
+        # the swap-acquire rc mapping: rc 2 (ambiguous holder) is the
+        # indeterminate arm, rc 3 (done-lock.sh's usage, environment, or
+        # unsupported-lock-data tool error) is a tool error of its own
+        # (never the retryable held-after-wait fail), and the residual rc
+        # (held past the bounded wait) is that fail
+        self.assertLess(section.index('SWAP_ACQ_RC" -eq 2'),
+                        section.index('SWAP_ACQ_RC" -eq 3'))
+        self.assertLess(section.index('SWAP_ACQ_RC" -eq 3'),
+                        section.index(
+                            "swap-critical-section lock acquire failed as a "
+                            "done-lock.sh tool error"))
+        self.assertLess(
+            section.index("swap-critical-section lock acquire failed as a "
+                          "done-lock.sh tool error"),
+            section.index("swap-critical-section merge lock is held after "
+                          "the bounded wait"))
+        self.assertIn("emit_outcome tool_error", section)
+        # the primary land mode keeps whole-landing exclusivity: its
+        # caller-held lock verification precedes the snapshot machinery and
+        # it never acquires internally
+        land_section = script.split(end_marker, 1)[1]
+        self.assertNotIn("merge-wait-acquire", land_section)
+        self.assertLess(land_section.index("MERGE_LOCK_DIR"),
+                        land_section.index("status --porcelain"))
         # the wired guard resolves adjacent to the helper, the $SCRIPT_DIR
         # precedent the parentage gate sets
         self.assertIn('REVERSE_GUARD="$SCRIPT_DIR/reverse_squash_guard.py"',
@@ -1855,7 +2196,7 @@ class LandSquashHelperTest(unittest.TestCase):
                               env=base_env(), check=False)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         for token in ("land-worktree", "base-mover", "check-landing",
-                      "check-archive", "--ack-egress"):
+                      "check-archive", "--ack-egress", "done-lock.sh exit 3"):
             self.assertIn(token, proc.stdout)
 
 
@@ -1872,7 +2213,7 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         # a second live checkout of the base branch (detached at the base
         # tip) carrying pre-landing bytes: the tail reconcile restores it,
         # the receipt records exit 0, OUTCOME pass
-        repo, wt, lock = self.worktree_repo("wt-tail-restore")
+        repo, wt = self.worktree_repo("wt-tail-restore")
         base_tip = rev(repo, "refs/heads/main")
         second = self.tmp / "wt-tail-second"
         git(repo, "worktree", "add", "-q", "--detach", str(second), base_tip)
@@ -1880,7 +2221,7 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertIn("reconcile-receipt:", proc.stdout)
@@ -1899,7 +2240,7 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         # the second live checkout carries a genuine local edit on a landing
         # path: reconcile exit 1, every block row printed, the receipt
         # recording the rows, OUTCOME pass, the landed ref intact
-        repo, wt, lock = self.worktree_repo("wt-tail-block")
+        repo, wt = self.worktree_repo("wt-tail-block")
         base_tip = rev(repo, "refs/heads/main")
         second = self.tmp / "wt-tail-second"
         git(repo, "worktree", "add", "-q", "--detach", str(second), base_tip)
@@ -1908,7 +2249,7 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         (second / "landed.txt").write_text("genuine local edit\n")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock)
+                             expected_base=base_tip)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])
         self.assertIn("block", proc.stdout)
@@ -1951,13 +2292,13 @@ class ReconcileTailGateTest(LandSquashHelperTest):
     def test_fault_seam_reconcile_tool_failure_land_worktree_mode(self):
         # land-worktree mode: the same seam, the same refusal shape, the
         # landed ref kept
-        repo, wt, lock = self.worktree_repo("wt-tail-fault")
+        repo, wt = self.worktree_repo("wt-tail-fault")
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed\n", "feature work")
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock,
+                             expected_base=base_tip,
                              fault="reconcile-tool-failure")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: fail"])
@@ -2002,14 +2343,14 @@ class LandLockOwnershipTest(LandSquashHelperTest):
         # Matrix row 2: ref-only land-worktree with a valid merge lock and
         # the done lock held advances only the selected ref and never
         # touches the done lock.
-        repo, wt, lock = self.worktree_repo("wt-done-held")
+        repo, wt = self.worktree_repo("wt-done-held")
         done = acquire_done_lock(repo)
         base_tip = rev(repo, "refs/heads/main")
         commit_file(wt, "landed.txt", "landed by feature\n", "feature work")
         source_tip = rev(wt, "HEAD")
 
         proc = land_worktree(repo, "feature", source_tip, "land feature",
-                             expected_base=base_tip, lock=lock,
+                             expected_base=base_tip,
                              done_lock=done)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outcome_lines(proc), ["OUTCOME: pass"])

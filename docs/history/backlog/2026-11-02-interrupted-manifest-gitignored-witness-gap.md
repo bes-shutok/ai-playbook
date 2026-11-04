@@ -26,3 +26,7 @@ Witness: two dead heads refusing witness-first across consecutive census turns (
 ## Dedup probe
 
 Searched open rows and both rolling logs for disposition witness arms and gitignored witnesses. The orphaned-manifest-pool family and the drain entry cover the drainable pool and deliberately exclude witness-refused heads; no open item owns the witness-arm gap for gitignored-only deliverables.
+
+## Update (2026-11-04, learn + investigate over the closeout-clobber authoring session)
+
+One of the two stuck heads is now dispositioned without needing this row's proposed arm: the 2026-11-01 head refused disposition-manifest dead-root witness-first, but its five review sidecars had survived the owning run's closeout at the primary reviews home (untracked), so the existing note-backed arm resolved them once the note named each path verbatim; the manifest closed as accounted (lane work landed on main, riders and finalize pass verified from the scheduler-state record). The remaining head (2026-10-25) is the standing operator park per the 2026-11-01 investigate disposition, not a census-growth case, and the census record now shows the drained baseline. The row's open scope is unchanged and narrower: it now owns only the truly-lost-content arm (deliverables that no longer exist anywhere, where a note cannot attest a surviving home), which no witnessed head currently exercises. Priority held at medium on that reduced scope; the composition rule for the note-backed arm is recorded as the second witness of project lesson 45.

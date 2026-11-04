@@ -250,6 +250,11 @@ Caller must provide:
    - `Panel mode`: `full` | `focused`
    - `Selection reason`: required for focused panels
    - `Source digest`: SHA-256 of reviewed content
+   - Optional PR base identity: `Reviewed PR base identity: local=<OID>, PR baseRefOid=<OID>; resolved at <UTC timestamp>`
+   - Optional PR head identity: `Reviewed PR head identity: local=<OID>, PR headRefOid=<OID>; resolved at <UTC timestamp>`
+   - Optional PR recovery disposition when both identity pairs resolve: `Moved-scope disposition: old base/head=(<OID>, <OID>); new base/head=(<OID>, <OID>); arm=<full|verified-delta>[; delta=<old-head>..<new-head>; diff=<materialized-path>]`. Include delta fields only for a verified-delta arm. If either identity pair or the reviewed-scope digest cannot be resolved or verified, record `Moved-scope disposition: unresolved; reason=<why the pair or digest is unverifiable>` with no OID-pair or delta fields. This unresolved form is the exception to `doing-code-review`'s resolved-recovery OID-pair and `full|verified-delta` fields; it records that consumer's unclassifiable identity-or-digest failure, requires full re-review, and never permits posting the prior record as current.
+
+   This is the single Metadata format home for PR identity and moved-scope context. `doing-code-review` writes and consumes these optional prose lines; review-staging does not validate them or add sidecar fields.
    - `Escalation reason`: required only for a sixth worker
 
    The four freshness lines above (`Review mode`, `Changed-risk signals`, `Prior findings supplied as filter`, `Last fix commit`) are mechanically required only for records dated on or after `EXTENDED_SIDECAR_MIN_DATE` (Markdown surface: the staging filename's leading date), and the `Witness ledger` / `Release-gate ledger` lines are shape declarations validated through their sections rather than unconditionally required Metadata.
@@ -398,6 +403,9 @@ The staging doc must follow this structure exactly, including required headings:
 - Panel mode: full | focused
 - Selection reason: <required for focused>
 - Source digest: <sha256>
+- Reviewed PR base identity: <optional; see Review context above>
+- Reviewed PR head identity: <optional; see Review context above>
+- Moved-scope disposition: <optional PR recovery field; see Review context above>
 - Guideline pack: overlay=<id>; company=<path or none>; project=<path or none>; shared=<paths>; hints=<section/rule hints by worker> *(omit when Step 2.5 not applicable; when company-scoped, company and project are the paired convention sources)*
 - Escalation reason: <required for sixth worker>
 - Findings: <staged count>
