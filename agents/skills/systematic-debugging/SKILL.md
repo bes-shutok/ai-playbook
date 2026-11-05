@@ -51,6 +51,8 @@ You MUST complete each phase before proceeding to the next.
 
 **BEFORE attempting ANY fix:**
 
+0. **Recall before re-biting** — consult the applicable root-cause families catalog and the tagged lesson corpora per the cross-project "Recall before re-biting" instruction, and apply a matching lesson before proposing any fix.
+
 1. **Read Error Messages Carefully**
    - Don't skip past errors or warnings
    - They often contain the exact solution

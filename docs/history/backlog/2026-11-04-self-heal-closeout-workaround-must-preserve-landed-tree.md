@@ -33,6 +33,10 @@ Trace the user-directed recovery boundary through self-heal, done, and execute-p
 - The covered base-drift investigation already says not to manufacture ancestry or synthesize migration evidence. The current incident is separate: the gate's proof was refused, then the recovery changed history instead of satisfying and rerunning that proof.
 - Existing lessons #6, #264, and #450 already require building a squash from the current default tip, using `land_squash.sh land-worktree` for a worktree-complete landing, and deriving the parent/tree proof at commit time. This incident shows those best practices were not used; investigate the retrieval and handoff that failed rather than recording a duplicate rule.
 
+## Update (2026-11-05, resumed closeout recovery)
+
+A second recovery exposed the same retrieval failure without fabricating a commit: after finding that the scoped inventory command only applies to baseline-less closeouts, the assistant initially concluded that no safe transfer existed. The owning closeout's operator sequence separately permits transferring an unverified inventory item and rerunning the gate. Re-reading that sequence enabled a finite digest-verified recovery. The investigation should include this witness when deciding how the existing recovery instructions and lessons become available at the point of refusal; do not add another generic reminder to search.
+
 ## Why not fixed now
 
 This request is for session analysis, lesson capture, and investigation. Editing shared recovery and landing contracts changes a cross-skill boundary and needs a focused plan that compares instruction simplification with any helper change while preserving the existing deletion protections.

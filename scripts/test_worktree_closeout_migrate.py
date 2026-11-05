@@ -62,6 +62,15 @@ def _hermetic_git_env(root: Path, **extra: str) -> dict[str, str]:
     home = Path(root) / "fixture-home"
     home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(home)
+    # Guideline #28's gate: null both non-GIT_* config sources so the
+    # XDG and system gitconfigs cannot leak into fixture git calls.
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    # core.attributesFile / core.excludesFile default into
+    # $XDG_CONFIG_HOME/git/ too; the devnull pins cover only the two
+    # config files, so the XDG root itself goes (git falls back to
+    # $HOME/.config/git/, inside the fixture-local home).
+    env.pop("XDG_CONFIG_HOME", None)
     env.update(FIXTURE_LOCALE_ENV)
     env.update(extra)
     return env
@@ -1453,7 +1462,37 @@ class MigrateMergeLockTest(unittest.TestCase):
 
 
 
-class MigrateMirrorReceiptTest(unittest.TestCase):
+class _StripsHostGitEnv:
+    """Process-env hermeticity for in-process migrate runs: save and
+    strip inherited GIT_* variables, restore on cleanup. One home for the
+    BaselineClobberGuardTest / MigrateMirrorReceiptTest twins, so a
+    hermeticity fix to one class cannot silently miss the other."""
+
+    def strip_host_git_env(self) -> None:
+        self._saved_git_env = {
+            key: os.environ.get(key)
+            for key in list(os.environ)
+            if key.startswith("GIT_") or key == "XDG_CONFIG_HOME"
+        }
+        for key in self._saved_git_env:
+            os.environ.pop(key, None)
+        # The non-GIT_* git-config surfaces (guideline #28's gate): pin
+        # both config files off so in-process git subprocesses read no
+        # host XDG or system config; restore pops the saved-None keys.
+        self._saved_git_env.setdefault("GIT_CONFIG_GLOBAL", None)
+        self._saved_git_env.setdefault("GIT_CONFIG_SYSTEM", None)
+        os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+        os.environ["GIT_CONFIG_SYSTEM"] = os.devnull
+
+    def restore_host_git_env(self) -> None:
+        for key, value in self._saved_git_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+class MigrateMirrorReceiptTest(_StripsHostGitEnv, unittest.TestCase):
     """Fixtures for receipt-proven same-run mirror replacement at closeout
     migration (plan 2026-10-24-closeout-migration-same-run-mirror-replace
     Task 1): the session manifest beside the baseline binds the stable run
@@ -1470,6 +1509,14 @@ class MigrateMirrorReceiptTest(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="wcm-mirror-receipt-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         lock_root = self.root / "lock-root"
+        # Strip BEFORE the lock-env pins are applied so the saved map
+        # captures the true host state (the pins carry their own
+        # GIT_CONFIG_GLOBAL/SYSTEM devnull values; the in-process
+        # _migrate git subprocesses inherit this process env, so the
+        # recorded blob and the expected blob hash under one conversion
+        # configuration - shared twin home _StripsHostGitEnv).
+        self.strip_host_git_env()
+        self.addCleanup(self.restore_host_git_env)
         pins = _hermetic_lock_env(lock_root)
         self._saved_lock_env = {key: os.environ.get(key) for key in pins}
         os.environ.update(pins)
@@ -1659,6 +1706,46 @@ class MigrateMirrorReceiptTest(unittest.TestCase):
         )
         self.assertNotIn(
             self.CONTROL, {entry["source"] for entry in data.get("skipped", [])}
+        )
+
+    def test_migrate_identical_target_with_receipt_records_delivered_blob(self):
+        """[class: REPOSITORY_TEST] The receipt-proven identical-transfer
+        arm (a byte-identical target covered by the exact path's valid
+        same-run mirror receipt) records the delivered blob too: the
+        verified migrated row carries the delivered_blob sha of the bytes
+        standing at the target (plan
+        2026-11-04-closeout-clobber-guard-review-residual-trio R10 pins
+        this previously unasserted capture site)."""
+        shared = b'{"state": "boundary-2"}\n'
+        row = self._boundary_row([_file_receipt(self.CONTROL, _digest(shared))])
+        source, baseline = self._seed([row])
+        _write(source / self.CONTROL, shared)
+        target = self.root / "target"
+        _write(target / self.CONTROL, shared)
+        manifest = self.root / "closeout-migration.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = _migrate(source, target, baseline, manifest)
+        self.assertEqual(code, 0, buf.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        migrated = {entry["source"]: entry for entry in data.get("migrated", [])}
+        self.assertIn(self.CONTROL, migrated)
+        self.assertTrue(migrated[self.CONTROL]["verified"])
+        # The delivered blob derived independently of the recorder: hash a
+        # scratch copy of the standing bytes (git hash-object succeeds
+        # outside a repository, so a plain non-git target works).
+        scratch = self.root / "standing-scratch.md"
+        _write(scratch, shared)
+        expected_blob = subprocess.run(
+            ["git", "hash-object", "--", str(scratch)],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root), cwd=str(self.root),
+        ).stdout.strip()
+        scratch.unlink()
+        self.assertEqual(
+            migrated[self.CONTROL]["delivered_blob"], expected_blob,
+            "the receipt-identical migrated row must carry the delivered "
+            "blob sha of the bytes standing at the target",
         )
 
     def test_migrate_same_digest_other_path_stays_foreign(self):
@@ -6811,17 +6898,22 @@ class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.
     admission protocol); prevented rows stamped for prior runs' branch
     records report as foreign, never attributed to the adjudicated run's
     teardown evidence (the unattributable-rows report-only demotion
-    shape)."""
+    shape). Stamp-less rows (a legacy row written before the stamp
+    existed) fall to the single-record rule - attributed in a
+    single-record manifest, foreign beside any second branch record -
+    pinned in both directions (plan
+    2026-11-04-closeout-clobber-guard-review-residual-trio Task 3)."""
 
     PREVENTED_REL = "docs/tmp/execute-plan/x/rewound-record.md"
 
-    def _prevented_row(self, index: int | None) -> dict:
+    def _prevented_row(self, index: int | None, rel: str | None = None) -> dict:
         """One prevented_clobbers row in the producer's shape: the absolute
         destination the guard records ((target / rel).as_posix()) and the
         run-attribution stamp (None models a legacy row written before the
-        stamp existed)."""
+        stamp existed). ``rel`` overrides the default destination path so a
+        fixture can author more prevented rows than the notes' slice."""
         row = {
-            "destination": (self.primary / self.PREVENTED_REL).as_posix(),
+            "destination": (self.primary / (rel or self.PREVENTED_REL)).as_posix(),
             "action": "restored-from-HEAD",
         }
         if index is not None:
@@ -6837,14 +6929,16 @@ class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.
             {"branch": "wt-run", "source": str(self.worktree)},
         ]
 
-    def _author_manifest(self, prevented: list[dict]) -> Path:
-        """Rewrite the seeded fixture manifest's prevented_clobbers rows and
-        extend it to two branch records, keeping the git/citation/accounting
-        setup untouched."""
+    def _author_manifest(self, prevented: list[dict], two_records: bool = True) -> Path:
+        """Rewrite the seeded fixture manifest's prevented_clobbers rows and,
+        by default, extend it to two branch records (the re-run shape);
+        ``two_records=False`` keeps the seeded single-record legacy manifest.
+        The git/citation/accounting setup stays untouched."""
         manifest_path = self._seed_migration_manifest(landed=True)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["prevented_clobbers"] = prevented
-        manifest["branch"] = self._two_records()
+        if two_records:
+            manifest["branch"] = self._two_records()
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         return manifest_path
 
@@ -6886,6 +6980,86 @@ class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.
         self.assertNotIn("prevented clobber(s) this run restored from HEAD", out)
         self.assertNotIn("held:", out)
         self.assertTrue(Path(self.worktree).is_dir())
+
+    def test_single_record_manifest_unstamped_prevented_row_attributed(self):
+        # A stamp-less prevented row (record_index absent, the legacy row
+        # written before the stamp existed) in a single-record manifest
+        # falls to the single-record rule len(records) == 1: attributed to
+        # this run's teardown evidence, so the summary line prints and no
+        # foreign note does.
+        self._author_manifest([self._prevented_row(None)], two_records=False)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("removal: git worktree remove", out)
+        self.assertIn("branch-closeout: prevented clobber(s) this run restored from HEAD", out)
+        self.assertIn((self.primary / self.PREVENTED_REL).as_posix(), out)
+        self.assertIn("the operator decides", out)
+        self.assertNotIn("never this run's teardown evidence", out)
+        self.assertNotIn("held:", out)
+        self.assertTrue(Path(self.worktree).is_dir())
+
+    def test_two_record_manifest_unstamped_prevented_row_foreign(self):
+        # The same stamp-less prevented row beside a second branch record
+        # (len(records) == 2) fails the single-record rule: it demotes to
+        # the report-only foreign note and is never attributed to this
+        # run's teardown evidence.
+        self._author_manifest([self._prevented_row(None)])
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("removal: git worktree remove", out)
+        self.assertIn(
+            "branch-closeout: prevented clobber(s) attributed to prior "
+            "run(s) in the shared manifest",
+            out,
+        )
+        self.assertIn((self.primary / self.PREVENTED_REL).as_posix(), out)
+        self.assertIn("never this run's teardown evidence", out)
+        self.assertNotIn("prevented clobber(s) this run restored from HEAD", out)
+        self.assertNotIn("held:", out)
+        self.assertTrue(Path(self.worktree).is_dir())
+
+    def test_prevented_notes_print_first_five_paths_plus_total(self):
+        """[class: REPOSITORY_TEST] The prevented notes' remainder counts
+        (plan 2026-11-04-closeout-clobber-guard-review-residual-trio R2):
+        more than five prevented paths in either prevented clobber(s) note
+        print the first five paths plus a parenthesized total, following
+        the sibling unattributed_missing note's slice-then-parenthesized-
+        count convention in this note's own (total: N) form; the pre-fix
+        note sliced at five paths with no count, so paths six and beyond
+        vanished from the operator's teardown evidence."""
+        rels = [f"docs/tmp/execute-plan/x/rewound-{n}.md" for n in range(7)]
+        restored = [self._prevented_row(1, rel=rel) for rel in rels]
+        foreign = [self._prevented_row(0, rel=rel) for rel in rels]
+        self._author_manifest(restored + foreign)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        for note_prefix in (
+            "branch-closeout: prevented clobber(s) this run restored from HEAD",
+            "branch-closeout: prevented clobber(s) attributed to prior "
+            "run(s) in the shared manifest",
+        ):
+            with self.subTest(note=note_prefix[:60]):
+                note_line = next(
+                    line for line in out.splitlines()
+                    if line.startswith(note_prefix)
+                )
+                for rel in rels[:5]:
+                    self.assertIn((self.primary / rel).as_posix(), note_line)
+                for rel in rels[5:]:
+                    self.assertNotIn(
+                        (self.primary / rel).as_posix(), note_line,
+                        "paths beyond the first five must not print "
+                        "verbatim; the count carries them",
+                    )
+                self.assertIn(
+                    "(total: 7)", note_line,
+                    "the note must carry the total count, following the "
+                    "sibling unattributed_missing note's slice-then-count "
+                    "convention in this note's own (total: N) form",
+                )
 
 
 class ManifestRecordIndexStampTest(unittest.TestCase):
@@ -7634,6 +7808,40 @@ class CloseoutReferenceStateTest(unittest.TestCase):
         state = MODULE._resolve_closeout_reference_state(manifest_path)
         self.assertIsInstance(state["destinations_error"], TypeError)
         self.assertEqual(state["verified_destinations"], [])
+
+    def test_typeerror_resolves_prevented_rows_empty_loop_order_invariant(self):
+        # Loop-order invariant (plan
+        # 2026-11-04-closeout-clobber-guard-review-residual-trio Task 4):
+        # given the resolver state after a TypeError, prevented_rows is
+        # empty. The prevented_clobbers read sits AFTER the migrated/renamed
+        # reads inside the same TypeError guard, so a non-iterable migrated
+        # section aborts the guard before any prevented row is collected
+        # even though this manifest carries a collectible prevented row;
+        # the handler's reset covers the key symmetrically once landed.
+        # GREEN-first: this passes before the reset lands (the prevented
+        # loop never runs past the raising read), so its one RED credential
+        # is the in-task reorder mutation run before the apply bullet
+        # (prevented read hoisted ahead of the migrated/renamed reads with
+        # the reset absent); a future edit turns it RED only by BOTH
+        # reordering the prevented read ahead of the migrated/renamed reads
+        # AND dropping the prevented_rows reset.
+        manifest_path = self._manifest(
+            json.dumps(
+                {
+                    "branch": [{"branch": "wt-run"}],
+                    "prevented_clobbers": [
+                        {
+                            "destination": "docs/tmp/execute-plan/x/rewound-record.md",
+                            "action": "restored-from-HEAD",
+                        },
+                    ],
+                    "migrated": 5,
+                }
+            ).encode("utf-8")
+        )
+        state = MODULE._resolve_closeout_reference_state(manifest_path)
+        self.assertIsInstance(state["destinations_error"], TypeError)
+        self.assertEqual(state["prevented_rows"], [])
 
     def test_skipped_section_rows_are_never_references(self):
         # skipped-section rows carry no presence requirement: their
@@ -8918,6 +9126,47 @@ class ScopedInventoryMigrateTest(unittest.TestCase):
         self.assertEqual(data["branch"][-1]["source"], str(source.resolve()))
         self.assertEqual(data["branch"][-1]["record_index"], 1)
         self.assertEqual(data["branch"][0].get("record_index"), None, "the producer's own record was stamped")
+
+    def test_scoped_identical_transfer_records_delivered_blob(self):
+        """[class: REPOSITORY_TEST] The scoped identical-transfer arm (the
+        expected transfer already stands at the target with identical
+        bytes) records the delivered blob too: the verified migrated row
+        carries the delivered_blob sha of the bytes standing at the target
+        (plan 2026-11-04-closeout-clobber-guard-review-residual-trio R10
+        pins this previously unasserted capture site)."""
+        source = self.root / "source"
+        review_rel = ".ai-playbook/reviews/2026-10-30-scoped-identical.md"
+        shared = b"identical transfer bytes\n"
+        primary = self.primary.resolve()
+        _write(source / review_rel, shared)
+        _write(primary / review_rel, shared)
+        skeleton = self._write_skeleton("wt-scoped-i", str(source))
+        inventory = self._write_inventory([review_rel])
+
+        proc = self._run_scoped(source, inventory, skeleton)
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        data = json.loads(skeleton.read_text(encoding="utf-8"))
+        migrated = data["migrated"]
+        self.assertEqual(len(migrated), 1, data)
+        entry = migrated[0]
+        self.assertEqual(entry["source"], review_rel)
+        self.assertEqual(entry["destination"], str(primary / review_rel))
+        self.assertTrue(entry["verified"])
+        expected_blob = subprocess.run(
+            ["git", "-C", str(primary), "hash-object", "--", review_rel],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_lock_env(self.root),
+        ).stdout.strip()
+        self.assertEqual(
+            entry["delivered_blob"], expected_blob,
+            "the identical-transfer migrated row must carry the delivered "
+            "blob sha of the bytes standing at the target",
+        )
+        self.assertEqual(
+            (primary / review_rel).read_bytes(), shared,
+            "the identical bytes at the target must not be rewritten",
+        )
 
     def test_scoped_inventory_empty_appends_nothing(self):
         """[class: REPOSITORY_TEST] Given an empty scoped inventory, expects
@@ -10442,7 +10691,7 @@ class NoCharterProducerWriteTest(NoCharterFixture, unittest.TestCase):
         self.assertNotIn("git worktree remove", gate_out)
 
 
-class BaselineClobberGuardTest(unittest.TestCase):
+class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
     """Fixtures for the baseline-clobber guards (entry
     closeout-migrate-baseline-tracked-clobber): the pre-flight refusal that
     keeps a baseline-relative migrate from carrying a tracked path backward
@@ -10461,6 +10710,17 @@ class BaselineClobberGuardTest(unittest.TestCase):
     V0 = b"corpus v0\n"
     V2 = b"corpus v2 head bytes\n"
 
+    # Task 2 fixtures (plan 2026-11-04-closeout-clobber-guard-review-
+    # residual-trio, R9): a literally wildcard-named tracked file plus a
+    # glob-matching sibling, so a bare pathspec built from the star rel
+    # glob-matches the sibling.
+    STAR_REL = "docs/reviews/t*.md"
+    STAR_V0 = b"star v0 bytes\n"
+    STAR_V2 = b"star v2 bytes\n"
+    SIB_REL = "docs/reviews/tzz.md"
+    SIB_V0 = b"sibling v0 bytes\n"
+    SIB_V2 = b"sibling v2 bytes\n"
+
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="wcm-baseline-clobber-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
@@ -10468,26 +10728,19 @@ class BaselineClobberGuardTest(unittest.TestCase):
         # environment: pin it hermetically for the whole class. The guard
         # helpers' git subprocesses inherit this process env, so inherited
         # host GIT_* variables are stripped too (the in-process twin of
-        # _hermetic_git_env's filter).
+        # _hermetic_git_env's filter; shared twin home _StripsHostGitEnv).
+        # Strip BEFORE the pins are applied so the saved map captures the
+        # true host state - the pins carry their own devnull
+        # GIT_CONFIG_GLOBAL/SYSTEM values.
+        self.strip_host_git_env()
+        self.addCleanup(self.restore_host_git_env)
         pins = _hermetic_lock_env(self.root)
         self._saved_lock_env = {key: os.environ.get(key) for key in pins}
         os.environ.update(pins)
-        self._saved_git_env = {
-            key: os.environ.get(key)
-            for key in list(os.environ)
-            if key.startswith("GIT_")
-        }
-        for key in self._saved_git_env:
-            os.environ.pop(key, None)
         self.addCleanup(self._restore_lock_env)
 
     def _restore_lock_env(self) -> None:
         for key, value in self._saved_lock_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        for key, value in self._saved_git_env.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
@@ -10557,6 +10810,90 @@ class BaselineClobberGuardTest(unittest.TestCase):
              f"100644,{blob},{self.REL}"],
             capture_output=True, text=True, check=True,
             env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+
+    # ---- Task 2 fixture helpers (plan 2026-11-04-closeout-clobber-guard-
+    # review-residual-trio, R9). Empirical substrate (git 2.56.0):
+    # `git rev-parse :<rel>` echoes its argument with rc=0 when <rel> holds
+    # glob metacharacters and resolves to no single stage-0 entry (the
+    # wildcard-named unmerged shape and the index-absent wildcard rel
+    # alike), while a plain index-absent rel exits 128; and a bare
+    # `git restore -- <star rel>` pathspec glob-matches sibling paths.
+    # The fixture plumbing below never lets the star path act as a
+    # pathspec: it stages index shapes with update-index plumbing and
+    # probes with `:(literal)` quoting of its own.
+
+    def _wildcard_fixture(self, name: str) -> Path:
+        """A target repo that additionally carries the literally wildcard-
+        named tracked file docs/reviews/t*.md across two commits plus the
+        glob-matching sibling docs/reviews/tzz.md across two commits."""
+        target = self._target_repo(name)
+        (target / "docs/reviews").mkdir(parents=True, exist_ok=True)
+        _write(target / self.STAR_REL, self.STAR_V0)
+        _write(target / self.SIB_REL, self.SIB_V0)
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "star v0")
+        _write(target / self.STAR_REL, self.STAR_V2)
+        _write(target / self.SIB_REL, self.SIB_V2)
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "star v2")
+        return target
+
+    def _stage_unmerged_wildcard(self, target: Path) -> None:
+        """Put the star rel at index stages 1-3 with no stage-0 entry (a
+        live merge's conflicted shape), built with update-index plumbing
+        so the fixture never lets the star path act as a pathspec."""
+        b1 = self._git(target, "rev-parse", f"HEAD~1:{self.STAR_REL}")
+        b2 = self._git(target, "rev-parse", f"HEAD:{self.STAR_REL}")
+        ours = subprocess.run(
+            ["git", "-C", str(target), "hash-object", "-w", "--stdin"],
+            input=b"stage-3 ours-side bytes\n", capture_output=True,
+            check=True, env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--force-remove",
+             self.STAR_REL],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        info = "".join(
+            f"100644 {blob} {stage}\t{self.STAR_REL}\n"
+            for stage, blob in ((1, b1), (2, b2),
+                                (3, ours.stdout.decode().strip()))
+        )
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--index-info"],
+            input=info.encode(), capture_output=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        self.assertNotIn(
+            " 0\t",
+            self._git(target, "ls-files", "-s", "--",
+                      f":(literal){self.STAR_REL}"),
+            "fixture precondition: no stage-0 entry may remain",
+        )
+        self.assertEqual(
+            len(self._git(target, "ls-files", "-u", "--",
+                          f":(literal){self.STAR_REL}").splitlines()),
+            3,
+            "fixture precondition: the star rel must sit at stages 1-3",
+        )
+
+    def _wildcard_staged_deletion(self, target: Path) -> None:
+        """Stage a deletion of the star rel (its index entry removed) and
+        delete its worktree file - the witnessed `git rm` shape - with
+        update-index plumbing so the star path never acts as a
+        pathspec."""
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--force-remove",
+             self.STAR_REL],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        (target / self.STAR_REL).unlink()
+        self.assertFalse(
+            (target / self.STAR_REL).exists(),
+            "fixture precondition: the worktree file is missing",
         )
 
     def test_migrate_preflight_refuses_tracked_backward_carry(self):
@@ -10876,6 +11213,17 @@ class BaselineClobberGuardTest(unittest.TestCase):
         classification_reads = {"n": 0}
 
         def restaging_run(argv, *a, **k):
+            # Hook truth (plan 2026-11-04-closeout-clobber-guard-review-
+            # residual-trio, R4, correcting the row's misstated premise):
+            # `f":{self.REL}" in argv` is element-exact list membership, so
+            # it never matches `_head_blob`'s rev-parse element
+            # `HEAD:<rel>` - a different argv string - and the hook does
+            # NOT match both probes as the row recorded. What argv alone
+            # cannot do is distinguish the classification read (the walk's
+            # _read_staged_entry) from the recheck read inside
+            # _reclassify_then_restore: both pass the same `:<rel>`
+            # element, so the one-shot counter below is what targets the
+            # restage at the classification read (the first read only).
             is_classification_read = "rev-parse" in argv and f":{self.REL}" in argv
             result = real_run(argv, *a, **k)
             if is_classification_read:
@@ -10923,6 +11271,9 @@ class BaselineClobberGuardTest(unittest.TestCase):
         classification_reads = {"n": 0}
 
         def restaging_run(argv, *a, **k):
+            # Same element-exact hook as the deletion arm's restaging_run
+            # above (the R4 hook-truth comment lives there): only the first
+            # `:<rel>` rev-parse - the classification read - is retargeted.
             is_classification_read = "rev-parse" in argv and f":{self.REL}" in argv
             result = real_run(argv, *a, **k)
             if is_classification_read:
@@ -11242,13 +11593,16 @@ class BaselineClobberGuardTest(unittest.TestCase):
         """[class: REPOSITORY_TEST] The staged-new-at-target shape (plan
         closeout-migrate-clobber-guard-restore-arms Task 3): a staged new
         file absent at HEAD - the head_blob-is-None skip - emits a
-        prevented-clobber-check line and stays untouched, owned or foreign;
+        prevented-clobber-check line and stays untouched under either
+        owned-set argument (the staged fixture path is in neither set -
+        the shape emits before any ownership check; label truth per
+        T3-NIT-1: neither subTest exercises an owned fixture path);
         the pre-fix walk passed the shape silently."""
         for label, owned in (
-            ("foreign", set()),
-            ("owned", {self.REL}),
+            ("empty owned set", set()),
+            ("owned set holding a different rel", {self.REL}),
         ):
-            with self.subTest(ownership=label):
+            with self.subTest(owned_set=label):
                 target = self._target_repo(f"target-new-at-target-{label}")
                 new_rel = "docs/tmp/staged-new.md"
                 _write(target / new_rel, b"staged new bytes never committed\n")
@@ -11333,6 +11687,722 @@ class BaselineClobberGuardTest(unittest.TestCase):
             self._git(target, "ls-files", "-s", "--", self.REL),
             f"100755 {head_blob} 0\t{self.REL}",
             "the mode-only restage must stay staged untouched",
+        )
+
+    # ---- Task 1 pins (plan 2026-11-04-closeout-clobber-guard-review-
+    # residual-trio, R8 disposition): the deletion arm's delivered-map
+    # consult. Before any restore of an owned index-absent path the arm
+    # reads the on-disk bytes' blob once (the consult, the arm's only
+    # worktree-byte read; the recheck observes index state only) and
+    # branches four ways: delivered bytes present unstaged are kept and
+    # reported, a missing file (a filesystem existence check, never
+    # probe-None) restores from HEAD as the witnessed full-rewind
+    # reconstruction, HEAD-equal bytes restore as loss-free cleanup, and
+    # anything else is report-only operator-decide. The peer-restage
+    # downgrade stays the safety witness: the existing
+    # test_postrun_guard_downgrades_when_peer_restages_during_owned_deletion
+    # pin keeps it, with the consult read placed before the recheck.
+
+    def test_postrun_guard_deletion_arm_keeps_delivered_bytes_present_unstaged(self):
+        """[class: REPOSITORY_TEST] The delivered-kept arm: an owned
+        index-absent path whose on-disk bytes hash to the run's delivered
+        blob keeps those bytes - no restore, a report line naming delivered
+        bytes present unstaged, and the path absent from the prevented
+        list (the plan's reproduced destruction witness: the pre-consult
+        arm restored HEAD over the run's delivered bytes)."""
+        target = self._target_repo("target-delivered-kept")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "--cached", self.REL)
+        _write(target / self.REL, b"corpus delivered unstaged bytes\n")
+        delivered_blob = self._git(target, "hash-object", "--", self.REL)
+        self.assertNotEqual(
+            delivered_blob, head_blob,
+            "fixture precondition: the delivered bytes differ from HEAD",
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: delivered_blob},
+            )
+        self.assertEqual(
+            prevented, [],
+            "delivered bytes present unstaged must stay absent from the "
+            "prevented list",
+        )
+        out = captured.getvalue()
+        self.assertIn(
+            "delivered bytes present unstaged", out,
+            "the keep report line must name delivered bytes present unstaged",
+        )
+        self.assertNotIn(
+            f"prevented clobber: {self.REL}", out,
+            "the delivered bytes must not be restored",
+        )
+        self.assertEqual(
+            MODULE._read_staged_entry(target, self.REL), (None, False),
+            "the staged deletion must stay in the index (no restore)",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(),
+            b"corpus delivered unstaged bytes\n",
+            "the run's delivered bytes must survive in the worktree",
+        )
+
+    def test_postrun_guard_deletion_arm_restores_missing_worktree_file(self):
+        """[class: REPOSITORY_TEST] The missing-file arm (GREEN-first
+        regression pin): an owned index-absent path whose worktree file
+        does not exist on disk (the witnessed `git rm` shape) restores
+        from HEAD exactly as today - the witnessed full-rewind
+        reconstruction - and enters the prevented list; the consult must
+        not widen this shape's behavior."""
+        target = self._target_repo("target-deletion-missing")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "-q", self.REL)
+        self.assertFalse(
+            (target / self.REL).exists(),
+            "fixture precondition: the worktree file is missing",
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: head_blob},
+            )
+        self.assertEqual(prevented, [self.REL])
+        self.assertIn(f"prevented clobber: {self.REL}", captured.getvalue())
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            head_blob,
+            "the index must hold HEAD after the restore",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the worktree must hold HEAD after the restore",
+        )
+
+    def test_postrun_guard_deletion_arm_restores_head_equal_bytes_loss_free(self):
+        """[class: REPOSITORY_TEST] The HEAD-equal arm (GREEN-first
+        regression pin): an owned index-absent path whose on-disk bytes
+        hash to HEAD's blob (delivered unknown here) restores from HEAD as
+        loss-free cleanup - the restore proceeds, the prevented list holds
+        the path, and index and worktree hold HEAD after it; nothing can
+        be lost because the bytes are HEAD's."""
+        target = self._target_repo("target-deletion-head-equal")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "--cached", self.REL)
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "fixture precondition: the on-disk bytes equal HEAD",
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: "f" * 40},
+            )
+        self.assertEqual(prevented, [self.REL])
+        self.assertIn(f"prevented clobber: {self.REL}", captured.getvalue())
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"),
+            head_blob,
+            "the index must hold HEAD after the loss-free restore",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the worktree must hold HEAD after the loss-free restore",
+        )
+
+    def test_postrun_guard_deletion_arm_reports_foreign_unstaged_bytes_report_only(self):
+        """[class: REPOSITORY_TEST] The foreign arm: an owned index-absent
+        path whose on-disk bytes hash to neither the delivered blob nor
+        HEAD's blob (pinned both with the delivered blob known and with no
+        delivered blob in the map - the defensive absence rule never
+        licenses a restore over unknown on-disk bytes) gets the report-only
+        operator-decide note, no restore, and stays absent from the
+        prevented list; the foreign bytes survive untouched."""
+        for label, delivered_map in (
+            ("delivered-known", "head"),
+            ("delivered-absent", {}),
+        ):
+            with self.subTest(map=label):
+                target = self._target_repo(f"target-deletion-foreign-{label}")
+                head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+                self._git(target, "rm", "--cached", self.REL)
+                _write(target / self.REL, b"foreign unstaged bytes\n")
+                foreign_blob = self._git(target, "hash-object", "--", self.REL)
+                self.assertNotEqual(
+                    foreign_blob, head_blob,
+                    "fixture precondition: the bytes are neither delivered "
+                    "nor HEAD",
+                )
+                mapped = (
+                    {self.REL: head_blob}
+                    if delivered_map == "head" else delivered_map
+                )
+                captured = io.StringIO()
+                with contextlib.redirect_stdout(captured):
+                    prevented = MODULE._prevent_tracked_clobbers(
+                        target, {self.REL}, mapped,
+                    )
+                self.assertEqual(
+                    prevented, [],
+                    "foreign unstaged bytes must stay absent from the "
+                    "prevented list",
+                )
+                out = captured.getvalue()
+                self.assertIn(
+                    "operator decision required", out,
+                    "the report-only note must name the operator decision",
+                )
+                self.assertNotIn(
+                    f"prevented clobber: {self.REL}", out,
+                    "the foreign bytes must not be restored",
+                )
+                self.assertEqual(
+                    MODULE._read_staged_entry(target, self.REL), (None, False),
+                    "the staged deletion must stay in the index (no restore)",
+                )
+                self.assertEqual(
+                    (target / self.REL).read_bytes(),
+                    b"foreign unstaged bytes\n",
+                    "the foreign unstaged bytes must survive untouched",
+                )
+
+    def test_postrun_guard_deletion_arm_reports_unprobeable_bytes_report_only(self):
+        """[class: REPOSITORY_TEST] The unprobeable arm: an owned
+        index-absent path whose file exists on disk but whose hash probe
+        returns None falls to the report-only operator-decide note, no
+        restore, absent from the prevented list - the missing-file branch
+        is decided by a filesystem existence check, never by probe-None,
+        so a failed probe on a present file can never pass for the
+        witnessed missing-file restore."""
+        target = self._target_repo("target-deletion-unprobeable")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "--cached", self.REL)
+        _write(target / self.REL, b"unstaged bytes the probe cannot read\n")
+        self.assertTrue(
+            (target / self.REL).exists(),
+            "fixture precondition: the file is present so only the probe "
+            "fails",
+        )
+        captured = io.StringIO()
+        with mock.patch.object(MODULE, "_worktree_blob", return_value=None):
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(
+                    target, {self.REL}, {self.REL: head_blob},
+                )
+        self.assertEqual(
+            prevented, [],
+            "unprobeable bytes must stay absent from the prevented list",
+        )
+        out = captured.getvalue()
+        self.assertIn(
+            "operator decision required", out,
+            "the report-only note must name the operator decision",
+        )
+        self.assertNotIn(
+            f"prevented clobber: {self.REL}", out,
+            "the unprobeable bytes must not be restored",
+        )
+        self.assertEqual(
+            MODULE._read_staged_entry(target, self.REL), (None, False),
+            "the staged deletion must stay in the index (no restore)",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(),
+            b"unstaged bytes the probe cannot read\n",
+            "the unprobeable unstaged bytes must survive untouched",
+        )
+
+    def test_postrun_guard_deletion_arm_delivered_equal_precedes_head_equal(self):
+        """[class: REPOSITORY_TEST] The delivered-equals-HEAD boundary: an
+        owned index-absent path whose delivered blob equals HEAD's blob
+        and whose on-disk bytes hash to both takes the delivered-equal
+        branch - keep and report, no prevented append - pinning the
+        overlap's branch order (a HEAD-first order would restore over the
+        run's delivered bytes)."""
+        target = self._target_repo("target-deletion-delivered-eq-head")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self._git(target, "rm", "--cached", self.REL)
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "fixture precondition: the on-disk bytes equal HEAD",
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: head_blob},
+            )
+        self.assertEqual(
+            prevented, [],
+            "the delivered-equal branch must take precedence: no prevented "
+            "append",
+        )
+        out = captured.getvalue()
+        self.assertIn(
+            "delivered bytes present unstaged", out,
+            "the delivered-equal report line must fire at the boundary",
+        )
+        self.assertNotIn(
+            f"prevented clobber: {self.REL}", out,
+            "the delivered bytes must not be restored at the boundary",
+        )
+        self.assertEqual(
+            MODULE._read_staged_entry(target, self.REL), (None, False),
+            "the staged deletion must stay in the index (no restore)",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the delivered bytes (equal to HEAD) must survive untouched",
+        )
+
+    def test_postrun_guard_deletion_arm_doc_surfaces_state_the_consult(self):
+        """[class: REPOSITORY_TEST] The three doc surfaces state the
+        four-way consult and its report-only dispositions after the
+        change: the deletion-arm inline comment, the
+        _prevent_tracked_clobbers docstring's arm inventory, and the
+        module header's guard paragraph."""
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        arm_at = source.index("if staged_blob is None:")
+        arm_window = source[arm_at:arm_at + 2000]
+        for surface_name, surface in (
+            ("deletion-arm inline comment", arm_window),
+            (
+                "_prevent_tracked_clobbers docstring",
+                MODULE._prevent_tracked_clobbers.__doc__ or "",
+            ),
+            ("module header guard paragraph", MODULE.__doc__ or ""),
+        ):
+            with self.subTest(surface=surface_name):
+                self.assertIn(
+                    "four-way consult", surface,
+                    f"the {surface_name} must state the four-way consult",
+                )
+                self.assertIn(
+                    "report-only", surface,
+                    f"the {surface_name} must state its report-only "
+                    "dispositions",
+                )
+
+    # ---- Task 2 pins (plan 2026-11-04-closeout-clobber-guard-review-
+    # residual-trio, R9): 40-hex blob validation in the staged-entry
+    # reader and literal pathspec quoting in the probes and restore.
+
+    def test_postrun_guard_classifies_wildcard_unmerged_report_only(self):
+        """[class: REPOSITORY_TEST] A wildcard-named unmerged entry - the
+        path holds glob metacharacters, so `git rev-parse :<rel>` exits 0
+        echoing the argument instead of the 128 the stage-0/unmerged
+        discrimination expects - classifies report-only: the reader
+        rejects the non-hex stdout and falls to the `git ls-files -u`
+        discriminator, the guard emits the unmerged line naming the rel,
+        no staged-new misclassification fires, zero restores spawn, and
+        all three index stages survive."""
+        target = self._wildcard_fixture("target-wildcard-unmerged")
+        self._stage_unmerged_wildcard(target)
+        restore_spawns = {"n": 0}
+        real_run = subprocess.run
+
+        def counting_run(argv, *a, **k):
+            if "restore" in argv:
+                restore_spawns["n"] += 1
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=counting_run):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(
+                    target, {self.STAR_REL},
+                )
+        self.assertEqual(
+            prevented, [],
+            "an unmerged wildcard-named entry is report-only: the "
+            "prevented list stays empty",
+        )
+        out = captured.getvalue()
+        self.assertIn(
+            f"prevented-clobber check: {self.STAR_REL}", out,
+            "the report line must name the wildcard rel",
+        )
+        self.assertIn(
+            "unmerged", out,
+            "the report line must name the unmerged state",
+        )
+        self.assertIn("left untouched", out)
+        self.assertNotIn(
+            "staged-new-at-target", out,
+            "the non-hex rc=0 echo must not pass for a stage-0 blob",
+        )
+        self.assertNotIn(
+            "staged-new-bytes", out,
+            "the vintage walk must not run on the echoed argument",
+        )
+        self.assertEqual(
+            restore_spawns["n"], 0,
+            "an unmerged entry must spawn zero restores",
+        )
+        self.assertEqual(
+            len(self._git(target, "ls-files", "-u", "--",
+                          f":(literal){self.STAR_REL}").splitlines()),
+            3, "all three index stages must survive the guard",
+        )
+
+    def test_pathspec_literal_quoting_in_unmerged_probe_history_and_restore(self):
+        """[class: REPOSITORY_TEST] The three rel-passing surfaces quote
+        the rel as `:(literal)<rel>` so glob metacharacters never act as
+        patterns: the `git ls-files -u` discriminator (reached only after
+        the reader rejects the non-hex echo), `_blob_in_head_history`'s
+        `git log`, and `_reclassify_then_restore`'s `git restore` (both
+        restore arms share the helper, so the vintage arm's exposure
+        closes with it)."""
+        target = self._wildcard_fixture("target-pathspec-literals")
+        self._stage_unmerged_wildcard(target)
+        literal = f":(literal){self.STAR_REL}"
+        git_argvs: list[list[str]] = []
+        real_run = subprocess.run
+
+        def recording_run(argv, *a, **k):
+            if argv and argv[0] == "git":
+                git_argvs.append(list(argv))
+            return real_run(argv, *a, **k)
+
+        with self.subTest(leg="ls-files -u discriminator"):
+            del git_argvs[:]
+            with mock.patch.object(MODULE.subprocess, "run",
+                                   new=recording_run):
+                entry = MODULE._read_staged_entry(target, self.STAR_REL)
+            ls_argvs = [a for a in git_argvs if "ls-files" in a]
+            self.assertEqual(
+                len(ls_argvs), 1,
+                "the rejected non-hex rc=0 echo must fall to exactly one "
+                "ls-files -u discriminator read",
+            )
+            self.assertEqual(
+                ls_argvs[0][-2:], ["--", literal],
+                "the discriminator must pass the rel quoted literal",
+            )
+            self.assertEqual(
+                entry, (None, True),
+                "the wildcard-named unmerged entry must classify unmerged",
+            )
+
+        with self.subTest(leg="git log head-history probe"):
+            del git_argvs[:]
+            head_blob = self._git(target, "rev-parse",
+                                  f"HEAD:{self.STAR_REL}")
+            with mock.patch.object(MODULE.subprocess, "run",
+                                   new=recording_run):
+                found = MODULE._blob_in_head_history(
+                    target, self.STAR_REL, head_blob,
+                )
+            log_argvs = [a for a in git_argvs if "log" in a]
+            self.assertEqual(len(log_argvs), 1, "the log probe must run")
+            self.assertEqual(
+                log_argvs[0][-2:], ["--", literal],
+                "the head-history probe must pass the rel quoted literal",
+            )
+            self.assertTrue(
+                found,
+                "the literal pathspec must still find the committed "
+                "vintage",
+            )
+
+        with self.subTest(leg="git restore"):
+            del git_argvs[:]
+            self._wildcard_staged_deletion(target)
+            with mock.patch.object(MODULE.subprocess, "run",
+                                   new=recording_run):
+                restored = MODULE._reclassify_then_restore(
+                    target, self.STAR_REL, None, "pin: literal restore",
+                )
+            restore_argvs = [a for a in git_argvs if "restore" in a]
+            self.assertEqual(
+                len(restore_argvs), 1,
+                "the unchanged recheck must let the restore subprocess "
+                "spawn",
+            )
+            self.assertEqual(
+                restore_argvs[0][-2:], ["--", literal],
+                "the restore must pass the rel quoted literal",
+            )
+            self.assertTrue(
+                restored, "the literal restore must land and hold",
+            )
+
+    def test_reclassify_downgrade_names_unmerged_recheck_and_restores_nothing(self):
+        """[class: REPOSITORY_TEST] Behavioral witness for the unmerged
+        recheck downgrade arm (T1-NIT-1's shape naming): a recheck read
+        returning unmerged downgrades to the dedicated unmerged line,
+        spawns no restore subprocess, and leaves the index untouched."""
+        target = self._target_repo("target-unmerged-recheck")
+        self._git(target, "rm", "--cached", self.REL)
+        restore_spawns = {"n": 0}
+        real_run = subprocess.run
+
+        def counting_run(argv, *args, **kwargs):
+            if "restore" in argv:
+                restore_spawns["n"] += 1
+            return real_run(argv, *args, **kwargs)
+
+        captured = io.StringIO()
+        with mock.patch.object(
+            MODULE, "_read_staged_entry", return_value=(None, True)
+        ), contextlib.redirect_stdout(captured), mock.patch.object(
+            MODULE.subprocess, "run", new=counting_run
+        ):
+            restored = MODULE._reclassify_then_restore(
+                target, self.REL, None, "pin: unmerged recheck downgrade",
+            )
+        self.assertFalse(
+            restored, "an unmerged recheck must not report a restore",
+        )
+        self.assertIn(
+            "is unmerged in the index (stages 1-3)", captured.getvalue(),
+            "the downgrade must name the unmerged shape like the "
+            "walk-level line",
+        )
+        self.assertEqual(
+            restore_spawns["n"], 0, "no restore subprocess may spawn",
+        )
+        self.assertEqual(
+            self._git(target, "ls-files", "-u", "--", self.REL),
+            "", "the fixture index must stay untouched",
+        )
+
+    def test_postrun_guard_wildcard_staged_deletion_restores_only_its_own_path(self):
+        """[class: REPOSITORY_TEST] An owned wildcard-named staged
+        deletion (the witnessed missing-file shape) restores exactly its
+        named rel: a foreign sibling staged rewind sitting on a
+        glob-matching path (docs/reviews/tzz.md under the t*.md pattern)
+        keeps its staged entry byte-identical - the bare pathspec a bare
+        restore would pass glob-matches the sibling and would clobber its
+        staged vintage."""
+        target = self._wildcard_fixture("target-wildcard-deletion")
+        sib_v0 = self._git(target, "rev-parse", f"HEAD~1:{self.SIB_REL}")
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--add", "--cacheinfo",
+             f"100644,{sib_v0},{self.SIB_REL}"],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        self._wildcard_staged_deletion(target)
+        star_head = self._git(target, "rev-parse", f"HEAD:{self.STAR_REL}")
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.STAR_REL},
+            )
+        self.assertEqual(
+            prevented, [self.STAR_REL],
+            "exactly the named wildcard rel enters the prevented list",
+        )
+        self.assertIn(
+            f"prevented clobber: {self.STAR_REL}", captured.getvalue(),
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.STAR_REL}"), star_head,
+            "the star rel's index entry must hold HEAD after the restore",
+        )
+        self.assertEqual(
+            (target / self.STAR_REL).read_bytes(), self.STAR_V2,
+            "the star rel's worktree file must hold HEAD after the restore",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.SIB_REL}"), sib_v0,
+            "the sibling's staged rewind must stay byte-identical",
+        )
+        self.assertEqual(
+            (target / self.SIB_REL).read_bytes(), self.SIB_V2,
+            "the sibling's worktree bytes must stay at its v2 landing",
+        )
+
+    def test_read_staged_entry_records_sha1_object_format_precondition(self):
+        """[class: REPOSITORY_TEST] The blob-shape validation carries a
+        reader-side clause recording the sha1 object-format precondition:
+        a sha256 target is outside the guard's observed universe, the
+        same repo-state scoping as the comparison's same-conversion
+        precondition (doc-only: the pin holds the wording, no behavior
+        beyond the 40-hex gate)."""
+        doc = MODULE._read_staged_entry.__doc__ or ""
+        self.assertIn(
+            "40-hex", doc,
+            "the reader docstring must name the 40-hex blob-shape "
+            "validation",
+        )
+        self.assertIn(
+            "sha1", doc,
+            "the reader docstring must record the sha1 object-format "
+            "precondition",
+        )
+        self.assertIn(
+            "sha256", doc,
+            "the reader docstring must name the sha256 target as outside "
+            "the observed universe",
+        )
+
+    def test_read_staged_entry_stage0_read_unchanged(self):
+        """[class: REPOSITORY_TEST] GREEN-first regression pin: a normal
+        stage-0 entry reads (blob, False) exactly as today - a plain
+        carried rel, a wildcard-named rel whose clean stage-0 entry
+        rev-parse resolves, and the index-absent plain rel whose
+        rev-parse exits 128 (the (None, False) staged-deletion
+        classification)."""
+        target = self._wildcard_fixture("target-stage0-unchanged")
+        with self.subTest(shape="plain stage-0 rel"):
+            head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+            self.assertEqual(
+                MODULE._read_staged_entry(target, self.REL),
+                (head_blob, False),
+            )
+        with self.subTest(shape="wildcard-named clean stage-0 rel"):
+            star_blob = self._git(target, "rev-parse",
+                                  f"HEAD:{self.STAR_REL}")
+            self.assertEqual(
+                MODULE._read_staged_entry(target, self.STAR_REL),
+                (star_blob, False),
+                "a clean stage-0 wildcard-named entry still resolves to "
+                "its blob",
+            )
+        with self.subTest(shape="index-absent plain rel (128 path)"):
+            absent = "docs/reviews/never-committed.md"
+            self.assertFalse(
+                (target / absent).exists(),
+                "fixture precondition: the rel is index-absent",
+            )
+            self.assertEqual(
+                MODULE._read_staged_entry(target, absent), (None, False),
+            )
+
+    # ---- Task 5 doc-wording pins (plan 2026-11-04-closeout-clobber-guard-
+    # review-residual-trio, R1/R3/R6/T1-DOC-1/T1-NIT-1/T1-IOTA-1): each pin
+    # greps the doc surface it corrects and is the RED/GREEN vehicle for
+    # that wording edit (comment-only and doc-wording edits name no new
+    # behavior; the pin holds the wording itself).
+
+    def test_record_delivered_blob_docstring_absence_trigger_is_failed_probe(self):
+        """[class: REPOSITORY_TEST] R1 docstring truth: the recorder's
+        absence trigger is stated as a genuinely failed probe (an unreadable
+        or missing file), never as a non-git target - `git hash-object`
+        succeeds outside a repository, so a non-git target is not the
+        absence trigger."""
+        doc = MODULE._record_delivered_blob.__doc__ or ""
+        self.assertNotIn(
+            "non-git target", doc,
+            "the docstring must not name a non-git target as the failed-"
+            "probe case: git hash-object succeeds outside a repo",
+        )
+        self.assertIn(
+            "unreadable", doc,
+            "the absence trigger must be stated as a genuinely failed "
+            "probe (an unreadable file)",
+        )
+        self.assertIn(
+            "missing file", doc,
+            "the absence trigger must be stated as a genuinely failed "
+            "probe (a missing file)",
+        )
+
+    def test_delivered_bytes_comparison_comment_records_clean_filter_precondition(self):
+        """[class: REPOSITORY_TEST] R3 comparison precondition: the
+        delivered-bytes comparison site carries a comment stating both
+        sides hash through the same clean-filter conversion (default
+        `git hash-object` applies filters, so the delivered hash and the
+        consult hash filter identically), whichever filters are
+        configured apply equally to both sides, and the equality is
+        robust under a stable filter configuration."""
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        site_at = source.index(
+            "deletion_blob = _worktree_blob(target, deletion_path)"
+        )
+        site_window = source[site_at:site_at + 900]
+        self.assertIn(
+            "same clean-filter conversion", site_window,
+            "the comparison site must state both sides hash through the "
+            "same clean-filter conversion",
+        )
+        self.assertIn(
+            "stable filter", site_window,
+            "the comparison site must state the equality is robust under "
+            "a stable filter configuration",
+        )
+        self.assertIn(
+            "apply equally to both sides", site_window,
+            "the comparison site must state whichever filters are "
+            "configured apply equally to both sides",
+        )
+        self.assertNotIn(
+            "autocrlf-unset", site_window,
+            "the comparison site must not premise the equality on the "
+            "repo's own filter state",
+        )
+
+    def test_module_header_vintage_sentence_names_delivered_blob_narrowing(self):
+        """[class: REPOSITORY_TEST] R6 module header qualification: the
+        vintage-restore sentence carries the delivered-blob clause - the
+        vintage arm keeps its current decision; the delivered-blob consult
+        narrows only the deletion arm."""
+        header = MODULE.__doc__ or ""
+        self.assertIn(
+            "vintage arm keeps its current decision", header,
+            "the vintage-restore sentence must record that the vintage "
+            "arm keeps its current decision",
+        )
+        self.assertIn(
+            "narrows only the deletion arm", header,
+            "the vintage-restore sentence must record that the "
+            "delivered-blob consult narrows only the deletion arm",
+        )
+
+    def test_guard_docstring_unmerged_route_covers_all_entries(self):
+        """[class: REPOSITORY_TEST] T1-DOC-1 unmerged route wording: the
+        guard docstring states the unmerged report-only route for ALL
+        unmerged entries, not only owned ones."""
+        doc = MODULE._prevent_tracked_clobbers.__doc__ or ""
+        self.assertNotIn(
+            "An owned entry sitting unmerged", doc,
+            "the docstring must not scope the unmerged report-only route "
+            "to owned entries: the code routes all unmerged entries",
+        )
+        self.assertIn(
+            "Any entry sitting unmerged", doc,
+            "the unmerged report-only route must be stated for all "
+            "unmerged entries",
+        )
+
+    def test_reclassify_downgrade_line_names_unmerged_shape(self):
+        """[class: REPOSITORY_TEST] T1-NIT-1 downgrade-line shape: the
+        reclassify-then-restore downgrade line names the unmerged shape
+        (stages 1-3) when the re-read returns unmerged, like the
+        walk-level unmerged line does."""
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        fn_at = source.index("def _reclassify_then_restore(")
+        fn_window = source[fn_at:source.index("\ndef ", fn_at + 1)]
+        self.assertIn(
+            "unmerged in the index", fn_window,
+            "the downgrade line must name the unmerged shape like the "
+            "walk-level line does",
+        )
+        self.assertIn(
+            "stages 1-3", fn_window,
+            "the downgrade line must name the stages 1-3 shape",
+        )
+
+    def test_guard_docstring_records_ita_non_coverage(self):
+        """[class: REPOSITORY_TEST] T1-IOTA-1 documented non-coverage: the
+        guard's walk docstring records that intent-to-add entries never
+        enter the enumeration on this host's git and that widening the
+        enumeration is forbidden."""
+        doc = MODULE._prevent_tracked_clobbers.__doc__ or ""
+        self.assertIn(
+            "intent-to-add", doc,
+            "the walk docstring must name intent-to-add entries",
+        )
+        self.assertIn(
+            "never enter the enumeration", doc,
+            "the walk docstring must record that intent-to-add entries "
+            "never enter the enumeration on this host's git",
+        )
+        self.assertIn(
+            "widening the enumeration is forbidden", doc,
+            "the walk docstring must record that widening the "
+            "enumeration is forbidden",
         )
 
 
@@ -11547,6 +12617,787 @@ class StrandedPointerCheckTest(unittest.TestCase):
         )
         self.assertIn(f"landed in {short_proc.stdout.strip()}", out)
         self.assertNotIn("landed in HEAD ", out)
+
+
+class BranchRecordedLandingCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The recorded-landing closeout proofs (plan
+    2026-11-04-agent-resource-cleanup-disposition Task 1): the closeout
+    migration manifest's branch record carries the landing identity (the
+    recorded start commit, the landing commit, and the touched path set
+    measured from that start at transfer time), so the gate judges the
+    branch's authored delta from the recorded start instead of the current
+    merge base and authorizes a completed branch whose landing is masked by
+    destination drift, while any unproven authored delta and every legacy
+    manifest keep today's retain-and-report verdict."""
+
+    PLAN_REL = "docs/history/plans/2026-10-08-x.md"
+    RECORD_REL = ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md"
+    PLAN_BODY = (
+        b"# Plan\n\nPlan review record: "
+        b".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n"
+    )
+
+    def _seed_drifted_landing(self, unlanded: bool = False) -> tuple[Path, str, str]:
+        """The drifted-base completed-plan shape: the branch commits its
+        delta (optionally one path that never lands), the destination lands
+        the delta in one squash commit and then drifts on, and the landing
+        commit stays unreachable from the destination tip. The manifest at
+        the derived gate path records the landing identity beside the
+        verified migrated row. Returns (manifest path, recorded start
+        commit, branch tip)."""
+        reviews = self.primary / ".ai-playbook/reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        _write(reviews / "2026-10-08-plan-review-x-exec-r1.md", b"r1\n")
+        _write(self.primary / self.PLAN_REL, self.PLAN_BODY)
+        self._commit_all(self.primary, "plan bytes at the plans root")
+        start = self._git(self.primary, "rev-parse", "HEAD").stdout.strip()
+        _write(self.worktree / "feature.txt", b"work\n")
+        if unlanded:
+            _write(self.worktree / "unlanded.txt", b"not landed\n")
+        self._commit_all(self.worktree, "work: branch delta")
+        tip = self._branch_oid("wt-run")
+        # One squash landing commit on the destination: the archive move
+        # plus the landed file (a squash landing touches every file its
+        # branch touched), then post-landing destination drift.
+        (self.primary / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+        self._git(self.primary, "mv", self.PLAN_REL, "docs/history/plans/completed/2026-10-08-x.md")
+        _write(self.primary / "feature.txt", b"work\n")
+        self._commit_all(self.primary, "land: squash (archive move + feature)")
+        _write(self.primary / "README.md", b"post-landing drift\n")
+        self._commit_all(self.primary, "drift: post-landing destination edit")
+        self.assertNotEqual(
+            self._git(
+                self.primary, "merge-base", "--is-ancestor", tip, "HEAD", check=False
+            ).returncode,
+            0,
+            "fixture precondition: the landing commit must be unreachable "
+            "from the destination tip",
+        )
+        # The gate reads the run's plan copy in the worktree for its owned
+        # citations; the landed bytes live in the primary tree.
+        _write(self.worktree / self.PLAN_REL, self.PLAN_BODY)
+        manifest_dir = self.primary / "docs/tmp/execute-plan/x"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = manifest_dir / "closeout-migration.json"
+        touched = ["feature.txt"] + (["unlanded.txt"] if unlanded else [])
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": self.RECORD_REL,
+                            "destination": self.RECORD_REL,
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {
+                            "branch": "wt-run",
+                            "source": str(self.worktree),
+                            "start_commit": start,
+                            "landing_commit": tip,
+                            "landing_touched": touched,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path, start, tip
+
+    def test_drifted_landing_deletes_through_recorded_identity(self):
+        # [class: REPOSITORY_TEST] The drifted-base false positive (plan
+        # 2026-11-04-agent-resource-cleanup-disposition Task 1): a
+        # completed-plan branch whose tip tree equals its recorded landing
+        # commit's tree, with the landing commit unreachable from the
+        # destination tip and the landing identity recorded in the closeout
+        # migration manifest, deletes through the closeout adjudication -
+        # the recorded landing identity is the proof, and no retention
+        # reason is reported.
+        self._seed_drifted_landing()
+        tip = self._branch_oid("wt-run")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            f"branch-closeout: branch wt-run exact-tree-accounted at {tip} "
+            "(the tip tree equals the recorded landing commit",
+            out,
+        )
+        self.assertIn(f"expected OID {tip}", out)
+        self.assertIn(
+            f"branch-disposition: branch=wt-run "
+            f"disposition=exact-tree-accounted oid={tip}",
+            out,
+        )
+        self.assertNotIn("branch-closeout: preserve branch wt-run", out)
+        self.assertNotIn("legacy evidence only", out)
+
+    def test_quoted_nonascii_touched_path_retains_when_dropped(self):
+        # [class: REPOSITORY_TEST] The quoted-path fail-open fix (plan
+        # 2026-11-04-agent-resource-cleanup-disposition r1 F1): a
+        # landing_touched entry stored in git's C-quote form (a non-ASCII
+        # path, the pre-"-z" recording shape) must resolve at proof time -
+        # when the destination dropped that authored path the proof must
+        # retain the branch with the unaccounted reason, never authorize
+        # deletion through a both-absent-equal misread of the quoted form.
+        manifest_path, start, tip = self._seed_drifted_landing()
+        _write(self.worktree / "caf\u00e9.txt", b"accented work\n")
+        self._commit_all(self.worktree, "work: accented delta")
+        tip = self._branch_oid("wt-run")
+        record = json.loads(manifest_path.read_text(encoding="utf-8"))
+        record["branch"][0]["landing_commit"] = tip
+        record["branch"][0]["landing_touched"] = [
+            "feature.txt",
+            '"caf\\303\\251.txt"',
+        ]
+        manifest_path.write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("branch-closeout: preserve branch wt-run", out)
+        self.assertIn(
+            "branch content absent at the destination: caf\u00e9.txt", out
+        )
+        self.assertNotIn("exact-tree-accounted", out)
+
+    def test_unlanded_authored_delta_retains_with_unaccounted_reason(self):
+        # [class: REPOSITORY_TEST] The guard direction (plan
+        # 2026-11-04-agent-resource-cleanup-disposition Task 1): the
+        # branch's authored delta measured from its recorded start commit
+        # contains a path absent at the destination, so the adjudication
+        # retains the branch with the unaccounted reason naming the path,
+        # never a deletion authorization.
+        self._seed_drifted_landing(unlanded=True)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("branch-closeout: preserve branch wt-run", out)
+        self.assertIn(
+            "branch content absent at the destination: unlanded.txt", out
+        )
+        self.assertIn(
+            "branch-disposition: branch=wt-run disposition=retained oid=", out
+        )
+        self.assertIn(
+            "branch: preserve wt-run and report it in the closeout record",
+            out,
+        )
+
+    def test_legacy_manifest_without_recorded_start_keeps_retain_and_report(self):
+        # Compatibility (plan 2026-11-04-agent-resource-cleanup-disposition
+        # Task 1): a branch with no recorded start commit and no exact-tree
+        # landing proof keeps today's retain-and-report verdict - the
+        # fallback is retention, never guessed ancestry.
+        self._seed_migration_manifest(landed=True)
+        _write(self.worktree / "unlanded.txt", b"not landed\n")
+        self._commit_all(self.worktree, "work: not landed anywhere")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("branch-closeout: preserve branch wt-run", out)
+        self.assertIn("no ancestry or exact-tree proof", out)
+        self.assertIn(
+            "branch-disposition: branch=wt-run disposition=retained oid=", out
+        )
+        self.assertIn(
+            "branch: preserve wt-run and report it in the closeout record; "
+            "delete only the worktree",
+            out,
+        )
+
+
+class BranchRecordLandingIdentityTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The landing-identity record at transfer time
+    (plan 2026-11-04-agent-resource-cleanup-disposition Task 1): a closeout
+    migrate run from a git worktree into the git primary records the branch
+    record's start commit (the merge base with the destination tip), the
+    landing commit (the branch tip), and the touched path set measured from
+    that start, so the gate's landing proof reads recorded evidence instead
+    of walking only destination-reachable history."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # In-process migrate runs resolve the lock script and merge-lock root
+        # from this process's environment: pin them hermetically for the
+        # whole class (WorktreeCloseoutTest's posture).
+        lock_root = Path(tempfile.mkdtemp(prefix="wcm-landing-lock-"))
+        self.addCleanup(shutil.rmtree, lock_root, ignore_errors=True)
+        pins = _hermetic_lock_env(lock_root)
+        self._saved_lock_env = {key: os.environ.get(key) for key in pins}
+        os.environ.update(pins)
+        self.addCleanup(self._restore_lock_env)
+
+    def _restore_lock_env(self) -> None:
+        for key, value in self._saved_lock_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_migrate_records_landing_identity_in_branch_record(self):
+        _write(self.worktree / "feature.txt", b"work\n")
+        self._commit_all(self.worktree, "work: branch feature")
+        _write(self.worktree / "docs/tmp/run-artifact.md", b"artifact\n")
+        baseline = self.root / "closeout-baseline.json"
+        code, _stdout, stderr = _run_cli(
+            "capture", "--out", str(baseline), "--dirs", "docs/tmp",
+            cwd=self.worktree,
+        )
+        self.assertEqual(code, 0, stderr)
+        manifest = self.root / "closeout-migration.json"
+        self.assertEqual(_migrate(self.worktree, self.primary, baseline, manifest), 0)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        record = data["branch"][-1]
+        self.assertEqual(record["branch"], "wt-run")
+        self.assertEqual(record["landing_commit"], self._branch_oid("wt-run"))
+        self.assertEqual(
+            record["start_commit"],
+            self._git(self.primary, "merge-base", "wt-run", "HEAD").stdout.strip(),
+        )
+        self.assertEqual(record["landing_touched"], ["feature.txt"])
+
+
+class AuthoringStrandBranchRetryTest(NoCharterFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The authoring-strand manifest binding and the
+    branch-only retry it enables (plan
+    2026-11-04-agent-resource-cleanup-disposition Task 1): the no-charter
+    stand-down pass appends the strand's branch identity row to the primary
+    slug home's existing migration manifest (the surface the execution
+    strand already uses), so the branch-only retry after the worktree
+    removal reads that manifest's identity row and no second evidence
+    surface is created."""
+
+    EXEC_BRANCH = "wt-exec-2026-10-28-no-charter-demo"
+    EXEC_RECORD_REL = ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md"
+
+    def _seed_execution_manifest(self) -> Path:
+        """The primary slug home's existing migration manifest: the
+        execution strand's branch record plus one verified migrated row
+        whose destination is present under the target."""
+        _write(self.primary / self.EXEC_RECORD_REL, b"r1\n")
+        manifest_dir = self.primary / "docs/tmp/execute-plan" / self.SLUG
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        path = manifest_dir / "closeout-migration.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": self.EXEC_RECORD_REL,
+                            "destination": self.EXEC_RECORD_REL,
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {
+                            "branch": self.EXEC_BRANCH,
+                            "source": str(self.root / "proj-wt-exec"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def _authoring_own_manifest(self) -> Path:
+        """The witnessed loss: the authoring strand's own ignored manifest,
+        worktree-local, lost with the removed worktree."""
+        path = (
+            self.worktree / "docs/tmp/execute-plan" / self.SLUG
+            / "closeout-migration.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "migrated": [],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {"branch": self.branch, "source": str(self.worktree)}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_removed_authoring_worktree_retry_reads_slug_home_identity(self):
+        self._seed_clean()
+        slug_home_manifest = self._seed_execution_manifest()
+        own_manifest = self._authoring_own_manifest()
+        code, out, err = self._run_gate("--migration-manifest", str(own_manifest))
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        # The pass appended the strand's identity row to the primary slug
+        # home's existing manifest; the execution row is intact (the
+        # manifest stays append-only, no second evidence surface).
+        data = json.loads(slug_home_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [row["branch"] for row in data["branch"]],
+            [self.EXEC_BRANCH, self.branch],
+        )
+        identity = data["branch"][-1]
+        self.assertEqual(identity["start_commit"], self.start_commit)
+        self.assertEqual(identity["landing_commit"], self.start_commit)
+        self.assertEqual(identity["landing_touched"], [])
+        self.assertNotIn("record_index", data["branch"][0])
+        # The worktree is removed; the strand's own ignored manifest is lost
+        # with it - the slug home manifest is the surviving evidence.
+        self._git(self.primary, "worktree", "remove", "--force", str(self.worktree))
+        self.assertFalse(self.worktree.exists())
+        # The branch-only retry reads the slug home manifest's identity row:
+        # the binding resolves the authoring branch and the adjudication
+        # proceeds to the ancestry-accounted deletion authorization.
+        retry_plan = self.primary / "docs/history/plans/2026-10-01-retry-operand.md"
+        _write(
+            retry_plan,
+            b"# Plan\n\nPlan review record: "
+            b".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n",
+        )
+        code, out, _err = _run_cli(
+            "gate-removal",
+            "--plan", str(retry_plan),
+            "--target", str(self.primary),
+            "--branch", self.branch,
+            "--migration-manifest", str(slug_home_manifest),
+            cwd=self.primary,
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertNotIn("exact-branch identity mismatch", out)
+        self.assertIn(
+            f"branch-disposition: branch={self.branch} "
+            "disposition=ancestry-accounted",
+            out,
+        )
+
+
+def _branch_dispositions(out: str) -> list[dict]:
+    """The machine-parseable branch dispositions a gate-removal run printed
+    (the _branch_disposition_line shape), parsed so the rehearsal's
+    completion-claim inventory rides the machinery's own adjudication output
+    rather than test-side guesses. ``reasons`` is the line's trailing field
+    and keeps its embedded spaces."""
+    rows: list[dict] = []
+    for line in out.splitlines():
+        prefix = "branch-disposition: "
+        if not line.startswith(prefix):
+            continue
+        head, sep, reasons = line[len(prefix):].partition(" reasons=")
+        row: dict = {}
+        for token in head.split(" "):
+            key, eq, value = token.partition("=")
+            if eq:
+                row[key] = value
+        if sep:
+            row["reasons"] = reasons
+        rows.append(row)
+    return rows
+
+
+class MultiResourceDispositionRehearsalTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The acceptance rehearsal of the multi-resource
+    disposition contract (plan 2026-11-04-agent-resource-cleanup-disposition
+    Task 3; the contract lives in `## Resource cleanup disposition` in
+    agents/skills/self-heal/SKILL.md, the adjudication steps in
+    _gate_branch_closeout behind the gate-removal pass): one temporary
+    repository holding a landed branch (its landing masked by destination
+    drift, the landing identity recorded per Task 1), an unmerged branch, and
+    an active foreign worktree. The disposition steps produce one verified
+    outcome per resource - the landed branch deletes only through the
+    recorded-landing proof, the unmerged branch keeps a named retention
+    carrying the exact unmerged work, and the active foreign worktree stays
+    retained and untouched - and the completion-claim inventory assembled
+    from those dispositions enumerates every in-scope resource read from the
+    run and claim records and matches each resource's verified end state."""
+
+    LANDED_PLAN_REL = "docs/history/plans/2026-10-08-x.md"
+    LANDED_RECORD_REL = ".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md"
+    UNMERGED_PLAN_REL = "docs/history/plans/2026-10-09-y.md"
+    UNMERGED_RECORD_REL = ".ai-playbook/reviews/2026-10-09-plan-review-y-exec-r1.md"
+    FOREIGN_CLAIM_REL = "docs/tmp/execution-claims/2026-11-04-foreign-run.md"
+    LANDED_PLAN_BODY = (
+        b"# Plan\n\nPlan review record: "
+        b".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n"
+    )
+    UNMERGED_PLAN_BODY = (
+        b"# Plan\n\nPlan review record: "
+        b".ai-playbook/reviews/2026-10-09-plan-review-y-exec-r1.md\n"
+    )
+
+    def _seed_rehearsal(self) -> tuple[str, str, str]:
+        """The three-resource fixture. The landed strand follows the Task 1
+        drifted-base shape: the branch commits its delta, the destination
+        lands the delta in one squash commit and then drifts on, the landing
+        commit stays unreachable from the destination tip, and the strand's
+        manifest records the landing identity. The unmerged strand is a
+        second run worktree whose branch commits one path that never lands
+        anywhere, with the same recorded identity (what a real migrate run
+        records at transfer time). The foreign strand is a registered
+        worktree owned by another run's live claim record, holding one
+        committed path of its own. Run and claim records are written after
+        every git commit so `git add -A` never sweeps a runtime record into
+        history. Returns (landed tip, unmerged tip, foreign tip)."""
+        reviews = self.primary / ".ai-playbook/reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        # Landed strand: plan bytes, branch delta, squash landing, drift.
+        _write(reviews / Path(self.LANDED_RECORD_REL).name, b"r1\n")
+        _write(self.primary / self.LANDED_PLAN_REL, self.LANDED_PLAN_BODY)
+        self._commit_all(self.primary, "plan bytes for the landed strand")
+        landed_start = self._git(self.primary, "rev-parse", "HEAD").stdout.strip()
+        _write(self.worktree / "feature.txt", b"work\n")
+        self._commit_all(self.worktree, "work: landed branch delta")
+        landed_tip = self._branch_oid("wt-run")
+        # One squash landing commit on the destination: the archive move
+        # plus the landed file (a squash landing touches every file its
+        # branch touched), then post-landing destination drift.
+        (self.primary / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
+        self._git(
+            self.primary, "mv", self.LANDED_PLAN_REL,
+            "docs/history/plans/completed/2026-10-08-x.md",
+        )
+        _write(self.primary / "feature.txt", b"work\n")
+        self._commit_all(self.primary, "land: squash (archive move + feature)")
+        _write(self.primary / "README.md", b"post-landing drift\n")
+        self._commit_all(self.primary, "drift: post-landing destination edit")
+        self.assertNotEqual(
+            self._git(
+                self.primary, "merge-base", "--is-ancestor", landed_tip,
+                "HEAD", check=False,
+            ).returncode,
+            0,
+            "fixture precondition: the landing commit must be unreachable "
+            "from the destination tip",
+        )
+        # Unmerged strand: a second run worktree whose branch commits one
+        # path the destination never receives.
+        _write(reviews / Path(self.UNMERGED_RECORD_REL).name, b"r1\n")
+        _write(self.primary / self.UNMERGED_PLAN_REL, self.UNMERGED_PLAN_BODY)
+        self._commit_all(self.primary, "plan bytes for the unmerged strand")
+        unmerged_start = self._git(self.primary, "rev-parse", "HEAD").stdout.strip()
+        self.unmerged_worktree = self.root / "proj-wt-unmerged"
+        self._git(
+            self.primary, "worktree", "add", "-q", "-b", "wt-unmerged",
+            str(self.unmerged_worktree),
+        )
+        _write(self.unmerged_worktree / "notes.txt", b"unmerged work\n")
+        self._commit_all(self.unmerged_worktree, "work: notes never land anywhere")
+        unmerged_tip = self._branch_oid("wt-unmerged")
+        self.assertNotEqual(
+            self._git(
+                self.primary, "merge-base", "--is-ancestor", unmerged_tip,
+                "HEAD", check=False,
+            ).returncode,
+            0,
+            "fixture precondition: the unmerged branch must carry work the "
+            "destination never receives",
+        )
+        # Foreign strand: a registered worktree owned by another run's live
+        # claim record, holding one committed path of its own.
+        self.foreign_worktree = self.root / "proj-wt-foreign"
+        self._git(
+            self.primary, "worktree", "add", "-q", "-b", "wt-foreign",
+            str(self.foreign_worktree),
+        )
+        _write(self.foreign_worktree / "foreign.txt", b"foreign active work\n")
+        self._commit_all(self.foreign_worktree, "work: foreign run's active delta")
+        foreign_tip = self._branch_oid("wt-foreign")
+        # The gate reads each run's own plan copy in its worktree for the
+        # owned citations; the primary's copies stay where the strands left
+        # them (the landed plan is archived, the unmerged plan still sits at
+        # the plans root because that strand never completed).
+        _write(self.worktree / self.LANDED_PLAN_REL, self.LANDED_PLAN_BODY)
+        _write(self.unmerged_worktree / self.UNMERGED_PLAN_REL, self.UNMERGED_PLAN_BODY)
+        # The run and claim records (the runtime-neutral owner sources the
+        # contract binds dispositions to).
+        self.foreign_claim = self.primary / self.FOREIGN_CLAIM_REL
+        _write(
+            self.foreign_claim,
+            (
+                "session: foreign-run\n"
+                f"worktree: {self.foreign_worktree}\n"
+                "branch: wt-foreign\n"
+                "updated: 2026-11-04T12:00:00Z\n"
+            ).encode("utf-8"),
+        )
+        self.landed_manifest = self._write_strand_manifest(
+            "x", "wt-run", self.worktree, landed_start, landed_tip,
+            ["feature.txt"], self.LANDED_RECORD_REL,
+        )
+        self.unmerged_manifest = self._write_strand_manifest(
+            "y", "wt-unmerged", self.unmerged_worktree, unmerged_start,
+            unmerged_tip, ["notes.txt"], self.UNMERGED_RECORD_REL,
+        )
+        return landed_tip, unmerged_tip, foreign_tip
+
+    def _write_strand_manifest(
+        self,
+        slug: str,
+        branch: str,
+        source: Path,
+        start: str,
+        tip: str,
+        touched: list[str],
+        record_rel: str,
+    ) -> Path:
+        """One strand's closeout migration manifest at its derived slug home:
+        one verified migrated row present under the target plus the branch
+        record carrying the Task 1 landing identity (start commit, landing
+        commit, touched set measured from that start)."""
+        manifest = (
+            self.primary / "docs/tmp/execute-plan" / slug / "closeout-migration.json"
+        )
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": record_rel,
+                            "destination": record_rel,
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {
+                            "branch": branch,
+                            "source": str(source),
+                            "start_commit": start,
+                            "landing_commit": tip,
+                            "landing_touched": touched,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest
+
+    def _run_gate_for(self, worktree: Path, plan_rel: str) -> tuple[int, str, str]:
+        """One gate-removal adjudication of one strand's worktree: the same
+        pass the owning closeout runs before any removal."""
+        return _run_cli(
+            "gate-removal",
+            "--plan", str(worktree / plan_rel),
+            "--target", str(self.primary),
+            "--worktree", str(worktree),
+            cwd=worktree,
+        )
+
+    def _local_branches(self) -> set[str]:
+        """The branch-ref inventory read from its runtime-neutral source."""
+        out = self._git(
+            self.primary, "for-each-ref", "--format=%(refname:short)", "refs/heads/"
+        ).stdout
+        return {line.strip() for line in out.splitlines() if line.strip()}
+
+    def _registered_worktree_branches(self) -> dict[str, str]:
+        """The worktree registration inventory read from its runtime-neutral
+        source (the porcelain worktree list): resolved worktree path ->
+        branch. The paths resolve because the fixture's mkdtemp root sits
+        behind a macOS /var symlink the porcelain output never carries."""
+        entries: dict[str, str] = {}
+        path: str | None = None
+        for line in self._git(
+            self.primary, "worktree", "list", "--porcelain"
+        ).stdout.splitlines():
+            if line.startswith("worktree "):
+                path = str(Path(line[len("worktree "):]).resolve())
+            elif line.startswith("branch refs/heads/") and path is not None:
+                entries[path] = line[len("branch refs/heads/"):]
+        return entries
+
+    def test_rehearsal_produces_one_disposition_per_resource_and_the_claim_matches(self):
+        # [class: REPOSITORY_TEST] The multi-resource rehearsal (plan
+        # 2026-11-04-agent-resource-cleanup-disposition Task 3): one cleanup
+        # pass over a landed branch, an unmerged branch, and an active
+        # foreign worktree ends with one verified outcome per resource, a
+        # completion-claim inventory that enumerates the full in-scope set,
+        # and every foreign or active resource preserved - the only removal
+        # is the landed branch, and only because the recorded-landing proof
+        # authorizes it at the recorded expected OID.
+        landed_tip, unmerged_tip, foreign_tip = self._seed_rehearsal()
+
+        # Resource 1 adjudication: the landed branch, through the
+        # recorded-landing proof (Task 1). The verdict below is the only
+        # removal authorization the rehearsal acts on.
+        code, landed_out, _err = self._run_gate_for(
+            self.worktree, self.LANDED_PLAN_REL
+        )
+        self.assertEqual(code, 0, landed_out)
+        self.assertEqual(landed_out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            f"branch-closeout: branch wt-run exact-tree-accounted at "
+            f"{landed_tip} (the tip tree equals the recorded landing "
+            "commit's tree and the recorded landing's touched set is "
+            "present at the destination",
+            landed_out,
+        )
+        self.assertIn(f"expected OID {landed_tip}", landed_out)
+        landed_rows = _branch_dispositions(landed_out)
+        self.assertEqual(len(landed_rows), 1)
+        self.assertEqual(landed_rows[0]["branch"], "wt-run")
+        self.assertEqual(landed_rows[0]["disposition"], "exact-tree-accounted")
+        self.assertEqual(landed_rows[0]["oid"], landed_tip)
+        # No other resource leaked into this adjudication.
+        self.assertNotIn("wt-unmerged", landed_out)
+        self.assertNotIn("wt-foreign", landed_out)
+
+        # The sanctioned removal: the worktree removal the gate's own line
+        # authorizes, then the branch deletion at the recorded expected OID
+        # only after the quiesce re-check confirms the ref still sits there.
+        self.assertIn(
+            f"removal: git worktree remove --force "
+            f"{shlex.quote(str(self.worktree))}",
+            landed_out,
+        )
+        self._git(self.primary, "worktree", "remove", "--force", str(self.worktree))
+        self.assertEqual(
+            self._git(self.primary, "rev-parse", "--verify", "wt-run").stdout.strip(),
+            landed_tip,
+        )
+        self._git(self.primary, "branch", "-D", "wt-run")
+
+        # Resource 2 adjudication: the unmerged branch. The adjudication
+        # itself passes (retention is a verdict, never a gate failure); the
+        # disposition carries the named retention with the exact unmerged
+        # work, and the closeout report names the preserve decision.
+        code, unmerged_out, _err = self._run_gate_for(
+            self.unmerged_worktree, self.UNMERGED_PLAN_REL
+        )
+        self.assertEqual(code, 0, unmerged_out)
+        self.assertEqual(unmerged_out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("branch-closeout: preserve branch wt-unmerged", unmerged_out)
+        self.assertIn(
+            "branch content absent at the destination: notes.txt", unmerged_out
+        )
+        self.assertIn(
+            "branch: preserve wt-unmerged and report it in the closeout "
+            "record; delete only the worktree",
+            unmerged_out,
+        )
+        unmerged_rows = _branch_dispositions(unmerged_out)
+        self.assertEqual(len(unmerged_rows), 1)
+        self.assertEqual(unmerged_rows[0]["branch"], "wt-unmerged")
+        self.assertEqual(unmerged_rows[0]["disposition"], "retained")
+        self.assertEqual(unmerged_rows[0]["oid"], unmerged_tip)
+        # No other resource leaked into this adjudication.
+        self.assertNotIn("wt-run", unmerged_out)
+        self.assertNotIn("wt-foreign", unmerged_out)
+
+        # Resource 3: the active foreign worktree. No gate run touches it -
+        # the cleanup binds it to its live claim record and routes its
+        # disposition to the owning authorized closeout; the survival
+        # assertions at the end verify it stayed untouched.
+
+        # The completion-claim inventory, assembled from the dispositions
+        # above plus the owner-bound foreign resource: the contract's
+        # vocabulary, one entry per in-scope resource.
+        inventory: dict[tuple[str, str], dict] = {}
+        manifest_for_branch = {
+            "wt-run": self.landed_manifest,
+            "wt-unmerged": self.unmerged_manifest,
+        }
+        for rows, resource in (
+            (landed_rows, ("branch", "wt-run")),
+            (unmerged_rows, ("branch", "wt-unmerged")),
+        ):
+            row = rows[0]
+            if row["disposition"] in ("exact-tree-accounted", "ancestry-accounted"):
+                inventory[resource] = {
+                    "disposition": "verified-removal",
+                    "evidence": (
+                        f"{row['disposition']} at the proven OID {row['oid']} "
+                        "through the recorded-landing proof"
+                    ),
+                }
+            else:
+                marker = "branch content absent at the destination: "
+                unmerged_work = [
+                    token.split(marker, 1)[1].strip()
+                    for token in row.get("reasons", "").split("; ")
+                    if marker in token
+                ]
+                # Named retention must name the exact unmerged work.
+                self.assertEqual(unmerged_work, ["notes.txt"])
+                inventory[resource] = {
+                    "disposition": "named-retention",
+                    "owner": (
+                        "branch record in "
+                        f"{manifest_for_branch[row['branch']].name} (its own "
+                        "run's migration manifest)"
+                    ),
+                    "unmerged_work": unmerged_work,
+                }
+        inventory[("worktree", self.foreign_worktree.name)] = {
+            "disposition": "named-retention",
+            "owner": (
+                f"live claim record ({self.FOREIGN_CLAIM_REL}); continuation "
+                "through the owning authorized closeout"
+            ),
+        }
+
+        # The claim is valid only when it matches the full inventory: every
+        # in-scope resource read from the run and claim records (the
+        # runtime-neutral sources) appears exactly once, so a partial result
+        # can never read as complete.
+        in_scope: set[tuple[str, str]] = set()
+        for manifest_path in (self.landed_manifest, self.unmerged_manifest):
+            record = json.loads(manifest_path.read_text(encoding="utf-8"))
+            in_scope.add(("branch", record["branch"][-1]["branch"]))
+        claim_fields: dict[str, str] = {}
+        for line in self.foreign_claim.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition(": ")
+            if sep:
+                claim_fields[key] = value
+        in_scope.add(("worktree", Path(claim_fields["worktree"]).name))
+        self.assertEqual(set(inventory), in_scope)
+        self.assertEqual(len(inventory), 3)
+
+        # The claim matches each resource's verified end state, confirmed
+        # from the inventory sources (branch refs, worktree registrations,
+        # bytes on disk).
+        branches_after = self._local_branches()
+        registrations_after = self._registered_worktree_branches()
+        # wt-run: verified removal - ref and registration both gone.
+        self.assertNotIn("wt-run", branches_after)
+        self.assertNotIn(str(self.worktree.resolve()), registrations_after)
+        # wt-unmerged: named retention held - ref unmoved at its tip and the
+        # registration intact; the rehearsal removed nothing for the
+        # retained resource.
+        self.assertEqual(self._branch_oid("wt-unmerged"), unmerged_tip)
+        self.assertEqual(
+            registrations_after.get(str(self.unmerged_worktree.resolve())),
+            "wt-unmerged",
+        )
+        self.assertTrue(
+            (self.unmerged_worktree / "notes.txt").is_file(),
+            "the unmerged strand's work must survive the adjudication",
+        )
+        # wt-foreign: retained untouched - registration, ref, committed
+        # bytes, and the owner claim record all survive the whole rehearsal.
+        self.assertEqual(
+            registrations_after.get(str(self.foreign_worktree.resolve())),
+            "wt-foreign",
+        )
+        self.assertEqual(self._branch_oid("wt-foreign"), foreign_tip)
+        self.assertEqual(
+            (self.foreign_worktree / "foreign.txt").read_bytes(),
+            b"foreign active work\n",
+        )
+        self.assertTrue(self.foreign_claim.is_file())
 
 
 if __name__ == "__main__":

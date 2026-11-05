@@ -1,6 +1,6 @@
 # Backlog: review-driven plans lack finding inventory closure
 
-Status: open
+Status: covered (docs/history/plans/2026-11-05-plans-review-finding-inventory-step.md)
 Priority: high
 Class: fix-class
 Origin class: consumer-feedback (company)

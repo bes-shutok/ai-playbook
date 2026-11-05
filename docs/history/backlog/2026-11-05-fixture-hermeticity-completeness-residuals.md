@@ -1,0 +1,24 @@
+# Fixture hermeticity completeness residuals (r5 review, deferred family)
+
+Status: open
+Priority: low
+Cluster: closeout-guard review-residual trio follow-ups
+Filed: 2026-11-05, r5 address pass of the closeout-clobber-guard-review-residual-trio execution (record `.ai-playbook/reviews/2026-11-05-closeout-clobber-guard-review-residual-trio-code-review-r5.md`; deferred per the r4 manifest reflection's pre-registered r5 exit policy - the recurring hermeticity-completeness class defers to durable rows and r5 is the exit round)
+
+## Residuals
+
+- R-A (r5 F1, correctness-completeness, `quality#hermeticity-pin-gap`): the `_hermetic_git_env` XDG_CONFIG_HOME pop and the GIT_CONFIG_GLOBAL/SYSTEM devnull pins carry no pin; extend the selftest `test_hermetic_git_env_clears_inherited_and_pins_home_locale` (~line 5899) with planted-value assertions (XDG absent from the built env, both devnull pins present), mirroring its own GIT_TRACE_TASK2_LEAK plant pattern.
+- R-B (r5 F2, testing, `testing#hermeticity-gap`; EXISTING debt, the diff strictly narrowed the surface): the non-mixin classes leave the XDG surface open - fixture-setup git envs built from raw `os.environ.copy()` (~lines 1289, 2420, 8988, 9380 - the fourth is ScopedPublicationSweepRaceTest's setup commits, planted before its own later XDG test) and process pins applied without an XDG pop (every non-mixin `os.environ.update(pins)` setUp site: ~231, 1307, 2434, 9004, 8240, 12830 - six at filing time). Remedy: build those setup envs through `_hermetic_git_env` and pop/save-restore `XDG_CONFIG_HOME` beside each non-mixin `os.environ.update(pins)`.
+- R-C (r5 F3, design-simplicity, `architecture#dual-surface-policy-parity`; enumeration widened per r6 review): the `_StripsHostGitEnv` strip posture covers only the two twins while FOUR in-process sibling classes (`WorktreeCloseoutTest`, `MigrateMergeLockTest`, `BoundaryMirrorTest`, and `ScopedInventoryMigrateTest` - the latter's in-process `MODULE.main` runs at test-file lines 9273/9337) keep the pins-only posture; either wire the mixin into all four sibling setUps (strip before the pins apply, one pair of lines each) or narrow the mixin docstring to the pair it serves. The wiring option is preferred (it is the anti-drift goal the mixin's own docstring states).
+- R-D (r5 F4, design-simplicity, `simplification#shrink`): the guideline #28 devnull pin pair is written out twice (helper env dict ~lines 67-68; mixin live-process surface ~lines 1484-1485). Remedy: hoist one module constant (e.g. `_NULL_GIT_CONFIG_PINS`) beside `FIXTURE_LOCALE_ENV` and consume it from both surfaces so the contract cannot drift (a drifted mixin pin would even propagate through the twin setUps' `_saved_lock_env` snapshots).
+
+## Witness
+
+r5 record findings F1-F4 (four-lens focused fresh-adversarial round over digest e39a369aeebaa63b7b1484b255a8557be4438133cec255f62e7981b88f75fc93); the diff's own hermeticity fixes (19ad1b3a2, 1aeb8403b) were probe-verified, not test-pinned, by the r5 workers' empirical probes as strictly narrowing (they carry no test pin; see R-A). Row corrections: R-B's site enumeration and R-C's class enumeration widened per the r6 record's findings (commit recorded in the run's landing message).
+
+## Corrections (r7 review, the exit round's tracked landing path)
+
+Landed post-landing on main per the r7 record's deferred-finding landing path (the pre-registered exit rule forbade further branch changes after the workers launched):
+
+- R-C's class enumeration is mechanically closed at SIX in-process pins-only runner classes, not four: `WorktreeCloseoutTest`, `MigrateMergeLockTest`, `BoundaryMirrorTest`, `ScopedInventoryMigrateTest` (in-process `MODULE.main` runs at test-file lines 9273/9337), `TeardownRecordMirrorEndToEndTest` (in-process boundary-mirror `MODULE.main` at test-file line 8307, migrate runs at 8339/8366, pins-only setUp ~8240), and `BranchRecordLandingIdentityTest` (migrate run at test-file line 12851, pins-only setUp ~12830). The wiring remedy applies to all six sibling setUps; the closure evidence is the r7 workers' exhaustive call-site sweep ("complete enumeration of every MODULE.main and `_migrate` call site confirms no other pins-only in-process runner exists"). Supersedes the "FOUR ... all four" wording above (the r6 widening stopped one class short of its own R-B site list).
+- R-B's quantifier is scoped, not universal: seven non-mixin `os.environ.update(pins)` setUp sites exist at filing time; the six listed leave XDG open at git time, and ScopedPublicationSweepRaceTest's ~9445 site is excluded because its own sweep-pins block pins `XDG_CONFIG_HOME` to a fixture dir before any git subprocess - the pop remedy must NOT be applied there (it would churn the deliberately planted sweep fixture). Secondary wording fix: "its own later XDG plant in the same setUp" (not "XDG test").

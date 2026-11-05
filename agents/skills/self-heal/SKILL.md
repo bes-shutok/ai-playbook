@@ -22,6 +22,16 @@ Before ending a workflow on a blocker or routine failure, determine whether the 
 
 After `investigate` commits its log entry, mutate the prompt's origin only under the caller's existing owner-recognized freeze or live claim. Do not create machinery merely to avoid a stop: any proposed gate, validator, lock, ledger, or required ceremony must follow the repository's Machinery admission protocol.
 
+## Resource cleanup disposition
+
+A request to clean up agent-created resources ends with one disposition per in-scope resource (every worktree registration or local branch ref the request names or plausibly owns) before any completion claim. The inventory is read only from the runtime-neutral sources already on disk: the worktree list, branch ancestry, and the run and claim records that own the resources. Build no new inventory surface beside those sources. The disposition vocabulary:
+
+- **Verified removal**: the resource is gone, confirmed from the inventory sources.
+- **Named retention**: the resource stays; the response names its owner (the run or claim record bound to it) and the exact unmerged work it holds.
+- **Continuation through the owning authorized closeout**: the resource's disposition belongs to its owning run's authorized closeout; route it there instead of disposing of it in this cleanup.
+
+A completion claim is valid only when it matches the full inventory: it enumerates every in-scope resource with its disposition, and a partial result never reads as complete. A resource that cannot be dispositioned ends the request under Recovery's existing terminal condition (step 5); this section adds no second stop rule.
+
 ## Repeated review cycles
 
 When a plans, execute-plan, or other review loop has gone through repeated correction rounds, inspect the chronological review artifacts, sidecars, fix history, and current digest. Use `review-reconciliation` when its recurrence, contradiction, or churn trigger applies. Decide from the evidence whether findings are converging, fixes are producing new defects, the witness is inadequate, or the review surface is misdesigned.
@@ -33,6 +43,9 @@ Recommend and carry out the smallest coherent correction that the active workflo
 - `using-skills` routes any skill-workflow stop here for the before-judgment recovery check; user-only decisions stay with the user.
 - `plans` calls this skill once before judging a non-converging plan-review loop or an authoring stop unrecoverable; its review budgets and cap-closure rules remain authoritative.
 - `done` invokes this handoff once before judging a closeout failure unrecoverable; its fail-closed runner refusals, staging decisions, and user-only stops stay authoritative.
+- `done`'s Operator branch closeout report answers a multi-resource cleanup request under `## Resource cleanup disposition`; its sanctioned branch-closeout sequence stays authoritative for each removal.
+- `execute-plan`'s ad-hoc-worktree closeout reports its run's resource dispositions under `## Resource cleanup disposition` when the closeout answers a multi-resource cleanup request; its removal gates and Terminal closeout ownership stay authoritative.
+- `plans`' landing handoff reports the authoring worktree's and branch's dispositions under `## Resource cleanup disposition` when the handoff answers a multi-resource cleanup request; its landing order stays authoritative and its claim policy stays procedure-owned.
 - `execute-plan` calls this skill before a Phase 3 review stop for recurring or regenerated findings, escalation, or re-entry limits; its review-reconciliation and fix-risk gates remain authoritative.
 - `review-plan` calls this skill at its active churn or recurrence trigger, before any pause; its one-attempt self-heal state and authorization contract remain authoritative.
 - `review-loop` reaches this skill only through `review-plan`'s churn sequence, never a direct call before its standalone fix-risk stop; its review-round, escalation, budget, and authorization limits remain authoritative.

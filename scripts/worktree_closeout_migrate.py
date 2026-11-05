@@ -50,9 +50,19 @@ Subcommands:
            and the re-capture remediation; after the carry, a staged tracked
            entry whose staged bytes are an older committed vintage of HEAD
            and that this run carried is restored from HEAD and reported as a
-           prevented clobber (the between-snapshot rewind window), while
+           prevented clobber unless the staged bytes equal the run's
+           delivered blob (they stay untouched with a report line; this
+           vintage arm keeps its current decision - the delivered-blob
+           consult narrows only the deletion arm - and the
+           between-snapshot rewind window stands), while
            staged entries this run did not carry are reported only and never
-           touched; every staged shape the post-run guard walks emits a
+           touched; an owned staged deletion consults the on-disk bytes
+           first (the four-way consult): delivered bytes present unstaged
+           are kept and reported, a missing file restores from HEAD (the
+           witnessed rewind reconstruction), HEAD-equal bytes restore as
+           loss-free cleanup, and any other bytes take a report-only
+           operator-decide note and are never restored; every staged shape
+           the post-run guard walks emits a
            line - a staged new file absent at HEAD, a staged blob equal to
            HEAD (a no-op restage), and brand-new bytes on a carried path
            report and stay untouched like the foreign shapes, so no walked
@@ -1124,10 +1134,12 @@ def _blob_in_head_history(repo: Path, rel: str, blob: str) -> bool:
     """True when the blob id appears in the path's committed history at HEAD
     (an older committed vintage of the file). The probe is name-scoped (no
     --follow): vintages committed under a previous path name before a rename
-    onto this path are not seen, a conservative miss."""
+    onto this path are not seen, a conservative miss. The pathspec passes
+    the rel quoted `:(literal)` so glob metacharacters in the rel never
+    act as patterns."""
     proc = subprocess.run(
         ["git", "-C", str(repo), "log", "--format=%H", "-n", "1",
-         "--find-object", blob, "HEAD", "--", rel],
+         "--find-object", blob, "HEAD", "--", f":(literal){rel}"],
         capture_output=True, text=True,
     )
     return proc.returncode == 0 and bool(proc.stdout.strip())
@@ -1147,19 +1159,25 @@ def _worktree_blob(repo: Path, path: Path) -> str | None:
 
 def _record_delivered_blob(
     delivered_blobs: dict[str, str], target: Path, rel: str, delivered: Path,
-) -> str | None:
+    entry: dict,
+) -> None:
     """Delivered-blob capture for the post-run clobber guard (plan
     closeout-migrate-clobber-guard-restore-arms, Terms): hash the bytes this
     run actually delivered for a carried rel into the in-memory rel-to-blob
-    map the guard pass compares against - computed during the carry loop,
-    before the manifest append, which records the sha additively as
-    delivered_blob on the run's own migrated/replaced rows. A failed hash
-    probe (a non-git target) records nothing: the guard's absence rule then
-    keeps the vintage-only signature for that rel."""
+    map the guard pass compares against, and stamp the sha additively as
+    delivered_blob on the caller's manifest entry - the run's own
+    migrated/replaced row - here, in this one place (the four capture
+    sites pass their entry instead of repeating the stamp; plan
+    2026-11-04-closeout-clobber-guard-review-residual-trio R10). A
+    genuinely failed hash probe (an unreadable or missing file -
+    `git hash-object` succeeds outside a repository, so the probe's
+    failure is a real read failure, never the target's git-ness) records
+    nothing: the guard's absence rule then keeps the vintage-only
+    signature for that rel."""
     blob = _worktree_blob(target, delivered)
     if blob:
         delivered_blobs[rel] = blob
-    return blob
+        entry["delivered_blob"] = blob
 
 
 def _unchanged_since_baseline(src: Path, rel: str, baseline_files: dict[str, str]) -> bool:
@@ -1194,24 +1212,40 @@ def _baseline_clobber_preflight(
     return offenders
 
 
+# The blob-shape gate for a rev-parse stage-0 stdout (plan 2026-11-04-
+# closeout-clobber-guard-review-residual-trio, R9): the 40-hex sha1 form.
+# rev-parse echoes a glob-named argument with rc=0 (a wildcard-named
+# unmerged rel resolves to no single stage-0 entry), so rc=0 alone cannot
+# be trusted; only a 40-hex stdout passes for a blob id.
+_STAGE0_BLOB_RE = re.compile(r"[0-9a-f]{40}")
+
+
 def _read_staged_entry(target: Path, rel: str) -> tuple[str | None, bool]:
     """One index entry's classification read (lesson 370's index-membership
     oracle rule): the stage-0 blob id via rev-parse, with git ls-files -u
     discriminating the two shapes rev-parse alone collapses - it exits 128
-    for both an unmerged entry and an index-absent one. Returns (blob,
-    unmerged): (blob, False) is a stage-0 entry, (None, True) is unmerged
-    (stages 1-3 present), (None, False) is index-absent (a staged
-    deletion)."""
+    for both an unmerged entry and an index-absent one. A rc=0 stdout is
+    trusted only in the 40-hex sha1 blob form: the sha1 object format is
+    the precondition (a sha256 target sits outside the guard's observed
+    universe, the same repo-state scoping as the comparison's
+    same-conversion precondition), and any other rc=0 stdout - rev-parse
+    echoing a glob-named argument, the wildcard-named unmerged shape -
+    falls to the ls-files -u discriminator, which passes the rel quoted
+    `:(literal)` so glob metacharacters never act as patterns. Returns
+    (blob, unmerged): (blob, False) is a stage-0 entry, (None, True) is
+    unmerged (stages 1-3 present), (None, False) is index-absent (a
+    staged deletion)."""
     proc = subprocess.run(
         ["git", "-C", str(target), "rev-parse", f":{rel}"],
         capture_output=True, text=True,
     )
     if proc.returncode == 0:
         blob = proc.stdout.strip()
-        if blob:
+        if blob and _STAGE0_BLOB_RE.fullmatch(blob):
             return blob, False
     stages = subprocess.run(
-        ["git", "-C", str(target), "ls-files", "-u", "--", rel],
+        ["git", "-C", str(target), "ls-files", "-u", "--",
+         f":(literal){rel}"],
         capture_output=True, text=True,
     )
     unmerged = stages.returncode == 0 and bool(stages.stdout.strip())
@@ -1230,10 +1264,23 @@ def _reclassify_then_restore(
     classification read and this re-read downgrades to a report-only pass;
     a restore subprocess failure or a post-restore re-read mismatch is
     reported without a re-restore. The window between this re-read and the
-    restore subprocess stays a bounded silent-drop window. Returns True
+    restore subprocess stays a bounded silent-drop window. The restore
+    pathspec passes the rel quoted `:(literal)` so glob metacharacters in
+    the rel never widen the restore onto sibling paths. Returns True
     when the restore landed and held."""
     blob, unmerged = _read_staged_entry(target, rel)
-    if unmerged or blob != expected_blob:
+    if unmerged:
+        # T1-NIT-1 (plan 2026-11-04-closeout-clobber-guard-review-
+        # residual-trio): the re-read's unmerged shape is named like the
+        # walk-level unmerged line, not folded into the changed-under-guard
+        # wording.
+        print(
+            f"prevented-clobber check: {rel} is unmerged in the index "
+            "(stages 1-3) when re-read between classification and "
+            "restore; left untouched"
+        )
+        return False
+    if blob != expected_blob:
         print(
             f"prevented-clobber check: {rel} changed under the "
             "guard between classification and restore; left "
@@ -1242,7 +1289,7 @@ def _reclassify_then_restore(
         return False
     restore = subprocess.run(
         ["git", "-C", str(target), "restore", "--source=HEAD",
-         "--staged", "--worktree", "--", rel],
+         "--staged", "--worktree", "--", f":(literal){rel}"],
         capture_output=True, text=True,
     )
     if restore.returncode != 0:
@@ -1279,15 +1326,33 @@ def _prevent_tracked_clobbers(
     bytes are the run's own output staged back and stay untouched with a
     report line; a rel with no in-memory delivered blob keeps the current
     vintage-only signature (a defensive absence rule - the decision never
-    reads the manifest). An owned entry sitting unmerged at index stages 1-3
-    is a live merge, not a rewind: report-only, never restored. Both
-    restore arms run the shared reclassify-then-restore helper
+    reads the manifest). Any entry sitting unmerged at index stages 1-3 -
+    owned or foreign alike - is a live merge, not a rewind: report-only,
+    never restored. An owned staged deletion (index-absent at the walk)
+    runs the four-way consult before any restore (plan 2026-11-04-
+    closeout-clobber-guard-review-residual-trio, R8): a missing file is
+    decided by a filesystem existence check before any read (never
+    probe-None), and otherwise it reads the on-disk bytes' blob once (the
+    consult, the arm's only worktree-byte read; the recheck observes
+    index state only) - bytes equal to the run's delivered blob keep the
+    delivered bytes present unstaged with a report line and no prevented
+    append; a missing file restores from HEAD as the witnessed
+    full-rewind reconstruction; bytes equal to HEAD restore as loss-free
+    cleanup; anything else (foreign or newer local bytes, or a present
+    file whose hash probe failed) is report-only operator-decide and
+    never restored.
+    Both restore arms run the shared reclassify-then-restore helper
     (_reclassify_then_restore). Staged entries this run did not carry are
     foreign work: reported, never touched. Every walked shape emits: a
     staged new file absent at HEAD (staged-new-at-target), a staged blob
     equal to HEAD including a mode-only change (a no-op restage), and
     brand-new bytes on a carried path (staged-new-bytes-on-a-carried-path)
     all report and stay untouched - no walked shape passes silently.
+    Intent-to-add entries never enter the enumeration on this
+    host's git (`git diff --cached --name-only` does not list
+    intent-to-add entries on git 2.56.0), so the walk never sees
+    them; widening the enumeration is forbidden (documented
+    non-coverage, not a coverage gap to fix).
     Returns the prevented paths.
     Vintage detection is its own small probe beside the concept owner
     scripts/revert_set_classifier.py; the report lines borrow that
@@ -1318,22 +1383,70 @@ def _prevent_tracked_clobbers(
             continue
         if staged_blob is None:
             # A staged deletion (index-absent; the unmerged shape is routed
-            # above) has no index blob to compare: an owned deletion is the
-            # between-snapshot rewind in its most destructive shape and
-            # restores from HEAD; a foreign deletion is reported and never
-            # touched.
-            if rel in owned:
+            # above) has no index blob to compare: the owned shape runs the
+            # four-way consult before any restore (its report-only
+            # dispositions are inventoried in the docstring above; plan
+            # 2026-11-04-closeout-clobber-guard-review-residual-trio, R8).
+            # A foreign deletion is reported and never touched.
+            if rel not in owned:
+                print(
+                    f"prevented-clobber check: {rel} is a staged deletion "
+                    "this run did not carry (foreign staged work); "
+                    "left untouched"
+                )
+                continue
+            deletion_path = target / rel
+            if not deletion_path.exists():
                 if _reclassify_then_restore(
                     target, rel, None,
                     "staged deletion of a tracked file this run "
                     "carried; restored from HEAD",
                 ):
                     prevented.append(rel)
-            else:
+                continue
+            deletion_blob = _worktree_blob(target, deletion_path)
+            delivered_blob = (delivered_blobs or {}).get(rel)
+            head_blob = _head_blob(target, rel)
+            # The same-conversion equality precondition (R3): both sides
+            # hash through the same clean-filter conversion - the default
+            # `git hash-object` applies clean filters, so the delivered
+            # hash and the on-disk consult hash filter identically;
+            # whichever filters are configured apply equally to both sides
+            # and the equality is robust under a stable filter
+            # configuration between the delivery-time capture and this
+            # closeout consult.
+            if delivered_blob is not None and deletion_blob == delivered_blob:
+                # The on-disk bytes are this run's delivered output left
+                # unstaged by the deletion: restoring HEAD would destroy
+                # the run's output, so the bytes stay and the shape is
+                # reported (no prevented append).
                 print(
-                    f"prevented-clobber check: {rel} is a staged deletion "
-                    "this run did not carry (foreign staged work); "
-                    "left untouched"
+                    f"prevented-clobber check: {rel} holds the bytes this "
+                    "run delivered unstaged (delivered bytes present "
+                    f"unstaged, delivered blob {delivered_blob[:12]}); "
+                    "kept, not restored"
+                )
+            elif deletion_blob is not None and deletion_blob == head_blob:
+                # The on-disk bytes equal HEAD: restoring loses nothing,
+                # the loss-free cleanup of the same rewind shape.
+                if _reclassify_then_restore(
+                    target, rel, None,
+                    "staged deletion of a tracked file this run "
+                    "carried; on-disk bytes equal HEAD; restored "
+                    "from HEAD (loss-free cleanup)",
+                ):
+                    prevented.append(rel)
+            else:
+                # Foreign or newer local unstaged bytes, or a present file
+                # whose hash probe failed: restoring HEAD could destroy
+                # real work, so the arm stays report-only and the
+                # operator decides.
+                print(
+                    f"prevented-clobber check: {rel} holds unstaged bytes "
+                    "that are neither the bytes this run delivered nor "
+                    "HEAD (foreign or newer local work, or the hash probe "
+                    "failed); operator decision required; left untouched, "
+                    "not restored"
                 )
             continue
         head_blob = _head_blob(target, rel)
@@ -1674,6 +1787,48 @@ def _cmd_migrate_transfer(
             "source": str(source),
             "note": "branch unresolved (non-git source or detached HEAD)",
         }
+    # Recorded landing identity (plan
+    # 2026-11-04-agent-resource-cleanup-disposition Task 1): the branch
+    # record also records the landing commit (the branch tip at transfer
+    # time, the content the closeout landing carries), the recorded start
+    # commit (the merge base with the destination tip - the base the
+    # authored delta is judged from), and that delta's touched path set, so
+    # the removal gate's landing proof reads recorded evidence instead of
+    # walking only destination-reachable history after base drift. Fields
+    # are recorded only when derivable: a detached or non-git source keeps
+    # the unresolved-branch record, and a non-git target or an unresolvable
+    # merge base records no start commit - the gate's fallback stays
+    # retention, never guessed ancestry.
+    if branch_record.get("branch") and _target_is_git_repository(target):
+        tip_run = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
+            capture_output=True, text=True,
+        )
+        if tip_run.returncode == 0:
+            landing_commit = tip_run.stdout.strip()
+            branch_record["landing_commit"] = landing_commit
+            start_run = subprocess.run(
+                ["git", "-C", str(target), "merge-base", landing_commit, "HEAD"],
+                capture_output=True, text=True,
+            )
+            if start_run.returncode == 0:
+                start_commit = start_run.stdout.strip()
+                branch_record["start_commit"] = start_commit
+                touched_run = subprocess.run(
+                    [
+                        "git", "-C", str(target), "diff", "--name-only",
+                        "--no-renames", "-z", f"{start_commit}..{landing_commit}",
+                    ],
+                    capture_output=True, text=True,
+                )
+                if touched_run.returncode == 0:
+                    branch_record["landing_touched"] = sorted(
+                        {
+                            entry
+                            for entry in touched_run.stdout.split("\x00")
+                            if entry.strip()
+                        }
+                    )
     migrated: list[dict] = []
     renamed: list[dict] = []
     replaced: list[dict] = []
@@ -1760,9 +1915,8 @@ def _cmd_migrate_transfer(
                             "destination": dst.as_posix(),
                             "verified": True,
                         }
-                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
-                        if blob:
-                            entry["delivered_blob"] = blob
+                        _record_delivered_blob(
+                            delivered_blobs, target, rel, dst, entry)
                         migrated.append(entry)
                         continue
                     receipt = receipts.get(rel)
@@ -1782,9 +1936,8 @@ def _cmd_migrate_transfer(
                             "destination": dst.as_posix(),
                             "verified": True,
                         }
-                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
-                        if blob:
-                            entry["delivered_blob"] = blob
+                        _record_delivered_blob(
+                            delivered_blobs, target, rel, dst, entry)
                         migrated.append(entry)
                         continue
                     skipped.append(
@@ -1803,9 +1956,8 @@ def _cmd_migrate_transfer(
                     )
                     if status == "replaced":
                         replaced.append(payload["entry"])
-                        blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
-                        if blob:
-                            payload["entry"]["delivered_blob"] = blob
+                        _record_delivered_blob(
+                            delivered_blobs, target, rel, dst, payload["entry"])
                         priors.append((dst, payload["prior_tmp"]))
                         print(f"REPLACED: {rel} (receipt-proven same-run mirror)")
                         continue
@@ -1840,9 +1992,8 @@ def _cmd_migrate_transfer(
                         f"(incoming {_sha256(src)[:12]} / existing {collision_dst_digest[:12]})"
                     )
                 else:
-                    blob = _record_delivered_blob(delivered_blobs, target, rel, dst)
-                    if blob:
-                        entry["delivered_blob"] = blob
+                    _record_delivered_blob(
+                        delivered_blobs, target, rel, dst, entry)
                     migrated.append(entry)
             else:
                 failed.append(
@@ -3457,9 +3608,99 @@ def _gate_removal_no_charter(
         )
         print("OUTCOME: fail")
         return 1
+    # Authoring-strand manifest binding (plan
+    # 2026-11-04-agent-resource-cleanup-disposition Task 1): at this pass
+    # the strand's branch identity row is appended to the primary slug
+    # home's existing migration manifest, so a removed worktree's
+    # branch-only retry reads that manifest and no second evidence surface
+    # is created. A failed append fails the pass closed: the worktree whose
+    # removal would strand the retry's evidence stays.
+    bind_refusal = _append_authoring_strand_identity_row(
+        target, slug, expected_branch, worktree_resolved, start_commit
+    )
+    if bind_refusal is not None:
+        print(f"refused: {bind_refusal}")
+        print(_GATE_REMEDY_LINE)
+        print("OUTCOME: fail")
+        return 1
+    print(
+        "authoring strand: branch identity row appended to the primary "
+        f"slug-home migration manifest "
+        f"({_authoring_slug_home_manifest(target, slug)}) for the "
+        "branch-only retry"
+    )
     _print_gate_removal_line(args.worktree)
     print("OUTCOME: pass")
     return 0
+
+
+def _authoring_slug_home_manifest(target: Path, slug: str) -> Path:
+    """The primary slug home's closeout migration manifest: the canonical
+    execute-plan session directory (the target's facts-resolved tmp root
+    plus the plan session slug) the execution strand's manifest already
+    lives in."""
+    return _facts_tmp_root(target) / "execute-plan" / slug / "closeout-migration.json"
+
+
+def _append_authoring_strand_identity_row(
+    target: Path,
+    slug: str,
+    branch: str,
+    worktree: Path,
+    start_commit: str,
+) -> str | None:
+    """The authoring-strand manifest binding (plan
+    2026-11-04-agent-resource-cleanup-disposition Task 1): at the no-charter
+    stand-down pass the strand's branch identity row is appended to the
+    primary slug home's existing migration manifest - the surface the
+    execution strand already uses, created there when absent - so a removed
+    worktree's branch-only retry reads that manifest and no second evidence
+    surface is created. The row carries the recorded start commit as the
+    landing identity: the arm verified the ref still sits at the start
+    commit, so the branch's authored delta is the empty set. Returns None on
+    success, else the refusal text - a lost append would strand the
+    branch-only retry without evidence, so the pass fails closed and the
+    worktree stays."""
+    verify = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--verify", branch],
+        capture_output=True, text=True,
+    )
+    if verify.returncode != 0:
+        return (
+            f"the authoring branch {branch} no longer resolves for the "
+            f"identity row ({verify.stderr.strip()}); the worktree stays"
+        )
+    tip = verify.stdout.strip()
+    if tip != start_commit:
+        return (
+            f"the authoring branch {branch} moved past the recorded start "
+            f"commit before the identity row could be appended ({tip} != "
+            f"{start_commit}); the worktree stays"
+        )
+    manifest_path = _authoring_slug_home_manifest(target, slug)
+    try:
+        _append_manifest(
+            manifest_path,
+            {
+                "branch": [
+                    {
+                        "branch": branch,
+                        "source": str(worktree),
+                        "start_commit": start_commit,
+                        "landing_commit": tip,
+                        "landing_touched": [],
+                    }
+                ]
+            },
+        )
+    except (OSError, ValueError) as exc:
+        return (
+            "the authoring strand's branch identity row could not be "
+            "appended to the primary slug-home migration manifest "
+            f"{manifest_path} ({exc}); the worktree stays: repair the "
+            "manifest home, then re-run gate-removal"
+        )
+    return None
 
 
 def _print_gate_removal_line(worktree_operand: str) -> None:
@@ -3892,7 +4133,7 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
 
 
 def _branch_landing_content_scope(
-    target: Path, branch: str, plan_basename: str
+    target: Path, branch: str, plan_basename: str, start_commit: str | None = None
 ) -> tuple[str, str]:
     """The legacy changed-path content-scope proof for a branch whose
     commits are not merge-reachable from HEAD (the squash-landing shape):
@@ -3902,12 +4143,19 @@ def _branch_landing_content_scope(
     sit inside that introduction commit's touched set (a squash landing
     touches every file its branch touched; --no-renames keeps an archival
     move's plans-root vintage in the set). ``branch`` may be the captured
-    proven OID, so the proof judges one immutable commit. Returns (verdict,
-    evidence): verdict "accounted" reports landed content as ACCOUNTING
-    EVIDENCE only (plan 2026-10-19-gate-removal-closeout-accounting Task 2:
-    it never permits deleting a non-ancestor branch); anything else is a
-    preserve reason, never a gate failure - an unaccounted branch is retained
-    and reported, exactly like Arm 6's pairing in the sweep chain."""
+    proven OID, so the proof judges one immutable commit. When a recorded
+    start commit is supplied and resolves, the changed paths are judged from
+    it instead of the current merge base, so inherited destination base
+    drift never enters the content scope (plan
+    2026-11-04-agent-resource-cleanup-disposition Task 1); an unresolvable
+    recorded start is unaccounted - the fallback is retention, never guessed
+    ancestry. Without a recorded start commit the merge-base behavior is
+    unchanged. Returns (verdict, evidence): verdict "accounted" reports
+    landed content as ACCOUNTING EVIDENCE only (plan
+    2026-10-19-gate-removal-closeout-accounting Task 2: it never permits
+    deleting a non-ancestor branch); anything else is a preserve reason,
+    never a gate failure - an unaccounted branch is retained and reported,
+    exactly like Arm 6's pairing in the sweep chain."""
     adds: list[tuple[int, str]] = []
     intro = subprocess.run(
         [
@@ -3944,14 +4192,27 @@ def _branch_landing_content_scope(
             return "unaccounted", f"cannot resolve the committer date of {sha}"
         if int(ct_text) > intro_ct:
             return "unaccounted", f"post-landing commits on branch ({sha})"
-    merge = subprocess.run(
-        ["git", "-C", str(target), "merge-base", branch, "HEAD"],
-        capture_output=True, text=True,
-    )
-    if merge.returncode != 0:
-        return "unaccounted", "no merge base between the branch and HEAD"
+    if start_commit:
+        start_verify = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--verify", f"{start_commit}^{{commit}}"],
+            capture_output=True, text=True,
+        )
+        if start_verify.returncode != 0:
+            return "unaccounted", (
+                f"recorded start commit {start_commit} unresolvable "
+                f"({start_verify.stderr.strip()})"
+            )
+        delta_base = start_commit
+    else:
+        merge = subprocess.run(
+            ["git", "-C", str(target), "merge-base", branch, "HEAD"],
+            capture_output=True, text=True,
+        )
+        if merge.returncode != 0:
+            return "unaccounted", "no merge base between the branch and HEAD"
+        delta_base = merge.stdout.strip()
     changed = subprocess.run(
-        ["git", "-C", str(target), "diff", "--name-only", f"{merge.stdout.strip()}..{branch}"],
+        ["git", "-C", str(target), "diff", "--name-only", f"{delta_base}..{branch}"],
         capture_output=True, text=True,
     )
     if changed.returncode != 0:
@@ -3967,6 +4228,125 @@ def _branch_landing_content_scope(
     for changed_path in changed.stdout.splitlines():
         if changed_path.strip() and changed_path not in touched:
             return "unaccounted", f"branch content outside the landing's file set: {changed_path}"
+    return "accounted", ""
+
+
+
+def _unquote_git_path(path: str) -> str:
+    """Resolve a stored git path to its literal form.
+
+    Paths recorded before the -z switch (or by foreign writers) may carry
+    git's C-quote form ("docs/caf\303\251.md"); a quoted form would fail
+    rev-parse resolution and silently fall into the both-absent-equal arm,
+    so unquote before any blob probe. Plain paths pass through unchanged.
+    """
+    if not (path.startswith('"') and path.endswith('"') and len(path) >= 2):
+        return path
+    body = path[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out.extend(ch.encode("utf-8"))
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):
+            break
+        esc = body[i]
+        if esc == "x" and i + 2 < len(body):
+            out.append(int(body[i + 1 : i + 3], 16))
+            i += 3
+        elif esc in "01234567":
+            oct_digits = body[i : i + 3]
+            digits = ""
+            while len(digits) < 3 and i + len(digits) < len(body) and body[i + len(digits)] in "01234567":
+                digits += body[i + len(digits)]
+            out.append(int(digits, 8))
+            i += len(digits)
+        elif esc == "n":
+            out.append(10)
+            i += 1
+        elif esc == "t":
+            out.append(9)
+            i += 1
+        elif esc == "r":
+            out.append(13)
+            i += 1
+        else:
+            out.extend(esc.encode("utf-8"))
+            i += 1
+    return out.decode("utf-8", errors="surrogateescape")
+def _branch_recorded_landing_scope(
+    target: Path, proven_oid: str, tip_tree: str, record: dict
+) -> tuple[str, str]:
+    """The recorded-landing content proof (plan
+    2026-11-04-agent-resource-cleanup-disposition Task 1): when the
+    manifest's branch record carries the landing identity (the landing
+    commit, the recorded start commit, and the touched path set measured
+    from that start at transfer time), a branch tip whose tree still equals
+    the recorded landing commit's tree is content-identical to the
+    transfer-time tip, so the recorded touched set IS the branch's authored
+    delta; the proof then requires every authored path's content to be
+    present at the destination tip (blob equality, both-absent equal)
+    before authorizing the exact-tree deletion path - a destination rewrite
+    that dropped the landed content retains the branch. Returns (verdict,
+    evidence): "accounted" joins the exact-tree deletion path; "legacy"
+    means the record carries no landing identity and the caller falls
+    through to the legacy changed-path scope; anything else is a preserve
+    reason, never a gate failure - an unaccounted branch is retained and
+    reported."""
+    landing = record.get("landing_commit")
+    start = record.get("start_commit")
+    touched = record.get("landing_touched")
+    if not (
+        isinstance(landing, str) and landing
+        and isinstance(start, str) and start
+        and isinstance(touched, list)
+        and all(isinstance(path, str) and path for path in touched)
+    ):
+        return "legacy", ""
+    tree_run = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--verify", f"{landing}^{{tree}}"],
+        capture_output=True, text=True,
+    )
+    if tree_run.returncode != 0:
+        return "unaccounted", (
+            f"recorded landing commit {landing} unresolvable "
+            f"({tree_run.stderr.strip()})"
+        )
+    if tip_tree != tree_run.stdout.strip():
+        return "unaccounted", (
+            f"branch tip tree no longer equals the recorded landing commit "
+            f"{landing}'s tree"
+        )
+    for raw_path in sorted(set(touched)):
+        path = _unquote_git_path(raw_path)
+        tip_blob = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--verify", f"{proven_oid}:{path}"],
+            capture_output=True, text=True,
+        )
+        head_blob = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--verify", f"HEAD:{path}"],
+            capture_output=True, text=True,
+        )
+        if tip_blob.returncode != 0 and head_blob.returncode != 0:
+            continue
+        if tip_blob.returncode != 0:
+            return "unaccounted", (
+                f"branch content differs at the destination: {path} (the "
+                "destination still carries the path the recorded landing "
+                "removed)"
+            )
+        if head_blob.returncode != 0:
+            return "unaccounted", (
+                f"branch content absent at the destination: {path}"
+            )
+        if tip_blob.stdout.strip() != head_blob.stdout.strip():
+            return "unaccounted", (
+                f"branch content differs at the destination: {path}"
+            )
     return "accounted", ""
 
 
@@ -4061,6 +4441,29 @@ def _is_done_session_gate_report(destination: str) -> bool:
     return adjacent and destination.endswith("-full.txt")
 
 
+def _row_attributed_to_adjudicated(row: dict, records: list) -> bool:
+    """True when a manifest row's run-attribution stamp binds it to the
+    adjudicated branch record. One shared helper owns this attribution
+    decision for both consuming loops - the missing-destination hold over
+    ``verified_rows`` and the prevented-clobbers teardown summary over
+    ``prevented_rows`` (plan
+    2026-11-04-closeout-clobber-guard-review-residual-trio Task 3, folding
+    the previously duplicated predicate) - so the loops cannot drift. A
+    stamp is recognized only when the row's ``record_index`` is an int
+    (bool excluded); a stamp-less row - a legacy row written before the
+    stamp existed - falls to the single-record rule ``len(records) == 1``:
+    attributed only in a single-record legacy manifest, foreign beside any
+    other record count. A stamped row is attributed exactly when its index
+    equals the adjudicated record's index, ``len(records) - 1`` (the sole
+    binding ``_gate_branch_closeout`` holds; deriving it here keeps the two
+    attribution rules keyed to one record)."""
+    index = row.get("record_index")
+    stamped = isinstance(index, int) and not isinstance(index, bool)
+    if not stamped:
+        return len(records) == 1
+    return index == len(records) - 1
+
+
 def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
     """The consumer-usable closeout reference state behind the gate's
     exact-branch adjudication, refactored out of the gate's inline logic
@@ -4102,10 +4505,10 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
       reads it.
     - ``destinations_error``: the TypeError a non-iterable section raises
       at destination extraction, else None, discarding any partial
-      collection (both ``verified_destinations`` and ``verified_rows``
-      reset together); the gate re-raises it at the guard-check point
-      (after identity binding), preserving the inline ordering, and the
-      sweep treats the shape as reference-less.
+      collection (``verified_destinations``, ``verified_rows``, and
+      ``prevented_rows`` reset together); the gate re-raises it at the
+      guard-check point (after identity binding), preserving the inline
+      ordering, and the sweep treats the shape as reference-less.
 
     No shape is normalized and no refusal class is added: malformed parsed
     shapes resolve to no references while the gate's shape-specific skip,
@@ -4161,6 +4564,7 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         state["destinations_error"] = exc
         state["verified_destinations"] = []
         state["verified_rows"] = []
+        state["prevented_rows"] = []
     return state
 
 
@@ -4361,14 +4765,14 @@ def _gate_branch_closeout(
     # covers only the missing destinations attributed to the adjudicated
     # branch record (position len(records) - 1, the run this gate
     # adjudicates) and, in a single-record legacy manifest, every stamp-less
-    # row (gate-report shapes excepted, report-only as below); a stamp is
-    # recognized only when its record_index is an int (bool
-    # excluded). The unattributed population - stamped rows at any other
+    # row (gate-report shapes excepted, report-only as below); stamp
+    # recognition and the single-record fallback are the shared helper
+    # _row_attributed_to_adjudicated's contract, not restated here. The
+    # unattributed population - stamped rows at any other
     # index, and stamp-less rows whenever more than one branch record
     # exists - demotes to a report-only foreign note, so a prior run's
     # drained destination can no longer permanently refuse this run's
     # teardown; the refusal text for the attributed population is unchanged.
-    adjudicated_index = len(records) - 1
     hold_missing: list[str] = []
     expired_missing: list[str] = []
     unattributed_missing: list[str] = []
@@ -4376,12 +4780,7 @@ def _gate_branch_closeout(
         destination = row["destination"]
         if (target / destination).exists():
             continue
-        index = row.get("record_index")
-        stamped = isinstance(index, int) and not isinstance(index, bool)
-        if not stamped:
-            attributed = len(records) == 1
-        else:
-            attributed = index == adjudicated_index
+        attributed = _row_attributed_to_adjudicated(row, records)
         if attributed and _is_done_session_gate_report(destination):
             # Swept-artifact classification (the 2026-10-31 closeout-gates
             # trio, landed 52750a1fe; shared-slug second witness): inside
@@ -4432,12 +4831,7 @@ def _gate_branch_closeout(
     prevented_restored: list[str] = []
     prevented_foreign: list[str] = []
     for row in state["prevented_rows"]:
-        index = row.get("record_index")
-        stamped = isinstance(index, int) and not isinstance(index, bool)
-        if not stamped:
-            attributed = len(records) == 1
-        else:
-            attributed = index == adjudicated_index
+        attributed = _row_attributed_to_adjudicated(row, records)
         if attributed:
             prevented_restored.append(row["destination"])
         else:
@@ -4449,6 +4843,13 @@ def _gate_branch_closeout(
             "HEAD (report-only, the operator decides whether any restored "
             "path needs re-staging): "
             + ", ".join(prevented_restored[:5])
+            # Remainder count (plan 2026-11-04-closeout-clobber-guard-
+            # review-residual-trio, R2): the first five paths plus the
+            # total, following the sibling unattributed_missing note's
+            # slice-then-parenthesized-count convention, in this note's
+            # own (total: N) form, so paths beyond the slice stay in the
+            # operator's teardown evidence.
+            + f" (total: {len(prevented_restored)})"
         )
     if prevented_foreign:
         prevented_notes.append(
@@ -4457,6 +4858,7 @@ def _gate_branch_closeout(
             "does not attribute to the adjudicated branch record are never "
             "this run's teardown evidence): "
             + ", ".join(prevented_foreign[:5])
+            + f" (total: {len(prevented_foreign)})"
         )
 
     # Capture ONE proven tip OID for the ancestry/tree checks.
@@ -4473,6 +4875,7 @@ def _gate_branch_closeout(
 
     # Content accounting against the CAPTURED OID only.
     accounted: str | None = None
+    accounted_via = "destination-history"
     legacy_evidence: str | None = None
     ancestry = subprocess.run(
         ["git", "-C", str(target), "merge-base", "--is-ancestor", proven_oid, "HEAD"],
@@ -4500,7 +4903,46 @@ def _gate_branch_closeout(
                 )
             elif tip_tree in trees:
                 accounted = "exact-tree-accounted"
-        if accounted is None:
+        if accounted is None and tree_run.returncode == 0:
+            # The recorded-landing proof first (plan
+            # 2026-11-04-agent-resource-cleanup-disposition Task 1): a
+            # record carrying the landing identity proves the branch through
+            # its recorded evidence (tip tree vs the recorded landing tree,
+            # then the recorded touched set present at the destination);
+            # only a record without the identity falls through to the legacy
+            # changed-path scope.
+            verdict, evidence = _branch_recorded_landing_scope(
+                target, proven_oid, tip_tree, record
+            )
+            if verdict == "accounted":
+                accounted = "exact-tree-accounted"
+                accounted_via = "recorded-landing"
+            elif verdict == "legacy":
+                recorded_start = record.get("start_commit")
+                verdict, evidence = _branch_landing_content_scope(
+                    target,
+                    proven_oid,
+                    basename,
+                    start_commit=(
+                        recorded_start
+                        if isinstance(recorded_start, str) and recorded_start
+                        else None
+                    ),
+                )
+                if verdict == "accounted":
+                    legacy_evidence = (
+                        "changed-path scope: content landed inside the "
+                        "landing's file set (legacy evidence only)"
+                    )
+                else:
+                    reasons.append(
+                        "no ancestry or exact-tree proof; " + evidence
+                    )
+            else:
+                reasons.append(
+                    "no ancestry or exact-tree proof; " + evidence
+                )
+        elif accounted is None:
             # Legacy changed-path scope: accounting evidence only. It can
             # report landed content but never permits deleting a
             # non-ancestor branch.
@@ -4572,10 +5014,18 @@ def _gate_branch_closeout(
         disposition["removal_blocked"] = guard_failed
         return None, lines + foreign_notes + prevented_notes, disposition
     if accounted == "exact-tree-accounted":
+        if accounted_via == "recorded-landing":
+            proof_text = (
+                "the tip tree equals the recorded landing commit's tree and "
+                "the recorded landing's touched set is present at the "
+                "destination"
+            )
+        else:
+            proof_text = "the tip tree equals a destination-history commit's tree"
         return None, [
             f"branch-closeout: branch {recorded} exact-tree-accounted at "
-            f"{proven_oid} (the tip tree equals a destination-history "
-            "commit's tree; the non-ancestor branch is retained)",
+            f"{proven_oid} ({proof_text}; the non-ancestor branch is "
+            "retained)",
             f"branch: {recorded} content is landed by exact tree match; the "
             "branch stays retained for automated paths, and the operator "
             f"closeout may delete it at expected OID {proven_oid} only "

@@ -82,10 +82,10 @@
 # terminal-newest boundary is not refused here - the fresh boundary carries
 # it to the writer's own adoption validations, and a refused write rolls the
 # fresh marker back), and the writer carries the prior start
-# commit and ownership claims into the new linked manifest. On success it
-# prints one status line on stdout followed by eval-able export lines for the
-# downstream consumers: DONE_LOCK_DIR, DONE_LOCK_TOKEN, DONE_RUN_MARKER,
-# DONE_RUN_MANIFEST, DONE_RUN_ID.
+# commit and ownership claims into the new linked manifest. On success the
+# stdout carries only eval-able export lines for the downstream consumers:
+# DONE_LOCK_DIR, DONE_LOCK_TOKEN, DONE_RUN_MARKER, DONE_RUN_MANIFEST,
+# DONE_RUN_ID; every status, advisory, and diagnostic line rides stderr.
 #
 # Every terminal classification and fail-closed exit after the acquire
 # releases only the lock generation that invocation acquired (the env-token
@@ -248,7 +248,8 @@ resolve_helper() { # name -> prints path or nothing
 # finalize composes: the acquire's own exports name the hold and the token
 # compare-and-swap releases only that generation, never a newer one, so no
 # reentrant or holder-ancestry semantics are added. The release output is
-# echoed; a refused release is one warning line and the caller's original
+# relayed on stderr (the acquisition stdout stays eval-safe); a refused
+# release is one warning line and the caller's original
 # refusal outcome and remedy text stay the exit of record. The exports-lost
 # acquire corner keeps its own refusal: no token, no generation to name.
 # The no-OUTCOME-pass acquire corner is the second tokenless corner (an
@@ -260,7 +261,7 @@ setup_release_acquired_lock() { # -> prints the release output; never refuses
   [ -n "${LOCK_SCRIPT:-}" ] && [ -n "${DONE_LOCK_DIR:-}" ] && [ -n "${DONE_LOCK_TOKEN:-}" ] || return 0
   rel_out="$(DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" \
     bash "$LOCK_SCRIPT" release-repo 2>&1)" || rel_rc=$?
-  printf '%s\n' "$rel_out"
+  printf '%s\n' "$rel_out" >&2
   if [ "$rel_rc" -ne 0 ]; then
     echo "done_run setup: WARNING: the acquired done lock did not release (rc=$rel_rc); the refusal above still stands; re-derive the hold with the lock script's status" >&2
   fi
@@ -319,7 +320,7 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
     printf '%s\n' "{\"skip\": true, \"reason\": \"owned_plan_paths selects $count owned plan(s); no single plan baseline to reuse; the manual scoped copy is the session's before-commit duty\", \"fallback\": \"manual scoped copy\"}" \
       > "$record" || return 1
   fi
-  echo "done_run setup: zero/multi-plan run: migration skip record present: $(basename "$record")"
+  echo "done_run setup: zero/multi-plan run: migration skip record present: $(basename "$record")" >&2
   # Migrate-shape twin (lesson 289): a branch-only gate-removal pass reads
   # the migration manifest's shape, which no zero-plan producer wrote before
   # this skeleton, so setup emits it at the same session resolution with the
@@ -336,7 +337,7 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
     if [ -n "$repo_top" ] && [ -n "$run_branch" ]; then
       printf '%s\n' "{\"branch\": [{\"branch\": \"$run_branch\", \"source\": \"$repo_top\"}], \"migrated\": []}" \
         > "$skeleton" || return 1
-      echo "done_run setup: zero/multi-plan run: migrate-shape manifest skeleton present: $(basename "$skeleton")"
+      echo "done_run setup: zero/multi-plan run: migrate-shape manifest skeleton present: $(basename "$skeleton")" >&2
     else
       echo "done_run setup: zero/multi-plan run: no checkout root or current branch resolved; migrate-shape manifest skeleton not written (the branch-only hand-build remedy keeps applying)" >&2
     fi
@@ -346,8 +347,8 @@ write_zero_multi_plan_skip_record() { # session manifest-path -> rc
 
 # Classify a found partial setup; print the remedy lines on stderr and, for
 # an explicit --from-manifest re-entry, the audit exports on stdout, and for
-# an explicit --adopt of the classified orphan a routing note before the
-# fresh adopting boundary (the refusal class below never writes).
+# an explicit --adopt of the classified orphan a routing note on stderr
+# before the fresh adopting boundary (the refusal class below never writes).
 # Read-only except the re-entry arm's one zero/multi-plan skip-record write
 # (the same producer duty a fresh setup performs; a plain classification
 # writes nothing). Its terminal exits release the acquired lock generation
@@ -433,9 +434,9 @@ classify_partial() { # from_manifest(empty allowed) adopt_target(empty allowed)
                   ;;
               esac
             fi
-            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); --adopt $adopt_target is not the classified boundary and is forwarded to the writer's own adoption validations behind the fresh marker (a refused write rolls that marker back)"
+            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); --adopt $adopt_target is not the classified boundary and is forwarded to the writer's own adoption validations behind the fresh marker (a refused write rolls that marker back)" >&2
           else
-            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); continuing with a fresh marker and manifest"
+            echo "done_run setup: newest manifest run_id=$mid is $verdict (closed boundary); continuing with a fresh marker and manifest" >&2
           fi
           return 1
         fi
@@ -474,7 +475,7 @@ classify_partial() { # from_manifest(empty allowed) adopt_target(empty allowed)
       fi
       RUN_MARKER_PATH=""
       [ -n "$newest_marker" ] && [ "$marker_name" = "$(basename "$newest_marker")" ] && RUN_MARKER_PATH="$newest_marker"
-      echo "done_run setup: re-entering boundary run_id=$mid (explicit --from-manifest)"
+      echo "done_run setup: re-entering boundary run_id=$mid (explicit --from-manifest)" >&2
       # the re-entered boundary completes the zero/multi-plan producer duty
       # before its exports are handed back, so an interrupted setup never
       # strands its run without the commit stage's skip evidence
@@ -551,9 +552,9 @@ cmd_setup() {
   REARM="$(resolve_helper rearm_on_touch.py)"
   if [ -n "$REARM" ]; then
     REARM_OUT="$(python3 "$REARM" 2>&1 || true)"
-    echo "done_run setup: rearm-on-touch (advisory): $(printf '%s' "$REARM_OUT" | head -n 1)"
+    echo "done_run setup: rearm-on-touch (advisory): $(printf '%s' "$REARM_OUT" | head -n 1)" >&2
   else
-    echo "done_run setup: rearm-on-touch (advisory): helper not deployed; skipped"
+    echo "done_run setup: rearm-on-touch (advisory): helper not deployed; skipped" >&2
   fi
 
   # 2. Done-lock wait-acquire with the short agent wait.
@@ -598,9 +599,9 @@ cmd_setup() {
   if [ -n "$DEPLOY" ]; then
     DRIFT_OUT="$(bash "$DEPLOY" --check 2>&1 || true)"
     if [ -n "$DRIFT_OUT" ]; then
-      printf 'done_run setup: runtime-helper drift advisory (echo-and-continue):\n%s\n' "$DRIFT_OUT"
+      printf 'done_run setup: runtime-helper drift advisory (echo-and-continue):\n%s\n' "$DRIFT_OUT" >&2
     else
-      echo "done_run setup: runtime-helper drift advisory: no drift"
+      echo "done_run setup: runtime-helper drift advisory: no drift" >&2
     fi
   fi
 
@@ -618,7 +619,7 @@ cmd_setup() {
   if [ -n "$SWEEP" ]; then
     PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
     SWEEP_OUT="$(python3 "$SWEEP" sweep --target "$PRIMARY" --apply 2>&1 || true)"
-    printf 'done_run setup: residue sweep (fail-open): %s\n' "$(printf '%s' "$SWEEP_OUT" | grep -E '^(OUTCOME|remove|registration|branch-report):')"
+    printf 'done_run setup: residue sweep (fail-open): %s\n' "$(printf '%s' "$SWEEP_OUT" | grep -E '^(OUTCOME|remove|registration|branch-report):')" >&2
   fi
 
   # 5. Partial-setup classification (read-only unless --from-manifest; an
@@ -657,7 +658,7 @@ cmd_setup() {
     rm -f "$MARKER"
     fail_partial "run manifest" "the writer refused: $(printf '%s' "$WM_OUT" | tail -n 3)"
   }
-  printf '%s\n' "$WM_OUT"
+  printf '%s\n' "$WM_OUT" >&2
   MANIFEST="$(printf '%s\n' "$WM_OUT" | sed -n 's/^manifest: //p')"
   RUN_ID="$(printf '%s\n' "$WM_OUT" | sed -n 's/^run_id: //p')"
   if [ -z "$MANIFEST" ] || [ -z "$RUN_ID" ]; then
@@ -677,7 +678,7 @@ cmd_setup() {
     setup_die 1
   }
 
-  echo "done_run setup: ok run_id=$RUN_ID"
+  echo "done_run setup: ok run_id=$RUN_ID" >&2
   echo "export DONE_LOCK_DIR=$(printf '%q' "$DONE_LOCK_DIR")"
   echo "export DONE_LOCK_TOKEN=$(printf '%q' "$DONE_LOCK_TOKEN")"
   echo "export DONE_RUN_MARKER=$(printf '%q' "$MARKER")"

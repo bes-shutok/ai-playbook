@@ -1,7 +1,7 @@
 # Backlog: cleanup responses lose resource disposition across turns
 
 - **Filed:** 2026-11-02, repeated operator-directed worktree and branch cleanup
-- **Status:** covered (docs/history/plans/2026-11-04-agent-resource-cleanup-disposition.md)
+- **Status:** covered (docs/history/plans/completed/2026-11-04-agent-resource-cleanup-disposition.md; executed tip 57c2b2158)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Consumer projects that run the cleanup and self-heal workflows need the resource-by-resource disposition and recovery handoff; the skills-repo personal priority profile must not park or defer this as formal-hardening for the skills repo alone.

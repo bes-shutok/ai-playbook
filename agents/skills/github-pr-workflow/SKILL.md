@@ -297,36 +297,46 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 2. At merge time: if the user signals they are about to merge such a PR ("I'll merge now", "merging this", asking for the merge URL, etc.), repeat the warning before they click. The warning is load-bearing for users who squash-merge by habit; it is not optional.
 
 ## PR Descriptions and Stats
-- Write the summary section in plain prose, not bullet lists. Explain what the PR does in one paragraph as if talking to a teammate: what the change enables, why it was needed, and how it fits the existing system. Use simple language. Avoid jargon.
-- Follow the prose summary with a "flow in one line" sentence showing the data/control path end-to-end (e.g. `trigger → fetch phone → format → send`). This makes the purpose immediately clear without reading the full diff.
+- Include five labeled sections in every PR description: What, Why, How, Testing, and Notes for reviewers. Write What, Why, and How in plain prose, not bullet lists; keep the one-line end-to-end flow in How (for example `trigger → fetch phone → format → send`). Use simple language and avoid jargon.
+- In Testing, state the verification actually run, or state that no verification was run. Keep additional verification details out unless asked. If any section cannot be completed honestly, say so in that section rather than omitting it.
 - Only use bullet lists for enumerated specifics (files changed, config keys added, API endpoints). Do not use bullets for the main description.
 - For PR descriptions against a non-default base branch (for example stacked PRs), describe only the delta visible from that base; do not frame changes as restorations or mention work that exists only below the base branch.
-- When drafting a PR description, omit verification sections unless the user explicitly asks for verification details or the repository template requires them.
 - When a user asks for PR stats, prefer concise branch-vs-base counts (for example commits plus doc/non-doc file counts) over full file-change or insertion/deletion totals unless the user explicitly asks for churn metrics.
 - Never reference gitignored files (e.g. `AGENTS.md`, `CLAUDE.md`, `docs/`) in PR descriptions, commit messages, or review replies; they do not appear in the diff and cause spurious review comments. Only mention files that are tracked and visible in the PR.
 - Commit messages follow coding_guidelines.md section 40: the subject leads with a compressed why after any required prefix; when the subject cannot carry the reason, the body opens with the short why.
 - **Title stays in sync with scope:** when you push commits or edit the body of an open PR and the change set is no longer what the current title claims (added regions, modules, or deliverables; narrowed scope; retitled ticket), run `gh pr edit <n> --title "..."` in the same turn as the body/files update. Readers judge the PR from the title first; a stale title after a body refresh looks unfinished.
 
+## PR size policy
+Resolve the target repository's applicable company and repository guidance before reading its facts settings or using the portable fallback. Apply every applicable restriction even when facts omit a numeric value; when guidance differs, keep the stricter constraints. Facts may refine a rule only when they do not weaken it. Preserve each source's boundary inclusivity and exception prerequisites, and never self-authorize an exception.
+
+The optional facts keys are `pr_size_target_lines` (positive integer), `pr_size_hard_max_lines` (positive integer or absent), and `pr_size_exclude_paths` (path classifications or patterns). The effective normal target is the strictest of 450 changed production lines, the configured target, and the applicable policy target. For exclusions, exclude a path only when applicable guidance permits it; facts may narrow the excluded set but cannot add exclusions that weaken guidance. When sources disagree on a path classification, resolve it rather than assuming the path is excluded. Use the strictest applicable maximum, and never let facts raise a maximum set by guidance. Without configured exclusions, exclude tests and documentation. A hard maximum exists only when applicable guidance or facts defines one. When no applicable guidance exists, use facts and the portable fallback. If applicable guidance exists but its required input is missing, contradictory, or too ambiguous to classify a changed path, resolve it before creating a PR rather than assuming an unrestricted fallback.
+
+Measure additions plus deletions in the final tree diff against the caller-supplied PR base, counting only paths included by the resolved classifications. Do not measure from trunk when the PR targets a stacked predecessor. Apply one disposition to each measured slice:
+
+- At or below the normal target: proceed with the ordinary PR description.
+- Above the normal target: split further where clean boundaries exist, or explain in Notes for reviewers why the slice cannot be split and meet any policy rationale or exception requirements.
+- Above a defined hard maximum: split before creating the PR.
+
+The portable fallback is a 450-line normal target excluding tests and documentation, with no hard maximum. Do not put organization-specific values or path classifications in shared skill text.
+
 ## PR Chunk Splitting
 When asked to split a branch diff against a base branch (for example `master`) into multiple PRs:
 
 ### Sizing Rules
-- Target fewer than 10 non-doc files per chunk; hard max is 15 non-doc files.
-- Doc-only files (`docs/**`, `AGENTS.md`, `README.md`) do not count toward the file limit but should be distributed to the chunk that owns the behavior they document.
-- Distribute chunks as evenly as possible; avoid one oversized chunk paired with several tiny ones.
+- Apply the PR size policy above to every chunk; do not use file counts or even distribution as a proxy for review size.
+- Documentation-only files should be assigned to the chunk that owns the behavior they document. A documentation-only first or last PR is allowed when it has disjoint file ownership and an honest description; preserve ordinary review and validation duties.
 
 ### Grouping Rules
 - Each chunk must have a single clear change reason (feature addition, refactor, infra/config, dependency upgrade, etc.).
 - Minimize file overlap between chunks; no file should appear in two chunks.
 - Identify "ride-along" changes (infrastructure, refactoring, dependency upgrades not tied to a specific feature) and group them into their own dedicated chunk.
-- When a core feature set is tightly coupled and cannot be split below the hard max without breaking the feature, say so explicitly and recommend opening a single PR rather than splitting artificially.
+- When a core feature set cannot be split cleanly within the hard maximum, reduce or restructure its scope before creating a PR.
 
 ### Output Format
 When presenting a split plan:
-1. List each chunk with: chunk number, change reason, non-doc file count, and file list.
-2. Show chunk sizes side-by-side so the user can judge evenness at a glance.
-3. If chunks form a dependency order (stacked PRs targeting each other rather than the base), state the recommended merge order explicitly.
-4. Flag any files that could reasonably fit in multiple chunks and explain the placement choice.
+1. List each chunk with: chunk number, change reason, measured changed lines, policy disposition, and file list.
+2. If chunks form a dependency order (stacked PRs targeting each other rather than the base), state the recommended merge order explicitly.
+3. Flag any files that could reasonably fit in multiple chunks and explain the placement choice.
 
 ## PR Branch Creation
 When the user asks to actually create the PR branches (not just plan them):

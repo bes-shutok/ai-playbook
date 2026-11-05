@@ -4,7 +4,7 @@ Added: 2026-11-02, doing-code-review r1 panel over the closeout-migrate-baseline
 
 Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family record: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-PROMPTS.md)
 
-Status: open, Priority: medium, Class: fix-class
+Status: covered-pending-execution (docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md), Priority: medium, Class: fix-class
 
 Witness: .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r1.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r2.md; .ai-playbook/reviews/2026-11-02-closeout-migrate-baseline-tracked-clobber-code-review-r3.md
 - **Cluster:** docs/history/backlog/2026-11-02-closeout-migrate-finally-guard-exception-containment.md

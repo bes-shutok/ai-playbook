@@ -6,6 +6,7 @@
 - **Priority:** low
 - **Driving force:** correctness (each item is a stale pointer, mis-citation, or un-pinned referent that a verifier can follow into a wrong conclusion)
 - **Cluster:** docs/history/backlog/2026-10-22-claim-lifecycle-disposition-attribution-wording.md
+- **Cluster:** docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md (same PLAN-PROMPTS contract surface; this row owns a narrower freeze-rule placement citation residual, that row owns loss of the shared rules block)
 - **Cluster:** docs/history/backlog/2026-10-22-reverse-squash-guard-backlog-root-resolution-narrowing.md
 
 Items (each independently foldable; one landing may carry several):

@@ -4,8 +4,13 @@ Backlog origin: docs/history/backlog/2026-11-03-done-run-setup-stdout-export-emi
 Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-03-plan-review-done-run-setup-stdout-export-emission-split-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 Execution budget: 2h total, largest task 1h
+Executed: yes (016695af6)
 
 Authoring claim: done-run-setup-stdout-export-emission-split.md (session sess_0579a3dc-7408-418d-bdf3-b7eea257a06e)
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-03-done-run-setup-stdout-export-emission-split.md: execution-landing flip returns the row to its `covered` witness at this completed twin. The implementation landed through this run's own execution landing (the earlier covered flip at 6f65e9a56 preceded any executed-scope verification; this run supplied the verification: production emission split, focused-suite pins, execution code-review r1 clean).
 
 ## Terms
 
@@ -104,14 +109,14 @@ Files:
 Primary class anchors:
 - `cmd_setup` in `scripts/done_run.sh`
 
-- [ ] `cmd_setup` delivers eval-safe acquisition stdout: given a successful fixture setup run over a scratch checkout, expects stdout lines that all parse as shell assignment lines (every line starts with `export `) and the full stdout evaluating without error under `eval` [class: REPOSITORY_TEST]
-- [ ] `cmd_setup` delivers the byte-identical payload contract: given the same fixture run captured before and after the change, expects the `export` lines byte-identical between the two captures [class: REPOSITORY_TEST]
-- [ ] `cmd_setup` delivers the stderr split: given the re-entered boundary path and the interrupted partial-marker classification stop, expects their `done_run setup: ...` status and diagnostic lines on stderr and their exports unchanged on stdout [class: REPOSITORY_TEST]
-- [ ] `cmd_setup` delivers the eval-safe refusal shape: given a refused fixture setup run, expects stdout carries no unparseable prose (printf-relayed release-output and writer-echo lines included in the move set, alongside plain echoes; the contract's `OUTCOME:` channel line stays on its own contract-owned channel and is not part of this move set) [class: REPOSITORY_TEST]
-- [ ] Run the canary additions against the current tree; expect RED: the success-path stdout still carries plain status `echo` lines beside the export block (tests and fixture wiring are selected at execution from the suite's existing harness) [class: REPOSITORY_TEST]
-- [ ] Move every status, advisory, and diagnostic emission on the `cmd_setup` acquisition path to stderr regardless of the emitting builtin (plain `echo` lines and printf-based relay lines alike), keeping each `export` line byte-identical on stdout [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the new cells pass, and the suite's stdout-pinned cells that assert the moved status lines in `proc.stdout` are updated to the new shapes in the same task (execution derives the affected cells from the suite; the current tree pins at least the residue-sweep relay family, failing-sweep relay, foreign-by-arrival writer-echo relay, and adopt-forward note in stdout), leaving the updated suite green [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: setup stdout carries only eval-able export lines, status lines to stderr` [class: IMPLEMENTATION_REQUIRED]
+- [x] `cmd_setup` delivers eval-safe acquisition stdout: given a successful fixture setup run over a scratch checkout, expects stdout lines that all parse as shell assignment lines (every line starts with `export `) and the full stdout evaluating without error under `eval` [class: REPOSITORY_TEST]
+- [x] `cmd_setup` delivers the byte-identical payload contract: given the same fixture run captured before and after the change, expects the `export` lines byte-identical between the two captures [class: REPOSITORY_TEST]
+- [x] `cmd_setup` delivers the stderr split: given the re-entered boundary path and the interrupted partial-marker classification stop, expects their `done_run setup: ...` status and diagnostic lines on stderr and their exports unchanged on stdout [class: REPOSITORY_TEST]
+- [x] `cmd_setup` delivers the eval-safe refusal shape: given a refused fixture setup run, expects stdout carries no unparseable prose (printf-relayed release-output and writer-echo lines included in the move set, alongside plain echoes; the contract's `OUTCOME:` channel line stays on its own contract-owned channel and is not part of this move set) [class: REPOSITORY_TEST]
+- [x] Run the canary additions against the current tree; expect RED: the success-path stdout still carries plain status `echo` lines beside the export block (tests and fixture wiring are selected at execution from the suite's existing harness) [class: REPOSITORY_TEST]
+- [x] Move every status, advisory, and diagnostic emission on the `cmd_setup` acquisition path to stderr regardless of the emitting builtin (plain `echo` lines and printf-based relay lines alike), keeping each `export` line byte-identical on stdout [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the new cells pass, and the suite's stdout-pinned cells that assert the moved status lines in `proc.stdout` are updated to the new shapes in the same task (execution derives the affected cells from the suite; the current tree pins at least the residue-sweep relay family, failing-sweep relay, foreign-by-arrival writer-echo relay, and adopt-forward note in stdout), leaving the updated suite green [class: REPOSITORY_TEST]
+- [x] Commit: `fix: setup stdout carries only eval-able export lines, status lines to stderr` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Pin the already-eval-safe acquire and wait-acquire echo in scripts/done-lock.sh
 
@@ -127,11 +132,11 @@ Primary class anchors:
 
 This task is a pinning task, not a move task: review r1's measured probe found the acquire and wait-acquire acquisition surfaces already eval-safe in the current bytes (a blocked wait-acquire and a blocked direct acquire each print zero bytes on stdout, a successful acquire prints exactly the two export assignment lines, and the holder diagnostics already print on stderr), so the origin's move arm is already satisfied and this task characterizes and pins that shape instead of re-implementing it.
 
-- [ ] `cmd_acquire` and `cmd_wait_acquire` deliver eval-safe acquisition stdout: given a successful fixture acquire over a scratch lock directory, expects stdout lines that all parse as shell assignment lines and a whole-stdout eval completing without error [class: REPOSITORY_TEST]
-- [ ] The lock echo delivers the blocked-path shape: given an acquire or wait-acquire that hits a held lock or times out, expects stdout empty of prose (holder wait diagnostics, timeout reports, and blocked holder evidence on stderr) and no partial assignment line on stdout [class: REPOSITORY_TEST]
-- [ ] Characterization cells assert the measured shapes above against the current tree; expect GREEN before any change (execution adds them to `scripts/test_done_lock_holder_visibility.sh` only where the suite does not already pin the shape, per its own r1 finding F1 verification) [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: the characterization cells pass with no production change; if any cell cannot pass against the current bytes, that measured gap is a real regression and is reported for triage instead of being papered over [class: REPOSITORY_TEST]
-- [ ] Commit: `test: pin the lock acquisition echo eval-safe shapes (already compliant)` [class: IMPLEMENTATION_REQUIRED]
+- [x] `cmd_acquire` and `cmd_wait_acquire` deliver eval-safe acquisition stdout: given a successful fixture acquire over a scratch lock directory, expects stdout lines that all parse as shell assignment lines and a whole-stdout eval completing without error [class: REPOSITORY_TEST]
+- [x] The lock echo delivers the blocked-path shape: given an acquire or wait-acquire that hits a held lock or times out, expects stdout empty of prose (holder wait diagnostics, timeout reports, and blocked holder evidence on stderr) and no partial assignment line on stdout [class: REPOSITORY_TEST]
+- [x] Characterization cells assert the measured shapes above against the current tree; expect GREEN before any change (execution adds them to `scripts/test_done_lock_holder_visibility.sh` only where the suite does not already pin the shape, per its own r1 finding F1 verification) [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: the characterization cells pass with no production change; if any cell cannot pass against the current bytes, that measured gap is a real regression and is reported for triage instead of being papered over [class: REPOSITORY_TEST]
+- [x] Commit: `test: pin the lock acquisition echo eval-safe shapes (already compliant)` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Consumer sweep and done skill Step 0 sentence
 
@@ -140,7 +145,7 @@ Context surface: the plan's Terms, this task, and `## Standing constraints` when
 Files:
 - `agents/skills/done/SKILL.md`
 
-- [ ] Sweep consumers of the acquisition banner: grep scripts and skills for consumers that eval, source, tee, or otherwise parse the setup or acquire stdout (the `DONE_RUN_` and lock-export banner patterns), name each consumer and its post-change behavior in the task log, and verify none depends on a removed stdout status line; a consumer that does gets its minimal fix folded here as plan-related work [class: REPOSITORY_TEST]
-- [ ] The done skill Step 0 success paragraph is corrected in place: the stale sentence stating setup prints one status line plus eval-able exports is rewritten to the new shape (stdout carries only eval-able export lines; status and diagnostics on stderr), and the same passage notes the stdout is now eval-safe while the evaluate-only-export-lines prescription stays as the consumer-side guard [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the final battery: both focused suites green (Validation Commands above) and a scripted whole-stdout eval of a fixture acquire completing with the lock exports set [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: done Step 0 notes eval-safe acquisition stdout` [class: IMPLEMENTATION_REQUIRED]
+- [x] Sweep consumers of the acquisition banner: grep scripts and skills for consumers that eval, source, tee, or otherwise parse the setup or acquire stdout (the `DONE_RUN_` and lock-export banner patterns), name each consumer and its post-change behavior in the task log, and verify none depends on a removed stdout status line; a consumer that does gets its minimal fix folded here as plan-related work [class: REPOSITORY_TEST]
+- [x] The done skill Step 0 success paragraph is corrected in place: the stale sentence stating setup prints one status line plus eval-able exports is rewritten to the new shape (stdout carries only eval-able export lines; status and diagnostics on stderr), and the same passage notes the stdout is now eval-safe while the evaluate-only-export-lines prescription stays as the consumer-side guard [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the final battery: both focused suites green (Validation Commands above) and a scripted whole-stdout eval of a fixture acquire completing with the lock exports set [class: REPOSITORY_TEST]
+- [x] Commit: `docs: done Step 0 notes eval-safe acquisition stdout` [class: IMPLEMENTATION_REQUIRED]

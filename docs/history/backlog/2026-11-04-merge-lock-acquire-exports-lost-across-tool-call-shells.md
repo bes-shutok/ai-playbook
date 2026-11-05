@@ -6,7 +6,7 @@
 - **Priority:** medium
 - **Origin class:** skill-usage issue capture (session investigate, first witnessed instance)
 Class: fix-class
-Cluster: docs/history/backlog/2026-11-04-lock-acquire-export-capture-census.md (same mechanism, the acquire-time export-capture discipline; this row owns the merge-landing lock arm, that row owns the family-wide census)
+Cluster: docs/history/backlog/2026-11-04-lock-acquire-export-capture-census.md (same mechanism, the acquire-time export-capture discipline; this row owns the merge-landing lock arm, that row owns the family-wide census), docs/history/backlog/2026-11-05-merge-lock-held-after-wait-refusal-lacks-age-deferral-guidance.md (same surface, the merge landing lock; different defect class - that row owns the held-after-wait refusal's age-based deferral guidance, this row owns acquire-to-release capture discipline across tool-call shells)
 
 ## Observed versus expected
 

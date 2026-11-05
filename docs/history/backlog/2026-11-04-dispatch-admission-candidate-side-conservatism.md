@@ -3,6 +3,7 @@
 Status: open
 Priority: low
 Cluster: parallel-execution-landing-serialization-blockers
+Cluster: docs/history/backlog/2026-11-05-dispatch-admission-outstanding-manifest-recovery.md
 Driving force: correctness
 
 Origin: Task 1 intermediate review (Step 1.2b, testing lens), off-plan observation on `scripts/dispatch_admission.py`.

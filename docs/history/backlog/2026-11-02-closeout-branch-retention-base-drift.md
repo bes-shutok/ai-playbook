@@ -1,7 +1,7 @@
 # Backlog: closeout retains completed branches after base-history drift
 
 - **Filed:** 2026-11-02, self-heal recovery of the quota-governor strand cleanup
-- **Status:** covered (docs/history/plans/2026-11-04-agent-resource-cleanup-disposition.md)
+- **Status:** covered (docs/history/plans/completed/2026-11-04-agent-resource-cleanup-disposition.md; executed tip 57c2b2158)
 - **Priority:** medium
 - **Origin class:** observed closeout refusal
 - **Class:** fix-class

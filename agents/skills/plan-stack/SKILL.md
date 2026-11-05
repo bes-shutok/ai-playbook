@@ -9,12 +9,13 @@ Use this skill when the user wants one plan to drive a linear series of pull req
 
 ## Authoring contract
 
-1. Confirm that the user wants one stack plan. Keep the ordinary one-plan-per-deployable-phase behavior when they do not ask for a stack.
-2. Group code work by a coherent class or type boundary with its owned documentation. Make each task one pull request.
-3. Assign every source, test, fixture, and documentation path to exactly one task. If two slices need the same file, group those edits in one task or reshape the slices before finalizing the plan.
-4. Order tasks linearly. Task 1 uses the configured base; every later task depends on the immediately preceding task. A task may depend only on its ancestors. State the predecessor and branch base in each task.
-5. Give every task an independent acceptance witness: the branch containing its ancestors and current task, with later tasks absent, passes task-specific checks and the repository-standard suite. Name the observable output or assertion that proves the slice works.
-6. Use the standard single-file plan format and lifecycle from `plans`. Keep stack-specific definitions and constraints in the plan's Terms and Standing constraints; do not duplicate the `execute-plan` or GitHub workflow procedures.
+1. Confirm one stack plan; otherwise keep one plan per deployable phase.
+2. Group code by coherent class or type boundary, with its tests and documentation needed to understand or safely use it. Make each task one pull request and assign every path once; group shared-file edits or reshape the slices.
+3. Budget each slice against the effective target resolved by `github-pr-workflow`'s PR-size policy. Split over-target slices when clean boundaries exist; otherwise record why the slice cannot be split and carry that rationale to the PR's Notes for reviewers. Do not copy policy values or lookup rules here.
+4. Allow one optional documentation-only task as the first or last PR, with disjoint file ownership and honest intended/current-state descriptions.
+5. Order tasks linearly: Task 1 uses the configured base; each later task depends on its immediate predecessor and uses that branch as base.
+6. Give each task an independent witness: ancestors plus current task, later tasks absent, pass task-specific checks and the repository-standard suite. Name the observable output or assertion.
+7. Use the standard single-file plan format and lifecycle from `plans`; keep stack terms and constraints in Terms and Standing constraints, without duplicating `execute-plan` or GitHub procedures.
 
 When separate repository plans split one agreed cross-repository stack, apply this task shape in every plan; a repository contributing one PR still uses one Task 1 with `Depends on: none` and that repository's configured `Base`.
 
@@ -22,17 +23,17 @@ When separate repository plans split one agreed cross-repository stack, apply th
 
 Each task includes:
 
-- `PR slice`: its class or type responsibility when it contains code, or `N/A` with its owned documentation for a documentation-only task.
-- `Depends on` and `Base`: none and the configured base for the first task; otherwise the immediately preceding task and its branch.
-- One disjoint `Files:` list covering the task's changes.
-- Acceptance checkboxes proving the task branch builds and passes task-specific and repository-standard validation without descendants.
-- A commit subject for the task boundary.
+- `PR slice`: code class or type, or `N/A` with owned docs for a docs-only task.
+- `Depends on` and `Base`: none and configured base for Task 1; otherwise the immediate predecessor and its branch.
+- One disjoint `Files:` list.
+- Acceptance checks for task-specific and repository-standard validation without descendants, plus an observable witness.
+- A commit subject.
 
-The plan's shared constraints state that child branches include all ancestors, no later tasks, and each file belongs to one task. The plan distinguishes implementation acceptance from later human-owned release conditions in `Ship when` prose.
+Child branches include ancestors and no later tasks; each file belongs to one task. Keep implementation acceptance separate from human-owned release conditions in `Ship when` prose.
 
 ## Output check
 
-Before returning the draft, trace each task's files and predecessor against the others. Reject duplicate file ownership and forward dependencies. Confirm each task names its code class or type slice, or marks it `N/A` when documentation-only; all tasks name owned docs, predecessor, and observable validation witness. Then continue through the `plans` skill's normal confirmation and lifecycle.
+Before returning the draft, verify ownership, ordering, slice budget and any docs-only task's position and honest description. Reject duplicate paths and forward dependencies. Confirm every task names its slice (`N/A` for docs-only), dependencies/base, owned docs, and validation witness; then continue the `plans` lifecycle.
 
 ## Integration Points
 

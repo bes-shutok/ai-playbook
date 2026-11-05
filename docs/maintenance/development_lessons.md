@@ -2521,7 +2521,7 @@ A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first s
 
 ## 104. A Deleted Backlog Origin Row Fails the Origins Archive Gate; Archive It Covered
 
-**Rule:** the origins gate's served dispositions for a landed plan's backlog origin row are archived under `docs/history/backlog/completed/` with the covered flip, archived under `rejected/`, or a closed-status header at the top level; a filesystem `rm` reads as `missing` and fails closed as a straggler, so removal from the top level means move-plus-flip, not deletion.
+**Rule:** the origins gate's served dispositions for a landed plan's backlog origin row are archived under `docs/history/backlog/completed/` with the covered flip, archived under `rejected/`, a closed-status header at the top level, or the repository guidelines' fold-and-delete shapes (an ad-hoc landing's same-change row deletion; an authoring completion's covered flip plus the disposition fold onto the archived plan with the origin file deleted); a bare deletion with neither fold nor archive reads as `missing` and still fails closed as a straggler.
 
 **Why:** witnessed 2026-10-19 (playbook repo): the silent-strand row was `git rm`-ed as the covering witness and the archive gate refused twice (missing = straggler) until the row was restored under the backlog completed archive with `- **Status:** covered (<plan path>)`; the default completed directory is `docs/history/backlog/completed`, not the plans completed dir.
 
@@ -4510,7 +4510,7 @@ Third witness 2026-11-02 (playbook repo, exec resume carrier run): the landing r
 
 **Rule:** two arms. (1) A fixture that stages tracked environment files for a worktree-branching test commits them on the fixture base before the test branches; dropping them into the worktree after the branch point leaves them untracked worktree-side, where the run's foreign-dirt gate reads them as foreign dirt and refuses. (2) When a test compares a path built from a literal temp directory against a path from `.resolve()`, derive both sides through the same resolve call; on this host macOS presents user-facing `/var/...` spellings while resolution yields `/private/var/...`, and a one-sided resolve fails every comparison.
 
-**Why:** witnessed 2026-10-27 (playbook repo, the absolute-tmp regression for the migration-manifest destination): worktree-side facts.md tripped the foreign-dirt gate until committed fixture-side pre-branch, and the `/var` duality broke `relative_to` until both sides derived from the resolved worktree root. Second witness 2026-10-30 (playbook repo, an exec-run suite pin over the capture output): the pin first compared a literal temp-dir path inside a substring assertion and failed on the same duality; the fix derived both sides through `.resolve()` with a substring (`assertIn`) shape, which also survives emitted text whose sentence continues past the checked span (the output line's trailing period would have broken an `endswith` pin).
+**Why:** witnessed 2026-10-27 (playbook repo, the absolute-tmp regression for the migration-manifest destination): worktree-side facts.md tripped the foreign-dirt gate until committed fixture-side pre-branch, and the `/var` duality broke `relative_to` until both sides derived from the resolved worktree root. Second witness 2026-10-30 (playbook repo, an exec-run suite pin over the capture output): the pin first compared a literal temp-dir path inside a substring assertion and failed on the same duality; the fix derived both sides through `.resolve()` with a substring (`assertIn`) shape, which also survives emitted text whose sentence continues past the checked span (the output line's trailing period would have broken an `endswith` pin). Third witness 2026-11-05 (playbook repo, a multi-resource disposition rehearsal fixture): the test keyed its worktree registration map by raw `git worktree list --porcelain` path strings while the fixture-side lookups carried the `/var/folders/...` spelling, so the registration lookup returned None and the first targeted run failed; keying both sides by `.resolve()` cleared it. The worker self-corrected in one iteration, but the lesson had existed since 2026-10-27 with no surface citing it at fixture-authoring time (the discoverability gap is filed as the 2026-11-05 orphan-sweep backlog row).
 
 **See also:** #245 (a preservation assertion needs the fixture to move the preserved value).
 
@@ -4718,6 +4718,8 @@ The reverse-squash guard's archive-egress check resolves the reviews home inside
 **Why:** witnessed 2026-10-28 (playbook repo, a learn run over the shared primary checkout): the constructed blob carried HEAD plus the run's two lesson edits only, but the pathspec commit landed the worktree copy, transplanting a peer session's uncommitted deletions of two landed witness blocks into history (caught by the commit's `--stat` reading 4 deletions where the own hunks had 1); base-branch immutability made the repair a corrective restore commit (`f69f12577`) re-adding both blocks, and the intended corpus state was reached only across the two commits. Second witness 2026-10-31 (playbook repo): even the plain `git add <path>` plus pathspec commit arm carries the same hazard on a shared checkout - the index is shared, so the add swept a peer session's staged deletions of the same path into the commit; caught the same way (--stat deletions vs own hunks) and repaired with a corrective restore. Pre-commit mechanical check on a shared checkout: `git status --short` staged column and `git diff --cached -- <path>` before any add. Third witness 2026-10-31 (playbook repo, an exec carrier run's landing): even the staged-column check is insufficient when the sweep source is the WORKING TREE - a plain multi-path `git add` swept a peer session's uncommitted working-tree edits (an unlanded fix plus its fixtures and doc-registry rows) authored between the run's file reads and the add; the `--stat` read missed it because the swept paths were whole-file changes the run had legitimately touched, and the sweep surfaced only through a downstream test suite at the landed HEAD and the focused review panel. So the shared-checkout discipline is two checks, not one: immediately before the landing commit, re-derive the changed-file set (`git diff --cached --name-only`) and diff it against the hunks you authored (a foreign path or a foreign hunk inside a shared path goes back to its owner session before the commit); and after any landing on a shared checkout, run the touched surface's test suite at the new HEAD before declaring the landing done - the suite is the catcher when the diff read is not. Fourth witness 2026-11-03 (playbook repo, the wrong-location authoring run's completion pass on main): the sweep needed NO add at all - two explicit `git add <own-path>` calls followed by a bare `git commit` consumed the shared index wholesale, landing a peer session's PRE-STAGED one-line edit in a path the run never touched; caught on the spot by re-reading `git status --porcelain` in the same message before reporting, and repaired with an attributing revert (`33707a7f9`) so the owner re-lands deliberately. The pre-commit check generalizes: on a shared checkout, ANY commit - not only landings - must be preceded by `git diff --cached --name-only` against the session's own authored set.
 
 **See also:** #227 (a landing's recorded sha comes from the landing receipt: the verify arm); lesson 234's second witness (the sibling capture surprise: a pathspec commit landing the whole staged index); the index-blob construction practice for committing own hunks out of a foreign-dirty file.
+
+Second witness 2026-11-05 (playbook repo, memory-index-load-budget-consolidation execution): a soft-reset rebuild recomposed the archive commit by pathspec with only the renamed file and the deleted row named, silently dropping the staged living-path deletion half of the rename from the committed tree while it stayed in the index; `git ls-files` (an index view) masked the gap and only tree-level inspection caught the two-path state before landing. The family's verify arm is the operative defense both times: read the rebuilt commit's `git show --stat` against the intended tree delta - both halves of a rename are one delta - before building on it.
 
 ## 291. A Record Field That Wants a Digest Is Authored Empty or With a Freshly Computed Value, Never With a Composed Plausible-Looking One
 
@@ -6006,3 +6008,83 @@ Seventh witness extension to #65 (2026-11-02, execution run landing, main-rider 
 **Why:** witnessed 2026-11-04 (playbook repo, the producer code-family run's Phase 3 r1): the grammar-home pair was validated by calling the builder directly and a mutation dropping `epilog=`/`formatter_class=` left all 60 suite tests and 853 selftest checks green while `--help` contained zero occurrences of the example; the fold added the standing `--help`-surface check and the mutation replay then fails exactly it.
 
 **See also:** #391 (probe every named surface: the enumeration discipline that finds the untested surface), #397 (same-run witness-strength family).
+
+## 400. A Harness-Inactive Worker May Have Already Written Its Worktree
+
+**Principle:** Family A (a worker's output is witnessed at the disk it wrote, never at the harness's terminal marker).
+
+**Trigger:** an implement sub-agent returns an inactivity/timeout marker, and the next step is relaunching it or adopting the inline fallback.
+
+**Rule:** before treating a harness-marked-inactive worker as dead-with-no-output, diff the run worktree: uncommitted edits to the task's `Files:` list are the worker's delivered work even when it never returned a report or wrote its log. Adopt the recovered diff through the parent's own verification (read the full diff, run the task validation, fix failing cells) instead of relaunching a duplicate that would collide with the hidden edits, and record the provenance in the task's implement log. The liveness rule stays unchanged: verify termination first; the marker alone is not that verification in either direction.
+
+**Why:** witnessed 2026-11-05 (playbook repo, the done-run-setup-stdout-export-emission-split execution run): two consecutive implement workers were marked inactive at the 10-minute boundary with "no log, no changed files" read from a stale pre-write listing; both had in fact delivered the complete Task 1 move work (+33/-40 production, +223 suite cells) in the worktree. The first suite run then executed the recovered bytes and its 2 failures localized to the workers' own over-tight cells; the recovery, not a relaunch, salvaged the whole task.
+
+**See also:** #391 (probe every named surface: the disk-check discipline that finds the hidden edits).
+
+## 401. Persist Orchestrated Review Worker Returns to Disk on Arrival, Before Any Synthesis
+
+**Principle:** Family D (durable records land where their consumers read them; session-volatile context is not a record home). **Shape trigger:** a parent-orchestrated panel whose lens workers return findings into the parent conversation, with staging synthesis still ahead and any chance of a context compaction between arrival and write.
+
+**Rule:** the moment a lens worker's return arrives, write it verbatim to a per-worker payload file beside the round's session logs before synthesizing anything; the staging record's panel table (per-worker raw/solo/echo counts) is reconstructable only from those payloads. A return that lives only in conversation dies with the next compaction, and a round whose attribution is unrecoverable is void, not stageable: this run lost a full two-worker round (findings survived as distilled text, per-worker attribution did not) and paid a replacement certifying round to re-cover the same bytes. The void is honest when documented in the round log with the re-verified fix lineage; the persistence habit is cheaper than the void.
+
+**Why:** witnessed 2026-11-05 (playbook repo, memory-index-load-budget-consolidation execution, review r2): the first dispatch's returns compacted away before staging, disk grep for the findings' attribution came back empty, and the round was voided with the address pass applied from the distilled summary; every later round persisted payloads on arrival and staged cleanly.
+
+**See also:** the review-staging record contract's panel-table fields (the fields the payloads must let you rebuild).
+
+## 402. A Landing Gate's Evidence Leg Resolves Only the Homes It Names; Mirror Gate-Required Records Into the Source Worktree
+
+**Principle:** Family H (verify the real thing: read where the gate actually reads, not where the corpus canonically lives). **Shape trigger:** a pre-landing or landing gate whose refusal names an evidence record while the run's records were all authored at the primary checkout of a worktree run.
+
+**Rule:** before invoking a worktree landing, check which checkout each evidence-consuming gate anchors at and copy every gate-required record byte-identically into the homes that checkout resolves - the plans-egress pointer into the source worktree's reviews home, not only the primary's. The worktree landing's check-archive leg anchors at the source worktree precisely so the record survives the primary checkout staying byte-unchanged during composition; a record present only at the primary fails the leg with a missing-evidence refusal that reads like the record does not exist.
+
+**Why:** witnessed 2026-11-05 (playbook repo, same execution): the landing refused twice on the exec-review evidence leg while the pointer sat complete at the primary reviews home; a byte-identical copy into the worktree's reviews home (the code comment names the anchor: the run's exec-review record exists on the source worktree's disk) passed the leg on the next attempt.
+
+**See also:** #290 (verify the real thing's commit arm), the land-worktree help text naming the source-worktree anchor.
+
+## 403. A Tracked Durable Row Filed Mid-Review-Loop Forces a Fresh Round
+
+**Principle:** Family C (a loop's freshness gate and its backlog-capture duty interact; file deferrals only at a pre-registered exit boundary).
+
+**Trigger:** an execute-plan Phase 3 (or review-loop) round ends with valid non-blocking findings to defer, and the loop wants both the durable rows and the exit.
+
+**Rule:** before staging the round's record, pre-register the exit policy in the manifest (which residual classes defer, which round is the exit round), and file deferred-findings backlog rows ONLY when no further digest change is needed - because a tracked row changes the branch diff, the code-family digest, and the just-written round record binds the pre-filing digest; the record selector's re-bind grading accepts only comment-only script hunks, so a docs-only additive delta still forces a fresh adversarial round. Fix-in-round beats defer when the finding is cheap text, and a mechanically closed enumeration (an exhaustive call-site sweep) is the closure evidence that stops an inventory-widening oscillation across rounds.
+
+**Why:** witnessed 2026-11-05 (playbook repo, the closeout-clobber-guard-review-residual-trio execution run): the r5 address pass deferred six findings into two tracked rows (commit 479f6b86b), which moved the digest and forced r6; r6's three row-text findings were fixed in 08ead2fe4, moving the digest again and forcing r7 - two extra four-lens waves spent on the interplay. The r7 exit was clean only because the manifest pre-registered "no further tracked changes after the workers launch" and the r7 enumeration was mechanically closed.
+
+**See also:** #397 (same-run witness-strength family: the worker probes that made the deferrals honest).
+
+## 404. Test setUp Must Capture Host Env Before Applying Hermeticity Pins
+
+**Principle:** Family A (a save/restore fixture captures the true host state, never the pins it is about to apply).
+
+**Trigger:** a test class both strips host environment variables for hermeticity and applies process-env pins (lock dirs, HOME, config redirects) whose values the class also wants restored.
+
+**Rule:** run the strip-and-capture BEFORE applying the pins into the process env: the pins' own values (for example devnull config redirects) then sit in `os.environ` at capture time, so the saved map records pin values instead of host state, the restore re-applies the pins after cleanup, and the process env stays mutated for every later test in the same pytest process. Capture-first ordering makes an unset host key absent from the capture, the pop-marker fires, and restore converges on the true host values in both the host-set and host-unset directions.
+
+**Why:** witnessed 2026-11-05 (playbook repo, the closeout-clobber-guard-review-residual-trio execution run, review r4): a shared strip helper added in r3 was invoked after the hermeticity pins in both twin setUps, so `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` survived cleanup as devnull for the rest of the pytest process and a host-set value was silently discarded; two lenses reproduced it empirically (in-process runs of one test per class, before/after cleanup) and the fresh adversarial round priced the environment-mutation class at Medium.
+
+**See also:** #397 (same-run witness-strength family), #400 (the same run's worker-recovery lesson).
+
+## 405. Worktree Transfer-In Is Need-Scoped; a Bulk Reviews-Copy Strands the Done Setup
+
+**Principle:** Family A (state the contract's scope, not just its name; a wholesale copy of a shared gitignored home manufactures foreign state).
+
+**Trigger:** provisioning a fresh authoring (or execution) worktree whose transfer-in step names the reviews home among the gitignored inputs.
+
+**Rule:** transfer in only the review artifacts this run needs and owns (for a pre-plan authoring run: none; the run's own staging records are written later); never bulk-copy the primary checkout's whole `.ai-playbook/reviews/` corpus into the worktree. The done setup's claim-or-foreign gate enumerates every staging candidate on disk: a copied corpus becomes hundreds of candidates that are neither owned nor foreign, the manifest write refuses, and the remedy is deleting the copies (the primary home stays canonical) or bulk-marking them foreign - both recoverable, both avoidable.
+
+**Why:** witnessed 2026-11-05 (playbook repo, this authoring run): a `rsync -a` of the primary reviews home into the fresh worktree seeded ~500 foreign records; `done_run.sh setup` refused at write-manifest with the claim-or-foreign violation listing the full copied corpus, and the start-empty invariant had to be restored by hand before setup could pass.
+
+**See also:** the Worktree-first standard's Transfer-in implementation (the start-empty invariant is fresh-worktree-only and the inputs are the ones the readiness gate resolves).
+
+## 406. The Staging Validator's Attempt-Ledger Parser Needs a Following Heading; a Final-Section Ledger Parses Zero Rows
+
+**Principle:** Family A (a section-extraction regex over Markdown consumes up to the next heading; a document ending on the extracted section yields an empty extraction, not its content).
+
+**Trigger:** composing a review-staging pair whose `### Attempt ledger` section is the document's last section (no trailing `### ` heading after the table).
+
+**Rule:** end the staging Markdown with a trailing low-stakes section after the Attempt ledger (for example a `### Notes` block), or reorder so the ledger is never final: the validator's coverage-parity arm extracts the ledger section with a lookahead that terminates only at the next `### ` or `## ` heading, so a final-section ledger extracts nothing, the parsed row count reads 0 against the sidecar's non-empty `attempts[]`, and the record refuses with `Attempt ledger rows 0 != sidecar attempts[] N` even though the table itself is well-formed.
+
+**Why:** witnessed 2026-11-05 (playbook repo, this authoring run's r1 plan-review pair): the first validator pass failed with exactly that disagreement while the ledger table carried all three workers' rows; adding a trailing `### Notes` section cleared it without any table change. Prior witnesses (#311 family, lesson corpus hits on the ledger's required presence) covered the section's existence, not the extraction terminator.
+
+**See also:** #311 (re-derive from raw bytes on first mismatch), the review-staging validator's coverage-parity arm (the enforcing surface).

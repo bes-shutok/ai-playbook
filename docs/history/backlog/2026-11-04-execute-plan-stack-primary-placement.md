@@ -35,3 +35,13 @@ Also trace which repository instructions, facts, and existing execution lessons 
 - `agents/skills/execute-plan/SKILL.md`, Stack-task entry permits recovery and task work to remain in the primary checkout.
 - `agents/skills/execute-plan-stack/SKILL.md`, step 2 says to adopt the established worktree; step 4 binds the branch transition to the retained run worktree.
 - The target repository facts declare `worktree_policy = "primary"`; the operator directed execution to remain in the primary checkout after the assistant proposed a worktree.
+
+## Additional witnessed failure: policy update during setup (2026-11-05)
+
+The same stack workflow repeated the placement error in an interactive Codex run. The first facts read had no placement key, so the assistant asked a bootstrap placement question. Before provisioning it relied on that earlier snapshot instead of rereading the file. After the operator reported adding the configuration, the next disk read showed `worktree_policy = "primary"`. The assistant acknowledged that value but continued in its newly created worktree, citing the retained-placement exception. The operator explicitly rejected that reasoning and directed a return to branches in the primary checkout.
+
+This witness separates two causes. The pre-provision decision used stale configuration across an outstanding setup question. The later decision inverted instruction precedence: an exception intended to preserve an established run was treated as authority to disregard the operator's current placement direction. The configuration was available and understood at the second decision; lack of access was not the cause. The run then incurred a worker stop, source and artifact transfer, claim rebinding, and local fixture relocation.
+
+Expected recovery is to observe the existing worker to termination, preserve and verify its owned changes, and honor the operator's primary-placement direction under the existing claim and continuity controls. Retained-run identity prevents duplicate ownership; it does not authorize refusing an operator-directed relocation.
+
+Investigation extension: assess whether the existing policy paragraph can state the fresh-config consult and explicit-direction precedence more clearly without adding another gate or placement protocol. Cover both an initially configured primary project and a configuration change made while the bootstrap answer is pending. Keep the existing safeguards against silently relocating unrelated live runs. No shared skill or validator was changed during the consumer recovery.

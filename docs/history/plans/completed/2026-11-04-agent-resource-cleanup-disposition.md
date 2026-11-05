@@ -1,5 +1,7 @@
 # Plan: agent resource cleanup disposition
 
+Executed: yes (57c2b2158713d884e66155fb1c274b5e0860047a)
+
 Backlog origins (scope of record):
 - docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md
 - docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md
@@ -120,16 +122,16 @@ Primary class anchors:
 - `_gate_branch_closeout` in `scripts/worktree_closeout_migrate.py`
 - `_branch_landing_content_scope` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] RED fixture for the drifted-base false positive: given a completed-plan branch whose tip tree equals its recorded landing commit's tree, with the landing commit unreachable from the current destination tip and the landing identity recorded in the closeout migration manifest, expects the closeout adjudication to authorize deletion with no retention [class: REPOSITORY_TEST]
-- [ ] RED fixture for the guard direction: given a branch whose authored delta from its recorded start commit contains a path absent at the destination, expects retention with the unaccounted reason [class: REPOSITORY_TEST]
-- [ ] RED fixture for the fallback: given a branch with no recorded start commit and no exact-tree landing proof, expects today's retain-and-report verdict [class: REPOSITORY_TEST]
-- [ ] RED fixture for branch-only evidence: given a removed authoring worktree, expects the branch-only retry to read the strand's identity row from the primary slug home's migration manifest [class: REPOSITORY_TEST]
-- [ ] Implement the landing-identity record: at closeout transfer time the closeout migration manifest's branch record gains the landing commit's object id and touched path set, so the proof reads recorded evidence instead of walking only destination-reachable history [class: IMPLEMENTATION_REQUIRED]
-- [ ] Implement the authored-delta proof: judge the branch's changed paths from its recorded start commit instead of the current merge base, so inherited base drift never enters the content scope [class: IMPLEMENTATION_REQUIRED]
-- [ ] Implement the landing-aware landing proof: when the recorded landing commit is unreachable from the destination tip, match its recorded tree and touched set and require the branch's authored delta present at the destination before authorizing any deletion, so a destination rewrite that dropped the landed content still retains the branch [class: IMPLEMENTATION_REQUIRED]
-- [ ] Implement the authoring-strand manifest binding: the authoring closeout appends its strand's branch identity row to the primary slug home's existing migration manifest the execution strand already uses, so a removed worktree's branch-only retry reads that manifest and no second evidence surface is created [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the new fixtures, then the full closeout-migrate gate suite, expects GREEN with no sibling regression [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: judge branch closeout authored delta from recorded start commit` [class: IMPLEMENTATION_REQUIRED]
+- [x] RED fixture for the drifted-base false positive: given a completed-plan branch whose tip tree equals its recorded landing commit's tree, with the landing commit unreachable from the current destination tip and the landing identity recorded in the closeout migration manifest, expects the closeout adjudication to authorize deletion with no retention [class: REPOSITORY_TEST]
+- [x] RED fixture for the guard direction: given a branch whose authored delta from its recorded start commit contains a path absent at the destination, expects retention with the unaccounted reason [class: REPOSITORY_TEST]
+- [x] RED fixture for the fallback: given a branch with no recorded start commit and no exact-tree landing proof, expects today's retain-and-report verdict [class: REPOSITORY_TEST]
+- [x] RED fixture for branch-only evidence: given a removed authoring worktree, expects the branch-only retry to read the strand's identity row from the primary slug home's migration manifest [class: REPOSITORY_TEST]
+- [x] Implement the landing-identity record: at closeout transfer time the closeout migration manifest's branch record gains the landing commit's object id and touched path set, so the proof reads recorded evidence instead of walking only destination-reachable history [class: IMPLEMENTATION_REQUIRED]
+- [x] Implement the authored-delta proof: judge the branch's changed paths from its recorded start commit instead of the current merge base, so inherited base drift never enters the content scope [class: IMPLEMENTATION_REQUIRED]
+- [x] Implement the landing-aware landing proof: when the recorded landing commit is unreachable from the destination tip, match its recorded tree and touched set and require the branch's authored delta present at the destination before authorizing any deletion, so a destination rewrite that dropped the landed content still retains the branch [class: IMPLEMENTATION_REQUIRED]
+- [x] Implement the authoring-strand manifest binding: the authoring closeout appends its strand's branch identity row to the primary slug home's existing migration manifest the execution strand already uses, so a removed worktree's branch-only retry reads that manifest and no second evidence surface is created [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the new fixtures, then the full closeout-migrate gate suite, expects GREEN with no sibling regression [class: REPOSITORY_TEST]
+- [x] Commit: `fix: judge branch closeout authored delta from recorded start commit` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Resource cleanup disposition contract in self-heal with integration pointers
 
@@ -144,12 +146,12 @@ Files:
 Primary class anchors:
 - `## Resource cleanup disposition` in `agents/skills/self-heal/SKILL.md`
 
-- [ ] The contract section defines the per-resource disposition vocabulary (verified removal, named retention with owner and exact unmerged work, continuation through the owning authorized closeout) and the rule that a completion claim is valid only when it matches the full inventory [class: IMPLEMENTATION_REQUIRED]
-- [ ] The contract section binds the cleanup handoff to the existing Recovery terminal-condition duty by pointer, never restating it [class: IMPLEMENTATION_REQUIRED]
-- [ ] The contract section names the runtime-neutral inventory sources (worktree list, branch ancestry, run and claim records) and forbids a new inventory surface [class: IMPLEMENTATION_REQUIRED]
-- [ ] One-line integration pointers from the done worktree-removal report, the execute-plan worktree closeout, and the plans landing handoff name the contract section without duplicating its vocabulary [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the hygiene scan and the pins suite, expects exit 0 on both [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: add resource cleanup disposition contract to self-heal` [class: IMPLEMENTATION_REQUIRED]
+- [x] The contract section defines the per-resource disposition vocabulary (verified removal, named retention with owner and exact unmerged work, continuation through the owning authorized closeout) and the rule that a completion claim is valid only when it matches the full inventory [class: IMPLEMENTATION_REQUIRED]
+- [x] The contract section binds the cleanup handoff to the existing Recovery terminal-condition duty by pointer, never restating it [class: IMPLEMENTATION_REQUIRED]
+- [x] The contract section names the runtime-neutral inventory sources (worktree list, branch ancestry, run and claim records) and forbids a new inventory surface [class: IMPLEMENTATION_REQUIRED]
+- [x] One-line integration pointers from the done worktree-removal report, the execute-plan worktree closeout, and the plans landing handoff name the contract section without duplicating its vocabulary [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the hygiene scan and the pins suite, expects exit 0 on both [class: REPOSITORY_TEST]
+- [x] Commit: `docs: add resource cleanup disposition contract to self-heal` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Acceptance rehearsal of the multi-resource disposition contract
 
@@ -163,6 +165,12 @@ Primary class anchors:
 - `## Resource cleanup disposition` in `agents/skills/self-heal/SKILL.md`
 - `_gate_branch_closeout` in `scripts/worktree_closeout_migrate.py`
 
-- [ ] Rehearsal fixture test recorded in the Task 1 test file: given a temporary repository holding a landed branch, an unmerged branch, and an active foreign worktree, expects the disposition steps to produce one verified outcome per resource and the completion claim inventory to match [class: REPOSITORY_TEST]
-- [ ] The rehearsal preserves every foreign or active resource and removes only fixture-created resources [class: REPOSITORY_TEST]
-- [ ] Commit: `test: rehearse multi-resource cleanup disposition contract` [class: REPOSITORY_TEST]
+- [x] Rehearsal fixture test recorded in the Task 1 test file: given a temporary repository holding a landed branch, an unmerged branch, and an active foreign worktree, expects the disposition steps to produce one verified outcome per resource and the completion claim inventory to match [class: REPOSITORY_TEST]
+- [x] The rehearsal preserves every foreign or active resource and removes only fixture-created resources [class: REPOSITORY_TEST]
+- [x] Commit: `test: rehearse multi-resource cleanup disposition contract` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md: covered by this plan's Tasks 1-2 (disposition contract + base-drift closeout narrowing); origin row flipped covered by the execution landing.
+- docs/history/backlog/2026-11-02-closeout-branch-retention-base-drift.md: covered by Task 1 (the base-drift false-positive arm narrowed; recorded-start authored-delta judgment); origin row flipped covered by the execution landing.
+- docs/history/backlog/2026-11-05-agent-resource-cleanup-pin-coverage-residuals.md: created by this run as the durable residual home (items 1-18); stays open by design.

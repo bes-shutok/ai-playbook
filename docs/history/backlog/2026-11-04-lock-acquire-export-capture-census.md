@@ -5,7 +5,7 @@ Priority: normal
 Class: fix-class
 Origin class: learn Step 1.9 project-issue capture (2026-11-04 24h session-pattern harvest, window 2026-11-03 07:13 to 2026-11-04 07:13)
 Added: 2026-11-04
-Cluster: docs/history/backlog/2026-11-04-merge-lock-acquire-exports-lost-across-tool-call-shells.md (same mechanism, the acquire-time export-capture discipline; that row owns the merge-landing lock arm, this row owns the family-wide census), docs/history/backlog/2026-11-04-parallel-execution-landing-serialization-blockers.md (same surface, the merge landing lock; different defect class - that row owns the lock's parallelism-admission scope, this row owns acquire-time export capture)
+Cluster: docs/history/backlog/2026-11-04-merge-lock-acquire-exports-lost-across-tool-call-shells.md (same mechanism, the acquire-time export-capture discipline; that row owns the merge-landing lock arm, this row owns the family-wide census), docs/history/backlog/2026-11-04-parallel-execution-landing-serialization-blockers.md (same surface, the merge landing lock; different defect class - that row owns the lock's parallelism-admission scope, this row owns acquire-time export capture), docs/history/backlog/2026-11-05-merge-lock-held-after-wait-refusal-lacks-age-deferral-guidance.md (same surface, the merge landing lock; different defect class - that row owns the held-after-wait refusal's age-based deferral guidance, this row owns acquire-time export capture)
 
 ## Observed versus expected
 

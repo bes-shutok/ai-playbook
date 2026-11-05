@@ -966,7 +966,7 @@ expect_absent "superseded uncontained execution-child marker wording must be abs
 pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
 # scheduler ops lanes and durability plan Task 4 (2026-09-19): the recycling
 # update call is demoted to a verified-only optimization leg, so the old
-# 'ladder recycling needle' literal (the update-as-primary step 2 sentence)
+# 'ladder recycling needle' literal (the update-as-primary step 2 sentence); the operative row below was renamed and re-needled to the activated chain default by plan docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md Task 4
 # and the old 'hand-off proceed refusal bound' literal (the update-refusal
 # convergence sentence "converges to the fallback's fresh-id create within
 # the same dispatch attempt") both died with the recycling primary path.
@@ -974,7 +974,7 @@ pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct 
 # below carries the same semantics on the operative path (a create refusal
 # routes to the next mutating call, the lingered-record delete, instead of
 # stranding the dispatch). Both dead literals are frozen absent.
-pin "ladder operative delete-plus-create needle" grep -qF 'delete-plus-create is the operative path' "$Z"
+pin "ladder operative chain default needle" grep -qF 'the launchd clocked-order chain is the operative default child dispatch' "$Z"
 pin "recycling update is a verified-only optimization leg" grep -qF 'may replace the delete-plus-create above only when a live-verified parent-to-child flip is recorded' "$Z"
 pin "hand-off proceed refusal bound (operative path)" grep -qF 'deleting your own lingered completed spawner record first when the create is refused for the automation-born cap' "$Z"
 expect_absent "demoted update-as-primary recycling wording must be absent from zcode.md" 'update the recorded parent record into the child one-shot' "$Z"
@@ -1028,7 +1028,7 @@ pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the asse
 [ "$(grep -oF 'never curtails an advancing dispatch' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "advancing-dispatch scoping count" "PIN FAIL: advancing-dispatch scoping count" || fail=1; }
 [ "$(grep -oF 'The bound counts decided mutations, not primitive calls' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit clause count" "PIN FAIL: bound unit clause count" || fail=1; }
 # bound unit-clause parenthetical count (dfm loop-guard successor)
-[ "$(grep -oF "a parent re-arm's shape is per the recipe's operative shape (delete-plus-create today; the recycling leg only if a verified flip reopens it)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit-clause parenthetical count" "PIN FAIL: bound unit-clause parenthetical count" || fail=1; }
+[ "$(grep -oF "a parent re-arm's shape is per the recipe's activated shape (the launchd clocked-order chain for bound sessions; the delete-plus-create fallback behind its guard rule sets, the recycling leg only if a verified flip reopens it)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit-clause parenthetical count" "PIN FAIL: bound unit-clause parenthetical count" || fail=1; }
 [ "$(grep -oF 'any refusal after that single call takes the existing escalation paths' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "escalation-routing count" "PIN FAIL: escalation-routing count" || fail=1; }
 [ "$(grep -oF "must stop touching automation primitives immediately after it regardless of the call's outcome" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "stop-bound tail count" "PIN FAIL: stop-bound tail count" || fail=1; }
 [ "$(grep -oF "the loop's signature appeared (two listings, no mutating step between them)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "guard-signature restatement count" "PIN FAIL: guard-signature restatement count" || fail=1; }
@@ -3358,7 +3358,10 @@ pin "Project-class guard paragraph marker" grep -qF 'Project-class guard.' "$S"
 # rollback supersession, the truncation no-re-poll span, the
 # dispatch-discipline exception enumeration, the two-mutating-calls
 # parenthetical, and the duties-core mirror), and arm 3 the launchd
-# default-in-waiting demotion paragraph. Every row is count-gated at exactly 1
+# default paragraph, activated 2026-11-03 by plan
+# docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md
+# Task 4 (the arm-3 rows below convert to absence rows and a retained
+# fallback re-pin under that plan). Every row is count-gated at exactly 1
 # whole-file per the plan's expect1 idiom, so a restatement anywhere fails as
 # a second home.
 pin "arm 1 ownership-allowlist rule-set heading" test "$(grep -oF 'Ownership allowlist (every automation delete on this ladder)' "$Z" | wc -l | tr -d ' ')" -eq 1
@@ -3378,9 +3381,24 @@ pin "arm 2 rollback supersession span" test "$(grep -oF 'the distinct-failure ro
 pin "arm 2 dispatch-discipline probe exception span" test "$(grep -oF 'and the post-delete probe listing), which precedes or intervenes' "$Z" | wc -l | tr -d ' ')" -eq 1
 pin "arm 2 two-mutating-calls probe span" test "$(grep -oF 'plus the mandated post-delete probe listing between them' "$Z" | wc -l | tr -d ' ')" -eq 1
 pin "arm 2 duties-core probe mirror span" test "$(grep -oF 'one read-only listing probe precedes the create' "$DC" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 demoted-fallback paragraph heading" test "$(grep -oF 'Demoted fallback (arm 3)' "$Z" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 retired default-dispatch span" test "$(grep -oF 'stops being the default child dispatch for sessions already bound to an armed record' "$Z" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 promotion-review activation span" test "$(grep -oF 'takes over as the operative default for bound sessions only when the promotion review' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "arm 3 demoted-fallback paragraph heading" test "$(grep -oF 'Demoted fallback (arm 3)' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "arm 3 retired default-dispatch span" test "$(grep -oF 'documented fallback firing only behind both guard rule sets' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "arm 3 promotion-review activation span" test "$(grep -oF 'takes over as the operative default for bound sessions only when the promotion review' "$Z" | wc -l | tr -d ' ')" -eq 0
+
+# --- dispatch-ladder-rearm-joint-hardening Task 4 pins (plan
+# docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md,
+# Task 4) --- companion rows over the activated text and absence rows over
+# the six remaining removed spans of the validation block's negation greps
+# (the two converted arm-3 rows above cover the other two).
+pin "ladder re-arm chained default needle" grep -qF 'defaults to arming the chain through the launchd clocked-order chain at the next slot' "$DC"
+pin "ladder gap-row disposition needle" test "$(grep -oF 'clocked-order discharge-verification gap row' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "ladder verify-successor posture needle" grep -qF 'the verify-successor arm stays warning-only with zero recorded catches at review time' "$Z"
+pin "removed span: operative-path parenthetical" test "$(grep -oF 'delete-plus-create is the operative path; the recycling update call is demoted' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: cost-review sentence" test "$(grep -oF "The promotion review and the guard rules' cost review are separate decisions" "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: keeps-operative declaration" test "$(grep -oF 'keeps delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: step-2-operative declaration" test "$(grep -oF 'step 2 is delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: UNVERIFIED-operative declaration" test "$(grep -oF 'stays UNVERIFIED with delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: only-operative-path declaration" test "$(grep -oF 'the only operative path' "$Z" | wc -l | tr -d ' ')" -eq 0
 
 # --- two-mode loop policy Task 3 pins (plan
 # docs/history/plans/completed/2026-10-06-two-mode-loop-policy.md, Task 3) ---

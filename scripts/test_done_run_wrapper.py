@@ -406,15 +406,18 @@ class DoneRunSetupTest(FixtureMixin, unittest.TestCase):
         proc = self.run_setup("--label", "fixture-run", cwd=wt, env=env)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("foreign-by-arrival", proc.stdout)
-        # Report-line shape pinned beyond the loose substring: the count and
-        # the bounded sample listing (the existing report-emission limit).
+        # the writer echo relays on stderr (the acquisition stdout carries
+        # only export lines); the report shape is pinned beyond the loose
+        # substring: the count and the bounded sample listing (the existing
+        # report-emission limit)
+        self.assertIn("foreign-by-arrival", proc.stderr)
         self.assertIn(
             "write-manifest: foreign-by-arrival: 1 gitignored staging "
             "candidate(s)",
-            proc.stdout,
+            proc.stderr,
         )
-        self.assertIn(review_rel, proc.stdout)
+        self.assertIn(review_rel, proc.stderr)
+        self.assertNotIn("foreign-by-arrival", proc.stdout)
         exports = self.eval_exports(proc.stdout)
         marker_epoch = int(Path(exports["DONE_RUN_MARKER"]).read_text().split()[0])
         self.assertGreater(marker_epoch, doc_mtime)
@@ -477,15 +480,17 @@ class DoneRunSetupResidueSweepTest(FixtureMixin, unittest.TestCase):
 
     def assert_summary_relays_skip(self, proc, branch: str, reason: str) -> None:
         """The summary line cmd_setup prints relays the branch-report skip
-        evidence verbatim, and the sweep's final OUTCOME rides the same
-        relayed block as its last line (the sweep prints it last and the
-        filter preserves order)."""
+        evidence verbatim on stderr (the acquisition stdout carries only
+        export lines), and the sweep's final OUTCOME rides the same relayed
+        block as its last line (the sweep prints it last and the filter
+        preserves order)."""
         self.assertIn(
             f"done_run setup: residue sweep (fail-open): branch-report: "
             f"branch {branch}: skipped at {self.branch_oid(branch)}; "
             f"reason: {reason}\nOUTCOME: pass\n",
-            proc.stdout,
+            proc.stderr,
         )
+        self.assertNotIn("residue sweep", proc.stdout)
 
     def test_residue_sweep_relays_dirty_branch_backed_skip_evidence(self) -> None:
         self.init_fixture_repo()
@@ -555,11 +560,11 @@ class DoneRunSetupResidueSweepTest(FixtureMixin, unittest.TestCase):
         self.git("worktree", "add", "-q", "--detach", str(path))
         shutil.rmtree(path)
         proc, exports = self.setup_session("--label", "fixture-run")
-        # the summary relays the sweep's pass but invents no branch data
-        # for the branchless stale detached registration
+        # the summary relays the sweep's pass on stderr but invents no
+        # branch data for the branchless stale detached registration
         self.assertIn(
             "done_run setup: residue sweep (fail-open): OUTCOME: pass",
-            proc.stdout,
+            proc.stderr,
         )
         self.assertNotIn("branch-report:", proc.stdout)
         self.assertNotIn("skipped at", proc.stdout)
@@ -629,15 +634,187 @@ class DoneRunSetupResidueSweepTest(FixtureMixin, unittest.TestCase):
             },
         )
         proc = self.run_via_runner_dir(runner_dir, home)
-        # fail-open: the sweep's failure OUTCOME is relayed verbatim and
-        # the setup classification is unchanged (rc 0 boundary written)
+        # fail-open: the sweep's failure OUTCOME is relayed verbatim on
+        # stderr and the setup classification is unchanged (rc 0 boundary
+        # written)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(
             "done_run setup: residue sweep (fail-open): OUTCOME: tool_error",
-            proc.stdout,
+            proc.stderr,
         )
+        self.assertNotIn("residue sweep", proc.stdout)
         exports = self.eval_exports(proc.stdout)
         self.assertTrue(exports.get("DONE_RUN_ID"))
+
+
+class DoneRunSetupAcquisitionStdoutTest(FixtureMixin, unittest.TestCase):
+    """Task 1 witnesses (plan docs/history/plans/
+    2026-11-03-done-run-setup-stdout-export-emission-split.md): the setup
+    acquisition stdout is eval-safe by construction -
+    every stdout line on the success, re-entry, and refusal paths is an
+    `export`-prefixed assignment the payload contract owns, every status,
+    advisory, and diagnostic line (plain echo or printf relay) rides
+    stderr beside an unchanged byte-identical payload, and a whole-stdout
+    `eval` parses and sets the exports even when a status line carries
+    shell metacharacters."""
+
+    def assert_stdout_export_lines_only(self, proc) -> None:
+        nonexport = [
+            line for line in proc.stdout.splitlines()
+            if line and not line.startswith("export ")
+        ]
+        self.assertEqual(nonexport, [], proc.stdout)
+
+    def eval_whole_stdout(self, proc) -> dict:
+        """A whole-stdout `eval` in a fresh bash: a status line beside the
+        export block aborts the parse mid-file (the 2026-10-26/27 and
+        2026-11-03 witnesses), so the eval must exit 0 with every payload
+        export set in the eval's own env."""
+        check = subprocess.run(
+            ["bash", "-c",
+             'eval "$1" && printf \'%s\\n\' '
+             '"${DONE_LOCK_DIR-unset}" "${DONE_LOCK_TOKEN-unset}" '
+             '"${DONE_RUN_MARKER-unset}" "${DONE_RUN_MANIFEST-unset}" '
+             '"${DONE_RUN_ID-unset}"',
+             "done-run-eval", proc.stdout],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(check.returncode, 0, check.stderr)
+        keys = ["DONE_LOCK_DIR", "DONE_LOCK_TOKEN", "DONE_RUN_MARKER",
+                "DONE_RUN_MANIFEST", "DONE_RUN_ID"]
+        values = check.stdout.splitlines()
+        self.assertEqual(len(values), len(keys), check.stdout)
+        for key, value in zip(keys, values):
+            self.assertNotEqual(value, "unset", key)
+        return dict(zip(keys, values))
+
+    def assert_payload_shape(self, proc) -> list[str]:
+        """The export payload keeps its exact byte shape: the lock acquire
+        echo's two relayed assignment lines followed by the five setup
+        assignment lines in the contract's order, `printf '%q'`-quoted
+        values (bare for fixture-safe paths), the run id bare — the exact
+        stdout bytes the pre-split emission built."""
+        session = self.done_session()
+        marker = next(session.glob("run-start-*")).resolve()
+        manifest = next(session.glob("run-manifest-*.json")).resolve()
+        run_id = json.loads(manifest.read_text())["run_id"]
+        exports = self.eval_exports(proc.stdout)
+        payload = [
+            line for line in proc.stdout.splitlines()
+            if line.startswith("export ")
+        ]
+        self.assertEqual(payload, [
+            f"export DONE_LOCK_DIR={shlex.quote(exports['DONE_LOCK_DIR'])}",
+            f"export DONE_LOCK_TOKEN={shlex.quote(exports['DONE_LOCK_TOKEN'])}",
+            f"export DONE_LOCK_DIR={shlex.quote(exports['DONE_LOCK_DIR'])}",
+            f"export DONE_LOCK_TOKEN={shlex.quote(exports['DONE_LOCK_TOKEN'])}",
+            f"export DONE_RUN_MARKER={shlex.quote(str(marker))}",
+            f"export DONE_RUN_MANIFEST={shlex.quote(str(manifest))}",
+            f"export DONE_RUN_ID={run_id}",
+        ])
+        return payload
+
+    def test_success_stdout_is_export_lines_only_and_eval_safe(self) -> None:
+        self.init_fixture_repo()
+        proc = self.run_setup("--label", "fixture-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assert_stdout_export_lines_only(proc)
+        evaled = self.eval_whole_stdout(proc)
+        exports = self.eval_exports(proc.stdout)
+        self.assertEqual(evaled, exports)
+        self.assertEqual(evaled["DONE_RUN_ID"], exports["DONE_RUN_ID"])
+
+    def test_export_payload_lines_keep_byte_shape(self) -> None:
+        """The byte-identical payload contract: the export lines carry the
+        exact bytes the pre-split emission built (`printf '%q'` quoting in
+        the contract's order), so a caller that evaluates only the export
+        lines sees no change."""
+        self.init_fixture_repo()
+        proc = self.run_setup("--label", "fixture-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assert_payload_shape(proc)
+
+    def test_reentry_status_lines_ride_stderr_exports_stdout(self) -> None:
+        self.init_fixture_repo()
+        first = self.run_setup("--label", "first")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        run_id = self.eval_exports(first.stdout)["DONE_RUN_ID"]
+        second = self.run_setup("--from-manifest", run_id)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn(
+            f"done_run setup: re-entering boundary run_id={run_id} "
+            "(explicit --from-manifest)",
+            second.stderr,
+        )
+        self.assertNotIn("re-entering boundary", second.stdout)
+        self.assert_stdout_export_lines_only(second)
+        self.assertEqual(
+            self.eval_exports(second.stdout)["DONE_RUN_ID"], run_id
+        )
+
+    def test_partial_marker_stop_diagnostics_ride_stderr(self) -> None:
+        self.init_fixture_repo()
+        repo_top = self.git("rev-parse", "--show-toplevel").stdout.strip()
+        digest = hashlib.sha256(repo_top.rstrip("/").encode()).hexdigest()
+        session = self.done_session()
+        session.mkdir(parents=True)
+        (session / "run-start-20261103T000000Z").write_text(
+            f"{int(time.time())} {digest} {os.getpid()}\n"
+        )
+        second = self.run_setup("--label", "second")
+        self.assertEqual(second.returncode, 2)
+        self.assertIn(
+            "done_run setup: found a content-confirmed marker with no "
+            "manifest (partial marker write)",
+            second.stderr,
+        )
+        self.assertIn(
+            "done_run setup: remedy: re-run setup to write the manifest "
+            "bound to that marker, or remove the marker to discard the "
+            "attempt",
+            second.stderr,
+        )
+        self.assertNotIn("partial marker write", second.stdout)
+        self.assert_stdout_export_lines_only(second)
+
+    def test_refusal_stdout_eval_safe_release_relay_on_stderr(self) -> None:
+        """The orphan classification stop refuses through setup_die, whose
+        terminal release relay is a printf of the captured release output:
+        pre-change that block (its `OUTCOME:` line included) lands on stdout
+        beside the lock payload relay; post-change stdout stays
+        export-lines-only and the relayed block rides stderr. The release's
+        own `OUTCOME:` contract channel is untouched - only the wrapper's
+        relay destination moves."""
+        self.init_fixture_repo()
+        first = self.run_setup("--label", "first")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self.run_setup("--label", "second")
+        self.assertEqual(second.returncode, 2)
+        self.assertIn(
+            "done_run setup: no new boundary written", second.stderr
+        )
+        self.assertIn("OUTCOME:", second.stderr)
+        self.assertNotIn("OUTCOME:", second.stdout)
+        self.assert_stdout_export_lines_only(second)
+
+    def test_metacharacter_status_line_cannot_break_the_eval(self) -> None:
+        """The 2026-11-03 witness: a status line carrying shell
+        metacharacters (the residue sweep's branch-report relays a branch
+        name with braces) aborted a whole-stdout eval after the hold was
+        taken. Post-change the line rides stderr and the eval parses."""
+        self.init_fixture_repo()
+        path = self.tmp / "repo-wt-brace"
+        self.git("worktree", "add", "-q", "-b", "wt-{brace}-plan", str(path))
+        (path / "scratch-untracked.md").write_text("untracked\n")
+        proc = self.run_setup("--label", "fixture-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("wt-{brace}-plan", proc.stderr)
+        self.assertIn("skipped at", proc.stderr)
+        self.assertNotIn("wt-{brace}-plan", proc.stdout)
+        self.assertNotIn("skipped at", proc.stdout)
+        self.assert_stdout_export_lines_only(proc)
+        self.assert_payload_shape(proc)
+        self.eval_whole_stdout(proc)
 
 
 class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
@@ -668,8 +845,8 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         before = manifest.read_bytes()
         second = self.run_setup("--label", "second")
         self.assertEqual(second.returncode, 0, second.stderr)
-        notes = self.terminal_notes(second.stdout)
-        self.assertEqual(len(notes), 1, second.stdout)
+        notes = self.terminal_notes(second.stderr)
+        self.assertEqual(len(notes), 1, second.stderr)
         self.assertIn("finalized", notes[0])
         self.assertIn(run_id, notes[0])
         # the prior manifest stays byte-identical and a fresh boundary lands
@@ -701,8 +878,8 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         ).read_bytes()
         second = self.run_setup("--label", "second")
         self.assertEqual(second.returncode, 0, second.stderr)
-        notes = self.terminal_notes(second.stdout)
-        self.assertEqual(len(notes), 1, second.stdout)
+        notes = self.terminal_notes(second.stderr)
+        self.assertEqual(len(notes), 1, second.stderr)
         self.assertIn("adopted", notes[0])
         self.assertIn(newest_id, notes[0])
         self.assertEqual(
@@ -728,8 +905,8 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         before = manifest.read_bytes()
         second = self.run_setup("--label", "second")
         self.assertEqual(second.returncode, 0, second.stderr)
-        notes = self.terminal_notes(second.stdout)
-        self.assertEqual(len(notes), 1, second.stdout)
+        notes = self.terminal_notes(second.stderr)
+        self.assertEqual(len(notes), 1, second.stderr)
         self.assertIn("dispositioned", notes[0])
         self.assertIn(run_id, notes[0])
         self.assertEqual(manifest.read_bytes(), before)
@@ -749,8 +926,8 @@ class DoneRunSetupManifestStateTest(FixtureMixin, unittest.TestCase):
         before_shadow = shadow.read_bytes()
         second = self.run_setup("--label", "second")
         self.assertEqual(second.returncode, 0, second.stderr)
-        notes = self.terminal_notes(second.stdout)
-        self.assertEqual(len(notes), 1, second.stdout)
+        notes = self.terminal_notes(second.stderr)
+        self.assertEqual(len(notes), 1, second.stderr)
         self.assertIn("shadow-closed", notes[0])
         self.assertIn(run_id, notes[0])
         # both prior records stay byte-identical and a fresh boundary lands
@@ -1265,9 +1442,11 @@ class DoneRunSetupAdoptionTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         # the forward arm routed the orphan target to the writer, which
         # adopted it: the terminal newest record is named and untouched
+        # (the routing note rides stderr beside the other status lines)
         self.assertIn(
-            "is not the classified boundary and is forwarded", proc.stdout
+            "is not the classified boundary and is forwarded", proc.stderr
         )
+        self.assertNotIn("is not the classified boundary and is forwarded", proc.stdout)
         self.assertEqual(newest_path.read_bytes(), newest_bytes)
         self.assertEqual(target_path.read_bytes(), target_bytes)
         reexports = self.eval_exports(proc.stdout)

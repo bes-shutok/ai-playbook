@@ -7,6 +7,7 @@ Origin class: self-serving
 Quarantine: 2026-11-04
 Class: fix-class
 Driving force: reliability
+Cluster: docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md (same defect class: a fired carrier strands silently at the fire boundary; that row owns the runtime scheduler carrier, this row owns the chain fire path)
 
 ## Problem
 
