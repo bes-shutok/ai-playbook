@@ -1,7 +1,7 @@
 # Backlog: honor primary placement in execute-plan-stack
 
 - **Filed:** 2026-11-04, operator correction during a stacked execution
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-06-primary-placement-stack-execution.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Company projects configured for primary-checkout execution must be able to use the stack workflow without creating a worktree that their repo policy disallows.

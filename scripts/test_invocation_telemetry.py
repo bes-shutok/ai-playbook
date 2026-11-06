@@ -97,14 +97,16 @@ VRS_SUCCESS = {
     "stdout": "OUTCOME: pass\n",
     "stderr": "",
 }
-# The refusal probe's stderr: one deterministic eight-line block for an
+# The refusal probe's stderr: one deterministic twenty-line block for an
 # undated invalid staging record (an undated filename keeps the date-gated
 # freshness errors out of the baseline, so the block is content-only).
 # Re-baselined 2026-11-04 (producer code-family record arm plan, Task 3):
 # the three record-grammar diagnostics gained the grammar-home citation
 # (GRAMMAR_HOME_CITATION in scripts/validate_review_staging.py) beside the
 # Panel line's existing skill-pointer parenthetical; every other line and
-# the line count are unchanged.
+# the line count were unchanged then. Task 2 of the certification-gates
+# reporting plan added one warning for each sidecar-dependent diagnostic
+# skipped when the stats sidecar is missing.
 VRS_REFUSAL_LINES = [
     "WARN: missing ### Counts or Agents launched row"
     " (clear-record grammar example: scripts/validate_review_staging.py"
@@ -112,6 +114,30 @@ VRS_REFUSAL_LINES = [
     "WARN: missing ### Triage outcomes or Pending triage placeholder"
     " (clear-record grammar example: scripts/validate_review_staging.py"
     " --help usage epilog)",
+    "WARN: skipped version-1 sidecar schema validation: the stats sidecar"
+    " is missing prevents evaluation",
+    "WARN: skipped record-kind enum validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped cap-closure contract validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped corrections extension validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped last-fix commit agreement: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped current sidecar field and finding validation: the stats"
+    " sidecar is missing prevents evaluation",
+    "WARN: skipped finding conservation: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped counts parity: the stats sidecar is missing prevents"
+    " evaluation",
+    "WARN: skipped coverage Markdown agreement: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped soften-watchlist agreement: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped discarded-row ownership validation: the stats sidecar"
+    " is missing prevents evaluation",
+    "WARN: skipped sidecar-surface witness-ledger shape validation: the"
+    " stats sidecar is missing prevents evaluation",
     # Each ERROR line now names its provenance source (the review-staging
     # SKILL.md rule it enforces); re-baselined to the current CLI.
     "ERROR: missing ## Metadata (review-staging SKILL.md)",

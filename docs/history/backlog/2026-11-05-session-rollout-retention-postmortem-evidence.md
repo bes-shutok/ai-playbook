@@ -18,6 +18,7 @@ Expected: a deliberate, recorded decision on evidence retention versus disk budg
 
 - 2026-11-05 ~02:00Z: the runtime rollout directory holds exactly three window files (one subagent transcript 5.6MB, two live sessions); sessions from the same day's 00:00, 04:15, 07:12, 10:36-13:20, 15:06-22:43 windows have no rollout files left.
 - Counter-pressure: `docs/tmp/` holds 747M with its own retention-redesign machinery mid-promotion (Cluster: the docs/tmp retention strand row), so "mirror everything into the repo" is not an available answer.
+- 2026-11-06 harvest append: a same-week interactive session whose entire ask was locating the authoring session of a plan spent about 7 minutes on git archaeology, because session ids survive only in commit-message prose and no rollout transcript existed for the target. The runtime task index's reader-side schema validation rejected 29 distinct stored session rows in one day's host log (read-time all-fields-undefined shape) even though the rows exist and carry titles, so index-assisted lookup degrades exactly when a post-mortem needs it. This tightens arm (b)'s case: a bounded harvest-window export is the repo-owned half of lookup regardless of the retention-window decision.
 
 ## Suspected root area
 

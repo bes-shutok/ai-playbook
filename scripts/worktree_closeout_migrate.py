@@ -44,10 +44,17 @@ Subcommands:
            already-copied files stay in the audit record.
            Baseline clobber guards (entry closeout-migrate-baseline-tracked-
            clobber): with a baseline and a git-repository target, the migrate
-           refuses before any copy when a would-carry path is tracked at the
-           target's HEAD with different committed bytes - a whole-file carry
-           would overwrite destination content - naming each offending path
-           and the re-capture remediation; after the carry, a staged tracked
+           refuses before any copy when a would-carry path's bytes hash to
+           an older committed vintage of the tracked target HEAD - a
+           whole-file carry would rewind destination content - naming each
+           offending path and the re-capture remediation; a forward carry of
+           newer or novel bytes is not refused (it takes the collision and
+           receipt dispositions), and the comparison re-runs inside the
+           merge-lock span before the first copy, refusing exit 2 when the
+           target HEAD or any carried source byte changed since the
+           pre-flight read (the snapshot comparison closes the pre-lock
+           window; the bounded retry is a re-run of the closeout migrate);
+           after the carry, a staged tracked
            entry whose staged bytes are an older committed vintage of HEAD
            and that this run carried is restored from HEAD and reported as a
            prevented clobber unless the staged bytes equal the run's
@@ -1118,16 +1125,45 @@ def cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _head_blob_or_error(repo: Path, rel: str) -> tuple[str | None, str | None]:
+    """The committed blob id for one repo-relative path at HEAD, with the
+    probe's failure distinguished from absence: returns (blob, error) -
+    (blob, None) resolved, (None, None) the path is absent at HEAD, and
+    (None, stderr) a genuinely failed probe (rc != 0, the shape the
+    failure-manifest-trace entry forbids collapsing into absent). The
+    probe is `git ls-tree HEAD -- :(literal)<rel>`, not rev-parse
+    --verify: rev-parse exits rc != 0 for BOTH a genuinely failed probe
+    and a plain absent-at-HEAD path ("Needed a single revision"),
+    collapsing the shapes so every absent path reads as a probe failure;
+    ls-tree answers absence in-band (rc 0, empty output), so a non-zero
+    rc keeps meaning a real probe failure. The pathspec quotes the rel
+    `:(literal)` so glob metacharacters never act as patterns (the
+    convention _blob_in_head_history shares)."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "ls-tree", "HEAD", "--", f":(literal){rel}"],
+        capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
+    )
+    if proc.returncode != 0:
+        return None, proc.stderr.strip()
+    if not proc.stdout.strip():
+        return None, None
+    # Tracked at HEAD: the single row's "<mode> <type> <object> TAB <path>"
+    # meta carries the object id (the blob, for the file paths this probe
+    # serves). The path column is left un-compared: ls-tree quotes
+    # non-plain names, so a byte path match would misread quoted rows as
+    # probe failures.
+    meta = proc.stdout.splitlines()[0].partition("\t")[0].split()
+    if len(meta) != 3:
+        return None, f"unparseable ls-tree row: {proc.stdout.splitlines()[0]!r}"
+    return meta[2], None
+
+
 def _head_blob(repo: Path, rel: str) -> str | None:
     """The committed blob id for one repo-relative path at HEAD; None when
     the path is absent at HEAD or the git probe fails."""
-    proc = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--verify", f"HEAD:{rel}"],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip() or None
+    blob, _error = _head_blob_or_error(repo, rel)
+    return blob
 
 
 def _blob_in_head_history(repo: Path, rel: str, blob: str) -> bool:
@@ -1137,12 +1173,30 @@ def _blob_in_head_history(repo: Path, rel: str, blob: str) -> bool:
     onto this path are not seen, a conservative miss. The pathspec passes
     the rel quoted `:(literal)` so glob metacharacters in the rel never
     act as patterns."""
+    in_history, _error = _blob_in_head_history_or_error(repo, rel, blob)
+    return in_history
+
+
+def _blob_in_head_history_or_error(
+    repo: Path, rel: str, blob: str,
+) -> tuple[bool, str | None]:
+    """`_blob_in_head_history` with the probe's failure distinguished from
+    the negative: (True, None) an older committed vintage, (False, None) a
+    probe that resolved negative, (False, stderr) a failed probe (rc != 0)
+    the caller must never read as not-a-vintage (plan 2026-11-05-closeout-
+    migrate-supplemental-inventory-and-guard-residuals Task 2: a failed
+    vintage probe on a differ-from-HEAD path refuses or keeps the legacy
+    byte-difference refusal). The probe and its `:(literal)` pathspec
+    quoting are `_blob_in_head_history`'s own."""
     proc = subprocess.run(
         ["git", "-C", str(repo), "log", "--format=%H", "-n", "1",
          "--find-object", blob, "HEAD", "--", f":(literal){rel}"],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
-    return proc.returncode == 0 and bool(proc.stdout.strip())
+    if proc.returncode != 0:
+        return False, proc.stderr.strip()
+    return bool(proc.stdout.strip()), None
 
 
 def _worktree_blob(repo: Path, path: Path) -> str | None:
@@ -1151,10 +1205,144 @@ def _worktree_blob(repo: Path, path: Path) -> str | None:
     proc = subprocess.run(
         ["git", "-C", str(repo), "hash-object", "--", str(path)],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() or None
+
+
+def _head_tracked_map(repo: Path) -> tuple[dict[str, str] | None, str | None]:
+    """The full HEAD tracked map (repo-relative path -> object id) in one
+    `git ls-tree -r -z HEAD` read - the pre-flight's single batched HEAD
+    probe (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+    guard-residuals Task 2). -z keeps non-plain names unquoted so the map
+    keys are the raw working-tree names the source walk produces. Returns
+    (map, None), or (None, stderr) when the read fails - the caller falls
+    back to the per-path `_head_blob_or_error` probe and never silently
+    reads the failure as an empty map."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "ls-tree", "-r", "-z", "HEAD"],
+        capture_output=True,
+        env=_sanitize_git_child_env(),
+    )
+    if proc.returncode != 0:
+        return None, proc.stderr.decode(errors="replace").strip()
+    head_map: dict[str, str] = {}
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        meta, tab, path = raw.partition(b"\t")
+        parts = meta.split()
+        if not tab or len(parts) != 3:
+            return None, f"unparseable ls-tree row: {os.fsdecode(raw)!r}"
+        head_map[os.fsdecode(path)] = parts[2].decode("ascii", "replace")
+    return head_map, None
+
+
+def _batch_hash_worktree_blobs(repo: Path, paths: list[Path]) -> dict[Path, str]:
+    """Batch blob hashes for a path set in one `git hash-object --stdin-paths`
+    read (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+    residuals Task 2): the same default-filter hashing semantics as the
+    per-path `_worktree_blob` probe, one spawn instead of one per path.
+    Paths whose string form contains LF or CR never enter the batch
+    (line-separated stdin cannot carry such a name faithfully) - they keep
+    the per-path argv probe. A batch that fails (rc != 0) or whose output
+    line count mismatches the batched path count falls back per-path too -
+    a batch-tail path is never silently skipped. Returns only the paths
+    whose hash resolved; a path absent from the map is a failed hash (the
+    caller's existing hash-failure skip applies)."""
+    blobs: dict[Path, str] = {}
+    batchable: list[Path] = []
+    fallback: list[Path] = []
+    for path in paths:
+        if "\n" in str(path) or "\r" in str(path):
+            fallback.append(path)
+        else:
+            batchable.append(path)
+    if batchable:
+        payload = b"\n".join(os.fsencode(p) for p in batchable) + b"\n"
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "--stdin-paths"],
+            input=payload, capture_output=True,
+            env=_sanitize_git_child_env(),
+        )
+        lines = [line.strip() for line in proc.stdout.split(b"\n") if line.strip()]
+        if proc.returncode == 0 and len(lines) == len(batchable):
+            for path, line in zip(batchable, lines):
+                blobs[path] = line.decode("ascii", "replace")
+        else:
+            # rc != 0 or a count mismatch: every batched path keeps its
+            # per-path decision through the argv probe below.
+            fallback.extend(batchable)
+    for path in fallback:
+        blob = _worktree_blob(repo, path)
+        if blob:
+            blobs[path] = blob
+    return blobs
+
+
+def _head_history_object_universe(repo: Path) -> set[str] | None:
+    """Every object id reachable from HEAD in one `git rev-list --objects`
+    read - the vintage batch's exclusion-only prefilter (plan 2026-11-05-
+    closeout-migrate-supplemental-inventory-and-guard-residuals Task 2,
+    the Task 3 batching recipe's prefilter arm): a candidate blob absent
+    from the universe cannot appear in any committed tree, so it is
+    definitively not-a-vintage - a negative only, never a positive signal,
+    because rev-list attributes each object to its first traversal path and
+    therefore cannot clear a specific rel. None when the read fails: every
+    candidate then keeps its per-rel `_blob_in_head_history` probe."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--objects", "HEAD"],
+        capture_output=True,
+        env=_sanitize_git_child_env(),
+    )
+    if proc.returncode != 0:
+        return None
+    return {
+        parts[0].decode("ascii", "replace")
+        for parts in (line.split() for line in proc.stdout.split(b"\n"))
+        if parts
+    }
+
+
+def _batch_vintage_decisions(
+    repo: Path, candidates: list[tuple[str, str]],
+) -> tuple[dict[tuple[str, str], bool], dict[tuple[str, str], str]]:
+    """Direction decisions for the differ-from-HEAD candidates, batched over
+    the candidate blob set (plan 2026-11-05-closeout-migrate-supplemental-
+    inventory-and-guard-residuals Task 2; shared by the pre-lock pre-flight
+    and the in-lock re-scan so neither re-walks serially). One
+    `git rev-list --objects HEAD` pass builds HEAD's object universe, a
+    candidate blob absent from the universe is excluded as definitively
+    not-a-vintage (the prefilter is exclusion-only), and every remaining
+    candidate keeps its per-rel `_blob_in_head_history` probe (the
+    automatic fallback the recipe names). Returns (decisions, probe_errors):
+    decisions maps (rel, blob) -> is-an-older-committed-vintage;
+    probe_errors maps (rel, blob) -> stderr for the candidates whose per-rel
+    probe failed rc != 0 - the caller refuses those paths or keeps the
+    legacy byte-difference refusal for them, never reading a failed probe
+    as not-a-vintage.
+    The probes are name-scoped like `_blob_in_head_history`, so the
+    inherited conservative miss stands unchanged (documented edge, plan
+    Task 2 edge inventory): a vintage committed under a pre-rename name is
+    not seen, reads as a forward carry, and falls through to the collision
+    and absent-at-HEAD dispositions, backstopped by the post-run guard's
+    identical name-scoped miss; no --follow widening (documented
+    non-coverage, not a gap to fix)."""
+    decisions: dict[tuple[str, str], bool] = {}
+    probe_errors: dict[tuple[str, str], str] = {}
+    universe = _head_history_object_universe(repo)
+    for rel, blob in candidates:
+        if universe is not None and blob not in universe:
+            decisions[(rel, blob)] = False
+            continue
+        in_history, error = _blob_in_head_history_or_error(repo, rel, blob)
+        if error is not None:
+            probe_errors[(rel, blob)] = error
+        else:
+            decisions[(rel, blob)] = in_history
+    return decisions, probe_errors
 
 
 def _record_delivered_blob(
@@ -1189,27 +1377,213 @@ def _unchanged_since_baseline(src: Path, rel: str, baseline_files: dict[str, str
 
 def _baseline_clobber_preflight(
     source: Path, target: Path, dirs: list[str], baseline_files: dict[str, str],
-) -> list[str]:
-    """Backward-move pre-flight (entry closeout-migrate-baseline-tracked-
-    clobber): return the would-carry paths tracked at the target's HEAD whose
-    source bytes differ from the committed HEAD bytes - the whole-file carries
-    that would overwrite destination content. Byte-identical and HEAD-absent
-    paths never offend; the walk mirrors the carry loop's own skip rule."""
-    offenders: list[str] = []
+    failures: list[dict] | None = None,
+    phase: str = "preflight",
+) -> tuple[list[str], dict[str, str] | None, dict[str, str]]:
+    """Direction-aware backward-move pre-flight (entry closeout-migrate-
+    baseline-tracked-clobber; narrowed by plan 2026-11-05-closeout-migrate-
+    supplemental-inventory-and-guard-residuals Task 2): return the
+    would-carry paths whose source bytes hash to an OLDER COMMITTED VINTAGE
+    of the tracked HEAD bytes - the whole-file carries that would rewind
+    destination content. A forward carry of newer or novel bytes is not an
+    offender: it falls through to the collision and receipt dispositions
+    (the overbreadth origin's witnessed false exit-2). Byte-identical and
+    HEAD-absent paths never offend; the walk mirrors the carry loop's own
+    skip rule and every decision stays per-path.
+    The probes batch: the HEAD tracked map is read once (`git ls-tree -r
+    -z`, with the per-path `_head_blob_or_error` probe as the fallback when
+    the map read fails), the walk's candidates hash in one
+    `git hash-object --stdin-paths` read (per-path argv probes for LF/CR-
+    named paths and for a failed or count-mismatched batch), and the
+    vintage question batches over the candidate blob set through
+    `_batch_vintage_decisions`' exclusion-only prefilter - the shared
+    recipe of the pre-lock pre-flight and the in-lock re-scan, so neither
+    re-walks serially.
+    A failed HEAD read or probe is never silently treated as absent (entry
+    closeout-migrate-guard-failure-manifest-trace F11): the path is
+    reported by name on stderr and, when the caller passes ``failures``,
+    recorded under the phase's action string - ``head-map-failed`` /
+    ``head-probe-failed`` on the pre-flight phase, the same strings under
+    the ``rescan-`` prefix on the re-scan phase - for the manifest's
+    prevented_clobber_failures section, then skipped for this run (the
+    post-run guard still covers the rewind case). A failed vintage probe
+    on a differ-from-HEAD path never reads as not-a-vintage either: the
+    path is reported by name and keeps the legacy byte-difference refusal
+    (an offender).
+    The second and third return values are the pre-lock snapshot the
+    in-lock re-scan compares against (the HEAD tracked map - None when its
+    read failed - and the carried-set source blob map): the re-scan's
+    snapshot comparison refuses any drift, including drift that leaves the
+    offender set unchanged. ``phase`` names the calling phase ("preflight"
+    or "rescan") for the stderr label and the failure action strings."""
+    label = "baseline clobber pre-flight" if phase == "preflight" else "in-lock re-scan"
+    prefix = "" if phase == "preflight" else "rescan-"
+    candidates: list[tuple[Path, str]] = []
     for src in _iter_configured_files(source, dirs):
         rel = src.relative_to(source).as_posix()
         if _is_dangling_symlink(src) or not src.exists():
             continue
         if _unchanged_since_baseline(src, rel, baseline_files):
             continue
-        head_blob = _head_blob(target, rel)
-        if head_blob is None:
+        candidates.append((src, rel))
+    head_map, head_map_error = _head_tracked_map(target)
+    if head_map is None:
+        print(
+            f"WARN: {label}: HEAD tracked map read failed "
+            f"({head_map_error}); falling back to per-path HEAD probes "
+            "for this walk",
+            file=sys.stderr,
+        )
+        if failures is not None:
+            failures.append(
+                {
+                    "destination": target.as_posix(),
+                    "action": f"{prefix}head-map-failed",
+                    "error": head_map_error or "HEAD tracked map read failed",
+                }
+            )
+        head_states = {
+            rel: _head_blob_or_error(target, rel) for _src, rel in candidates
+        }
+    else:
+        head_states = {rel: (head_map.get(rel), None) for _src, rel in candidates}
+    source_blobs = _batch_hash_worktree_blobs(target, [src for src, _rel in candidates])
+    blob_by_rel = {
+        rel: source_blobs[src] for src, rel in candidates if src in source_blobs
+    }
+    differs: list[tuple[str, str]] = []
+    probe_failed_rels: set[str] = set()
+    for _src, rel in candidates:
+        head_blob, probe_error = head_states[rel]
+        if probe_error is not None:
+            print(
+                f"WARN: {label}: HEAD probe failed "
+                f"for {rel}: {probe_error}; the path cannot be checked "
+                "against HEAD this run and is skipped (the post-run "
+                "guard still covers the staged-rewind case)",
+                file=sys.stderr,
+            )
+            if failures is not None:
+                failures.append(
+                    {
+                        "destination": (target / rel).as_posix(),
+                        "action": f"{prefix}head-probe-failed",
+                        "error": probe_error,
+                    }
+                )
+            probe_failed_rels.add(rel)
             continue
-        src_blob = _worktree_blob(target, src)
-        if src_blob is None or src_blob == head_blob:
+        src_blob = blob_by_rel.get(rel)
+        if head_blob is None or src_blob is None or src_blob == head_blob:
             continue
-        offenders.append(rel)
-    return offenders
+        differs.append((rel, src_blob))
+    decisions, probe_errors = _batch_vintage_decisions(target, differs)
+    for rel, _blob in probe_errors:
+        print(
+            f"WARN: {label}: vintage probe failed for {rel}: "
+            f"{probe_errors[(rel, _blob)]}; the path keeps the legacy "
+            "byte-difference refusal this run",
+            file=sys.stderr,
+        )
+    offenders: list[str] = []
+    for _src, rel in candidates:
+        if rel in probe_failed_rels:
+            continue
+        head_blob, _probe_error = head_states[rel]
+        src_blob = blob_by_rel.get(rel)
+        if head_blob is None or src_blob is None or src_blob == head_blob:
+            continue
+        if (rel, src_blob) in probe_errors:
+            # A failed vintage probe never reads as not-a-vintage: the
+            # legacy byte-difference refusal stands for this path.
+            offenders.append(rel)
+        elif decisions.get((rel, src_blob), False):
+            offenders.append(rel)
+        # else: a forward carry of newer or novel bytes - no refusal; the
+        # carry falls through to the collision and receipt dispositions.
+    return offenders, head_map, blob_by_rel
+
+
+# The in-lock re-scan's refusal lines name the changed paths individually up
+# to this cap (a wide peer landing could change hundreds of tracked paths;
+# the count line carries the total either way).
+_RESCAN_NAMED_PATH_CAP = 20
+
+
+def _in_lock_clobber_rescan(
+    source: Path, target: Path, dirs: list[str], baseline_files: dict[str, str],
+    snapshot_head_map: dict[str, str] | None,
+    snapshot_source_blobs: dict[str, str],
+    failures: list[dict] | None = None,
+) -> list[str]:
+    """The in-lock re-scan (plan 2026-11-05-closeout-migrate-supplemental-
+    inventory-and-guard-residuals Task 2): re-invoke the pre-flight's own
+    comparison (`_baseline_clobber_preflight`, the single comparison
+    implementation) inside the merge-lock span after acquire and compare
+    the fresh scan against the pre-flight's snapshot, closing both
+    pre-lock-window halves - target HEAD differing from the pre-flight
+    capture OR any carried-set source byte differing from its pre-flight
+    read. The halves compare snapshots (HEAD tracked map and carried-set
+    source hashes captured at the pre-lock walk), never a diff of offender
+    lists: drift that leaves the offender set unchanged still refuses. A
+    snapshot half whose own map read failed (None) compares
+    unavailable-vs-unavailable and otherwise stays quiet - the failed read
+    is already recorded under its phase-distinct ``rescan-`` action string
+    by the scan itself. Returns the refusal lines (empty when the window is
+    clean); the caller refuses exit 2 with these lines before the first
+    copy."""
+    offenders, fresh_head_map, fresh_source_blobs = _baseline_clobber_preflight(
+        source, target, dirs, baseline_files, failures, "rescan",
+    )
+    lines: list[str] = []
+    if offenders:
+        for rel in offenders:
+            lines.append(
+                f"in-lock re-scan: {rel} is tracked at the target HEAD "
+                "with different bytes; carrying it would overwrite "
+                "destination content"
+            )
+    if (
+        snapshot_head_map is not None
+        and fresh_head_map is not None
+        and fresh_head_map != snapshot_head_map
+    ):
+        changed = sorted(
+            rel
+            for rel in set(fresh_head_map) | set(snapshot_head_map)
+            if fresh_head_map.get(rel) != snapshot_head_map.get(rel)
+        )
+        lines.append(
+            "in-lock re-scan: target HEAD moved during the pre-lock "
+            f"window ({len(changed)} committed path(s) changed)"
+        )
+        lines.extend(
+            f"in-lock re-scan: committed path changed in the window: {rel}"
+            for rel in changed[:_RESCAN_NAMED_PATH_CAP]
+        )
+        if len(changed) > _RESCAN_NAMED_PATH_CAP:
+            lines.append(
+                f"in-lock re-scan: ... and {len(changed) - _RESCAN_NAMED_PATH_CAP} more"
+            )
+    if fresh_source_blobs != snapshot_source_blobs:
+        changed = sorted(
+            rel
+            for rel in set(fresh_source_blobs) | set(snapshot_source_blobs)
+            if fresh_source_blobs.get(rel) != snapshot_source_blobs.get(rel)
+        )
+        lines.append(
+            "in-lock re-scan: source bytes changed during the pre-lock "
+            f"window ({len(changed)} carried path(s) changed)"
+        )
+        lines.extend(
+            f"in-lock re-scan: carried source path changed in the window: {rel}"
+            for rel in changed[:_RESCAN_NAMED_PATH_CAP]
+        )
+        if len(changed) > _RESCAN_NAMED_PATH_CAP:
+            lines.append(
+                f"in-lock re-scan: ... and {len(changed) - _RESCAN_NAMED_PATH_CAP} more"
+            )
+    return lines
 
 
 # The blob-shape gate for a rev-parse stage-0 stdout (plan 2026-11-04-
@@ -1238,6 +1612,7 @@ def _read_staged_entry(target: Path, rel: str) -> tuple[str | None, bool]:
     proc = subprocess.run(
         ["git", "-C", str(target), "rev-parse", f":{rel}"],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
     if proc.returncode == 0:
         blob = proc.stdout.strip()
@@ -1247,6 +1622,7 @@ def _read_staged_entry(target: Path, rel: str) -> tuple[str | None, bool]:
         ["git", "-C", str(target), "ls-files", "-u", "--",
          f":(literal){rel}"],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
     unmerged = stages.returncode == 0 and bool(stages.stdout.strip())
     return None, unmerged
@@ -1254,6 +1630,7 @@ def _read_staged_entry(target: Path, rel: str) -> tuple[str | None, bool]:
 
 def _reclassify_then_restore(
     target: Path, rel: str, expected_blob: str | None, restored_reason: str,
+    failures: list[dict] | None = None,
 ) -> bool:
     """The reclassify-then-restore sequence both restore arms run (plan
     closeout-migrate-clobber-guard-restore-arms, Terms): re-read the staged
@@ -1267,7 +1644,12 @@ def _reclassify_then_restore(
     restore subprocess stays a bounded silent-drop window. The restore
     pathspec passes the rel quoted `:(literal)` so glob metacharacters in
     the rel never widen the restore onto sibling paths. Returns True
-    when the restore landed and held."""
+    when the restore landed and held. An attempted restore that failed
+    (subprocess rc != 0) or did not hold HEAD afterwards is reported as
+    today and, when the caller passes ``failures``, recorded into the
+    manifest's prevented_clobber_failures section (entry
+    closeout-migrate-guard-failure-manifest-trace) - the pre-restore
+    downgrade prints (no restore was attempted) and records nothing."""
     blob, unmerged = _read_staged_entry(target, rel)
     if unmerged:
         # T1-NIT-1 (plan 2026-11-04-closeout-clobber-guard-review-
@@ -1291,13 +1673,23 @@ def _reclassify_then_restore(
         ["git", "-C", str(target), "restore", "--source=HEAD",
          "--staged", "--worktree", "--", f":(literal){rel}"],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
     if restore.returncode != 0:
+        error = restore.stderr.strip()
         print(
             f"WARN: prevented-clobber restore failed for {rel}: "
-            f"{restore.stderr.strip()}",
+            f"{error}",
             file=sys.stderr,
         )
+        if failures is not None:
+            failures.append(
+                {
+                    "destination": (target / rel).as_posix(),
+                    "action": "restore-failed",
+                    "error": error,
+                }
+            )
         return False
     head_blob = _head_blob(target, rel)
     final_blob, final_unmerged = _read_staged_entry(target, rel)
@@ -1307,6 +1699,20 @@ def _reclassify_then_restore(
             "the restore (staged entry re-read differs); reported, "
             "not re-restored"
         )
+        if failures is not None:
+            if final_unmerged:
+                error = "unmerged in the index when re-read after the restore"
+            elif head_blob is None:
+                error = "HEAD unresolvable when re-read after the restore"
+            else:
+                error = "staged entry re-read differs from HEAD after the restore"
+            failures.append(
+                {
+                    "destination": (target / rel).as_posix(),
+                    "action": "restore-mismatch",
+                    "error": error,
+                }
+            )
         return False
     print(f"prevented clobber: {rel} ({restored_reason})")
     return True
@@ -1315,6 +1721,7 @@ def _reclassify_then_restore(
 def _prevent_tracked_clobbers(
     target: Path, owned: set[str],
     delivered_blobs: dict[str, str] | None = None,
+    failures: list[dict] | None = None,
 ) -> list[str]:
     """Post-run staged-set ownership check (entry closeout-migrate-baseline-
     tracked-clobber): a staged tracked entry whose staged bytes are an older
@@ -1353,22 +1760,52 @@ def _prevent_tracked_clobbers(
     intent-to-add entries on git 2.56.0), so the walk never sees
     them; widening the enumeration is forbidden (documented
     non-coverage, not a coverage gap to fix).
-    Returns the prevented paths.
-    Vintage detection is its own small probe beside the concept owner
-    scripts/revert_set_classifier.py; the report lines borrow that
-    classifier's foreign-versus-reversal vocabulary."""
+    Returns the prevented paths. An unreadable staged set (the walk's rc !=
+    0 read) and an attempted restore that failed or did not hold HEAD are
+    recorded as {destination, action, error} entries into the caller's
+    ``failures`` list when one is passed (entry
+    closeout-migrate-guard-failure-manifest-trace: the manifest's
+    prevented_clobber_failures section, so the closeout reader adjudicates
+    without stderr); the report lines stay unchanged.
+    Vintage detection batches over the differ-from-HEAD staged blob set
+    through `_batch_vintage_decisions` (the Task 2 recipe: one exclusion-only
+    `rev-list --objects` prefilter, the automatic per-rel
+    `_blob_in_head_history` fallback for every candidate the prefilter cannot
+    exclude; plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+    guard-residuals Task 3) - the offender and prevented sets are
+    byte-identical to the serial per-rel probe's, a probe failure reading
+    exactly as the wrapper it replaced read it. Vintage detection is its own
+    small probe beside the concept owner scripts/revert_set_classifier.py;
+    the report lines borrow that classifier's foreign-versus-reversal
+    vocabulary."""
     prevented: list[str] = []
     proc = subprocess.run(
         ["git", "-C", str(target), "diff", "--cached", "--name-only", "-z"],
         capture_output=True,
+        env=_sanitize_git_child_env(),
     )
     if proc.returncode != 0:
+        error = proc.stderr.decode(errors="replace").strip()
         print(
             f"WARN: post-run staged-set read failed: "
-            f"{proc.stderr.decode(errors='replace').strip()}",
+            f"{error}",
             file=sys.stderr,
         )
+        if failures is not None:
+            failures.append(
+                {
+                    "destination": target.as_posix(),
+                    "action": "staged-set-read-failed",
+                    "error": error,
+                }
+            )
         return prevented
+    # Pass 1 - the classification walk (plan 2026-11-05-closeout-migrate-
+    # supplemental-inventory-and-guard-residuals Task 3): every walked shape
+    # whose disposition does not need the vintage question is reported or
+    # dispatched here; the differ-from-HEAD entries defer to the batch below,
+    # so the guard never probes the vintage question serially.
+    deferred: list[tuple[str, str]] = []
     for raw in proc.stdout.split(b"\0"):
         rel = os.fsdecode(raw)
         if not rel:
@@ -1401,6 +1838,7 @@ def _prevent_tracked_clobbers(
                     target, rel, None,
                     "staged deletion of a tracked file this run "
                     "carried; restored from HEAD",
+                    failures,
                 ):
                     prevented.append(rel)
                 continue
@@ -1434,6 +1872,7 @@ def _prevent_tracked_clobbers(
                     "staged deletion of a tracked file this run "
                     "carried; on-disk bytes equal HEAD; restored "
                     "from HEAD (loss-free cleanup)",
+                    failures,
                 ):
                     prevented.append(rel)
             else:
@@ -1470,7 +1909,19 @@ def _prevent_tracked_clobbers(
                 "left untouched"
             )
             continue
-        if _blob_in_head_history(target, rel, staged_blob):
+        deferred.append((rel, staged_blob))
+    # Pass 2 - the batched vintage decision over the differ-from-HEAD staged
+    # blob set (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+    # guard-residuals Task 3, composed from the Task 2 helpers): one
+    # exclusion-only `rev-list --objects` prefilter plus the automatic
+    # per-rel `_blob_in_head_history` fallback for every candidate the
+    # prefilter cannot exclude. A candidate whose per-rel probe failed rc != 0
+    # stays out of ``decisions``, and decisions.get(key, False) then reads
+    # exactly as the per-rel wrapper this batch replaces read it - the
+    # offender and prevented sets are byte-identical to the serial walk's.
+    decisions, _vintage_probe_errors = _batch_vintage_decisions(target, deferred)
+    for rel, staged_blob in deferred:
+        if decisions.get((rel, staged_blob), False):
             delivered_blob = (delivered_blobs or {}).get(rel)
             if rel not in owned:
                 print(
@@ -1498,6 +1949,7 @@ def _prevent_tracked_clobbers(
                     target, rel, staged_blob,
                     "staged bytes are an older committed vintage of a "
                     "tracked file this run carried; restored from HEAD",
+                    failures,
                 ):
                     prevented.append(rel)
         elif rel not in owned:
@@ -1518,6 +1970,30 @@ def _prevent_tracked_clobbers(
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
+    """The migrate command's named sanitize refusal wrapper (plan
+    2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals
+    Task 3): the body's every git-deriving subprocess builds its child env
+    through _sanitize_git_child_env, whose drop-and-proceed construction is
+    the normal path; only a structural impossibility raises
+    _GitEnvSanitizeError, refused here as exit 2 with the named message and
+    remedy before any lock span, guard, or copy has run."""
+    try:
+        return _cmd_migrate(args)
+    except _GitEnvSanitizeError as exc:
+        print(
+            f"ERROR: refusing the closeout migrate: {exc}",
+            file=sys.stderr,
+        )
+        print(
+            "remedy: unset the GIT_* redirection keys (GIT_DIR, "
+            "GIT_WORK_TREE, GIT_INDEX_FILE and siblings) or launch the "
+            "closeout from an environment that does not export them",
+            file=sys.stderr,
+        )
+        return 2
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest)
     if manifest_path.exists():
         try:
@@ -1535,6 +2011,12 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     # refusals), and no baseline is read or fabricated.
     scoped_files: list[str] | None = None
     baseline: dict = {}
+    # The pre-flight's own probe failures (entry
+    # closeout-migrate-guard-failure-manifest-trace), collected here and
+    # recorded into the transfer's manifest prevented_clobber_failures
+    # section; empty on the scoped-inventory route (the pre-flight is
+    # inert there).
+    preflight_failures: list[dict] = []
     if args.inventory is not None:
         inventory_path = Path(args.inventory)
         try:
@@ -1590,18 +2072,47 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             return 2
     source = Path(args.source).resolve()
     target = Path(args.target).resolve()
-    # Baseline clobber pre-flight (entry closeout-migrate-baseline-tracked-
-    # clobber): a whole-file baseline carry must never overwrite a
-    # destination-tracked file whose committed HEAD bytes differ from the
-    # carried bytes - that overwrite is the witnessed rewind mechanism. The
-    # refusal runs before the merge-lock span, names every offending path,
-    # and copies nothing. The scoped-inventory route has no baseline and a
-    # non-git target has no committed bytes to compare against, so the guard
-    # is inert on both.
-    if scoped_files is None and _target_is_git_repository(target):
-        offenders = _baseline_clobber_preflight(
-            source, target, dirs, baseline.get("files", {})
+    # Nested-target refusal (plan 2026-11-05-closeout-migrate-supplemental-
+    # inventory-and-guard-residuals Task 3): a target that resolves as a git
+    # repository whose toplevel is not the target itself would run both
+    # guards and every receipt against the enclosing repository's index
+    # while reporting target-relative success, and no scoping re-implements
+    # index isolation, so refusal is the only safe shape. The refusal
+    # precedes the pre-flight, the merge-lock span, and the first copy; a
+    # target that does not resolve as a repository keeps the named
+    # non-repository paths below.
+    nested_line = _nested_target_refusal_line(target)
+    if nested_line:
+        print(f"ERROR: {nested_line}", file=sys.stderr)
+        print(
+            "remedy: re-invoke the closeout migrate with the resolved "
+            "repository toplevel as --target",
+            file=sys.stderr,
         )
+        return 2
+    # Baseline clobber pre-flight (entry closeout-migrate-baseline-tracked-
+    # clobber): a whole-file baseline carry must never rewind a
+    # destination-tracked file - only a source bytes hash that is an older
+    # committed vintage of the tracked HEAD refuses (a forward carry of
+    # newer or novel bytes falls through to the collision and receipt
+    # dispositions). The refusal runs before the merge-lock span, names
+    # every offending path, and copies nothing. The invocation also
+    # captures the pre-lock snapshot (HEAD tracked map + carried-set source
+    # hashes) the in-lock re-scan compares against, closing the pre-lock
+    # window (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+    # guard-residuals Task 2). The scoped-inventory route has no baseline
+    # and a non-git target has no committed bytes to compare against, so
+    # the guard is inert on both.
+    preflight_ran = False
+    preflight_head_map: dict[str, str] | None = None
+    preflight_source_blobs: dict[str, str] = {}
+    if scoped_files is None and _target_is_git_repository(target):
+        offenders, preflight_head_map, preflight_source_blobs = (
+            _baseline_clobber_preflight(
+                source, target, dirs, baseline.get("files", {}), preflight_failures
+            )
+        )
+        preflight_ran = True
         if offenders:
             for rel in offenders:
                 print(
@@ -1651,7 +2162,35 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     try:
-        return _cmd_migrate_transfer(args, source, target, baseline, scoped_files)
+        if preflight_ran:
+            # The in-lock re-scan (plan 2026-11-05-closeout-migrate-
+            # supplemental-inventory-and-guard-residuals Task 2): inside the
+            # lock span after acquire and before the first copy, the
+            # comparison re-runs through the same pre-flight implementation
+            # and the fresh scan compares against the pre-lock snapshot -
+            # HEAD moved since the capture, or any carried-set source byte
+            # differs from its pre-flight read, refuses exit 2 (no
+            # HEAD-change-only variant: both halves close). The refusal
+            # leaves through the finally below, releasing the lock.
+            rescan_lines = _in_lock_clobber_rescan(
+                source, target, dirs, baseline.get("files", {}),
+                preflight_head_map, preflight_source_blobs, preflight_failures,
+            )
+            if rescan_lines:
+                for line in rescan_lines:
+                    print(f"ERROR: {line}", file=sys.stderr)
+                print(
+                    "ERROR: refusing the baseline-relative migrate before "
+                    "the first copy: the pre-lock window drifted since the "
+                    "pre-flight read; re-run the closeout migrate (the "
+                    "bounded retry - a peer landing inside the window is "
+                    "re-read by the re-scan)",
+                    file=sys.stderr,
+                )
+                return 2
+        return _cmd_migrate_transfer(
+            args, source, target, baseline, scoped_files, preflight_failures
+        )
     finally:
         if merge_exports is not None:
             _migrate_merge_lock_release(target, merge_exports, merge_started)
@@ -1750,6 +2289,7 @@ def _cmd_migrate_transfer(
     target: Path,
     baseline: dict,
     scoped_files: list[str] | None = None,
+    preflight_failures: list[dict] | None = None,
 ) -> int:
     manifest_path = Path(args.manifest)
     if source == target:
@@ -1777,6 +2317,7 @@ def _cmd_migrate_transfer(
     branch_head = subprocess.run(
         ["git", "-C", str(source), "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
     )
     branch_name = branch_head.stdout.strip() if branch_head.returncode == 0 else ""
     if branch_name and branch_name != "HEAD":
@@ -1803,6 +2344,7 @@ def _cmd_migrate_transfer(
         tip_run = subprocess.run(
             ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
             capture_output=True, text=True,
+            env=_sanitize_git_child_env(),
         )
         if tip_run.returncode == 0:
             landing_commit = tip_run.stdout.strip()
@@ -1810,6 +2352,7 @@ def _cmd_migrate_transfer(
             start_run = subprocess.run(
                 ["git", "-C", str(target), "merge-base", landing_commit, "HEAD"],
                 capture_output=True, text=True,
+                env=_sanitize_git_child_env(),
             )
             if start_run.returncode == 0:
                 start_commit = start_run.stdout.strip()
@@ -1820,6 +2363,7 @@ def _cmd_migrate_transfer(
                         "--no-renames", "-z", f"{start_commit}..{landing_commit}",
                     ],
                     capture_output=True, text=True,
+                    env=_sanitize_git_child_env(),
                 )
                 if touched_run.returncode == 0:
                     branch_record["landing_touched"] = sorted(
@@ -1863,6 +2407,17 @@ def _cmd_migrate_transfer(
     # propagates unchanged.
     aborted: BaseException | None = None
     persist_failure: BaseException | None = None
+    # Guard containment (plan
+    # 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals
+    # Task 1, entry closeout-migrate-finally-guard-exception-containment):
+    # an exception escaping the post-run guard is recorded into the
+    # manifest's prevented_clobber_failures section instead of escaping the
+    # finally - a fully-copied migration never ends manifest-less.
+    # KeyboardInterrupt/SystemExit are re-raised after the recording (never
+    # converted to exit 0); any other guard crash proceeds to the ordinary
+    # exit path with the loud stderr summary.
+    guard_failure: BaseException | None = None
+    guard_failures: list[dict] = []
     try:
         if scoped_files is not None:
             # One-for-one expectation: every inventory item names exactly one
@@ -2013,43 +2568,99 @@ def _cmd_migrate_transfer(
         # after the pre-flight read - lands as a staged older vintage of a
         # tracked path this run carried; restore it before the closeout's own
         # staging can seal it in. Skipped on an aborted loop and on non-git
-        # targets (no index to read).
+        # targets (no index to read). The guarded span (the guard call
+        # through _append_manifest) catches a guard crash with the manifest
+        # write's own BaseException idiom: the failure is recorded into
+        # prevented_clobber_failures and the span always proceeds to the
+        # sections build, the manifest write, and the priors
+        # restore-or-discard; KeyboardInterrupt/SystemExit are re-raised
+        # after the recording.
         if aborted is None and _target_is_git_repository(target):
             # The guard walks repo-relative staged names while the manifest
             # destinations are absolute: normalize the carried set into the
             # target-relative names the staged-set read produces, so the
-            # ownership comparison compares like with like.
-            prefix = target.as_posix() + "/"
-            owned_rels = {
-                dest[len(prefix):]
-                for dest in {entry["destination"] for entry in migrated}
-                | {entry["destination"] for entry in replaced}
-                if dest.startswith(prefix)
-            }
-            for rel in _prevent_tracked_clobbers(target, owned_rels, delivered_blobs):
-                prevented.append(
+            # ownership comparison compares like with like. The prep sits
+            # inside the same BaseException containment as the guard call
+            # (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+            # guard-residuals Task 2, folding the design-review guard-rail):
+            # a prep crash records guard-failed and skips the guard pass
+            # instead of escaping the finally manifest-less.
+            owned_rels: set[str] | None = None
+            try:
+                prefix = target.as_posix() + "/"
+                owned_rels = {
+                    dest[len(prefix):]
+                    for dest in {entry["destination"] for entry in migrated}
+                    | {entry["destination"] for entry in replaced}
+                    if dest.startswith(prefix)
+                }
+            except BaseException as exc:
+                guard_failure = exc
+                guard_failures.append(
                     {
-                        "destination": (target / rel).as_posix(),
-                        "action": "restored-from-HEAD",
+                        "destination": target.as_posix(),
+                        "action": "guard-failed",
+                        "error": (
+                            f"owned-set prep failed: {type(exc).__name__}: {exc}"
+                        ),
                     }
                 )
-        sections: dict[str, list[dict]] = {
-            "migrated": migrated,
-            "renamed": renamed,
-            "replaced": replaced,
-            "skipped": skipped,
-            "failed": failed,
-            "branch": [branch_record],
-            "prevented_clobbers": prevented,
-        }
-        if aborted is not None:
-            sections["interrupted"] = True
-            sections["incomplete"] = [
+            if owned_rels is not None:
+                try:
+                    for rel in _prevent_tracked_clobbers(
+                        target, owned_rels, delivered_blobs, guard_failures
+                    ):
+                        prevented.append(
+                            {
+                                "destination": (target / rel).as_posix(),
+                                "action": "restored-from-HEAD",
+                            }
+                        )
+                except BaseException as exc:
+                    guard_failure = exc
+                    guard_failures.append(
+                        {
+                            "destination": target.as_posix(),
+                            "action": "guard-failed",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+        prevented_clobber_failures = list(preflight_failures or []) + guard_failures
+        # The sections build sits inside the same containment (the same
+        # fold): a crash here records sections-build-failed and still
+        # writes a manifest carrying the failure row, never a manifest-less
+        # migration.
+        sections: dict[str, list[dict]] | None = None
+        sections_failure: BaseException | None = None
+        try:
+            sections = {
+                "migrated": migrated,
+                "renamed": renamed,
+                "replaced": replaced,
+                "skipped": skipped,
+                "failed": failed,
+                "branch": [branch_record],
+                "prevented_clobbers": prevented,
+                "prevented_clobber_failures": prevented_clobber_failures,
+            }
+            if aborted is not None:
+                sections["interrupted"] = True
+                sections["incomplete"] = [
+                    {
+                        "error": f"{type(aborted).__name__}: {aborted}",
+                        "note": "migration aborted mid-loop; entries recorded above are durable",
+                    }
+                ]
+        except BaseException as exc:
+            sections_failure = exc
+            prevented_clobber_failures.append(
                 {
-                    "error": f"{type(aborted).__name__}: {aborted}",
-                    "note": "migration aborted mid-loop; entries recorded above are durable",
+                    "destination": manifest_path.as_posix(),
+                    "action": "sections-build-failed",
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
-            ]
+            )
+            sections = {"prevented_clobber_failures": prevented_clobber_failures}
         try:
             _append_manifest(manifest_path, sections)
         except BaseException as exc:
@@ -2059,6 +2670,22 @@ def _cmd_migrate_transfer(
             _restore_prior_targets(priors)
         else:
             _discard_prior_targets(priors)
+        # The loud summary prints whenever the whole prevented_clobber_failures
+        # section (pre-flight + guard rows) is non-empty, regardless of the
+        # exit code this finally leads to (success, failed copies, failed
+        # persistence) and before the interrupt re-raise below.
+        if prevented_clobber_failures:
+            print(
+                f"ERROR: {len(prevented_clobber_failures)} clobber-guard failure(s) "
+                "recorded in prevented_clobber_failures; adjudicate before "
+                "teardown: "
+                + ", ".join(entry["destination"] for entry in prevented_clobber_failures),
+                file=sys.stderr,
+            )
+        if isinstance(guard_failure, (KeyboardInterrupt, SystemExit)):
+            raise guard_failure
+        if isinstance(sections_failure, (KeyboardInterrupt, SystemExit)):
+            raise sections_failure
     if persist_failure is not None:
         print(
             f"ERROR: migration manifest persistence failed ({persist_failure}); "
@@ -4503,6 +5130,14 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
       summary; a non-iterable section sets ``destinations_error`` like the
       migrated/renamed reads; additive only, no consumer outside the gate
       reads it.
+    - ``failure_rows``: every dictionary row of
+      ``prevented_clobber_failures`` with a truthy ``destination``, in
+      manifest order (plan
+      2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+      residuals Task 1), so guard failures reach the teardown decision
+      beside the prevented rows under the same attribution and
+      destinations_error rules; additive only, no consumer outside the
+      gate reads it.
     - ``destinations_error``: the TypeError a non-iterable section raises
       at destination extraction, else None, discarding any partial
       collection (``verified_destinations``, ``verified_rows``, and
@@ -4523,6 +5158,7 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         "verified_destinations": [],
         "verified_rows": [],
         "prevented_rows": [],
+        "failure_rows": [],
         "destinations_error": None,
     }
     try:
@@ -4560,11 +5196,21 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         for entry in manifest.get("prevented_clobbers", []):
             if isinstance(entry, dict) and entry.get("destination"):
                 state["prevented_rows"].append(entry)
+        # Guard-failure teardown rows (plan
+        # 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        # residuals Task 1): one additive loop beside the prevented read,
+        # inside the same TypeError guard, so guard failures reach the
+        # teardown decision beside the prevented rows with no new error
+        # surface.
+        for entry in manifest.get("prevented_clobber_failures", []):
+            if isinstance(entry, dict) and entry.get("destination"):
+                state["failure_rows"].append(entry)
     except TypeError as exc:
         state["destinations_error"] = exc
         state["verified_destinations"] = []
         state["verified_rows"] = []
         state["prevented_rows"] = []
+        state["failure_rows"] = []
     return state
 
 
@@ -4860,6 +5506,37 @@ def _gate_branch_closeout(
             + ", ".join(prevented_foreign[:5])
             + f" (total: {len(prevented_foreign)})"
         )
+    # Guard-failure teardown evidence (plan
+    # 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+    # residuals Task 1): the prevented_clobber_failures rows surface beside
+    # the prevented rows in the same report-only summary, riding the same
+    # attribution stamp and slice-then-count convention - a closeout whose
+    # manifest carries non-empty guard failures must be adjudicated before
+    # teardown, but the rows never hold the branch.
+    failures_own: list[str] = []
+    failures_prior: list[str] = []
+    for row in state["failure_rows"]:
+        if _row_attributed_to_adjudicated(row, records):
+            failures_own.append(row["destination"])
+        else:
+            failures_prior.append(row["destination"])
+    failure_notes: list[str] = []
+    if failures_own:
+        failure_notes.append(
+            "branch-closeout: clobber-guard failure(s) this run recorded "
+            "(report-only; the prevented_clobber_failures rows must be "
+            "adjudicated before teardown): "
+            + ", ".join(failures_own[:5])
+            + f" (total: {len(failures_own)})"
+        )
+    if failures_prior:
+        failure_notes.append(
+            "branch-closeout: clobber-guard failure(s) attributed to prior "
+            "run(s) in the shared manifest (report-only; never this run's "
+            "teardown evidence): "
+            + ", ".join(failures_prior[:5])
+            + f" (total: {len(failures_prior)})"
+        )
 
     # Capture ONE proven tip OID for the ancestry/tree checks.
     proven_oid, capture_err = _capture_branch_oid(target, recorded)
@@ -5012,7 +5689,7 @@ def _gate_branch_closeout(
         )
         disposition = _disposition("retained", proven_oid, reasons)
         disposition["removal_blocked"] = guard_failed
-        return None, lines + foreign_notes + prevented_notes, disposition
+        return None, lines + foreign_notes + prevented_notes + failure_notes, disposition
     if accounted == "exact-tree-accounted":
         if accounted_via == "recorded-landing":
             proof_text = (
@@ -5031,7 +5708,7 @@ def _gate_branch_closeout(
             f"closeout may delete it at expected OID {proven_oid} only "
             "after the documented quiesce-and-reconcile sequence while "
             "writers stay stopped",
-        ] + foreign_notes + prevented_notes, _disposition("exact-tree-accounted", proven_oid, [])
+        ] + foreign_notes + prevented_notes + failure_notes, _disposition("exact-tree-accounted", proven_oid, [])
     # The ancestry statement carries only the branch evidence the gate
     # itself proves (branch, proven OID, ancestry result): branch-only mode
     # has no linked worktree, and worktree/artifact facts stay with the
@@ -5045,7 +5722,7 @@ def _gate_branch_closeout(
         f"expected OID {proven_oid} after the documented quiesce-and-"
         "reconcile sequence (plain git branch -d must print deletable; "
         "never force while a linked worktree remains)",
-    ] + foreign_notes + prevented_notes, _disposition("ancestry-accounted", proven_oid, [])
+    ] + foreign_notes + prevented_notes + failure_notes, _disposition("ancestry-accounted", proven_oid, [])
 
 
 # ---------------------------------------------------------------------------
@@ -5770,13 +6447,111 @@ def _migrate_merge_max_wait() -> int:
     return wait
 
 
+class _GitEnvSanitizeError(RuntimeError):
+    """The sanitize helper could not construct a redirection-free git child
+    env - a structural impossibility on CPython subprocess, so the migrate's
+    refusal carrying this error is near-unreachable by construction (plan
+    2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals
+    Task 3)."""
+
+
+# The ambient redirection keys the sanitize helper drops (plan
+# 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals
+# Task 3, matching scripts/check_backlog_inbox_location.py's _clean_git_env
+# precedent plus GIT_CEILING_DIRECTORIES): each one redirects where git
+# reads its repository, index, objects, or config, so an ambient export
+# would point every git-deriving subprocess at a foreign repository and
+# silently degrade both clobber guards.
+_SANITIZE_GIT_ENV_KEYS = frozenset({
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_CONFIG_COUNT",
+})
+_SANITIZE_GIT_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def _sanitize_git_child_env() -> dict[str, str]:
+    """One sanitized child env for every git-deriving subprocess in the
+    migrate path (plan 2026-11-05-closeout-migrate-supplemental-inventory-
+    and-guard-residuals Task 3): a copy of the process environment with the
+    redirection keys dropped - GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+    GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR,
+    GIT_CEILING_DIRECTORIES, and the GIT_CONFIG_COUNT/GIT_CONFIG_KEY_*/
+    GIT_CONFIG_VALUE_* config-injection family - so every probe resolves
+    against the repository its ``-C`` argument names, never against an
+    ambient export. Drop-and-proceed is the normal path; only a structural
+    impossibility (the environment cannot be copied or a key cannot be
+    dropped - none is known on CPython subprocess) raises
+    _GitEnvSanitizeError, the migrate's named near-unreachable refusal."""
+    try:
+        env = dict(os.environ)
+        for key in [
+            k for k in env
+            if k in _SANITIZE_GIT_ENV_KEYS or k.startswith(_SANITIZE_GIT_ENV_PREFIXES)
+        ]:
+            del env[key]
+    except Exception as exc:
+        raise _GitEnvSanitizeError(
+            "cannot construct a redirection-free git child env: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    return env
+
+
+def _nested_target_refusal_line(target: Path) -> str | None:
+    """The nested-target refusal line (plan 2026-11-05-closeout-migrate-
+    supplemental-inventory-and-guard-residuals Task 3): when the target
+    resolves as a git repository (`git rev-parse --show-toplevel` succeeds)
+    but the reported toplevel differs from the resolved target path, both
+    clobber guards and every receipt would read and restore against the
+    enclosing repository's index while reporting target-relative success,
+    and no scoping re-implements index isolation, so refusal is the only
+    safe shape; returns the line naming both paths. None when the target is
+    not a repository (the named non-repository paths keep) or the toplevel
+    equals the target. The probe runs under the sanitized child env like
+    every git-deriving subprocess in the migrate path, so an ambient
+    GIT_DIR/GIT_WORK_TREE export cannot manufacture a false refusal."""
+    probe = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+        env=_sanitize_git_child_env(),
+    )
+    if probe.returncode != 0:
+        return None
+    toplevel = probe.stdout.strip()
+    if not toplevel:
+        return None
+    try:
+        resolved = Path(toplevel).resolve()
+    except OSError:
+        resolved = Path(toplevel)
+    if resolved == target:
+        return None
+    return (
+        f"refusing the closeout migrate: the target {target} resolves as a "
+        f"git repository whose toplevel {toplevel} does not equal the "
+        "resolved target path; the guards and receipts would read and "
+        "restore against the enclosing repository's index"
+    )
+
+
 def _target_is_git_repository(target: Path) -> bool:
     """True when the target resolves as a git repository toplevel: the merge
-    lock is repository-keyed, so a non-repository target has no key to take."""
+    lock is repository-keyed, so a non-repository target has no key to take.
+    The probe runs under the sanitized child env (plan 2026-11-05-closeout-
+    migrate-supplemental-inventory-and-guard-residuals Task 3): ambient
+    GIT_DIR/GIT_WORK_TREE redirections cannot make the detection resolve a
+    foreign repository."""
     probe = subprocess.run(
         ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
+        env=_sanitize_git_child_env(),
     )
     return probe.returncode == 0
 
@@ -5792,6 +6567,7 @@ def _merge_lock_wait_acquire(target: Path, label: str, max_wait: int) -> tuple[d
             capture_output=True,
             text=True,
             cwd=str(target),
+            env=_sanitize_git_child_env(),
         )
     except OSError as exc:
         return None, [f"merge lock script launch failed: {exc}"]
@@ -5812,7 +6588,7 @@ def _migrate_merge_lock_release(target: Path, exports: dict[str, str], started: 
     stay merge-status and merge-stale-clean)."""
     held = time.monotonic() - started
     script = _done_lock_script(target)
-    env = os.environ.copy()
+    env = _sanitize_git_child_env()
     env.update(exports)
     print(f"merge-lock: held {held:.1f}s", file=sys.stderr)
     try:

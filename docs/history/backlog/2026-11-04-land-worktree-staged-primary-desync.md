@@ -1,4 +1,4 @@
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-land-worktree-staged-primary-desync.md)
 Priority: high
 Class: fix-class
 Origin class: witnessed defect (operator-directed recovery session over the 2026-11-04 primary checkout)

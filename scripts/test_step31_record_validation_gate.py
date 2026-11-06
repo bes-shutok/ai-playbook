@@ -184,6 +184,288 @@ class Step31RecordValidationGateTest(unittest.TestCase):
         self._assert_single_final_outcome(out, "fail")
         self.assertIn("ERROR:", err)
 
+    def test_malformed_sidecar_names_suppressed_checks_as_warnings(self):
+        """A malformed sidecar keeps dependent checks suppressed but names
+        the skipped checks on the warning channel beside the owning error."""
+        path = self._clear_pair()
+        path.write_text(path.read_text().replace("### Panel", "### Reviewers", 1))
+        path.with_suffix(".stats.json").write_text('{"schema_version": 1,')
+
+        result = vrs.validate_staging_file(path, hard=True)
+        self.assertEqual(len(result.errors), 2, result.errors)
+        self.assertTrue(
+            result.errors[0].startswith("missing ### Panel under Review Statistics"),
+            result.errors,
+        )
+        self.assertTrue(
+            result.errors[1].startswith("invalid stats sidecar JSON:"),
+            result.errors,
+        )
+        self.assertFalse(any("skipped " in error for error in result.errors))
+        self.assertTrue(
+            any("skipped finding conservation:" in warning for warning in result.warnings),
+            result.warnings,
+        )
+
+        code, out, err = self._run_validator(["--hard", str(path)])
+
+        self.assertEqual(code, 1)
+        self._assert_single_final_outcome(out, "fail")
+        self.assertIn("ERROR: invalid stats sidecar JSON:", err)
+        warnings = [line for line in err.splitlines() if line.startswith("WARN: ")]
+        self.assertTrue(warnings, err)
+        self.assertTrue(
+            any("version-1 sidecar schema" in line for line in warnings),
+            warnings,
+        )
+        self.assertTrue(
+            any("finding conservation" in line for line in warnings),
+            warnings,
+        )
+
+    def test_missing_sidecar_names_only_the_sidecar_witness_check_as_skipped(self):
+        """The sidecar witness source is skipped, while a Metadata source
+        still reaches the witness validator."""
+        path = self._clear_pair()
+        content = path.read_text().replace(
+            "- Last fix commit: none", "- Last fix commit: " + "a" * 40, 1
+        )
+        path.write_text(content)
+        path.with_suffix(".stats.json").unlink()
+        result = vrs.ValidationResult(path)
+
+        with mock.patch.object(
+            vrs,
+            "validate_witness_ledger_shape",
+            wraps=vrs.validate_witness_ledger_shape,
+        ) as witness_validator:
+            vrs.validate_stats_sidecar(path, content, result, enforce_witness=True)
+
+        witness_validator.assert_called_once()
+        skipped = {
+            "version-1 sidecar schema validation",
+            "record-kind enum validation",
+            "cap-closure contract validation",
+            "corrections extension validation",
+            "last-fix commit agreement",
+            "current sidecar field and finding validation",
+            "finding conservation",
+            "counts parity",
+            "coverage Markdown agreement",
+            "soften-watchlist agreement",
+            "discarded-row ownership validation",
+            "sidecar-surface witness-ledger shape validation",
+        }
+        self.assertEqual(
+            {
+                warning.split(": the stats sidecar is missing prevents evaluation", 1)[0]
+                .removeprefix("skipped ")
+                for warning in result.warnings
+            },
+            skipped,
+            result.warnings,
+        )
+        self.assertTrue(
+            any(
+                "skipped sidecar-surface witness-ledger shape validation" in warning
+                for warning in result.warnings
+            ),
+            result.warnings,
+        )
+        self.assertFalse(
+            any("skipped witness-ledger shape validation" in warning for warning in result.warnings),
+            result.warnings,
+        )
+
+    def test_nested_self_heal_skip_warning_reaches_current_result(self):
+        """A skip found while walking a predecessor chain is not lost
+        when that predecessor's result is merged into the current record."""
+        review_id = "a" * 32
+        date = "2026-10-10"
+        current_path = self.root / (
+            date + "-branch-review-step31-gate-nested-self-heal-r4.md"
+        )
+        prior_path = current_path.with_name(
+            current_path.name.removesuffix("r4.md") + "r3.md"
+        )
+        markdown = vrs._post_window_fixture_markdown("plan").replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n- review-run-id: " + review_id
+            + "\n- review-started-at-ms: 123",
+            1,
+        )
+        current_path.write_text(markdown)
+        prior_path.write_text(markdown)
+        prior_payload = vrs._post_window_fixture_payload("plan")
+        prior_payload.update({"date": date, "round": 3, "source_digest": "b" * 64})
+        prior_payload["extensions"] = {
+            "convergence": {
+                "self_heal_attempt": {"status": "unknown", "run_id": review_id}
+            }
+        }
+        prior_path.with_suffix(".stats.json").write_text(json.dumps(prior_payload))
+        current_payload = vrs._post_window_fixture_payload("plan")
+        current_payload.update({"date": date, "round": 4, "source_digest": "c" * 64})
+        current_payload["extensions"] = {
+            "convergence": {
+                "self_heal_attempt": {"status": "unknown", "run_id": review_id}
+            }
+        }
+        result = vrs.ValidationResult(current_path)
+
+        vrs.validate_self_heal_attempt_state(
+            current_path, markdown, result, sidecar_payload=current_payload
+        )
+
+        self.assertTrue(
+            any(
+                "skipped self-heal chain validation for earlier rounds r1 through r1"
+                in warning
+                for warning in result.warnings
+            ),
+            result.warnings,
+        )
+
+    def test_unknown_discard_code_names_accepted_set_and_keeps_warning_pass(self):
+        """An unknown discard code remains a warning and names the accepted
+        set without changing the passing outcome."""
+        path = self._clear_pair()
+        markdown = path.read_text().replace(
+            "### Discarded findings\nNone.",
+            "### Discarded findings\n"
+            "| Worker | Worker severity | Pattern | Theme | Reason | Notes |\n"
+            "|---|---|---|---|---|---|\n"
+            "| testing | Medium | testing#gap | example | "
+            "not-a-real-reason | none |",
+            1,
+        )
+        path.write_text(markdown)
+
+        code, out, err = self._run_validator([str(path)])
+
+        self.assertEqual(code, 0)
+        self._assert_single_final_outcome(out, "pass")
+        self.assertNotIn("ERROR:", err)
+        warning = next(
+            line
+            for line in err.splitlines()
+            if line.startswith("WARN: unknown discard reason code: not-a-real-reason")
+        )
+        accepted = ", ".join(sorted(vrs.VALID_DISCARD_REASONS))
+        self.assertIn(f"accepted codes: {accepted}", warning)
+
+    def test_identity_filename_refusal_names_required_token_shape(self):
+        """A plan identity in the sidecar without an identity token keeps
+        the existing refusal text and states the required filename token."""
+        import hashlib
+
+        path = self._clear_pair()
+        sidecar_path = path.with_suffix(".stats.json")
+        payload = json.loads(sidecar_path.read_text())
+        repo_root = Path(__file__).resolve().parents[1]
+        source_plan_tmp = tempfile.TemporaryDirectory(
+            prefix="step31-source-plan-", dir=repo_root
+        )
+        self.addCleanup(source_plan_tmp.cleanup)
+        plan_path = Path(source_plan_tmp.name) / "plan.md"
+        plan_bytes = b"# Source plan fixture\n"
+        plan_path.write_bytes(plan_bytes)
+        plan_identity = plan_path.relative_to(repo_root).as_posix()
+        payload.setdefault("extensions", {})["plan_identity"] = plan_identity
+        payload["source_digest"] = hashlib.sha256(plan_bytes).hexdigest()
+        sidecar_path.write_text(json.dumps(payload))
+
+        code, out, err = self._run_validator(
+            ["--hard", "--source-plan", str(plan_path), str(path)]
+        )
+
+        self.assertEqual(code, 1)
+        self._assert_single_final_outcome(out, "fail")
+        refusal = next(
+            line
+            for line in err.splitlines()
+            if "sidecar plan_identity requires an identity-qualified review filename"
+            in line
+        )
+        self.assertTrue(
+            refusal.startswith(
+                "ERROR: sidecar plan_identity requires an identity-qualified review filename"
+            ),
+            refusal,
+        )
+        self.assertIn(
+            "required form: -p<8 lowercase hex>-r<N>.md",
+            refusal,
+        )
+
+    def test_soft_mode_single_violation_keeps_legacy_report_and_exit(self):
+        """A single independently-evaluable defect keeps soft mode's
+        report-only exit and emits no cascade skip notes."""
+        path = self._findings_pair()
+        sidecar = path.with_suffix(".stats.json")
+        payload = json.loads(sidecar.read_text())
+        payload["findings"][0]["severity"] = "Critical"
+        sidecar.write_text(json.dumps(payload))
+
+        code, out, err = self._run_validator([str(path)])
+
+        self.assertEqual(code, 0)
+        self._assert_single_final_outcome(out, "fail")
+        errors = [line for line in err.splitlines() if line.startswith("ERROR: ")]
+        self.assertEqual(len(errors), 1, err)
+        self.assertIn("finding conservation: finding 1 severity disagrees", errors[0])
+        self.assertFalse(any("skipped " in line for line in err.splitlines()), err)
+
+    def test_self_heal_first_refusal_names_skipped_earlier_rounds(self):
+        """A malformed r2 stops the r3 predecessor walk with an explicit
+        warning for the earlier chain segment that was not evaluated."""
+        review_id = "a" * 32
+        date = "2026-10-10"
+        current_path = self.root / (
+            date + "-branch-review-step31-gate-self-heal-r3.md"
+        )
+        prior_path = current_path.with_name(
+            current_path.name.removesuffix("r3.md") + "r2.md"
+        )
+        prior_path.write_text("# Prior round\n")
+        prior_payload = vrs._post_window_fixture_payload("plan")
+        prior_payload.update({"date": date, "round": 2, "source_digest": "b" * 64})
+        prior_payload["extensions"] = {
+            "convergence": {
+                "self_heal_attempt": {"status": "invalid", "run_id": review_id}
+            }
+        }
+        prior_path.with_suffix(".stats.json").write_text(json.dumps(prior_payload))
+
+        current_md = vrs._post_window_fixture_markdown("plan").replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n- review-run-id: " + review_id
+            + "\n- review-started-at-ms: 123",
+            1,
+        )
+        current_path.write_text(current_md)
+        current_payload = vrs._post_window_fixture_payload("plan")
+        current_payload.update({"date": date, "round": 3, "source_digest": "c" * 64})
+        current_payload["extensions"] = {
+            "convergence": {
+                "self_heal_attempt": {"status": "unknown", "run_id": review_id}
+            }
+        }
+        result = vrs.ValidationResult(path=current_path)
+
+        vrs._validate_self_heal_record(
+            current_path, current_md, result, current_payload, [], {}
+        )
+
+        self.assertTrue(
+            any(
+                "self-heal chain validation for earlier rounds r1 through r1" in warning
+                for warning in result.warnings
+            ),
+            result.warnings,
+        )
+        self.assertFalse(any("skipped " in error for error in result.errors))
+
     def test_hard_mode_passes_valid_findings_bearing_record(self):
         """A valid findings-bearing pair passes the same hard-mode
         invocation under the existing grammar, no new schema rule."""

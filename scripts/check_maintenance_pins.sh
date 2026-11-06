@@ -18,7 +18,9 @@
 # witnessed-fail-arm family under the same per-section fixture seam), and the
 # warning-only placement-pins family over the placement doctrine spans in the four placement-decision owners,
 # and the warning-only prompt-log prune-range pin family over the landed prune-range, receipt-preservation,
-# write-boundary, and audit-separation clauses across the two rolling logs and the five operative procedures.
+# write-boundary, and audit-separation clauses across the two rolling logs and the five operative procedures,
+# and the post-fire verification arm pins over the warning-only survey arm, the outcome-note shape and
+# retention cap, the task-index fire-ledger read path, and the fire-path preservation clause.
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 = all pins hold
 # (`OUTCOME: pass`) or every standing red is an unexpired recorded red named
 # in the run summary line, exit 1 = a failing pin (`OUTCOME: fail` after the PIN
@@ -4164,6 +4166,49 @@ rm -rf "$CONSULT_SELFTEST_FIXTURE"
 # (12 sites shipped that way before this guard). The searched literal is
 # split across two strings so this guard line cannot match itself.
 [ "$(grep -c "^[^#].*#.*| route_""heredoc_stream" "$0" | tr -d ' ')" -eq 0 ] || { recorded_red_check "routed heredoc pipe dead-wired after a trailing comment" "PIN FAIL: routed heredoc pipe dead-wired after a trailing comment" || fail=1; }
+
+# --- post-fire verification arm pins (plan docs/history/plans/2026-11-05-automation-fire-time-failure-verification.md, Task 1) ---
+# The warning-only post-fire verification arm: the survey arm's spine and
+# admission fields, the outcome-note shape and retention cap in the
+# state-file module, the task-index fire-ledger read path in the runtime
+# overlay, the fire-path preservation clause in the scheduling module,
+# the read-side suppression clause beside the arm's memory correction
+# (survey-arms plus the state-file pointer), and the adapter/selftest
+# files with the adapter's unavailable-source signal. Machinery admission: incident
+# docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md;
+# expected catch frequency: every pins run over an edit to the arm's four
+# module surfaces; false-positive cost: one failing pin naming the dropped
+# clause; review due 2026-12-05; promotion requires a production true catch
+# and a pre-registered registry-removal row.
+pin "post-fire verification arm anchor in survey-arms" grep -qF 'Post-fire verification arm' "$SA"
+pin "post-fire arm warning-only spine in survey-arms" grep -qF 'never runs pre-fire, never retries a fire, and never gates, blocks, prevents, cancels, or reschedules a dispatch' "$SA"
+pin "post-fire arm admission review date in survey-arms" grep -qF '2026-12-05' "$SA"
+pin "post-fire arm incident row citation in survey-arms" grep -qF 'docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md' "$SA"
+pin "post-fire arm registry-removal promotion clause" grep -qF 'pre-registered registry-removal row' "$SA"
+pin "post-fire arm unknown-no-write clause in survey-arms" grep -qF 'report `unknown` and write nothing' "$SA"
+pin "post-fire arm mandate-match-unknown clause in survey-arms" grep -qF 'mandate_match=unknown' "$SA"
+pin "outcome-note field paragraph anchor in state-file" grep -qF '`one-shot-fire-outcome|` notes records' "$SF"
+pin "outcome-note grammar literal in state-file" grep -qF '"note": "one-shot-fire-outcome|automation_id=<id>|scheduled_at=<epoch ms>' "$SF"
+pin "outcome-note retention cap 30 clause in state-file" grep -qF 'newest 30 outcome notes' "$SF"
+pin "outcome-note correction statuses in state-file" grep -qF 'correction=<pending|done|ambiguous>' "$SF"
+pin "outcome-note no-type-field clause in state-file" grep -qF 'no `type` field is ever added' "$SF"
+pin "task-index fire ledger section anchor in zcode overlay" grep -qF '## Task-index fire ledger' "$Z"
+pin "task-index store fallback locator literal in zcode overlay" grep -qF '~/.zcode/v2/tasks-index.sqlite' "$Z"
+pin "task-index env resolver literal in zcode overlay" grep -qF 'ZCODE_DATA_BASE_DIR' "$Z"
+pin "task-index read-only clause in zcode overlay" grep -qF 'open it read-only (`mode=ro`), never write it' "$Z"
+pin "lifecycle-vs-session-outcome separation clause in zcode overlay" grep -qF 'never substitute for the session outcome' "$Z"
+pin "fire path carries no outcome inputs anchor in scheduling" grep -qF 'The fire path carries no outcome inputs' "$SC"
+pin "scheduling no pre-fire lookup clause" grep -qF 'never performs a pre-fire duplicate or outcome lookup, never retries a fire, and never gates, defers, or blocks a dispatch on a fire outcome' "$SC"
+pin "fire-outcome adapter script present" test -f "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter read-only URI literal" grep -qF 'mode=ro' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter retention cap constant" grep -qF 'RETENTION_CAP = 30' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter correction prefix literal" grep -qF 'CORRECTION_PREFIX = "fire-outcome-correction|"' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter correction supersedes key literal" grep -qF 'supersedes=%s@%s' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "post-fire arm read-side suppression clause in survey-arms" grep -qF 'treats the correction as authoritative and suppresses the armed line' "$SA"
+pin "post-fire arm read-side suppression immutability clause in survey-arms" grep -qF 'the armed line itself stays immutable' "$SA"
+pin "outcome-note read-side suppression pointer in state-file" grep -qF 'authoritative over its armed line' "$SF"
+pin "adapter unavailable-source signal class" grep -qF 'class SourceUnavailable' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "fire-outcome selftest present" test -f "$repo/scripts/test_maintenance_fire_outcomes.py"
 
 # --- prompt-log prune-range pins (plan docs/history/plans/2026-10-20-plan-prompts-prune-range-content-inventory.md, Task 2) ---
 # WARNING-ONLY pin family over the landed prune-range clauses: full-range

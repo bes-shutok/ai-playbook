@@ -4,7 +4,7 @@ Added: 2026-11-02, doing-code-review r3 panel over the closeout-migrate-baseline
 
 Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family record: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-PROMPTS.md)
 
-Status: covered-pending-execution (docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md), Priority: high, Class: fix-class
+Status: covered (docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md)
 Origin class: self-serving
 Skill/step: `agents/skills/execute-plan/worktree-first.md`, Transfer-out-and-deletion implementation
 Driving force: efficiency + simplicity

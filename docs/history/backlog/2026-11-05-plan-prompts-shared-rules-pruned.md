@@ -1,6 +1,6 @@
 # Backlog: pruning the first prompt entry removed the shared rolling-log contract
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-plan-prompts-shared-rules-pruned.md)
 Workflow: backlog
 Priority: high
 Class: fence-class

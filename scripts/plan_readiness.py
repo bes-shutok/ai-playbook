@@ -9,34 +9,37 @@ closure)`` section that stands in for the yes verdict? A plan under the plans
 dir's ``rejected/`` archive is never active-ready: it is excluded with its own
 named reason before any review checks run.
 
-Exit 0 only when every readiness condition passes; otherwise prints the FIRST
-failed condition and exits 1. Digest, schema, sidecar-path, and review-parsing
-rules are IMPORTED from ``validate_review_staging.py`` (same directory); the
-digest recipe is never re-implemented here. ``{plans_dir}`` and ``{reviews_dir}``
-resolve from the ``.ai-playbook/facts.md`` TOML block via ``facts_paths.py``.
+Exit 0 only when every readiness condition passes; otherwise prints every
+independently evaluable failed condition in gate order and exits 1. Digest,
+schema, sidecar-path, and review-parsing rules are IMPORTED from
+``validate_review_staging.py`` (same directory); the digest recipe is never
+re-implemented here. ``{plans_dir}`` and ``{reviews_dir}`` resolve from the
+``.ai-playbook/facts.md`` TOML block via ``facts_paths.py``.
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 pass (every readiness
-condition holds), exit 1 fail (the FIRST failed condition is named on
-stderr), exit 2 indeterminate (not modeled: a readiness run over readable
-inputs always reaches a verdict), exit 3 tool error (argparse usage and
-mutual-exclusion violations overridden from argparse's exit 2, and a
-sibling-compatibility mismatch: compatibility evidence is about the
-environment pairing, never a readiness fail). Every non-metadata run ends
-with exactly one final ``OUTCOME:`` line on stdout after the human-readable
-evidence; ``--help`` is a metadata exit with no ``OUTCOME:`` line. The
+condition holds), exit 1 fail (every independently evaluable failed condition
+is enumerated on stderr), exit 2 indeterminate (a readiness run whose graded
+evidence cannot be resolved; this reason remains exclusive), exit 3 tool
+error (argparse usage and mutual-exclusion violations overridden from
+argparse's exit 2, and a sibling-compatibility mismatch: compatibility
+evidence is about the environment pairing, never a readiness fail). Every
+non-metadata run ends with exactly one final ``OUTCOME:`` line on stdout
+after the human-readable evidence; ``--help`` is a metadata exit with no
+``OUTCOME:`` line. The
 ``--sweep`` drift mode rides the same vocabulary. The importable probe
 functions (``evaluate_readiness``, the structural probes behind
 ``run_pre_round``, ``check_review_name``, ``run_sweep``'s helpers) are
 library surfaces outside this CLI contract and keep their function-level
 behavior.
 
-Condition ordering inside ``evaluate_readiness`` is deliberate: local
-readability checks (plan path, review artifact, sidecar file, sidecar JSON,
-review UTF-8, plan bytes) run first so each gets its own named reason, then
-the shared sidecar gate (schema, source_kind, digest), then the verdict line,
-then ``is_review_ready``. Several of those readability steps re-state checks
-the shared gate would also make; they exist for reason classification, not
-duplication.
+Prerequisite ordering inside ``evaluate_readiness`` is deliberate: local
+readability checks and the shared sidecar gate run before dependent checks;
+if a prerequisite fails, its reason names the suppressed probes. After the
+prerequisites pass, verdict, review readiness, and independently gated
+plan-text probes accumulate their problems in gate order. A graded
+indeterminate result stays the sole reason and exit 2. Several local
+readability steps re-state checks the shared gate would also make; they exist
+for reason classification, not duplication.
 """
 
 from __future__ import annotations
@@ -1664,6 +1667,30 @@ def _gated_probe_reason(problem: str, min_date: str, round_no: int, round_date: 
     return f"{problem} (required for plans reviewed on or after {min_date}; latest round r{round_no} is dated {round_date})"
 
 
+def _format_readiness_problems(problems: list[str]) -> str:
+    """Keep a lone refusal byte-stable and enumerate multiple refusals."""
+    if len(problems) == 1:
+        return problems[0]
+    return "multiple readiness violations:\n" + "\n".join(
+        f"- {problem}" for problem in problems
+    )
+
+
+def _with_skipped_probes(reason: str, probes: tuple[str, ...]) -> str:
+    """Name downstream probes suppressed by a failed prerequisite gate."""
+    return f"{reason}\n  skipped probes: {', '.join(probes)}"
+
+
+_PLAN_TEXT_PROBES = (
+    "decision-points trailer",
+    "Review Scope",
+    "plan ownership",
+    "scope classification",
+    "anchors block",
+    "extraction-rule executability",
+)
+
+
 # The graded-gate indeterminate prefix (review-cert-graded-binding plan,
 # Task 6): the shared gate's indeterminate evidence (an unresolvable seal
 # anchor or a git plumbing failure over resolved inputs on the
@@ -1738,11 +1765,11 @@ def _plan_corrections_context(
 def _first_gate_error_reason(
     first_error: str, payload: dict, round_no: int
 ) -> str:
-    """Map the shared gate's FIRST error to the readiness reason.
+    """Map one shared-gate error into its existing readiness reason family.
 
     Routing home (review-cert-graded-binding plan, Task 6): a
     ``corrections verification:``-prefixed error is the corrections family
-    and routes DIRECTLY, as the first dispatch test, before the coverage,
+    and routes DIRECTLY before the coverage,
     source_kind, and source_digest substring branches and the final schema
     wrap. The marker constant is corrections_record's exported
     ``MARKER_PREFIX``, so a verifier leg can never be misfiled into a
@@ -1792,8 +1819,10 @@ def evaluate_readiness(
 ) -> tuple[bool, str | None]:
     """Evaluate the readiness conditions in order.
 
-    Returns ``(ok, reason)``; ``reason`` names the FIRST failed condition only
-    and is ``None`` on success. ``advisories`` is the optional out-parameter
+    Returns ``(ok, reason)``; ``reason`` enumerates every independently
+    evaluable failed condition in gate order and is ``None`` on success.
+    Prerequisite failures stop dependent checks and name the skipped probes;
+    a graded indeterminate reason remains exclusive. ``advisories`` is the optional out-parameter
     threaded down to ``latest_review_round``: the caller owns the list and any
     printing (this function neither prints nor keeps module state).
     ``verification_head`` (the validated ``--verification-head`` OID) threads
@@ -1817,15 +1846,21 @@ def evaluate_readiness(
         try:
             shape = plan_shape.resolve_plan_operand(resolved)
         except plan_shape.PlanShapeRefusal as exc:
-            return False, str(exc)
+            return False, _with_skipped_probes(
+                str(exc), ("review-series resolution", "sidecar and plan probes")
+            )
     elif not resolved.is_file():
-        return False, f"plan file does not exist: {resolved}"
+        return False, _with_skipped_probes(
+            f"plan file does not exist: {resolved}",
+            ("review-series resolution", "sidecar and plan probes"),
+        )
     try:
         rel_to_plans = resolved.relative_to(plans_dir)
     except ValueError:
-        return False, (
+        return False, _with_skipped_probes(
             f"plan file resolves outside plans_dir: {resolved} "
-            f"is not under {plans_dir}"
+            f"is not under {plans_dir}",
+            ("review-series resolution", "sidecar and plan probes"),
         )
     # Rejected archive: a plan under the plans dir's rejected/ subdirectory
     # is a recorded decision against doing the work. It is excluded from
@@ -1833,29 +1868,35 @@ def evaluate_readiness(
     # sweep's candidate derivation excludes the archive before this gate
     # runs). See docs/history/plans/rejected/README.md.
     if rel_to_plans.parts and rel_to_plans.parts[0] == "rejected":
-        return False, (
+        return False, _with_skipped_probes(
             f"plan file sits under the rejected archive directory "
-            f"({plans_dir / 'rejected'}): excluded from active-plan readiness"
+            f"({plans_dir / 'rejected'}): excluded from active-plan readiness",
+            ("review-series resolution", "sidecar and plan probes"),
         )
 
     # r6 Z5: a configured-but-missing reviews_dir is a wiring failure with
     # its OWN reason (mirroring the sweep's r5 message), never a misleading
     # "no review artifact" that sends the user down the wrong remedy loop.
     if not reviews_dir.is_dir():
-        return False, (
-            f"configured reviews_dir does not exist on disk: {reviews_dir}"
+        return False, _with_skipped_probes(
+            f"configured reviews_dir does not exist on disk: {reviews_dir}",
+            ("sidecar and plan probes",),
         )
     story_slug = feature_slug(resolved)
     try:
         slug = artifact_slug(resolved)
     except ArtifactSlugRefusal as exc:
-        return False, str(exc)
+        return False, _with_skipped_probes(
+            str(exc), ("review-series resolution", "sidecar and plan probes")
+        )
     plan_root = repository_root(resolved.parent)
     plan_identity = normalize_plan_path(resolved, plan_root) if plan_root else None
     try:
         latest = latest_review_round(reviews_dir, slug, plan_identity, advisories)
     except AmbiguousReviewSeries as exc:
-        return False, str(exc)
+        return False, _with_skipped_probes(
+            str(exc), ("sidecar and plan probes",)
+        )
 
     # Case-variant secondary probe: scan the reviews home's directory
     # entries for round filenames matching the canonical shape regex
@@ -1886,39 +1927,39 @@ def evaluate_readiness(
             case_variants.append(name)
     if case_variants:
         if latest is not None:
-            return False, (
+            return False, _with_skipped_probes((
                 "case-variant round records exist under both the "
                 "story-key and canonical shapes; rename the legacy pair "
                 "to the canonical lowercase shape: "
                 f"{', '.join(case_variants)}"
-            )
+            ), ("sidecar and plan probes",))
         legacy_names: list[str] = []
         for name in case_variants:
             legacy_names.append(name)
             sidecar_name = name[:-3] + ".stats.json"
             if sidecar_name in entry_names:
                 legacy_names.append(sidecar_name)
-        return False, (
+        return False, _with_skipped_probes((
             f"no review artifact for canonical artifact slug {slug!r} "
             f"(plan filename story slug {story_slug!r}) under "
             f"{reviews_dir}; legacy case-variant round records "
             f"{', '.join(legacy_names)} exist; rename the pair to the "
             "canonical lowercase shape"
-        )
+        ), ("sidecar and plan probes",))
 
     # 2. A review artifact for the canonical artifact slug (the feature
     # slug lowercased; the story slug stays in the plan filename) exists.
     if latest is None:
         if story_slug != slug:
-            return False, (
+            return False, _with_skipped_probes((
                 f"no review artifact for canonical artifact slug {slug!r} "
                 f"(plan filename story slug {story_slug!r}) "
                 f"under {reviews_dir}"
-            )
-        return False, (
+            ), ("sidecar and plan probes",))
+        return False, _with_skipped_probes((
             f"no review artifact for feature slug {slug!r} "
             f"under {reviews_dir}"
-        )
+        ), ("sidecar and plan probes",))
     latest_path, round_no = latest
 
     # The sidecar and review Markdown are each read ONCE here, purely so a
@@ -1927,20 +1968,22 @@ def evaluate_readiness(
     # digest is computed ONCE and threaded into the shared gate.
     sidecar = vrs.stats_sidecar_path(latest_path)
     if not sidecar.is_file():
-        return False, (
-            f"missing stats sidecar for latest round r{round_no}: {sidecar.name}"
+        return False, _with_skipped_probes(
+            f"missing stats sidecar for latest round r{round_no}: {sidecar.name}",
+            ("shared sidecar schema/kind/digest gate", "verdict and plan-text probes"),
         )
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return False, (
-            f"malformed stats sidecar (unreadable or invalid JSON): {exc}"
+        return False, _with_skipped_probes(
+            f"malformed stats sidecar (unreadable or invalid JSON): {exc}",
+            ("shared sidecar schema/kind/digest gate", "verdict and plan-text probes"),
         )
     if not isinstance(payload, dict):
-        return False, (
+        return False, _with_skipped_probes((
             f"malformed stats sidecar (top-level JSON value is not an object): "
             f"{type(payload).__name__} (round r{round_no})"
-        )
+        ), ("shared sidecar schema/kind/digest gate", "verdict and plan-text probes"))
     # r5 Y1: a legacy/versionless (or explicit-unsupported) sidecar is
     # REJECTED before the shared gate runs. Pure-legacy payloads take the
     # shared validator's compatibility path, which never reaches the digest
@@ -1950,33 +1993,20 @@ def evaluate_readiness(
     # single owner; only current-shape payloads (version-1 or the versionless
     # current markers) carry a verifiable ``source_digest`` contract at all.
     if not vrs.is_current_shape(payload):
-        return False, (
+        return False, _with_skipped_probes((
             f"sidecar schema is legacy/versionless; a current-shape sidecar "
             f"with a verifiable source_digest is required (round r{round_no})"
-        )
-    # r6 Z1: the shared gate's source_kind check only fires when the key is
-    # DECLARED, so a versionless current-shape sidecar with the key deleted
-    # or null bypassed it (empirically exit-0). Enforce the kind locally,
-    # unconditionally, with its own named reason; the shared gate below stays
-    # the authority for everything else.
-    # Deliberate ordering deviation from the plan Assumptions (which
-    # prescribe schema, then source_kind, then digest): this local
-    # kind-before-schema pre-check runs first so a wrong-kind or kindless
-    # sidecar is fail-closed classified with its own named reason instead of
-    # surfacing as a generic schema failure. Same pattern as the readability
-    # pre-checks above: local reason-classification pre-checks ahead of the
-    # shared authority.
+        ), ("shared sidecar gate", "verdict and plan-text probes"))
+    # A missing source_kind remains a local named failure because the shared
+    # validator compares kinds only when the sidecar declares one. Declared
+    # wrong or malformed values flow through the shared validator, allowing
+    # its full error list to be routed below.
     declared_kind = payload.get("source_kind")
-    if declared_kind != "plan":
-        if declared_kind is None:
-            return False, (
-                f"sidecar source_kind is missing or not 'plan' (round "
-                f"r{round_no})"
-            )
-        return False, (
-            f"sidecar source_kind is {declared_kind!r}, expected 'plan' "
-            f"(round r{round_no})"
-        )
+    missing_kind_reason = (
+        f"sidecar source_kind is missing or not 'plan' (round r{round_no})"
+        if declared_kind is None
+        else None
+    )
     # Regeneration notice (review-record legacy identity plan, Task 4): the
     # resolved sidecar carrying the repair tool's marker adds ONE
     # report-only notice through the advisory out-parameter; the caller owns
@@ -1996,8 +2026,9 @@ def evaluate_readiness(
     try:
         content = latest_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        return False, (
-            f"cannot read review artifact r{round_no} (not valid UTF-8): {exc}"
+        return False, _with_skipped_probes(
+            f"cannot read review artifact r{round_no} (not valid UTF-8): {exc}",
+            ("shared sidecar gate", "verdict and plan-text probes"),
         )
     if shape is not None:
         # Directory form: the digest payload is the manifest serialization
@@ -2009,7 +2040,10 @@ def evaluate_readiness(
         try:
             plan_bytes = resolved.read_bytes()
         except OSError as exc:
-            return False, f"cannot read plan bytes to compute digest: {exc}"
+            return False, _with_skipped_probes(
+                f"cannot read plan bytes to compute digest: {exc}",
+                ("shared sidecar gate", "verdict and plan-text probes"),
+            )
     plan_text: str | None = None
     if shape is not None:
         # Per-file fence scanning with file-named errors (plan-directory-
@@ -2019,7 +2053,10 @@ def evaluate_readiness(
         for file_label, file_text in shape.fence_units():
             _fence_problem = fence_balance_problem(file_text)
             if _fence_problem is not None:
-                return False, f"plan file {file_label}: {_fence_problem}"
+                return False, _with_skipped_probes(
+                    f"plan file {file_label}: {_fence_problem}",
+                    _PLAN_TEXT_PROBES,
+                )
         plan_text = shape.charter_plus_tasks_text()
     else:
         # Structural fence-balance gate (unconditional, before ANY probe or
@@ -2032,7 +2069,9 @@ def evaluate_readiness(
         except UnicodeDecodeError:
             _fence_problem = None
         if _fence_problem is not None:
-            return False, _fence_problem
+            return False, _with_skipped_probes(
+                _fence_problem, _PLAN_TEXT_PROBES
+            )
     # Cap-closure declaration presence and the plan-text date guards: the
     # trigger set for the single shared defensive decode below (the only
     # gated consumers of the plan text).
@@ -2060,20 +2099,20 @@ def evaluate_readiness(
         try:
             plan_text = plan_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
-            return False, (
+            return False, _with_skipped_probes((
                 f"cannot read plan bytes for gated checks (trailer, "
                 f"Review Scope, and/or plan ownership): {exc}"
-            )
+            ), _PLAN_TEXT_PROBES)
     expected_digest = vrs.compute_source_digest("plan", plan_bytes)
 
     # 3. Shared sidecar gate: the SAME validation the staging validator runs
     # (schema validity, then source_kind, then digest — the sequencing the
     # plan Assumptions prescribe), with the "Stats sidecar: skipped" waiver
     # disabled by passing expected_digest and source_kind explicitly. This is
-    # the single schema/kind/digest authority; no local duplicate checks. The
-    # FIRST error is mapped to a crisp first-failed reason below, preserving
-    # the distinct reason families (malformed sidecar, schema, source_kind,
-    # stale digest) by classifying the shared validator's error text.
+    # the single schema/kind/digest authority; no local duplicate checks.
+    # Each error is mapped to its existing reason family below, preserving
+    # the distinct malformed sidecar, schema, source_kind, and stale-digest
+    # classifications while allowing the full error list through.
     # Task 6 pass-through: the correction context (the plan path relative to
     # its resolved repository root, the current bytes, and that root) arms
     # the graded stale arm, so it can verify a declared corrections record
@@ -2092,9 +2131,6 @@ def evaluate_readiness(
         source_kind="plan",
         corrections_context=corrections_context,
     )
-    if staging_result.errors:
-        first_error = staging_result.errors[0]
-        return False, _first_gate_error_reason(first_error, payload, round_no)
     graded_indeterminate = getattr(
         staging_result, "indeterminate_reason", None
     )
@@ -2105,6 +2141,16 @@ def evaluate_readiness(
         # and main() classifies the prefixed reason as the indeterminate
         # outcome (exit 2).
         return False, _GATE_INDETERMINATE_PREFIX + graded_indeterminate
+
+    sidecar_problems = []
+    if missing_kind_reason is not None:
+        sidecar_problems.append(missing_kind_reason)
+    sidecar_problems.extend(
+        _first_gate_error_reason(error, payload, round_no)
+        for error in staging_result.errors
+    )
+    if sidecar_problems:
+        return False, _format_readiness_problems(sidecar_problems)
 
     # 4. Verdict: sidecar ``verdict`` field is DECISIVE when conforming
     # ("yes"/"no" via the single-owner ``sidecar_verdict`` predicate); for
@@ -2124,6 +2170,7 @@ def evaluate_readiness(
     # conjunct passes (whatever the verdict value), and a probe reason
     # returns the dedicated terminal-state reason. Without the
     # declaration, today's verdict behavior is unchanged.
+    problems: list[str] = []
     verdict_field = sidecar_verdict(payload)
     if cap_closure_declared:
         findings = payload.get("findings")
@@ -2138,24 +2185,24 @@ def evaluate_readiness(
             staged_patterns,
         )
         if problem is not None:
-            return False, problem
+            problems.append(problem)
     else:
         if verdict_field == "no":
-            return False, (
+            problems.append(
                 f"latest review r{round_no} sidecar verdict field reports 'no'"
             )
         if verdict_field != "yes":
             summary = summary_section(content)
             verdicts = verdict_tokens(summary)
             if not verdicts or verdicts[-1].lower() != "yes":
-                return False, (
+                problems.append(
                     f"latest review r{round_no} does not report a ready=yes verdict "
                     f"line in its ## Summary"
                 )
 
     # 5. is_review_ready() over the same Markdown is True.
     if not vrs.is_review_ready(content):
-        return False, (
+        problems.append(
             f"latest review r{round_no} has unresolved blocking findings "
             f"(is_review_ready is False)"
         )
@@ -2176,8 +2223,10 @@ def evaluate_readiness(
     if trailer_gated:
         problem = decision_marker_problem(plan_text)
         if problem:
-            return False, _gated_probe_reason(
-                problem, DECISION_MARKER_MIN_DATE, round_no, round_date
+            problems.append(
+                _gated_probe_reason(
+                    problem, DECISION_MARKER_MIN_DATE, round_no, round_date
+                )
             )
 
     # 7. Review Scope category gate (forward-looking): plans whose LATEST
@@ -2189,8 +2238,10 @@ def evaluate_readiness(
     if scope_gated:
         problem = review_scope_problem(plan_text)
         if problem:
-            return False, _gated_probe_reason(
-                problem, REVIEW_SCOPE_MIN_DATE, round_no, round_date
+            problems.append(
+                _gated_probe_reason(
+                    problem, REVIEW_SCOPE_MIN_DATE, round_no, round_date
+                )
             )
 
     # 8. Plan-structure gate (forward-looking): plans whose LATEST round
@@ -2207,13 +2258,17 @@ def evaluate_readiness(
             plan_text, repo_root(plans_dir.parent)
         )
         if problem:
-            return False, _gated_probe_reason(
-                problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
+            problems.append(
+                _gated_probe_reason(
+                    problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
+                )
             )
         problem = scope_classification_problem(plan_text)
         if problem:
-            return False, _gated_probe_reason(
-                problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
+            problems.append(
+                _gated_probe_reason(
+                    problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
+                )
             )
 
     # 9. Extraction-rule executability parity (contract single-sourcing):
@@ -2249,8 +2304,10 @@ def evaluate_readiness(
     # verdicts and refusal strings by construction.
     problem = extraction_rule_executability_problem(plan_text)
     if problem is not None:
-        return False, problem
+        problems.append(problem)
 
+    if problems:
+        return False, _format_readiness_problems(problems)
     return True, None
 
 
@@ -2610,9 +2667,11 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     sidecar-date gating and NO review-record consultation: the tolerated
     no-review-artifact/missing-sidecar class is respected by construction
     (this function never opens ``reviews_dir`` or any sidecar). All clean
-    prints the OK line and exits 0; the FIRST failing condition prints
-    ``readiness PRE-ROUND FAILED: <reason>`` to stderr and exits 1, an
-    executability refusal carrying step 9's byte-identical named label.
+    prints the OK line and exits 0; every independently computable failing
+    condition prints under one ``readiness PRE-ROUND FAILED:`` prefix and
+    exits 1. A prerequisite failure stops dependent probes and names them
+    in a skip note; an executability refusal carries step 9's byte-identical
+    named label.
 
     After every probe passes, the optional `Execution budget:` header
     line is sized non-blockingly: ``readiness PRE-ROUND WARNING:`` lines
@@ -2670,7 +2729,11 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
                     f"readiness"
                 )
     if reason is not None:
-        print(f"readiness PRE-ROUND FAILED: {reason}", file=sys.stderr)
+        print(
+            "readiness PRE-ROUND FAILED: "
+            + _with_skipped_probes(reason, _PLAN_TEXT_PROBES),
+            file=sys.stderr,
+        )
         return 1
 
     plan_text: str | None = None
@@ -2691,35 +2754,49 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
             plan_text = resolved.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             print(
-                f"readiness PRE-ROUND FAILED: cannot read plan bytes (not "
-                f"valid UTF-8): {exc}",
+                "readiness PRE-ROUND FAILED: "
+                + _with_skipped_probes(
+                    f"cannot read plan bytes (not valid UTF-8): {exc}",
+                    _PLAN_TEXT_PROBES,
+                ),
                 file=sys.stderr,
             )
             return 1
-        # Gate order, first problem wins; each probe stays the single owner
-        # of its check (no logic re-implemented here). The fence-balance probe
+        # The fence-balance probe
         # runs FIRST: an unterminated fence makes the stripper drop everything
         # it swallowed, so no later probe may evaluate the truncated text.
         problem = fence_balance_problem(plan_text)
-    if problem is None:
-        problem = decision_marker_problem(plan_text)
-    if problem is None:
-        problem = review_scope_problem(plan_text)
-    if problem is None:
-        problem = plan_ownership_problem(
-            plan_text, repo_root(plans_dir.parent)
-        )
-    if problem is None:
-        problem = scope_classification_problem(plan_text)
-    if problem is None:
-        problem = anchors_block_problem(plan_text)
-    if problem is None:
-        # The plan-private subset of step 9 (extraction-rule executability
-        # parity): the SAME helper step 9 calls, so the refusal strings are
-        # byte-identical; still no review-record consultation.
-        problem = extraction_rule_executability_problem(plan_text)
     if problem is not None:
-        print(f"readiness PRE-ROUND FAILED: {problem}", file=sys.stderr)
+        print(
+            "readiness PRE-ROUND FAILED: "
+            + _with_skipped_probes(problem, _PLAN_TEXT_PROBES),
+            file=sys.stderr,
+        )
+        return 1
+
+    # The probes stay the single owner of their checks; evaluate each once
+    # in the same gate order and collect only its returned problem.
+    problems = []
+    probes = (
+        decision_marker_problem,
+        review_scope_problem,
+        lambda text: plan_ownership_problem(
+            text, repo_root(plans_dir.parent)
+        ),
+        scope_classification_problem,
+        anchors_block_problem,
+        extraction_rule_executability_problem,
+    )
+    for probe in probes:
+        probe_problem = probe(plan_text)
+        if probe_problem is not None:
+            problems.append(probe_problem)
+    if problems:
+        print(
+            "readiness PRE-ROUND FAILED: "
+            + _format_readiness_problems(problems),
+            file=sys.stderr,
+        )
         return 1
 
     # Non-blocking sizing warnings (report posture per the guard
@@ -3498,7 +3575,7 @@ def _review_markdown(
         "| risk | security | complete | 0 | 0 | 0 | no | none |\n\n"
         "### Counts\n"
         "- Workers launched: 5\n"
-        "- Staged findings: 0\n\n"
+        f"- Staged findings: {1 if blocking_finding else 0}\n\n"
         "### Triage outcomes\n"
         "Pending triage.\n\n"
         "## Findings\n\n"
@@ -3816,7 +3893,7 @@ def _selftest_source_and_digest(
         "selftest#digest_non_hex",
         not ok and reason is not None
         and "invalid or missing" in reason
-        and "stale" not in reason,
+        and "stale" in reason,
         f"ok={ok} reason={reason}",
     )
 

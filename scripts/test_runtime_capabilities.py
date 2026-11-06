@@ -35,6 +35,14 @@ class ExecutePlanRegistrationTest(unittest.TestCase):
         task = {"required_criteria": ["criterion"], "checklist_actions": []}
         self.assertEqual(capabilities.derive_checklist_actions("task-1", task)[0], {"criterion"})
 
+    def test_evidence_item_limit_keeps_the_bare_refusal_needle(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            capabilities.evidence_criterion_ids(["a" * 513, "b" * 514])
+        self.assertEqual(
+            str(raised.exception),
+            "evidence criterion exceeds UTF-8 item byte limit",
+        )
+
     def test_plans_authoring_watcher_operations_remain_reachable(self) -> None:
         runtime_source = (ROOT / "scripts/execute_plan_runtime.py").read_text(encoding="utf-8")
         watcher_source = (ROOT / "scripts/execute_plan_resume_watcher.py").read_text(encoding="utf-8")

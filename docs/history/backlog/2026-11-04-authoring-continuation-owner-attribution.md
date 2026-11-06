@@ -1,6 +1,6 @@
 # Backlog: authoring continuation must retain the originating run's ownership
 
-- **Status:** open
+- **Status:** covered-pending-execution (docs/history/plans/2026-11-06-authoring-continuation-owner-attribution.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving

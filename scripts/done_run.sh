@@ -32,7 +32,12 @@
 # checkpoint refresh (a no-checkpoint refusal falls back to create-then-
 # refresh; an already-finalized manifest skips the refresh arm), the run
 # manifest finalize (a missing manifest is a one-line note; any other
-# non-zero exit aborts after the releases, never masking the error), the
+# non-zero exit aborts after the releases, never masking the error; the
+# finalize-manifest operation also propagates the finalized bytes into the
+# primary checkout's surviving shadow record for the same run-id (plan
+# docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md), and this
+# leg re-emits the operation's `shadow propagation:` report lines on its own
+# failure channel), the
 # checkpoint remove, the done-lock release (env-token path by default; with
 # --from-holder, or when the exports are lost, the lock script's
 # metadata-sourced release arm under its own recorded guards: the hold was
@@ -788,6 +793,17 @@ for value in values:
 manifest_scalar() { # manifest field -> the scalar value or empty
   python3 -c 'import json,sys
 print(json.load(open(sys.argv[1])).get(sys.argv[2]) or "")' "$1" "$2" 2>/dev/null
+}
+
+manifest_complete_flag() { # <path> -> true|false|unknown; the manifest's
+  # complete-flag read shared by the finalize classification's fallback arm
+  # and the step-6 status routing (one read shape, two consumers; a missing
+  # or unreadable manifest reads unknown)
+  python3 -c 'import json,sys
+try:
+    print("true" if json.load(open(sys.argv[1])).get("complete") else "false")
+except Exception:
+    print("unknown")' "$1" 2>/dev/null || printf '%s\n' "unknown"
 }
 
 canonical_manifest_payload() { # path -> "run_id marker" or empty on parse failure
@@ -2353,6 +2369,19 @@ finalize_die() { # rc message...: fail loud with the named evidence
   exit "$rc"
 }
 
+finalize_safe_token() { # value -> a single-line token safe for the state line
+  # The finalization-state line interpolates a run id that can originate
+  # from the --run-id argument, the setup-export fallback, or manifest
+  # content: every byte outside [A-Za-z0-9._-] becomes '?' (newline, CR,
+  # and tab flattened first, so the line always stays one line) and the
+  # value is capped at 64 bytes; empty resolves to `none` (nothing was
+  # bound).
+  local safe
+  safe="$(printf '%s' "${1:-}" | tr '\n\r\t' '---' \
+    | LC_ALL=C sed -E 's/[^A-Za-z0-9._-]/?/g' | cut -c1-64)"
+  if [ -n "$safe" ]; then printf '%s\n' "$safe"; else printf '%s\n' "none"; fi
+}
+
 landing_pending_state() { # <session-dir> <run-id>; sets LANDING_PENDING, LANDING_TIP, BASE_BRANCH
   # The deferred-squash witness (backlog 2026-10-26-finalize-deferred-squash-
   # silent-success): the run's owned-commits ledger carries a landing commit
@@ -2445,10 +2474,17 @@ cmd_finalize() {
   LIB="$(resolve_helper done_sweep_gates_lib.py)"
   [ -n "$LIB" ] || finalize_die 3 "no done_sweep_gates_lib.py resolved (repo-local scripts/ or deployed home)"
 
+  # Explicit --manifest is real binding (plan
+  # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+  # Task 2): the finalize's --manifest is wired through the resolver's
+  # explicit arm (its canonical-name validation applies), so the
+  # binding-evidence predicate below can recognize the named manifest.
+  [ -n "$FINALIZE_MANIFEST" ] && COMMIT_MANIFEST="$FINALIZE_MANIFEST"
   RUN_MANIFEST="$(resolve_manifest_path)" || {
-    # the finalize's own identity-refusal disposition owns a broken or
-    # ambiguous manifest record: fall back to the newest canonical record
-    # so the classifier (not the selector) refuses it named
+    # the finalize's refusal dispositions own a broken or ambiguous
+    # manifest record: fall back to the newest canonical record so the
+    # binding-evidence predicate (not the selector) refuses it named when
+    # no evidence ties it to this run
     RUN_MANIFEST=""
     local fb f_newest=""
     for fb in "$(session_dir)"/run-manifest-*.json; do
@@ -2459,11 +2495,102 @@ cmd_finalize() {
   }
   RUN_ID="$(resolve_run_id)"
   local finalize_rc=0 release_rc=0 marking_withheld=0 FM_OUT=""
+  local finalize_unbound_refused=0 selected_run_id bound=0
+  local fence_ok=0 fence_base="" fence_id=""
+  if [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
+    # Binding-evidence predicate (plan
+    # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+    # Task 2): the resolution selected a manifest, so the invocation must
+    # tie it to this run before any checkpoint or finalize-manifest
+    # mutation, on either non-explicit arm (the newest-confirmed-marker
+    # selection or the newest-glob fallback). Explicit --run-id binds; an
+    # explicit --manifest binds when the resolver selected exactly it (the
+    # verbatim explicit-arm echo above); a non-empty DONE_RUN_ID export
+    # binds when it agrees with the selected manifest's run_id.
+    # DONE_RUN_MANIFEST stays the resolver's hint-only context and the lock
+    # exports (DONE_LOCK_DIR/DONE_LOCK_TOKEN) are never binding evidence. A
+    # resolution that selects nothing keeps the not-bound path (exit 0).
+    selected_run_id="$(manifest_scalar "$RUN_MANIFEST" run_id)"
+    [ -n "$RUN_ID_ARG" ] && bound=1
+    if [ "$bound" -eq 0 ] && [ -n "$FINALIZE_MANIFEST" ] \
+       && [ "$RUN_MANIFEST" = "$FINALIZE_MANIFEST" ]; then
+      # Canonical-shape fence (r1 finding F1): when the explicit arm refuses
+      # a shadow-named --manifest, the newest-glob fallback can select that
+      # very file and the verbatim equality above cannot tell which arm
+      # produced the selection, so bind only a name passing the explicit
+      # arm's checks (canonical shape run-manifest-<id>.json with an id
+      # dot-free and non-empty, and readable). The explicit arm's refusal
+      # must not be overridable through the fallback: a shadow-named, empty,
+      # or unreadable name stays unbound; readable canonical names bind as
+      # before. (The missing half needs no fence: the fallback loop and the
+      # binding guard both require -f.)
+      fence_ok=1
+      fence_base="$(basename "$RUN_MANIFEST")"
+      case "$fence_base" in
+        run-manifest-*.json) ;;
+        *) fence_ok=0 ;;
+      esac
+      if [ "$fence_ok" -eq 1 ]; then
+        fence_id="${fence_base#run-manifest-}"
+        fence_id="${fence_id%.json}"
+        case "$fence_id" in
+          *.*|"") fence_ok=0 ;;
+        esac
+      fi
+      [ "$fence_ok" -eq 1 ] && [ -r "$RUN_MANIFEST" ] && bound=1
+    fi
+    if [ "$bound" -eq 0 ] && [ -n "${DONE_RUN_ID:-}" ] \
+       && [ "$DONE_RUN_ID" = "$selected_run_id" ]; then
+      bound=1
+    fi
+    if [ "$bound" -eq 0 ]; then
+      finalize_unbound_refused=1
+      finalize_rc=1
+      # The selected manifest's run id backfills an empty RUN_ID for
+      # coherence by construction; under the refusal flag no consumer reads
+      # it (the step-6 completion read is skipped, its refusal advice arm
+      # wins over every completion arm), and the refusal output never echoes
+      # it (the line reports run_id=unbound).
+      RUN_ID="$selected_run_id"
+      echo "done_run finalize: WARNING: unbound-resolution refusal: the manifest resolution selected a record this invocation cannot tie to its own run (no --run-id given, no --manifest the resolver bound, and no agreeing DONE_RUN_ID export); nothing was checkpointed or marked; the lock releases below still run" >&2
+      echo "done_run finalize: unbound-resolution remedy: re-derive this run's binding, then re-run the bound form: done_run finalize --run-id <run_id> (re-derive the run id from the run's own setup echo in your session context, or from the operator-owned interrupted-manifest census; the auto-selected record is never the evidence)" >&2
+    elif [ -z "$RUN_ID" ]; then
+      # Bound with an empty RUN_ID (resolve_run_id failed alongside the
+      # resolver while this fallback record was selected): reuse the
+      # selected run id so the marking targets the record this invocation
+      # bound through the agreement clause, never a false not-bound exit 0
+      # over a resolution that selected a record.
+      RUN_ID="$selected_run_id"
+    elif [ -z "$RUN_ID_ARG" ] && [ "$RUN_ID" != "$selected_run_id" ]; then
+      # Divergence re-key (r1 finding F5, the single-resolve invariant):
+      # resolve_run_id re-resolves the manifest internally, so between
+      # cmd_finalize's resolve and this one a peer setup can flip the newest
+      # confirmed marker and re-key every mutation onto a record the binding
+      # evidence never tied. The agreement and equality clauses validated
+      # selected_run_id (the first resolve's selection), so the mutations
+      # key on that single resolution: re-key the divergent second resolve
+      # onto it. An explicit --run-id is sole evidence by design and keeps
+      # its own id.
+      RUN_ID="$selected_run_id"
+    fi
+  fi
+
+  # The two LANDING DEFERRED advice strings below interpolate the bound run
+  # id through the same sanitizer as the finalization-state line (the
+  # visible text stays identical for well-formed ids).
+  local finalize_bound_advice_id
+  finalize_bound_advice_id="$(finalize_safe_token "$RUN_ID")"
 
   # 1. Checkpoint refresh at the finalize preamble: a no-checkpoint refusal
   #    falls back to create-then-refresh; an already-finalized manifest is
   #    the skip-the-refresh arm. A missing manifest is a one-line note.
-  if [ -z "$RUN_ID" ] || [ ! -f "$RUN_MANIFEST" ]; then
+  #    The unbound-resolution refusal owns these marking steps: both are
+  #    skipped so nothing is checkpointed or marked for the unbound
+  #    resolution (plan docs/history/plans/2026-11-02-done-finalize-resume-
+  #    marking-honesty.md, Task 2).
+  if [ "$finalize_unbound_refused" -eq 1 ]; then
+    :
+  elif [ -z "$RUN_ID" ] || [ ! -f "$RUN_MANIFEST" ]; then
     echo "done_run finalize: no run manifest from setup; nothing to finalize or checkpoint; the release still runs"
   else
     SESSION_ID="${session_id:-${DONE_RUN_SESSION:-done_run_finalize}}"
@@ -2507,7 +2634,7 @@ cmd_finalize() {
         else
           ms_state="free"
         fi
-        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; merge lock $ms_state; re-run finalize or the landing helper's land-worktree mode after the lock frees; the branch tip is $LANDING_TIP" >&2
+        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; merge lock $ms_state; re-run the bound finalize (finalize --run-id $finalize_bound_advice_id) or the landing helper's land-worktree mode after the lock frees; the branch tip is $LANDING_TIP" >&2
         echo "done_run finalize: run manifest complete marking withheld until the squash lands (the checkpoint is kept for the resume)"
       elif [ -z "$LANDING_TIP" ] && [ -z "$BASE_BRANCH" ]; then
         echo "done_run finalize: WARNING: the deferred-squash honesty check is skipped (unresolvable base branch or unreadable ledger tip); the summary is not landing-verified" >&2
@@ -2515,7 +2642,24 @@ cmd_finalize() {
     fi
     if [ "$marking_withheld" -eq 0 ]; then
       FM_OUT="$(python3 "$LIB" finalize-manifest --run-id "$RUN_ID" 2>&1)" || finalize_rc=$?
-      printf '%s\n' "$FM_OUT"
+      # The finalize-manifest operation's shadow-propagation report lines
+      # (plan docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md,
+      # Task 2) ride the operation's failure channel; re-emit them on this
+      # leg's failure channel so a miss report keeps its channel through the
+      # FM_OUT capture. Output without a propagation line stays byte-identical
+      # to the previous verbatim print, and no propagation wording matches the
+      # grep-classified advice arms above (the prefix is `shadow propagation:`).
+      case "$FM_OUT" in
+        *"shadow propagation"*)
+          while IFS= read -r fm_line; do
+            case "$fm_line" in
+              "finalize-manifest: shadow propagation:"*) printf '%s\n' "$fm_line" >&2 ;;
+              *) printf '%s\n' "$fm_line" ;;
+            esac
+          done <<< "$FM_OUT"
+          ;;
+        *) printf '%s\n' "$FM_OUT" ;;
+      esac
       if [ "$finalize_rc" -ne 0 ]; then
         echo "done_run finalize: FAILED (exit $finalize_rc); the run manifest finalize did not complete; running the releases so no lock strands" >&2
       else
@@ -2529,6 +2673,62 @@ cmd_finalize() {
         fi
       fi
     fi
+  fi
+
+  # Finalization-state classification and line (plan
+  # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+  # Task 1): the marking outcome is classified at exactly this one point,
+  # and both the line below and the step-6 status-not-free FAILED routing
+  # consume this single classification; a release failure never rewrites it
+  # (a release failure over a successful marking keeps the marking value).
+  # `applied` requires the lib's marked-complete output or a post-read
+  # complete=true from the manifest the marking targeted
+  # (run-manifest-<RUN_ID>.json), never the resolver-selected RUN_MANIFEST
+  # (the two diverge when --run-id names a record the resolver did not
+  # select). The run id is shape-sanitized before emission; the not-bound
+  # arm names the --run-id argument when one was given and `none`
+  # otherwise (nothing was bound).
+  local finalize_marking="" finalize_run_id_shown="" target_complete
+  if [ "$finalize_unbound_refused" -eq 1 ]; then
+    # The unbound-resolution refusal: the line reports `unbound`, never the
+    # auto-selected manifest's run id (the refusal output never echoes it).
+    finalize_marking="refused"
+    finalize_run_id_shown="unbound"
+  elif [ -z "$RUN_ID" ] || [ ! -f "$RUN_MANIFEST" ]; then
+    finalize_marking="not-bound"
+    finalize_run_id_shown="$RUN_ID_ARG"
+  elif [ "$marking_withheld" -eq 1 ]; then
+    finalize_marking="withheld"
+    finalize_run_id_shown="$RUN_ID"
+  elif [ "$finalize_rc" -ne 0 ]; then
+    if printf '%s\n' "${FM_OUT:-}" | grep -q "run-manifest identity mismatch"; then
+      finalize_marking="refused"
+    else
+      finalize_marking="failed"
+    fi
+    finalize_run_id_shown="$RUN_ID"
+  else
+    finalize_run_id_shown="$RUN_ID"
+    case "$FM_OUT" in
+      *"already complete"*) finalize_marking="already-complete";;
+      *"no run manifest found for run_id"*) finalize_marking="not-bound";;
+      *"marked complete in"*) finalize_marking="applied";;
+      *)
+        # No recognized lib note: read the complete flag from the manifest
+        # the marking targeted before claiming anything (the shared
+        # manifest_complete_flag read).
+        target_complete="$(manifest_complete_flag "$session/run-manifest-$RUN_ID.json")"
+        if [ "$target_complete" = "true" ]; then
+          finalize_marking="applied"
+        else
+          finalize_marking="failed"
+        fi;;
+    esac
+  fi
+  finalize_run_id_shown="$(finalize_safe_token "$finalize_run_id_shown")"
+  echo "done_run finalize: finalization: run_id=$finalize_run_id_shown marking=$finalize_marking"
+  if [ "$finalize_marking" = "failed" ]; then
+    echo "done_run finalize: finalization duty: re-run finalize to retry the run manifest marking (the marking failure above is not an identity refusal)" >&2
   fi
 
   # 3b. Guard-firing rows, BEFORE the done-lock release, never appended twice
@@ -2547,7 +2747,15 @@ cmd_finalize() {
   #     regardless.
   trace_stage guard-liveness-appends
   local guard_ledger_rel guard_snapshot child_pre_head child_post_head child_out firing
-  if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
+  if [ "$finalize_unbound_refused" -eq 1 ]; then
+    # The unbound-resolution refusal: the append step skips with its named
+    # warning; a bound re-run re-appends the rows (plan
+    # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+    # Task 2).
+    if [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
+      echo "done_run finalize: WARNING: guard-liveness rows not appended (the unbound-resolution refusal above skipped the marking); re-append them with --guard-firing on a bound re-run" >&2
+    fi
+  elif [ "${#GUARD_FIRINGS[@]}" -gt 0 ]; then
     guard_ledger_rel="scripts/gate_liveness_ledger.json"
     if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ] \
        && [ -s "$session/owned-commits-$RUN_ID.txt" ]; then
@@ -2673,14 +2881,21 @@ cmd_finalize() {
     # next invocation is chosen from state, not guessed.
     local manifest_complete
     manifest_complete="unknown"
-    if [ ! -f "${RUN_MANIFEST:-}" ]; then
+    # The completion state is read from the manifest the marking targeted
+    # (run-manifest-<RUN_ID>.json), never the resolver-selected
+    # RUN_MANIFEST: the two diverge when --run-id or a wired --manifest
+    # names a record the resolver did not select (plan
+    # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+    # Task 2). The unbound-resolution refusal skips the read entirely (r1
+    # finding F9): its advice arm below wins over every manifest-completion
+    # arm, so the read would only spend a python spawn over the
+    # auto-selected record and discard the result.
+    if [ "$finalize_unbound_refused" -eq 1 ]; then
+      :
+    elif [ ! -f "$session/run-manifest-$RUN_ID.json" ]; then
       manifest_complete="no-manifest"
     else
-      manifest_complete="$(python3 -c 'import json,sys
-try:
-    print("true" if json.load(open(sys.argv[1])).get("complete") else "false")
-except Exception:
-    print("unknown")' "$RUN_MANIFEST" 2>/dev/null)" || manifest_complete="unknown"
+      manifest_complete="$(manifest_complete_flag "$session/run-manifest-$RUN_ID.json")"
     fi
     # Identity-refusal routing (plan
     # docs/history/plans/completed/2026-10-31-done-finalize-manifest-leg-post-removal-ordering.md,
@@ -2688,12 +2903,20 @@ except Exception:
     # checked beside each completion arm so an unparseable manifest ("unknown")
     # still routes to the refusal-specific disposition when the finalize above
     # refused this manifest's identity, instead of the generic unreadable arm.
+    # Single-classification consumption (plan
+    # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+    # Task 1): refused is the classification the finalization-state line
+    # above carries, never a second grep over the lib output here.
     local finalize_identity_refused=0
-    if [ "$marking_withheld" -eq 0 ] \
-       && [ "$finalize_rc" -ne 0 ] \
-       && printf '%s\n' "${FM_OUT:-}" | grep -q "run-manifest identity mismatch"; then
-      finalize_identity_refused=1
-    fi
+    [ "$finalize_marking" = "refused" ] && finalize_identity_refused=1
+    if [ "$finalize_unbound_refused" -eq 1 ]; then
+      # Unbound-resolution refusal arm (plan
+      # docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+      # Task 2): the refusal-specific advice wins over every
+      # manifest-completion arm, including the release-only-safe advice the
+      # fallback-bound peer manifest earns when it reads complete.
+      echo "done_run finalize: FAILED: done lock status is not free after the release; the finalize above refused this invocation's manifest resolution for missing binding evidence, so re-derive the binding (the run's own DONE_RUN_ID export or --run-id) and re-run the bound finalize form (the lock-release steps above already ran); do not report completion while a hold survives" >&2
+    else
     case "$manifest_complete" in
       true)
         echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is complete, so a release-only retry of this finalize with corrected DONE_LOCK_DIR/DONE_LOCK_TOKEN env is safe; do not report completion while a hold survives" >&2;;
@@ -2705,9 +2928,7 @@ except Exception:
         # full finalize re-run cannot succeed from this checkout, so the
         # held-lock state is reported without the full-retry advice the
         # other incomplete-manifest causes keep.
-        if [ "$marking_withheld" -eq 0 ] \
-           && [ "$finalize_rc" -ne 0 ] \
-           && printf '%s\n' "${FM_OUT:-}" | grep -q "run-manifest identity mismatch"; then
+        if [ "$finalize_identity_refused" -eq 1 ]; then
           echo "done_run finalize: FAILED: done lock status is not free after the release; the finalize above refused this manifest's identity, so report the failed finalization step and do not re-run finalize from the primary checkout (the lock-release steps above already ran); do not report completion while a hold survives" >&2
         else
           echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest is NOT complete, so the run needs its full finalize re-run after the hold resolves, not a release-only retry; do not report completion while a hold survives" >&2
@@ -2721,12 +2942,20 @@ except Exception:
           echo "done_run finalize: FAILED: done lock status is not free after the release; the run manifest's completion state is unreadable, so re-derive it from the manifest before choosing a release-only retry; do not report completion while a hold survives" >&2
         fi;;
     esac
+    fi
     [ "$finalize_rc" -eq 0 ] && finalize_rc=1
   fi
 
   # 7. Report-input assembly: the landing summary plus the report-only
   #    missing-review-record scan (never blocking, never fabricating).
+  #    The unbound-resolution refusal skips both report steps with its
+  #    named warning; a bound re-run re-reports them (plan
+  #    docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+  #    Task 2).
   local ledger landing_commit
+  if [ "$finalize_unbound_refused" -eq 1 ]; then
+    echo "done_run finalize: WARNING: the landing summary and the missing-review-record scan are skipped (the unbound-resolution refusal above left the marking undone); re-report them on a bound finalize re-run" >&2
+  else
   ledger=""
   if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ]; then
     ledger="$session/owned-commits-$RUN_ID.txt"
@@ -2744,7 +2973,7 @@ except Exception:
         # The guard-firing child commit created the ledger's first line after
         # the marking decision: the manifest reads complete while the squash
         # pends, so the deferral prints here with the marking-consistent duty.
-        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; the complete marking above predates this ledger line; re-run finalize or the landing helper's land-worktree mode after the squash lands; the branch tip is $LANDING_TIP" >&2
+        echo "done_run finalize: WARNING: LANDING DEFERRED: the squash to $BASE_BRANCH has not landed; the complete marking above predates this ledger line; re-run the bound finalize (finalize --run-id $finalize_bound_advice_id) or the landing helper's land-worktree mode after the squash lands; the branch tip is $LANDING_TIP" >&2
       fi
       echo "done_run finalize: landing summary: run_id=$RUN_ID ledger=$ledger commits=$(wc -l < "$ledger" | tr -d ' ') branch_commit=$landing_commit (not on $BASE_BRANCH; squash pending)"
     else
@@ -2823,16 +3052,25 @@ for citing, record in missing:
     print(f"missing-review-record: {record} cited by {citing} (reconstruction duty: report with a witness note; never fabricate, never block, never delete)")
 print(f"missing-review-record scan: {len(missing)} missing record(s) corpus_root={reviews_dir}")
 PYEOF
+  fi
 
   # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:
   #    a failed append is a warning line and never blocks the closeout. The
   #    guard-firing rows ran before the done-lock release (step 3b), the
   #    landing-carried ones never appended again and the rest landed through
-  #    the checked child commit under the held lock.
+  #    the checked child commit under the held lock. The unbound-resolution
+  #    refusal skips the append with its named warning; a bound re-run
+  #    re-appends it (plan
+  #    docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md,
+  #    Task 2).
   trace_stage advisory-appends
   # A pending (unsquashed) landing commit records no cost line: the resume
   # re-run that completes the boundary appends the line once at completion.
-  if [ "$no_landing_cost" -eq 0 ] && [ "${LANDING_PENDING:-0}" -eq 0 ] && [ -n "$landing_commit" ] && [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
+  if [ "$finalize_unbound_refused" -eq 1 ]; then
+    if [ "$no_landing_cost" -eq 0 ]; then
+      echo "done_run finalize: WARNING: the landing-cost telemetry append is skipped (the unbound-resolution refusal above left the marking undone); re-append it on a bound finalize re-run" >&2
+    fi
+  elif [ "$no_landing_cost" -eq 0 ] && [ "${LANDING_PENDING:-0}" -eq 0 ] && [ -n "$landing_commit" ] && [ -n "$RUN_MANIFEST" ] && [ -f "$RUN_MANIFEST" ]; then
     metrics_dir="$(facts_toml_value metrics_dir)"
     metrics_dir="${metrics_dir:-.ai-playbook/metrics}"
     case "$metrics_dir" in /*) ;; *) metrics_dir="$repo_top/$metrics_dir";; esac

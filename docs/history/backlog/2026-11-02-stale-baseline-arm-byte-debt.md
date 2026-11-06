@@ -18,4 +18,5 @@ The plan's Task 2 byte-balance criterion (operative-byte delta at or below zero)
 
 A future touch of the Blocker recovery surface pays the debt from a same-file dedup or absorbed rewrite, restoring the file's cumulative delta to at or below zero; no action required while no further growth lands.
 Cluster: docs/history/backlog/2026-11-02-blocker-recovery-byte-payment-source.md (sibling residual from the same landing; shared surface: maintenance Blocker recovery text)
+Cluster: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md (same capture-contract surface; that row owns the chained-entry order trigger, this row owns the stale-baseline arm's byte debt)
 Cluster: docs/history/backlog/2026-11-02-ip-boundary-pause-arm-compression.md (sibling residual from the same landing; shared surface: maintenance Blocker recovery text)

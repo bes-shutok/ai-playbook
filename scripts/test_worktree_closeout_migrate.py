@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -6929,14 +6930,23 @@ class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.
             {"branch": "wt-run", "source": str(self.worktree)},
         ]
 
-    def _author_manifest(self, prevented: list[dict], two_records: bool = True) -> Path:
+    def _author_manifest(
+        self,
+        prevented: list[dict],
+        two_records: bool = True,
+        failures: list[dict] | None = None,
+    ) -> Path:
         """Rewrite the seeded fixture manifest's prevented_clobbers rows and,
         by default, extend it to two branch records (the re-run shape);
         ``two_records=False`` keeps the seeded single-record legacy manifest.
+        ``failures`` seeds the prevented_clobber_failures section (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1).
         The git/citation/accounting setup stays untouched."""
         manifest_path = self._seed_migration_manifest(landed=True)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["prevented_clobbers"] = prevented
+        if failures is not None:
+            manifest["prevented_clobber_failures"] = failures
         if two_records:
             manifest["branch"] = self._two_records()
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -7060,6 +7070,55 @@ class GateRemovalPreventedClobbersTeardownTest(_BranchCloseoutFixture, unittest.
                     "sibling unattributed_missing note's slice-then-count "
                     "convention in this note's own (total: N) form",
                 )
+
+    def _failure_row(self, index: int | None, rel: str) -> dict:
+        """One prevented_clobber_failures row in the producer's shape (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        the absolute destination, a named action, an error, and the
+        run-attribution stamp (None models a legacy unstamped row)."""
+        row = {
+            "destination": (self.primary / rel).as_posix(),
+            "action": "guard-failed",
+            "error": "OSError: simulated guard spawn failure",
+        }
+        if index is not None:
+            row["record_index"] = index
+        return row
+
+    def test_guard_failure_rows_surface_beside_prevented_rows_report_only(self):
+        """[class: REPOSITORY_TEST] The teardown summary's additive
+        prevented_clobber_failures read (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        guard-failure rows reach the teardown decision beside the prevented
+        rows in the same report-only summary - the adjudicated run's rows
+        name the failure destinations, rows stamped for prior runs report as
+        foreign, and neither ever holds the branch."""
+        self._author_manifest(
+            [self._prevented_row(1)],
+            failures=[
+                self._failure_row(
+                    1, rel="docs/tmp/execute-plan/x/guard-crash-own.md"),
+                self._failure_row(
+                    0, rel="docs/tmp/execute-plan/x/guard-crash-prior.md"),
+            ],
+        )
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("removal: git worktree remove", out)
+        self.assertIn("branch-closeout: prevented clobber(s) this run restored from HEAD", out)
+        self.assertIn("clobber-guard failure(s) this run recorded", out)
+        self.assertIn(
+            (self.primary / "docs/tmp/execute-plan/x/guard-crash-own.md").as_posix(),
+            out,
+        )
+        self.assertIn("clobber-guard failure(s) attributed to prior run(s)", out)
+        self.assertIn(
+            (self.primary / "docs/tmp/execute-plan/x/guard-crash-prior.md").as_posix(),
+            out,
+        )
+        self.assertNotIn("held:", out)
+        self.assertTrue(Path(self.worktree).is_dir())
 
 
 class ManifestRecordIndexStampTest(unittest.TestCase):
@@ -8559,7 +8618,7 @@ class ZeroPlanMigrateSkeletonProducerTest(unittest.TestCase):
             manifest = self._manifest_fixture(session / "run-manifest.json", [])
             proc = self._run_producer(session, manifest, cwd=repo)
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("migrate-shape manifest skeleton present", proc.stdout)
+            self.assertIn("migrate-shape manifest skeleton present", proc.stderr)
             skeleton = session / "worktree-migrate-baseline-run-z9-manifest.json"
             self.assertTrue(skeleton.is_file(), proc.stdout + proc.stderr)
             data = json.loads(skeleton.read_text(encoding="utf-8"))
@@ -10801,13 +10860,15 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
             env=_hermetic_lock_env(self.root),
         )
 
-    def _stage_rewind(self, target: Path, blob: str) -> None:
+    def _stage_rewind(self, target: Path, blob: str, rel: str | None = None) -> None:
         """Stage an older committed vintage of the tracked path while the
         worktree keeps HEAD - the between-snapshot rewind signature. --add
-        also covers the e2e fixture where git rm removed the entry first."""
+        also covers the e2e fixture where git rm removed the entry first.
+        ``rel`` defaults to the class's corpus rel; the Task 3 combined
+        fixtures stage rewinds on sibling rels with the same plumbing."""
         subprocess.run(
             ["git", "-C", str(target), "update-index", "--add", "--cacheinfo",
-             f"100644,{blob},{self.REL}"],
+             f"100644,{blob},{rel or self.REL}"],
             capture_output=True, text=True, check=True,
             env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
         )
@@ -10897,13 +10958,18 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
         )
 
     def test_migrate_preflight_refuses_tracked_backward_carry(self):
-        """[class: REPOSITORY_TEST] A baseline-relative migrate whose carry
-        would overwrite a tracked path with different committed bytes refuses
-        in the pre-flight: exit 2, both error lines, the tracked content
-        untouched, nothing copied, and no manifest."""
+        """[class: REPOSITORY_TEST] Safety witness (GREEN preservation, plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2; expected green before and after the narrowing -
+        it guards the narrowing from over-shooting): a would-carry path
+        whose source bytes hash to an OLDER COMMITTED VINTAGE of the tracked
+        target HEAD (the target's own v0 commit, a true backward carry that
+        would rewind destination content) refuses in the pre-flight: exit 2,
+        both error lines, the tracked content untouched, nothing copied, and
+        no manifest."""
         target = self._target_repo("target")
         source, baseline = self._source_with_baseline("source", b"corpus v1\n")
-        self._write_rel(source, b"corpus v1 + run row\n")
+        self._write_rel(source, self.V0)
         manifest = self.root / "migration.json"
         proc = self._run_migrate(source, baseline, manifest, target)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
@@ -11067,6 +11133,333 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
             }],
         )
 
+    # ---- Guard containment and the prevented_clobber_failures manifest
+    # section (plan 2026-11-05-closeout-migrate-supplemental-inventory-and-
+    # guard-residuals Task 1). The witnesses inject at the module's
+    # subprocess-launcher seam (or wrap MODULE._prevent_tracked_clobbers for
+    # the phase flag) and run in-process via MODULE.main under the
+    # setUp-pinned _hermetic_lock_env, so the fault reaches the guard's own
+    # spawns and the manifest lands on disk in this process.
+
+    def _owned_rewind_e2e_fixture(self, name: str = "target") -> tuple[Path, Path, Path, Path, str]:
+        """The end-to-end owned-rewind fixture (the shape
+        test_migrate_postrun_restores_owned_rewound_staged_entry_end_to_end
+        pins): the target's carried rel is worktree-absent with the v0 blob
+        staged in the index, and the source carries fresh v2 bytes under a
+        captured baseline, so the run migrates the path and the guard sees
+        an owned staged rewind. ``name`` distinguishes the fixture's target
+        repo from one the calling test built itself. Returns (target,
+        source, baseline, manifest, v0_blob)."""
+        target = self._target_repo(name)
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        self._git(target, "rm", "-q", self.REL)
+        self._stage_rewind(target, v0_blob)
+        self.assertFalse(
+            (target / self.REL).exists(),
+            "fixture precondition: the worktree copy is absent so the run carries the path",
+        )
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, self.V2)
+        manifest = self.root / "migration.json"
+        return target, source, baseline, manifest, v0_blob
+
+    def _migrate_inproc(self, source: Path, baseline: Path, manifest: Path, target: Path) -> int:
+        """The in-process migrate (the fault-injection seam's requirement):
+        MODULE.main under the setUp-pinned _hermetic_lock_env, so a
+        subprocess-launcher patch reaches the guard's spawns."""
+        return MODULE.main([
+            "migrate",
+            "--baseline", str(baseline),
+            "--source", str(source),
+            "--target", str(target),
+            "--manifest", str(manifest),
+            "--suffix", "1",
+        ])
+
+    def _guard_phase_wrappers(self):
+        """The phase-flag plumbing the fault injections share: wrap
+        MODULE._prevent_tracked_clobbers so a subprocess.run patch can fault
+        only the guard's spawns, and return (guarding, phase) for the test
+        to compose with its own faulty run function."""
+        real_guard = MODULE._prevent_tracked_clobbers
+        phase = {"in_guard": False}
+
+        def guarding(*a, **k):
+            phase["in_guard"] = True
+            try:
+                return real_guard(*a, **k)
+            finally:
+                phase["in_guard"] = False
+
+        return guarding, phase
+
+    def test_guard_spawn_oserror_midwalk_records_failure_and_completes_manifest(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        a fault-injected OSError at the guard's subprocess-launcher seam
+        mid-walk (the staged-set read succeeds, the first classification
+        read dies) is contained by the guarded span: the manifest is still
+        written with a {destination, action: guard-failed, error} entry in
+        prevented_clobber_failures, the priors disposition runs (the discard
+        arm), the run's copy work itself succeeded, and the run exits 0 with
+        the loud stderr summary naming the count and the destination."""
+        target, source, baseline, manifest, v0_blob = self._owned_rewind_e2e_fixture()
+        guarding, phase = self._guard_phase_wrappers()
+        real_run = MODULE.subprocess.run
+        real_discard = MODULE._discard_prior_targets
+        spawns = {"n": 0}
+        discard_calls = []
+
+        def faulty_run(argv, *a, **k):
+            if phase["in_guard"]:
+                spawns["n"] += 1
+                if spawns["n"] > 1:
+                    raise OSError("simulated guard spawn failure mid-walk")
+            return real_run(argv, *a, **k)
+
+        def spying_discard(priors):
+            discard_calls.append(list(priors))
+            return real_discard(priors)
+
+        with mock.patch.object(MODULE, "_prevent_tracked_clobbers", guarding), \
+                mock.patch.object(MODULE.subprocess, "run", faulty_run), \
+                mock.patch.object(MODULE, "_discard_prior_targets", spying_discard):
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertIn(
+            self.REL, [entry["source"] for entry in data["migrated"]],
+            "the run's copy work itself must have succeeded",
+        )
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(len(failures), 1, out.getvalue() + err.getvalue())
+        self.assertEqual(failures[0]["action"], "guard-failed")
+        self.assertEqual(failures[0]["destination"], target.resolve().as_posix())
+        self.assertIn("OSError", failures[0]["error"])
+        self.assertIn("simulated guard spawn failure", failures[0]["error"])
+        self.assertEqual(
+            data["prevented_clobbers"], [],
+            "the guard died before any restore, so nothing was prevented",
+        )
+        self.assertEqual(
+            discard_calls, [[]],
+            "the priors restore-or-discard disposition must run on the "
+            "guard-crash path too (the empty priors list takes the discard arm)",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), v0_blob,
+            "the staged rewind must stay (the guard died before any restore)",
+        )
+        err_text = err.getvalue()
+        self.assertIn(
+            "ERROR: 1 clobber-guard failure(s) recorded in "
+            "prevented_clobber_failures",
+            err_text,
+            "the loud stderr summary must print on the exit-0 path",
+        )
+        self.assertIn(target.resolve().as_posix(), err_text)
+
+    def test_guard_keyboard_interrupt_reraised_after_manifest_record(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        a fault-injected KeyboardInterrupt at the guard's spawn seam is
+        recorded in the written manifest's prevented_clobber_failures, the
+        priors discard arm runs, and the interrupt is re-raised out of the
+        migrate - never converted to exit 0."""
+        target, source, baseline, manifest, v0_blob = self._owned_rewind_e2e_fixture()
+        guarding, phase = self._guard_phase_wrappers()
+        real_run = MODULE.subprocess.run
+        real_discard = MODULE._discard_prior_targets
+        discard_calls = []
+
+        def interrupting_run(argv, *a, **k):
+            if phase["in_guard"]:
+                raise KeyboardInterrupt("simulated SIGINT at the guard's spawn seam")
+            return real_run(argv, *a, **k)
+
+        def spying_discard(priors):
+            discard_calls.append(list(priors))
+            return real_discard(priors)
+
+        with mock.patch.object(MODULE, "_prevent_tracked_clobbers", guarding), \
+                mock.patch.object(MODULE.subprocess, "run", interrupting_run), \
+                mock.patch.object(MODULE, "_discard_prior_targets", spying_discard):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(KeyboardInterrupt):
+                self._migrate_inproc(source, baseline, manifest, target)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertIn(
+            self.REL, [entry["source"] for entry in data["migrated"]],
+            "the run's copy work itself must have succeeded",
+        )
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["action"], "guard-failed")
+        self.assertIn("KeyboardInterrupt", failures[0]["error"])
+        self.assertEqual(
+            discard_calls, [[]],
+            "the priors discard arm must run before the interrupt re-raises",
+        )
+        self.assertIn(
+            "ERROR: 1 clobber-guard failure(s) recorded in "
+            "prevented_clobber_failures",
+            err.getvalue(),
+            "the loud stderr summary must print before the re-raise",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), v0_blob,
+            "the staged rewind must stay (the guard died before any restore)",
+        )
+
+    def test_staged_set_read_failure_recorded_in_manifest_not_silent(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        a staged-set read failing rc != 0 records a prevented_clobber_failures
+        entry into a completed manifest - the run exits 0 but not silently:
+        the loud stderr summary names the count and the destination."""
+        target, source, baseline, manifest, _v0_blob = self._owned_rewind_e2e_fixture()
+        guarding, phase = self._guard_phase_wrappers()
+        real_run = MODULE.subprocess.run
+        spawns = {"n": 0}
+
+        def failing_read_run(argv, *a, **k):
+            if phase["in_guard"]:
+                spawns["n"] += 1
+                if spawns["n"] == 1:
+                    return subprocess.CompletedProcess(
+                        argv, 1, b"", b"simulated staged-set read failure",
+                    )
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE, "_prevent_tracked_clobbers", guarding), \
+                mock.patch.object(MODULE.subprocess, "run", failing_read_run):
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertIn(
+            self.REL, [entry["source"] for entry in data["migrated"]],
+            "the run's copy work itself must have succeeded",
+        )
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(len(failures), 1, out.getvalue() + err.getvalue())
+        self.assertEqual(failures[0]["action"], "staged-set-read-failed")
+        self.assertEqual(failures[0]["destination"], target.resolve().as_posix())
+        self.assertIn("simulated staged-set read failure", failures[0]["error"])
+        self.assertEqual(data["prevented_clobbers"], [])
+        err_text = err.getvalue()
+        self.assertIn(
+            "ERROR: 1 clobber-guard failure(s) recorded in "
+            "prevented_clobber_failures",
+            err_text,
+            "no silent exit 0: the loud stderr summary must print",
+        )
+        self.assertIn(target.resolve().as_posix(), err_text)
+
+    def test_preflight_head_probe_failure_reported_not_treated_as_absent(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1,
+        extended over the Task 2 batched shape): a HEAD read failing rc != 0
+        - both the batched tracked-map read and the per-path fallback probe
+        it degrades to - is reported by name (the WARNs) and recorded in the
+        manifest's prevented_clobber_failures with the phase-provenance
+        action strings (the pre-flight rows unprefixed, the in-lock re-scan
+        rows under the rescan- prefix), never silently treated as absent at
+        HEAD; the run still completes (the paths are skipped for the
+        offender decision, the carry proceeds)."""
+        target = self._target_repo("target")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, self.V2)
+        manifest = self.root / "migration.json"
+        real_run = MODULE.subprocess.run
+
+        def failing_probe_run(argv, *a, **k):
+            if "ls-tree" in argv:
+                if "-z" in argv:
+                    # The batched map read runs bytes-mode capture; the
+                    # per-path fallback probe runs text-mode.
+                    return subprocess.CompletedProcess(
+                        argv, 1, b"", b"simulated HEAD probe failure",
+                    )
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "simulated HEAD probe failure",
+                )
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", failing_probe_run):
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        err_text = err.getvalue()
+        self.assertIn(
+            "HEAD tracked map read failed", err_text,
+            "the failed batched map read must be reported, never silent",
+        )
+        self.assertIn(
+            "HEAD probe failed", err_text,
+            "the failed per-path probe must be reported by name, never "
+            "silently treated as absent",
+        )
+        self.assertIn(self.REL, err_text)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(
+            [entry["action"] for entry in failures],
+            [
+                "head-map-failed",
+                "head-probe-failed",
+                "rescan-head-map-failed",
+                "rescan-head-probe-failed",
+            ],
+            "each phase must record its own probe failures under the "
+            "phase-distinct action strings",
+        )
+        self.assertEqual(failures[1]["destination"], (target.resolve() / self.REL).as_posix())
+        self.assertIn("simulated HEAD probe failure", failures[1]["error"])
+        self.assertIn(
+            "ERROR: 4 clobber-guard failure(s) recorded in "
+            "prevented_clobber_failures",
+            err_text,
+            "the loud stderr summary must name the recorded failures",
+        )
+
+    def test_preflight_absent_at_head_carry_no_false_probe_warning(self):
+        """[class: REPOSITORY_TEST] The probe's other shape (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1,
+        pass 2): a plain new artifact absent at HEAD resolves the HEAD probe
+        rc 0 with empty output and carries normally - no "HEAD probe failed"
+        WARN and no prevented_clobber_failures entry. The rev-parse probe
+        read exactly this shape as rc 128 "Needed a single revision",
+        printing a false WARN and recording a false head-probe-failed entry
+        on every normal new-artifact carry."""
+        target = self._target_repo("absent-target")
+        source, baseline = self._source_with_baseline("absent-source", b"corpus v1\n")
+        new_rel = "docs/tmp/fresh-run-artifact.md"
+        _write(source / new_rel, b"fresh run output\n")
+        manifest = self.root / "migration.json"
+        proc = self._run_migrate(source, baseline, manifest, target)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn(
+            "HEAD probe failed", proc.stderr,
+            "an absent-at-HEAD carry is not a probe failure: no false WARN",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["prevented_clobber_failures"], [],
+            "an absent-at-HEAD carry records no head-probe-failed entry",
+        )
+        self.assertIn(
+            new_rel, [entry["source"] for entry in data["migrated"]],
+            "the new artifact must actually carry (the witness is a silent carry)",
+        )
+
     def test_migrate_preflight_skips_dangling_symlink_like_the_carry_loop(self):
         """[class: REPOSITORY_TEST] A baseline-known path whose symlink
         dangled after the snapshot follows the carry loop's skip shape: the
@@ -11215,15 +11608,17 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
         def restaging_run(argv, *a, **k):
             # Hook truth (plan 2026-11-04-closeout-clobber-guard-review-
             # residual-trio, R4, correcting the row's misstated premise):
-            # `f":{self.REL}" in argv` is element-exact list membership, so
-            # it never matches `_head_blob`'s rev-parse element
-            # `HEAD:<rel>` - a different argv string - and the hook does
-            # NOT match both probes as the row recorded. What argv alone
-            # cannot do is distinguish the classification read (the walk's
-            # _read_staged_entry) from the recheck read inside
-            # _reclassify_then_restore: both pass the same `:<rel>`
-            # element, so the one-shot counter below is what targets the
-            # restage at the classification read (the first read only).
+            # the hook matches only a `rev-parse` argv carrying the `:<rel>`
+            # element (element-exact list membership), so it never matches
+            # `_head_blob`'s HEAD probe - an `ls-tree` argv whose pathspec
+            # is `:(literal)<rel>`, a different tool and a different argv
+            # string - and it does NOT match both probes as the row
+            # recorded. What argv alone cannot do is distinguish the
+            # classification read (the walk's _read_staged_entry) from the
+            # recheck read inside _reclassify_then_restore: both pass the
+            # same `:<rel>` element, so the one-shot counter below is what
+            # targets the restage at the classification read (the first
+            # read only).
             is_classification_read = "rev-parse" in argv and f":{self.REL}" in argv
             result = real_run(argv, *a, **k)
             if is_classification_read:
@@ -11305,7 +11700,12 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
         """[class: REPOSITORY_TEST] A restore subprocess failure is a report
         line, not a retry: the guard prints the restore-failure WARN,
         records no prevented path, spawns exactly one restore, and leaves
-        the staged rewind in place."""
+        the staged rewind in place. Extended (plan
+        closeout-migrate-supplemental-inventory-and-guard-residuals Task 1):
+        the same failed-restore shape end to end through MODULE.main writes
+        the manifest with the restore failure recorded in
+        prevented_clobber_failures, so the closeout reader adjudicates
+        without stderr."""
         target = self._target_repo("target")
         v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
         self._stage_rewind(target, v0_blob)
@@ -11335,6 +11735,34 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
             self._git(target, "rev-parse", f":{self.REL}"), v0_blob,
             "the staged rewind must stay after the failed restore",
         )
+
+        # End-to-end extension: the failed restore reaches the written
+        # manifest's prevented_clobber_failures section beside the prevented
+        # rows, the run exits 0, and nothing was prevented.
+        e2e_target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture(
+            "target-restore-failed-e2e",
+        )
+
+        def failing_restore_run_e2e(argv, *a, **k):
+            if "restore" in argv:
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "simulated restore failure",
+                )
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=failing_restore_run_e2e):
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, e2e_target)
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(len(failures), 1, out.getvalue() + err.getvalue())
+        self.assertEqual(failures[0]["action"], "restore-failed")
+        self.assertEqual(failures[0]["destination"], (e2e_target.resolve() / self.REL).as_posix())
+        self.assertIn("simulated restore failure", failures[0]["error"])
+        self.assertEqual(data["prevented_clobbers"], [])
 
     def test_postrun_guard_reports_post_restore_mismatch_without_re_restoring(self):
         """[class: REPOSITORY_TEST] The helper verifies the restore outcome:
@@ -11374,6 +11802,43 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
         )
         self.assertEqual(
             self._git(target, "rev-parse", f":{self.REL}"), peer_blob,
+            "the peer's post-restore bytes must survive (no re-restore)",
+        )
+
+        # End-to-end extension (plan closeout-migrate-supplemental-inventory-
+        # and-guard-residuals Task 1): the post-restore non-hold reaches the
+        # written manifest's prevented_clobber_failures section, the run
+        # exits 0, and nothing was prevented.
+        e2e_target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture(
+            "target-restore-mismatch-e2e",
+        )
+        _write(e2e_target / "docs/tmp/peer-restage-scratch.md", b"corpus restaged after the restore ran\n")
+        e2e_peer_blob = self._git(
+            e2e_target, "hash-object", "-w", "--", "docs/tmp/peer-restage-scratch.md",
+        )
+        (e2e_target / "docs/tmp/peer-restage-scratch.md").unlink()
+
+        def restaging_run_e2e(argv, *a, **k):
+            if "restore" in argv:
+                result = real_run(argv, *a, **k)
+                self._peer_restage(e2e_target, e2e_peer_blob)
+                return result
+            return real_run(argv, *a, **k)
+
+        with mock.patch.object(MODULE.subprocess, "run", new=restaging_run_e2e):
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, e2e_target)
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        failures = data["prevented_clobber_failures"]
+        self.assertEqual(len(failures), 1, out.getvalue() + err.getvalue())
+        self.assertEqual(failures[0]["action"], "restore-mismatch")
+        self.assertEqual(failures[0]["destination"], (e2e_target.resolve() / self.REL).as_posix())
+        self.assertEqual(data["prevented_clobbers"], [])
+        self.assertEqual(
+            self._git(e2e_target, "rev-parse", f":{self.REL}"), e2e_peer_blob,
             "the peer's post-restore bytes must survive (no re-restore)",
         )
 
@@ -12403,6 +12868,944 @@ class BaselineClobberGuardTest(_StripsHostGitEnv, unittest.TestCase):
             "widening the enumeration is forbidden", doc,
             "the walk docstring must record that widening the "
             "enumeration is forbidden",
+        )
+
+    # ---- Task 2: direction-aware pre-flight, batched probes, and the
+    # in-lock re-scan (plan 2026-11-05-closeout-migrate-supplemental-
+    # inventory-and-guard-residuals). The direction witnesses pin the
+    # narrowing (only an older committed vintage refuses; a forward carry
+    # falls through to the collision-rename disposition), the batching
+    # witnesses pin the batched probe shapes through the module's
+    # subprocess-launcher seam, and the interleaving witnesses drive the
+    # pre-lock window with the suite's deterministic foreign-hold idiom
+    # (_acquire_foreign_hold, in-process migrate, pinned lock env, generous
+    # max-wait, release) - never peer polling.
+
+    def _acquire_foreign_hold(self, repo: Path, label: str, holder_pid: int) -> dict[str, str]:
+        """Acquire the repository-keyed merge lock on ``repo`` from this
+        test process (the MigrateMergeLockTest idiom): the done-lock script
+        with the holder pid pinned into the hermetic env, the exports
+        parsed for the release."""
+        acquired = subprocess.run(
+            ["bash", str(repo / "scripts" / "done-lock.sh"), "merge-acquire", "--label", label],
+            capture_output=True, text=True, cwd=str(repo),
+            env=_hermetic_lock_env(self.root, MERGE_LOCK_HOLDER_PID=str(holder_pid)),
+        )
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        exports: dict[str, str] = {}
+        for line in acquired.stdout.splitlines():
+            for name in ("MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN"):
+                prefix = f"export {name}="
+                if line.startswith(prefix):
+                    exports[name] = line[len(prefix):]
+        self.assertIn("MERGE_LOCK_DIR", exports)
+        self.assertIn("MERGE_LOCK_TOKEN", exports)
+        return exports
+
+    def _release_hold(self, repo: Path, exports: dict[str, str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(repo / "scripts" / "done-lock.sh"), "merge-release"],
+            capture_output=True, text=True, cwd=str(repo),
+            env=_hermetic_lock_env(self.root, **exports),
+        )
+
+    def _interleaved_migrate(
+        self, source: Path, baseline: Path, manifest: Path, target: Path,
+        window_action, counts: dict[str, int] | None = None,
+    ) -> tuple[dict, list[str]]:
+        """The deterministic pre-lock-window fixture: a foreign hold is
+        acquired on the target first, the in-process migrate runs in a
+        worker thread under the setUp-pinned lock env with a generous
+        max-wait, the main thread waits until the pre-flight's pre-lock
+        invocation has returned (a recording wrapper sets the event), then
+        performs ``window_action`` inside the open window, releases the
+        hold, and joins the worker. Returns (box, phases): box carries
+        code/out/err for the finished run; phases lists each
+        `_baseline_clobber_preflight` invocation's offender list (the
+        pre-lock walk first, then the in-lock re-scan walk)."""
+        holder = subprocess.Popen(["sleep", "120"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        exports = self._acquire_foreign_hold(target, "blocker", holder.pid)
+        preflight_done = threading.Event()
+        phases: list[list[str]] = []
+        real_preflight = MODULE._baseline_clobber_preflight
+
+        def recording_preflight(*a, **k):
+            scanned = real_preflight(*a, **k)
+            # Shape-tolerant: the post-Task-2 scan returns (offenders,
+            # snapshot-head-map, snapshot-source-blobs); the pre-Task-2
+            # scan returns the bare offender list. Either way the phases
+            # ledger counts invocations, which is what the re-scan
+            # assertions read.
+            offenders = scanned[0] if isinstance(scanned, tuple) else scanned
+            phases.append(list(offenders))
+            preflight_done.set()
+            return scanned
+
+        real_run = MODULE.subprocess.run
+
+        def counting_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "ls-tree" in names:
+                counts["ls-tree"] = counts.get("ls-tree", 0) + 1
+            if "--stdin-paths" in names:
+                counts["stdin-paths"] = counts.get("stdin-paths", 0) + 1
+            return real_run(argv, *a, **k)
+
+        box: dict = {}
+
+        def run_migrate() -> None:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                box["code"] = MODULE.main([
+                    "migrate",
+                    "--baseline", str(baseline),
+                    "--source", str(source),
+                    "--target", str(target),
+                    "--manifest", str(manifest),
+                    "--suffix", "1",
+                ])
+            box["out"], box["err"] = out.getvalue(), err.getvalue()
+
+        saved_wait = os.environ.get("DOCS_SYNC_MERGE_MAX_WAIT")
+        os.environ["DOCS_SYNC_MERGE_MAX_WAIT"] = "120"
+        wrappers = [
+            mock.patch.object(MODULE, "_baseline_clobber_preflight", recording_preflight)
+        ]
+        if counts is not None:
+            wrappers.append(mock.patch.object(MODULE.subprocess, "run", counting_run))
+        worker = threading.Thread(target=run_migrate, daemon=True)
+        worker.start()
+        released = None
+        try:
+            with contextlib.ExitStack() as stack:
+                for wrapper in wrappers:
+                    stack.enter_context(wrapper)
+                self.assertTrue(
+                    preflight_done.wait(timeout=60),
+                    "the pre-lock pre-flight never returned inside the window",
+                )
+                window_action()
+                released = self._release_hold(target, exports)
+                worker.join(timeout=120)
+        finally:
+            if saved_wait is None:
+                os.environ.pop("DOCS_SYNC_MERGE_MAX_WAIT", None)
+            else:
+                os.environ["DOCS_SYNC_MERGE_MAX_WAIT"] = saved_wait
+        self.assertFalse(worker.is_alive(), "the migrate thread never finished")
+        if released is not None:
+            self.assertEqual(released.returncode, 0, released.stderr)
+        return box, phases
+
+    def test_migrate_forward_carry_falls_through_to_collision_rename(self):
+        """[class: REPOSITORY_TEST] Safety witness (the RED discriminator,
+        plan 2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): source bytes NEWER than HEAD on a tracked path -
+        novel bytes that hash to no committed vintage - no longer refuse;
+        the carry falls through to the concrete collision-rename
+        disposition: exit 0, the destination keeps HEAD, the run's bytes
+        land at the collision sibling, the renamed manifest row is recorded,
+        and no prevented_clobber_failures entry exists."""
+        target = self._target_repo("target")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, b"corpus v2 + run row\n")
+        manifest = self.root / "migration.json"
+        proc = self._run_migrate(source, baseline, manifest, target)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("COLLISION", proc.stdout)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual([entry["source"] for entry in data["renamed"]], [self.REL])
+        self.assertTrue(data["renamed"][0]["collision_renamed"])
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the destination must keep the committed HEAD bytes",
+        )
+        self.assertEqual(
+            (target / ".ai-playbook/reviews/corpus.wt-1.md").read_bytes(),
+            b"corpus v2 + run row\n",
+        )
+        self.assertEqual(data["prevented_clobber_failures"], [])
+
+    def test_in_lock_rescan_refuses_when_head_moves_in_prelock_window(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): a peer commit landing between the pre-flight
+        probe and the lock acquire, changing a tracked destination, is
+        refused by the in-lock re-scan before the first copy - exit 2 via
+        the HEAD-drift half of the snapshot comparison (the fresh scan's
+        offender set alone is empty here: the carried bytes are a forward
+        carry, so only the HEAD-snapshot comparison can fire), nothing
+        copied, no manifest. The fixture is the deterministic foreign-hold
+        idiom, never peer polling; the counting wrapper shows both walks
+        share the batched probes (one ls-tree and one --stdin-paths hash
+        batch per walk, two walks total)."""
+        target = self._target_repo("target")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, b"corpus v2 + run row\n")
+        manifest = self.root / "migration.json"
+        peer_bytes = b"corpus v3 peer landing\n"
+
+        def land_peer_commit() -> None:
+            _write(target / self.REL, peer_bytes)
+            self._git(target, "add", "-A")
+            self._git(target, "commit", "-q", "-m", "v3: peer landing in the pre-lock window")
+
+        counts: dict[str, int] = {}
+        box, phases = self._interleaved_migrate(
+            source, baseline, manifest, target, land_peer_commit, counts,
+        )
+        self.assertEqual(box["code"], 2, box["out"] + box["err"])
+        self.assertIn("in-lock re-scan", box["err"])
+        self.assertIn("target HEAD moved during the pre-lock window", box["err"])
+        self.assertIn(
+            f"in-lock re-scan: committed path changed in the window: {self.REL}",
+            box["err"],
+        )
+        self.assertNotIn(
+            "source bytes changed during the pre-lock window", box["err"],
+            "the HEAD-drift half fired; the source never drifted",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), peer_bytes,
+            "the refusal must leave the peer's committed content standing",
+        )
+        self.assertFalse(
+            (target / ".ai-playbook/reviews/corpus.wt-1.md").exists(),
+            "the copy must never have run (no collision sibling)",
+        )
+        self.assertFalse(manifest.exists(), "a refused re-scan writes no manifest")
+        self.assertEqual(
+            len(phases), 2,
+            "the re-scan must re-invoke the same pre-flight implementation "
+            "(the pre-lock walk, then the in-lock walk)",
+        )
+        self.assertEqual(
+            (counts.get("ls-tree"), counts.get("stdin-paths")), (2, 2),
+            "one ls-tree and one batched hash-object per walk: the re-scan "
+            "shares the batched probes, no serial re-probe",
+        )
+
+    def test_in_lock_rescan_refuses_when_source_drifts_in_prelock_window(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): a baseline-identical source file edited during
+        the pre-lock window (HEAD unchanged) closes through the re-scan's
+        source-drift half - the carried set changed under the pre-flight's
+        read, so the run refuses instead of carrying blind: exit 2 naming
+        the drifted path, the HEAD-drift half silent, the drifted bytes
+        never land at the target, and the genuinely carried companion file
+        never copies. Same deterministic foreign-hold idiom."""
+        target = self._target_repo("target")
+        source = self.root / "source"
+        self._write_rel(source, self.V2)
+        baseline = self.root / "baseline.json"
+        _capture_baseline(source, baseline)
+        late_rel = "docs/tmp/late-artifact.md"
+        _write(source / late_rel, b"late run output\n")
+        manifest = self.root / "migration.json"
+        drifted = self.V2 + b"drift row\n"
+
+        def edit_source_in_window() -> None:
+            self._write_rel(source, drifted)
+
+        box, phases = self._interleaved_migrate(
+            source, baseline, manifest, target, edit_source_in_window,
+        )
+        self.assertEqual(box["code"], 2, box["out"] + box["err"])
+        self.assertIn("in-lock re-scan", box["err"])
+        self.assertIn("source bytes changed during the pre-lock window", box["err"])
+        self.assertIn(
+            f"in-lock re-scan: carried source path changed in the window: {self.REL}",
+            box["err"],
+        )
+        self.assertNotIn(
+            "target HEAD moved during the pre-lock window", box["err"],
+            "HEAD is unchanged; only the source-drift half may fire",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the drifted bytes must never land at the target",
+        )
+        self.assertFalse(
+            (target / late_rel).exists(),
+            "the would-be companion copy must never land (never carry blind)",
+        )
+        self.assertFalse(manifest.exists(), "a refused re-scan writes no manifest")
+        self.assertEqual(len(phases), 2)
+
+    def test_multi_candidate_batched_preflight_exact_offenders_and_one_batch_per_walk(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): a multi-candidate fixture (older-vintage
+        offender, baseline-identical file, dangling symlink, absent-at-HEAD
+        path, forward-newer carry) produces the exact offender list and
+        per-path stderr naming after batching, and the subprocess-seam
+        counting wrapper pins one ls-tree and one batched hash-object call
+        per walk (plus one rev-list universe pass and one per-rel
+        --find-object probe for the single in-universe differ)."""
+        target = self._target_repo("target")
+        forward_rel = "docs/tmp/forward.md"
+        _write(target / forward_rel, b"forward committed base\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "forward: tracked surface")
+        source = self.root / "source"
+        _write(source / "docs/tmp/ledger.md", b"committed ledger line\n")
+        real = source / "docs/tmp/real.md"
+        _write(real, b"symlink resolution bytes\n")
+        link = source / "docs/tmp/link.md"
+        link.symlink_to(real)
+        self._write_rel(source, b"corpus v1\n")
+        baseline = self.root / "baseline.json"
+        _capture_baseline(source, baseline)
+        real.unlink()
+        self.assertTrue(
+            link.is_symlink() and not link.exists(),
+            "fixture precondition: the symlink dangles after the snapshot",
+        )
+        self._write_rel(source, self.V0)
+        _write(source / forward_rel, b"forward run edits\n")
+        _write(source / "docs/tmp/new-artifact.md", b"brand new bytes\n")
+        manifest = self.root / "migration.json"
+        counts: dict[str, int] = {}
+        real_run = MODULE.subprocess.run
+
+        def counting_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "ls-tree" in names:
+                counts["ls-tree"] = counts.get("ls-tree", 0) + 1
+            if "--stdin-paths" in names:
+                counts["stdin-paths"] = counts.get("stdin-paths", 0) + 1
+            elif "hash-object" in names:
+                counts["argv-hash-object"] = counts.get("argv-hash-object", 0) + 1
+            if "rev-list" in names:
+                counts["rev-list"] = counts.get("rev-list", 0) + 1
+            if "--find-object" in names:
+                counts["find-object"] = counts.get("find-object", 0) + 1
+            return real_run(argv, *a, **k)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(MODULE.subprocess, "run", counting_run):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        err_text = err.getvalue()
+        self.assertEqual(code, 2, out.getvalue() + err_text)
+        self.assertEqual(
+            err_text.count("is tracked at the target HEAD with different bytes"), 1,
+            "exactly one offender: the older vintage, not the forward carry",
+        )
+        self.assertIn(
+            f"baseline clobber pre-flight: {self.REL} is tracked at the "
+            "target HEAD with different bytes",
+            err_text,
+            "the offender must be named per-path on stderr",
+        )
+        self.assertNotIn(
+            f"{forward_rel} is tracked at the target HEAD", err_text,
+            "the forward-newer carry must not offend",
+        )
+        self.assertIn("narrow the capture dirs to untracked session surfaces", err_text)
+        self.assertEqual(counts.get("ls-tree"), 1, "one batched tracked-map read per walk")
+        self.assertEqual(counts.get("stdin-paths"), 1, "one batched hash pass per walk")
+        self.assertEqual(counts.get("rev-list"), 1, "one exclusion-only universe pass")
+        self.assertEqual(
+            counts.get("find-object"), 1,
+            "only the in-universe differ keeps its per-rel probe",
+        )
+
+    def test_newline_named_source_keeps_unbatched_per_path_decision(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): a source file whose name contains a newline
+        keeps the unbatched per-path decision - the hash batch cannot carry
+        an LF-named path, so the batch falls back per-path for that name
+        and the decision still lands: the newline-named older vintage
+        refuses with its named stderr line, one batch call stands beside
+        exactly one per-path argv hash for the excluded name."""
+        target = self._target_repo("target")
+        nl_rel = "docs/tmp/we\nird.md"
+        _write(target / nl_rel, b"nl v0\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "nl v0")
+        _write(target / nl_rel, b"nl v2\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "nl v2")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        _write(source / nl_rel, b"nl v0\n")
+        _write(source / "docs/tmp/batched-candidate.md", b"batchable new bytes\n")
+        manifest = self.root / "migration.json"
+        counts: dict[str, int] = {}
+        real_run = MODULE.subprocess.run
+
+        def counting_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "--stdin-paths" in names:
+                counts["stdin-paths"] = counts.get("stdin-paths", 0) + 1
+            elif "hash-object" in names:
+                counts["argv-hash-object"] = counts.get("argv-hash-object", 0) + 1
+            return real_run(argv, *a, **k)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(MODULE.subprocess, "run", counting_run):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        self.assertEqual(code, 2, out.getvalue() + err.getvalue())
+        self.assertIn(
+            f"{nl_rel} is tracked at the target HEAD with different bytes",
+            err.getvalue(),
+            "the LF-named vintage must keep its named refusal",
+        )
+        self.assertEqual(counts.get("stdin-paths"), 1)
+        self.assertEqual(
+            counts.get("argv-hash-object"), 1,
+            "the LF-named path must fall back to the per-path argv probe",
+        )
+
+    def test_vintage_probe_failure_falls_back_to_legacy_refusal_with_named_warning(self):
+        """[class: REPOSITORY_TEST] The failed-vintage-probe shape (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): a per-rel `git log --find-object` probe failing
+        rc != 0 on a differ-from-HEAD path never reads as not-a-vintage -
+        the path is reported by name (the WARN) and keeps the legacy
+        byte-difference refusal (an offender), so the run still exits 2."""
+        target = self._target_repo("target")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, self.V0)
+        manifest = self.root / "migration.json"
+        real_run = MODULE.subprocess.run
+
+        def failing_probe_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "log" in names and "--find-object" in names:
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "simulated vintage probe failure",
+                )
+            return real_run(argv, *a, **k)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(MODULE.subprocess, "run", failing_probe_run):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        err_text = err.getvalue()
+        self.assertEqual(code, 2, out.getvalue() + err_text)
+        self.assertIn(
+            f"vintage probe failed for {self.REL}", err_text,
+            "the failed vintage probe must be reported by name",
+        )
+        self.assertIn(
+            f"{self.REL} is tracked at the target HEAD with different bytes",
+            err_text,
+            "the legacy byte-difference refusal must stand for that path",
+        )
+
+    def test_hash_batch_failure_falls_back_per_path_and_preserves_decisions(self):
+        """[class: REPOSITORY_TEST] The failed-hash-batch shape (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 2): `git hash-object --stdin-paths` failing rc != 0
+        falls back per-path for every batched path - the decisions stand
+        (the older vintage still refuses, exit 2) and no batch-tail path is
+        silently skipped (each batched candidate keeps exactly one per-path
+        argv hash)."""
+        target = self._target_repo("target")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, self.V0)
+        _write(source / "docs/tmp/second-artifact.md", b"second new bytes\n")
+        manifest = self.root / "migration.json"
+        counts: dict[str, int] = {}
+        real_run = MODULE.subprocess.run
+
+        def failing_batch_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "--stdin-paths" in names:
+                counts["stdin-paths"] = counts.get("stdin-paths", 0) + 1
+                return subprocess.CompletedProcess(
+                    argv, 1, b"", b"simulated batch failure",
+                )
+            if "hash-object" in names:
+                counts["argv-hash-object"] = counts.get("argv-hash-object", 0) + 1
+            return real_run(argv, *a, **k)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(MODULE.subprocess, "run", failing_batch_run):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        self.assertEqual(code, 2, out.getvalue() + err.getvalue())
+        self.assertIn(
+            f"{self.REL} is tracked at the target HEAD with different bytes",
+            err.getvalue(),
+            "the offender decision must survive the batch failure",
+        )
+        self.assertEqual(counts.get("stdin-paths"), 1)
+        self.assertEqual(
+            counts.get("argv-hash-object"), 2,
+            "both batched candidates must fall back per-path (the vintage "
+            "rel and the absent-at-HEAD artifact), never a silent "
+            "batch-tail skip",
+        )
+
+    # ---- Task 3: post-run guard batching, the nested-target refusal, and
+    # the GIT_* sanitization (plan 2026-11-05-closeout-migrate-supplemental-
+    # inventory-and-guard-residuals). The batching witness pins the guard's
+    # vintage probe batching over the staged blob set composed from the
+    # Task 2 helpers (one exclusion-only prefilter pass, the per-rel
+    # fallback only where the prefilter cannot exclude) with the offender
+    # and prevented sets preserved exactly; the boundary witness refuses a
+    # nested target before any guard or copy; the env witnesses inject
+    # ambient GIT_* redirection keys through the CLI-subprocess harness's
+    # _hermetic_lock_env(root, **extra) so the migrator process itself
+    # carries them; the sanitize-failure refusal is fault-injected at the
+    # same subprocess-launcher seam class Task 1 named.
+
+    def _run_migrate_with_env(
+        self, source: Path, baseline: Path, manifest: Path, target: Path,
+        **extra: str,
+    ) -> subprocess.CompletedProcess:
+        """The CLI-subprocess migrate harness with extra env keys: the
+        injection surface for the ambient GIT_* redirection witnesses. The
+        migrator process itself carries the injected keys in its environ,
+        and every git-deriving subprocess it spawns inherits them unless
+        the sanitize helper drops them."""
+        return subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH), "migrate",
+                "--baseline", str(baseline),
+                "--source", str(source),
+                "--target", str(target),
+                "--manifest", str(manifest),
+            ],
+            capture_output=True, text=True, cwd=str(self.root),
+            env=_hermetic_lock_env(self.root, **extra),
+        )
+
+    def _expected_prevented_entry(self, target: Path) -> dict:
+        """The restored-from-HEAD prevented_clobbers row the owned-rewind
+        end-to-end fixture pins (destination absolute, record_index 0)."""
+        return {
+            "destination": (Path(target).resolve() / self.REL).as_posix(),
+            "action": "restored-from-HEAD",
+            "record_index": 0,
+        }
+
+    def test_guard_batches_vintage_probe_over_the_staged_blob_set(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): the post-run guard's vintage probe batches over
+        the staged blob set - one exclusion-only `rev-list --objects` pass
+        plus the per-rel `_blob_in_head_history` fallback only for the
+        candidate the prefilter cannot exclude (a committed vintage is in
+        HEAD's history; brand-new staged bytes are not) - with the offender
+        and prevented sets preserved exactly: the owned staged rewind still
+        restores (prevented == [REL]) and the brand-new bytes on the second
+        carried rel stay report-only."""
+        target = self._target_repo("target")
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        self._stage_rewind(target, v0_blob)
+        fresh_blob = subprocess.run(
+            ["git", "-C", str(target), "hash-object", "-w", "--stdin"],
+            input=b"brand-new staged bytes never committed\n",
+            capture_output=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        ).stdout.decode().strip()
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--add", "--cacheinfo",
+             f"100644,{fresh_blob},docs/tmp/ledger.md"],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        counts: dict[str, int] = {}
+        real_run = MODULE.subprocess.run
+
+        def counting_run(argv, *a, **k):
+            names = [x if isinstance(x, str) else os.fsdecode(x) for x in argv]
+            if "log" in names and "--find-object" in names:
+                counts["find-object"] = counts.get("find-object", 0) + 1
+            if "rev-list" in names:
+                counts["rev-list"] = counts.get("rev-list", 0) + 1
+            return real_run(argv, *a, **k)
+
+        captured = io.StringIO()
+        with mock.patch.object(MODULE.subprocess, "run", counting_run):
+            with contextlib.redirect_stdout(captured):
+                prevented = MODULE._prevent_tracked_clobbers(
+                    target, {self.REL, "docs/tmp/ledger.md"},
+                )
+        self.assertEqual(
+            prevented, [self.REL],
+            "the prevented set must be preserved exactly under batching",
+        )
+        self.assertIn(
+            "staged-new-bytes-", captured.getvalue(),
+            "brand-new staged bytes on a carried rel must stay report-only",
+        )
+        self.assertEqual(
+            (counts.get("rev-list"), counts.get("find-object")), (1, 1),
+            "one rev-list prefilter pass, and the per-rel find-object "
+            "fallback only for the committed-vintage candidate the "
+            "prefilter cannot exclude - the brand-new blob is never "
+            "probed serially",
+        )
+
+    def test_guard_divergent_sibling_vintage_stays_report_only(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): the divergent shape - blob X committed in the
+        target under a sibling path, staged on the carried rel with a
+        different delivered blob - stays report-only under either batching
+        variant: the name-scoped vintage probe misses it (the inherited
+        conservative miss), the entry survives untouched, and the prevented
+        set stays empty."""
+        target = self._target_repo("target")
+        sibling_rel = "docs/tmp/sibling-vintage.md"
+        _write(target / sibling_rel, b"divergent vintage bytes X\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "sibling vintage X")
+        x_blob = self._git(target, "rev-parse", f"HEAD:{sibling_rel}")
+        delivered_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self.assertNotEqual(x_blob, delivered_blob)
+        self._stage_rewind(target, x_blob)
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target, {self.REL}, {self.REL: delivered_blob},
+            )
+        self.assertEqual(
+            prevented, [],
+            "a vintage committed under a sibling path and staged on the "
+            "carried rel is not a name-scoped rewind: report-only, "
+            "nothing prevented",
+        )
+        self.assertIn(
+            "staged-new-bytes-on-a-carried-path", captured.getvalue(),
+            "the divergent shape must read as brand-new bytes on a "
+            "carried path (report-only) under either batching variant",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), x_blob,
+            "the divergent staged entry must stay untouched",
+        )
+
+    def test_guard_mixed_staged_shapes_keep_the_exact_prevented_set(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3, set equality): one walk carrying all four walked
+        shapes at once - an owned staged rewind, an owned staged vintage
+        equal to the delivered bytes, a foreign staged rewind, and owned
+        brand-new staged bytes - produces the exact offender and prevented
+        sets: only the owned rewind whose bytes differ from the delivered
+        blob restores; every other shape is report-only with its index
+        entry preserved."""
+        target = self._target_repo("target")
+        ledger_rel = "docs/tmp/ledger.md"
+        second_rel = "docs/tmp/second.md"
+        third_rel = "docs/tmp/third.md"
+        v0_blob = self._git(target, "rev-parse", f"HEAD~1:{self.REL}")
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        ledger_v0 = self._git(target, "rev-parse", f"HEAD:{ledger_rel}")
+        _write(target / ledger_rel, b"ledger v2 line\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "ledger v2")
+        _write(target / second_rel, b"second v0\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "second v0")
+        _write(target / second_rel, b"second v2\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "second v2")
+        second_v0 = self._git(target, "rev-parse", f"HEAD~1:{second_rel}")
+        _write(target / third_rel, b"third committed line\n")
+        self._git(target, "add", "-A")
+        self._git(target, "commit", "-q", "-m", "third baseline")
+        third_head = self._git(target, "rev-parse", f"HEAD:{third_rel}")
+        fresh_blob = subprocess.run(
+            ["git", "-C", str(target), "hash-object", "-w", "--stdin"],
+            input=b"brand-new owned staged bytes\n",
+            capture_output=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        ).stdout.decode().strip()
+        self._stage_rewind(target, v0_blob)
+        self._stage_rewind(target, ledger_v0, ledger_rel)
+        self._stage_rewind(target, second_v0, second_rel)
+        subprocess.run(
+            ["git", "-C", str(target), "update-index", "--add", "--cacheinfo",
+             f"100644,{fresh_blob},{third_rel}"],
+            capture_output=True, text=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            prevented = MODULE._prevent_tracked_clobbers(
+                target,
+                {self.REL, ledger_rel, third_rel},
+                {self.REL: head_blob, ledger_rel: ledger_v0},
+            )
+        self.assertEqual(
+            prevented, [self.REL],
+            "only the owned staged rewind whose bytes differ from the "
+            "delivered blob is prevented; the delivered-equal vintage "
+            "stays untouched",
+        )
+        out = captured.getvalue()
+        self.assertIn(f"prevented clobber: {self.REL}", out)
+        self.assertIn(
+            "staged bytes equal the bytes this run delivered", out,
+            "the delivered-equal vintage must take the untouched arm",
+        )
+        self.assertIn(
+            "holds a rewound staged vintage this run did not carry", out,
+            "the foreign rewind on the second rel must stay report-only",
+        )
+        self.assertIn(
+            "staged-new-bytes-", out,
+            "the brand-new staged bytes on the carried third rel must "
+            "stay report-only",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), head_blob,
+            "the owned rewind must hold HEAD after the restore",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{ledger_rel}"), ledger_v0,
+            "the delivered-equal staged bytes must survive in the index",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{second_rel}"), second_v0,
+            "the foreign rewind must survive untouched",
+        )
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{third_rel}"), fresh_blob,
+            "the brand-new staged bytes must survive untouched",
+        )
+
+    def test_migrate_refuses_nested_target_before_any_guard_or_copy(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): a target nested inside an enclosing repository
+        refuses exit 2 with the named toplevel-mismatch message before any
+        guard or copy runs - no merge-lock span, no pre-flight walk, no
+        manifest, and no write under the nested target."""
+        enclosing = self.root / "enclosing"
+        enclosing.mkdir(parents=True)
+        subprocess.run(
+            ["git", "-C", str(enclosing), "init", "-q"],
+            capture_output=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        _write(enclosing / "docs/tmp/ledger.md", b"enclosing committed line\n")
+        self._git(enclosing, "add", "-A")
+        self._git(enclosing, "commit", "-q", "-m", "enclosing baseline")
+        nested = enclosing / "nested-target"
+        nested.mkdir()
+        self._write_rel(nested, b"peer landing bytes\n")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, self.V2)
+        manifest = self.root / "migration.json"
+        before = sorted(
+            p.relative_to(nested).as_posix() for p in nested.rglob("*")
+        )
+        proc = self._run_migrate(source, baseline, manifest, nested)
+        self.assertEqual(
+            proc.returncode, 2,
+            f"a nested target must refuse exit 2: {proc.stdout + proc.stderr}",
+        )
+        self.assertIn(
+            "does not equal the resolved target path", proc.stderr,
+            "the refusal must carry the named toplevel-mismatch message",
+        )
+        self.assertIn(
+            str(enclosing.resolve()), proc.stderr,
+            "the refusal must name the enclosing repository toplevel",
+        )
+        self.assertNotIn(
+            "merge-lock", proc.stderr,
+            "the refusal must precede the merge-lock span",
+        )
+        self.assertNotIn(
+            "baseline clobber pre-flight", proc.stderr,
+            "the refusal must precede the pre-flight walk",
+        )
+        self.assertFalse(
+            manifest.exists(), "a refused nested target writes no manifest",
+        )
+        after = sorted(
+            p.relative_to(nested).as_posix() for p in nested.rglob("*")
+        )
+        self.assertEqual(
+            after, before, "the refusal must not write under the nested target",
+        )
+        self.assertEqual(
+            (nested / self.REL).read_bytes(), b"peer landing bytes\n",
+            "the nested target's own bytes must stay untouched",
+        )
+
+    def test_non_git_target_keeps_named_skip_path(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3, green preservation): a plain non-git target keeps
+        today's named skip path - no toplevel-mismatch refusal, the named
+        merge-lock skip line, and the migration completes."""
+        target = self.root / "plain-target"
+        target.mkdir(parents=True)
+        self._write_rel(target, b"peer landing bytes\n")
+        source, baseline = self._source_with_baseline("source", b"corpus v1\n")
+        self._write_rel(source, b"corpus v1 + run row\n")
+        manifest = self.root / "migration.json"
+        proc = self._run_migrate(source, baseline, manifest, target)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(
+            "merge-lock: skipped (the migration target is not a git "
+            "repository", proc.stderr,
+            "the named non-repository skip line must keep",
+        )
+        self.assertNotIn(
+            "does not equal the resolved target path", proc.stderr,
+            "a non-git target must not take the nested-target refusal",
+        )
+        self.assertTrue(manifest.exists())
+
+    def test_bogus_git_index_file_cannot_empty_the_prevented_set(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): a bogus GIT_INDEX_FILE injected into the
+        migrator's own environment must never empty the prevented set -
+        the sanitize helper drops the key from every git-deriving
+        subprocess (the guard's staged-set read included), so the migrate
+        completes with the prevented entry recorded against the intended
+        target; exit 0 with an empty prevented set is forbidden."""
+        target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture()
+        proc = self._run_migrate_with_env(
+            source, baseline, manifest, target,
+            GIT_INDEX_FILE=str(self.root / "bogus-index"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(f"prevented clobber: {self.REL}", proc.stdout)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["prevented_clobbers"], [self._expected_prevented_entry(target)],
+            "the prevented entry must be recorded against the intended "
+            "target, never emptied by an injected index redirection",
+        )
+        self.assertEqual(
+            data["prevented_clobber_failures"], [],
+            "a bogus GIT_INDEX_FILE must not surface as a staged-set "
+            "read failure either - the key never reaches the guard's "
+            "subprocesses",
+        )
+
+    def test_bogus_git_dir_cannot_empty_the_prevented_set(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): a bogus GIT_DIR injected into the migrator's own
+        environment must not degrade the repository detection into the
+        non-repository skip path - the sanitize helper drops the key, both
+        guards resolve against the intended target, and the prevented
+        entry is recorded; exit 0 with an empty prevented set is
+        forbidden."""
+        target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture()
+        proc = self._run_migrate_with_env(
+            source, baseline, manifest, target,
+            GIT_DIR=str(self.root / "bogus.git"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn(
+            "merge-lock: skipped", proc.stderr,
+            "the detection probe must not degrade to the non-repository "
+            "skip path under an injected GIT_DIR",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["prevented_clobbers"], [self._expected_prevented_entry(target)],
+            "the prevented entry must be recorded against the intended "
+            "target, never emptied by an injected GIT_DIR",
+        )
+        self.assertEqual(data["prevented_clobber_failures"], [])
+
+    def test_ambient_foreign_git_dir_and_work_tree_do_not_degrade_or_refuse(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): an ambient environment exporting GIT_DIR and
+        GIT_WORK_TREE at a valid foreign repository must not degrade any
+        git-derived probe and must not trip a false nested-target refusal -
+        the migrate completes with every probe resolved against the
+        intended target and the prevented entry recorded."""
+        target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture()
+        foreign = self.root / "foreign-repo"
+        foreign.mkdir(parents=True)
+        subprocess.run(
+            ["git", "-C", str(foreign), "init", "-q"],
+            capture_output=True, check=True,
+            env=_hermetic_git_env(self.root, **self.GIT_IDENTITY),
+        )
+        _write(foreign / "stray.md", b"foreign repo committed bytes\n")
+        self._git(foreign, "add", "-A")
+        self._git(foreign, "commit", "-q", "-m", "foreign baseline")
+        proc = self._run_migrate_with_env(
+            source, baseline, manifest, target,
+            GIT_DIR=str(foreign / ".git"),
+            GIT_WORK_TREE=str(foreign),
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "a valid foreign GIT_DIR/GIT_WORK_TREE must not refuse the "
+            f"migrate (no false nested-target refusal): {proc.stdout + proc.stderr}",
+        )
+        self.assertNotIn(
+            "does not equal the resolved target path", proc.stderr,
+            "the nested-target refusal must not fire on ambient "
+            "redirection keys",
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["prevented_clobbers"], [self._expected_prevented_entry(target)],
+            "every git-derived probe must resolve against the intended "
+            "target: the guard restored the intended target's staged "
+            "rewind",
+        )
+        self.assertEqual(data["prevented_clobber_failures"], [])
+        head_blob = self._git(target, "rev-parse", f"HEAD:{self.REL}")
+        self.assertEqual(
+            self._git(target, "rev-parse", f":{self.REL}"), head_blob,
+            "the intended target's index must hold HEAD after the restore",
+        )
+        self.assertEqual(
+            (target / self.REL).read_bytes(), self.V2,
+            "the intended target's worktree must hold HEAD after the "
+            "restore",
+        )
+
+    def test_sanitize_failure_refuses_named_exit_2_before_any_span(self):
+        """[class: REPOSITORY_TEST] Safety witness (plan
+        2026-11-05-closeout-migrate-supplemental-inventory-and-guard-
+        residuals Task 3): the sanitize refusal is reserved for a
+        structural impossibility and carries the same fault-injection seam
+        class Task 1 named - a _GitEnvSanitizeError raised at the sanitize
+        seam refuses exit 2 with the named message and remedy before any
+        lock span, guard, or copy."""
+        target, source, baseline, manifest, _v0 = self._owned_rewind_e2e_fixture()
+
+        def impossible(*a, **k):
+            raise MODULE._GitEnvSanitizeError(
+                "simulated structural impossibility constructing the "
+                "sanitized git child env"
+            )
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(MODULE, "_sanitize_git_child_env", impossible):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = self._migrate_inproc(source, baseline, manifest, target)
+        err_text = err.getvalue()
+        self.assertEqual(code, 2, out.getvalue() + err_text)
+        self.assertIn("refusing the closeout migrate", err_text)
+        self.assertIn("simulated structural impossibility", err_text)
+        self.assertIn(
+            "unset the GIT_* redirection keys", err_text,
+            "the refusal must name the remedy",
+        )
+        self.assertNotIn(
+            "merge-lock", err_text,
+            "the sanitize refusal must precede the merge-lock span",
+        )
+        self.assertFalse(
+            manifest.exists(), "a sanitize-refused migrate writes no manifest",
         )
 
 

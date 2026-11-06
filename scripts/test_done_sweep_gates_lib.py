@@ -9730,6 +9730,543 @@ def test_detect_interrupted_runs_dispositioned_and_dead_root_arms(
 
 
 # --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md
+# Task 1: the false-interruption witnessed shape at the detection level -
+# the closeout migration's primary shadow survives with the pre-finalize
+# complete flag while the finalize leg's finalized source copy dies with the
+# worktree. The classifier's read contract is pinned unchanged; the producer
+# arm (terminal-state propagation in the finalize leg) is Task 2.
+# --------------------------------------------------------------------------- #
+def _migrate_pre_finalize_manifest(source: Path, primary_session: Path) -> Path:
+    """The closeout migration's manifest transfer shape: the source run
+    manifest's bytes copied verbatim into the primary checkout's done-session
+    directory under the same canonical filename (the primary shadow)."""
+    primary_session.mkdir(parents=True, exist_ok=True)
+    shadow = primary_session / source.name
+    shadow.write_bytes(source.read_bytes())
+    return shadow
+
+
+def _finalize_manifest_file(path: Path) -> None:
+    """The finalize leg's marking shape: the record's ``complete`` flag
+    flipped to true and the canonical file rewritten in place (the finalized
+    bytes ``write_run_manifest`` emits)."""
+    manifest = lib.RunManifest.from_dict(
+        json.loads(path.read_text(encoding="utf-8"))
+    )
+    assert manifest is not None
+    manifest.complete = True
+    lib.write_run_manifest(manifest, path.parent)
+
+
+def test_detect_interrupted_runs_finalized_source_removed_reports_shadow_run(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 regression, the witnessed shape
+    end to end at the unit level: a worktree run's pre-finalize manifest
+    bytes are migrated to the primary checkout's done-session directory under
+    the same canonical filename (the primary shadow), the finalize leg then
+    marks the worktree's source copy complete, and the worktree removal
+    destroys that finalized source copy - the surviving primary shadow keeps
+    ``complete`` false with no terminal record of the run left in the primary
+    directory, so ``_detect_interrupted_runs`` over the primary done-session
+    directory reports the completed run as interrupted (the false evidence a
+    later done_run.sh setup refuses on; Task 2 removes the producer by
+    propagating the finalized bytes into the shadow)."""
+    primary = mktemp_repo("shadow-primary")
+    worktree = mktemp_repo("shadow-worktree")
+    now = time.time()
+    run_id = "run-finalized-then-removed"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    # The worktree run's own record: pre-finalize bytes, the worktree root
+    # recorded as repo_root.
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    # The finalize leg marks the source copy; the worktree removal then
+    # destroys the finalized source copy.
+    _finalize_manifest_file(source)
+    assert json.loads(source.read_text(encoding="utf-8"))["complete"] is True
+    source.unlink()
+
+    orphans = lib._detect_interrupted_runs(primary_session, primary)
+
+    assert [m.run_id for m in orphans] == [run_id]
+    # The reported record is the surviving shadow copy, still carrying the
+    # pre-finalize complete flag and the removed worktree's root.
+    assert orphans[0].source_name == shadow.name
+    assert orphans[0].complete is False
+    assert orphans[0].repo_root == root_digest(worktree)
+
+
+def test_detect_interrupted_runs_terminal_shadow_suppresses_finalized_run(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Plan Task 1's permanent contract twin, green
+    on landing: the same witnessed sequence with the finalized bytes also
+    landed on the surviving primary shadow (the terminal state Task 2's
+    propagation writes) suppresses the run from ``_detect_interrupted_runs``
+    output - the classifier's existing terminal-on-any-file closure pinned at
+    the detection level - while a genuinely incomplete sibling run in the
+    same directory keeps reporting."""
+    primary = mktemp_repo("terminal-shadow-primary")
+    worktree = mktemp_repo("terminal-shadow-worktree")
+    now = time.time()
+    run_id = "run-shadow-terminal"
+    sibling_id = "run-still-incomplete"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    _finalize_manifest_file(source)
+    # The propagation shape: the finalized bytes written over the shadow.
+    shadow.write_bytes(source.read_bytes())
+    source.unlink()
+    # A genuinely incomplete run in the same directory is unaffected.
+    _seed_run_manifest(
+        primary, sibling_id, marker_name(now + 1), root_digest(primary), now + 1
+    )
+
+    orphans = lib._detect_interrupted_runs(primary_session, primary)
+
+    assert [m.run_id for m in orphans] == [sibling_id]
+    assert all(m.run_id != run_id for m in orphans)
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md
+# Task 2: the finalize leg's terminal-state propagation into the primary
+# shadow record - the finalize-manifest operation's success path and its
+# already-complete early return write the finalized bytes over the surviving
+# shadow (the one authoritative writer), behind the identity check and the
+# already-terminal guard, with every miss reported on the failure channel
+# under the distinct `shadow propagation:` prefix and never failing the
+# finalize itself.
+# --------------------------------------------------------------------------- #
+def _linked_worktree_of(
+    primary: Path, tmp_path: Path, name: str, branch: str
+) -> Path:
+    """One linked worktree of the fixture primary (the ad-hoc worktree the
+    execute-plan dispatch recipe creates) with its own facts block, so
+    GateContext.discover resolves the worktree side like a dispatched run."""
+    worktree = tmp_path / name
+    git(primary, "worktree", "add", "-b", branch, str(worktree))
+    write_facts(worktree)
+    return worktree
+
+
+def _seed_transfer_witness(primary: Path, slug: str, run_id: str) -> Path:
+    """The closeout migration's transfer record: one verified migrated row
+    whose source names the run's done-session manifest, at the canonical
+    Phase 5 record home the transfer-out writes under the plan session
+    slug."""
+    record_dir = primary / "docs" / "tmp" / "execute-plan" / slug
+    record_dir.mkdir(parents=True, exist_ok=True)
+    record = record_dir / "closeout-migration.json"
+    record.write_text(
+        json.dumps(
+            {
+                "branch": [],
+                "migrated": [
+                    {
+                        "source": f"docs/tmp/done-session/run-manifest-{run_id}.json",
+                        "destination": str(
+                            primary
+                            / "docs"
+                            / "tmp"
+                            / "done-session"
+                            / f"run-manifest-{run_id}.json"
+                        ),
+                        "verified": True,
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return record
+
+
+def test_finalize_manifest_propagates_terminal_state_to_primary_shadow(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's red-to-green assertion against
+    the real entry point: given the Task 1 witnessed shape (a worktree run's
+    pre-finalize manifest bytes migrated to the primary checkout's
+    done-session shadow), ``finalize-manifest --run-id`` invoked against the
+    worktree root marks the source copy complete AND leaves the primary
+    shadow carrying the finalized bytes, so after the source copy is removed
+    (the worktree removal) ``_detect_interrupted_runs`` over the primary
+    directory no longer reports the run."""
+    primary = mktemp_repo("propagate-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "propagate-wt", "propagate-branch"
+    )
+    now = time.time()
+    run_id = "run-propagate-me"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "shadow propagation:" in err
+    payload = json.loads(shadow.read_text(encoding="utf-8"))
+    assert payload["complete"] is True
+    assert payload["run_id"] == run_id
+    assert payload["repo_root"] == root_digest(worktree)
+    # The witnessed shape: the finalized source copy dies with the worktree,
+    # and the surviving primary record is terminal.
+    source.unlink()
+    orphans = lib._detect_interrupted_runs(primary_session, primary)
+    assert all(m.run_id != run_id for m in orphans)
+
+
+def test_finalize_manifest_rerun_after_skipped_propagation_still_propagates(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's idempotency arm: a finalize
+    whose propagation write was refused (the shadow still pre-finalize) is
+    followed by a re-run finalize that takes the already-complete early
+    return - and that early return still runs the propagation arm, writing
+    the same finalized bytes over the strict pre-finalize twin."""
+    primary = mktemp_repo("repropagate-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "repropagate-wt", "repropagate-branch"
+    )
+    now = time.time()
+    run_id = "run-propagate-rerun"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    pre_bytes = shadow.read_bytes()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+    # First finalize: the marking succeeds but the shadow write is refused
+    # (the primary done-session directory is read-only).
+    primary_session.chmod(0o555)
+    try:
+        rc = lib.main(["finalize-manifest", "--run-id", run_id])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "no partial write" in captured.err
+        assert shadow.read_bytes() == pre_bytes
+    finally:
+        primary_session.chmod(0o755)
+    # The re-run: the source record is already complete, the early return
+    # still propagates, and the strict pre-finalize twin is replaced.
+    rc_again = lib.main(["finalize-manifest", "--run-id", run_id])
+    assert rc_again == 0
+    captured_again = capsys.readouterr()
+    assert "already complete" in captured_again.out
+    assert "wrote the finalized bytes over the primary shadow" in (
+        captured_again.err
+    )
+    payload = json.loads(shadow.read_text(encoding="utf-8"))
+    assert payload["complete"] is True
+    assert payload["run_id"] == run_id
+
+
+def test_finalize_manifest_shadow_absent_transfer_witness_writes_record(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's witness arm: with the primary
+    shadow absent but the run's closeout-migration record carrying a verified
+    transfer row whose source names the run's done-session manifest, the
+    finalize writes the finalized bytes as the surviving record at the
+    canonical shadow name - never invented from nothing (a run whose owned
+    plan claim has no record still skips)."""
+    primary = mktemp_repo("witness-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "witness-wt", "witness-branch"
+    )
+    now = time.time()
+    run_id = "run-witnessed-transfer"
+    plan_rel = "docs/history/plans/2026-11-05-witnessed.md"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree,
+        run_id,
+        marker_name(now),
+        root_digest(worktree),
+        now,
+        owned_plan_paths=[plan_rel],
+    )
+    _seed_transfer_witness(primary, "witnessed", run_id)
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "witnesses the transfer" in err
+    shadow = primary_session / f"run-manifest-{run_id}.json"
+    payload = json.loads(shadow.read_text(encoding="utf-8"))
+    assert payload["complete"] is True
+    assert payload["owned_plan_paths"] == [plan_rel]
+
+
+def test_finalize_manifest_shadow_absent_without_witness_skips_with_report(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's no-evidence arm: with neither a
+    primary shadow nor a closeout-migration transfer witness for the run,
+    the finalize propagates nothing, reports the skip on the failure channel
+    under the distinct prefix, and leaves the primary done-session directory
+    without the run's manifest or a write residue."""
+    primary = mktemp_repo("nowitness-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "nowitness-wt", "nowitness-branch"
+    )
+    now = time.time()
+    run_id = "run-no-witness"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree,
+        run_id,
+        marker_name(now),
+        root_digest(worktree),
+        now,
+        owned_plan_paths=["docs/history/plans/2026-11-05-nowitness.md"],
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "marked complete in" in captured.out
+    assert (
+        "no primary shadow and no closeout-migration transfer witness"
+        in captured.err
+    )
+    assert not (primary_session / f"run-manifest-{run_id}.json").exists()
+    assert not (primary_session / f"run-manifest-{run_id}.json.tmp").exists()
+
+
+def test_finalize_manifest_shadow_identity_mismatch_aborts_both_untouched(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's identity arm: a primary shadow
+    whose recorded ``owned_plan_paths`` disagree with the finalized source
+    (the run-identity bind) aborts the propagation with one report on the
+    failure channel, both files untouched - the shadow keeps its bytes, the
+    source keeps the finalized bytes the operation itself wrote, the
+    finalize still succeeds, and no line carries the finalize's own
+    ``run-manifest identity mismatch`` refusal wording (the wrapper's advice
+    routing never misroutes on the propagation)."""
+    primary = mktemp_repo("mismatch-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "mismatch-wt", "mismatch-branch"
+    )
+    now = time.time()
+    run_id = "run-shadow-mismatch"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    tampered = json.loads(shadow.read_text(encoding="utf-8"))
+    tampered["owned_plan_paths"] = ["docs/history/plans/2026-11-05-other.md"]
+    shadow.write_text(
+        json.dumps(tampered, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    shadow_before = shadow.read_bytes()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "marked complete in" in captured.out
+    assert "identity mismatch between the primary shadow" in captured.err
+    assert "both files untouched" in captured.err
+    assert shadow.read_bytes() == shadow_before
+    # The source bytes stay exactly the finalized bytes the operation wrote.
+    finalized = lib.RunManifest.from_dict(
+        json.loads(source.read_text(encoding="utf-8"))
+    )
+    assert finalized is not None and finalized.complete is True
+    combined = captured.out + captured.err
+    assert "run-manifest identity mismatch" not in combined
+
+
+def test_finalize_manifest_terminal_shadow_never_overwritten(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's already-terminal guard, both
+    suppression shapes: a primary shadow carrying ``complete`` true, and one
+    carrying a non-null ``dispositioned`` record, are each skipped with a
+    report and never overwritten - a sanctioned one-time closure record is
+    never destroyed by the propagation."""
+    primary = mktemp_repo("terminal-guard-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "terminal-guard-wt", "terminal-guard-branch"
+    )
+    now = time.time()
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+    complete_id = "run-shadow-complete"
+    source_a = _seed_run_manifest(
+        worktree, complete_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow_a = _migrate_pre_finalize_manifest(source_a, primary_session)
+    payload_a = json.loads(shadow_a.read_text(encoding="utf-8"))
+    payload_a["complete"] = True
+    shadow_a.write_text(
+        json.dumps(payload_a, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    before_a = shadow_a.read_bytes()
+    dispositioned_id = "run-shadow-dispositioned"
+    source_b = _seed_run_manifest(
+        worktree,
+        dispositioned_id,
+        marker_name(now + 1),
+        root_digest(worktree),
+        now + 1,
+        dispositioned={
+            "reason": "work-verified-landed",
+            "date": "2026-11-05",
+            "note": "closed elsewhere",
+        },
+    )
+    shadow_b = _migrate_pre_finalize_manifest(source_b, primary_session)
+    before_b = shadow_b.read_bytes()
+
+    rc_a = lib.main(["finalize-manifest", "--run-id", complete_id])
+    assert rc_a == 0
+    err_a = capsys.readouterr().err
+    assert "already carries terminal state (complete=true)" in err_a
+    assert shadow_a.read_bytes() == before_a
+    rc_b = lib.main(["finalize-manifest", "--run-id", dispositioned_id])
+    assert rc_b == 0
+    err_b = capsys.readouterr().err
+    assert "already carries terminal state (a dispositioned record)" in err_b
+    assert shadow_b.read_bytes() == before_b
+
+
+def test_finalize_manifest_primary_dispatch_is_silent_noop(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's primary-dispatched arm: with
+    the invocation checkout already the primary checkout (a plain repo), the
+    resolved primary shadow path is the file the operation itself owns - the
+    arm is a silent no-op skip with no propagation report, and the
+    already-complete re-run rewrites nothing (the manifest's bytes stay
+    untouched after the early return)."""
+    root = mktemp_repo("primary-dispatch")
+    now = time.time()
+    run_id = "run-primary-dispatch"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), root_digest(root), now
+    )
+    manifest_path = (
+        root / "docs" / "tmp" / "done-session" / f"run-manifest-{run_id}.json"
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "marked complete in" in captured.out
+    assert "shadow propagation" not in captured.err
+
+    before = manifest_path.read_bytes()
+    stat_before = manifest_path.stat().st_mtime_ns
+    rc_again = lib.main(["finalize-manifest", "--run-id", run_id])
+    assert rc_again == 0
+    captured_again = capsys.readouterr()
+    assert "already complete" in captured_again.out
+    assert "shadow propagation" not in captured_again.err
+    assert manifest_path.stat().st_mtime_ns == stat_before
+    assert manifest_path.read_bytes() == before
+
+
+def test_finalize_manifest_unresolvable_primary_reports_miss(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's unresolvable-primary miss: the
+    finalize's outcome and exit semantics stay unchanged while the
+    propagation reports the miss on the failure channel and writes
+    nothing."""
+    primary = mktemp_repo("unresolvable-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "unresolvable-wt", "unresolvable-branch"
+    )
+    now = time.time()
+    run_id = "run-primary-unresolvable"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    _migrate_pre_finalize_manifest(source, primary_session)
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+    monkeypatch.setattr(
+        lib,
+        "_resolve_primary_checkout",
+        lambda ctx: (None, "forced: fixture resolution refusal"),
+    )
+
+    rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "marked complete in" in captured.out
+    assert "primary checkout unresolved" in captured.err
+    assert "nothing propagated" in captured.err
+    shadow = primary_session / f"run-manifest-{run_id}.json"
+    assert json.loads(shadow.read_text(encoding="utf-8"))["complete"] is False
+
+
+def test_finalize_manifest_shadow_write_refusal_no_partial_write(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 2's write-refusal miss: the
+    finalize's own marking succeeds while the shadow write is refused (a
+    read-only primary done-session directory); the miss is reported on the
+    failure channel, the shadow keeps its pre-finalize bytes, and no temp
+    residue is left behind."""
+    primary = mktemp_repo("write-refused-primary")
+    worktree = _linked_worktree_of(
+        primary, tmp_path, "write-refused-wt", "write-refused-branch"
+    )
+    now = time.time()
+    run_id = "run-shadow-write-refused"
+    primary_session = primary / "docs" / "tmp" / "done-session"
+    source = _seed_run_manifest(
+        worktree, run_id, marker_name(now), root_digest(worktree), now
+    )
+    shadow = _migrate_pre_finalize_manifest(source, primary_session)
+    shadow_before = shadow.read_bytes()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(worktree))
+    primary_session.chmod(0o555)
+    try:
+        rc = lib.main(["finalize-manifest", "--run-id", run_id])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "marked complete in" in captured.out
+        assert "cannot write" in captured.err
+        assert "no partial write" in captured.err
+        assert shadow.read_bytes() == shadow_before
+        assert not (primary_session / f"run-manifest-{run_id}.json.tmp").exists()
+    finally:
+        primary_session.chmod(0o755)
+
+
+# --------------------------------------------------------------------------- #
 # Plan: docs/history/plans/2026-10-12-done-interrupted-manifest-state-
 # classification.md Task 1: the canonical run-boundary classifier
 # (classify_run_boundary), derived only through the existing RunManifest parse

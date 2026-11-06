@@ -8,6 +8,7 @@
 - **Cluster:** docs/history/backlog/2026-10-22-claim-lifecycle-disposition-attribution-wording.md
 - **Cluster:** docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md (same PLAN-PROMPTS contract surface; this row owns a narrower freeze-rule placement citation residual, that row owns loss of the shared rules block)
 - **Cluster:** docs/history/backlog/2026-10-22-reverse-squash-guard-backlog-root-resolution-narrowing.md
+- **Cluster:** docs/history/backlog/2026-11-06-authoring-payload-raced-pick-stand-down.md (same authoring-claim contract surface; that row owns the missing raced-pick continuation arm, this row owns citation and placement residuals)
 
 Items (each independently foldable; one landing may carry several):
 1. `agents/skills/maintenance/guards.md:16` still points the authoring payload's claim duty at `agents/skills/maintenance/prompt-templates.md`, which has held no AUTHORING CLAIM copy since the 2026-10-10 re-homing to `template-authoring.md`.

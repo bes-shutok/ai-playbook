@@ -24,3 +24,9 @@ Throughput
 - Evidenced completions in window: execution landings 2 (java-guideline rule 27 squash 9763a98ad; plan-authoring-branch-manifest-handoff squash eee052601, target plan archived this turn), authoring completions 1 (done-writer-adoption-guards plan at the plans root, certification oracle pass), audit dispatches 1 (deferred-retriage idle child offpeak-b79324e8, queued).
 - Error/park proxy: entries with failed outcome or parked recovery in window: 0 read this turn; standing turn_error names the persistent interrupted-manifest refused head 20261025T194856Z-75b095a82a7d (deliverables witness failed); pending_dispatch null; pending_rearm null.
 - Queue depth: ready prompt-log entries log:4 EXEC + 9 PLAN (1 frozen), plan-uncovered open backlog items 107, open top-level plans 21 (post-landing; live counts at report time).
+
+## 2026-11-06 review-metrics run 20261106T212251 (weekly rider)
+
+- Source: `~/.ai-playbook/review-telemetry/reports/review-metrics-20261106T212251.md`; 988 loops, 969 sidecars in the legacy bucket, 21 cap closures (0.02 share).
+- Ready rate per round: r1 0.20, r2 0.25, r3 0.23, r4 0.18, r5 0.14, decaying to 0.01 by r20. Findings fell from 5,205 at r1 to 27 at r20.
+- Complexity bands: small 46 loops (cap share 0.00, r1 ready 0.46); medium 227 (0.01, 0.26); large 371 (0.05, 0.14); unknown 344 (0.00, 0.18; includes legacy bucket).

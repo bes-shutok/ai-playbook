@@ -1,5 +1,7 @@
 # Plan: Certification Gates Report All Violations in One Exit
 
+Executed: yes (385bebf19)
+
 Authoring claim: 2026-11-03-certification-gates-sequential-reporting-churn.md (session sess_da6fb9e7-3b0e-4bce-a6c6-d6984827a07a)
 
 Backlog origin: docs/history/backlog/2026-11-03-certification-gates-sequential-reporting-churn.md
@@ -139,19 +141,19 @@ Primary class anchors:
 - `evaluate_readiness` in `scripts/plan_readiness.py`
 - `run_pre_round` in `scripts/plan_readiness.py`
 
-- [ ] Full enumeration witness: given a plan fixture violating at least three independent readiness checks, expects one `evaluate_readiness` call returning every violation with each check's evidence in the reason channel, not only the first [class: REPOSITORY_TEST]
-- [ ] Shared-gate widening witness: given a record whose sidecar validation produces multiple errors, expects every error line present in the readiness report with each error routed through the existing family classifier, instead of only the first element [class: REPOSITORY_TEST]
-- [ ] Pre-round full-problem witness: given a plan violating several pre-round probes, expects one `run_pre_round` invocation printing every probe failure and exiting 1 once [class: REPOSITORY_TEST]
-- [ ] CLI full-report witness: given the multi-violation fixture driven through the main entry, expects each planted violation's evidence substring in the captured stderr with the `OUTCOME: fail` tail intact [class: REPOSITORY_TEST]
-- [ ] Fence-suppression safety witness: given a plan with an unbalanced fence plus plantable later-probe violations, expects only the fence reason plus explicit skip notes naming the suppressed probes at one exit 1, never probe output derived from truncated text and never an exception escape [class: REPOSITORY_TEST]
-- [ ] Indeterminate-exclusivity witness: given an indeterminate graded condition plus an independent deterministic violation, expects exit 2 with the indeterminate prefix at position 0 of the reason, mirroring the done sweep's indeterminate-dominates rule [class: REPOSITORY_TEST]
-- [ ] Exit-vocabulary stability witness: given a violation-free plan, expects the existing pass path unchanged; given an indeterminate condition alone, expects exit 2 unchanged [class: REPOSITORY_TEST]
-- [ ] RED: run `scripts/test_plan_readiness.py` and observe the new enumeration, suppression, and exclusivity witnesses fail against the first-failure implementation [class: REPOSITORY_TEST]
-- [ ] Implement the accumulation: collect each independently computable check's problem in gate order into the reason channel, render the full set in the `readiness FAILED:` output and the pre-round report, and route every sidecar error through the family classifier; prerequisite gates (operand resolution, fence balance, sidecar readability, plan-byte decode) stay stop-further-descending checks that contribute their reason with explicit skip notes for suppressed dependents [class: IMPLEMENTATION_REQUIRED]
-- [ ] Implement the accumulation invariants: an indeterminate problem never aggregates and renders as the sole reason with the prefix at position 0; refresh the reason-semantic docstrings (the module docstring's exit-contract sentence, `evaluate_readiness`'s, and `run_pre_round`'s) to the enumerated semantics, leaving `check_review_name`'s first-failure sentence unchanged; every check's condition and every verdict stays identical [class: IMPLEMENTATION_REQUIRED]
-- [ ] Rewrite the first-error legacy pin: update the coexistence test that asserts exactly the `errors[0]` family so it asserts every routed family appears in the accumulated reason while the per-family classifier keeps its mapping coverage [class: REPOSITORY_TEST]
-- [ ] GREEN: `scripts/test_plan_readiness.py` and the readiness embedded selftest pass, including the new witnesses; legacy expectations stay unchanged except the named first-error pin, which the rewrite item updates [class: REPOSITORY_TEST]
-- [ ] Commit: `scripts: readiness gate reports every failed condition in one pass` [class: IMPLEMENTATION_REQUIRED]
+- [x] Full enumeration witness: given a plan fixture violating at least three independent readiness checks, expects one `evaluate_readiness` call returning every violation with each check's evidence in the reason channel, not only the first [class: REPOSITORY_TEST]
+- [x] Shared-gate widening witness: given a record whose sidecar validation produces multiple errors, expects every error line present in the readiness report with each error routed through the existing family classifier, instead of only the first element [class: REPOSITORY_TEST]
+- [x] Pre-round full-problem witness: given a plan violating several pre-round probes, expects one `run_pre_round` invocation printing every probe failure and exiting 1 once [class: REPOSITORY_TEST]
+- [x] CLI full-report witness: given the multi-violation fixture driven through the main entry, expects each planted violation's evidence substring in the captured stderr with the `OUTCOME: fail` tail intact [class: REPOSITORY_TEST]
+- [x] Fence-suppression safety witness: given a plan with an unbalanced fence plus plantable later-probe violations, expects only the fence reason plus explicit skip notes naming the suppressed probes at one exit 1, never probe output derived from truncated text and never an exception escape [class: REPOSITORY_TEST]
+- [x] Indeterminate-exclusivity witness: given an indeterminate graded condition plus an independent deterministic violation, expects exit 2 with the indeterminate prefix at position 0 of the reason, mirroring the done sweep's indeterminate-dominates rule [class: REPOSITORY_TEST]
+- [x] Exit-vocabulary stability witness: given a violation-free plan, expects the existing pass path unchanged; given an indeterminate condition alone, expects exit 2 unchanged [class: REPOSITORY_TEST]
+- [x] RED: run `scripts/test_plan_readiness.py` and observe the new enumeration, suppression, and exclusivity witnesses fail against the first-failure implementation [class: REPOSITORY_TEST]
+- [x] Implement the accumulation: collect each independently computable check's problem in gate order into the reason channel, render the full set in the `readiness FAILED:` output and the pre-round report, and route every sidecar error through the family classifier; prerequisite gates (operand resolution, fence balance, sidecar readability, plan-byte decode) stay stop-further-descending checks that contribute their reason with explicit skip notes for suppressed dependents [class: IMPLEMENTATION_REQUIRED]
+- [x] Implement the accumulation invariants: an indeterminate problem never aggregates and renders as the sole reason with the prefix at position 0; refresh the reason-semantic docstrings (the module docstring's exit-contract sentence, `evaluate_readiness`'s, and `run_pre_round`'s) to the enumerated semantics, leaving `check_review_name`'s first-failure sentence unchanged; every check's condition and every verdict stays identical [class: IMPLEMENTATION_REQUIRED]
+- [x] Rewrite the first-error legacy pin: update the coexistence test that asserts exactly the `errors[0]` family so it asserts every routed family appears in the accumulated reason while the per-family classifier keeps its mapping coverage [class: REPOSITORY_TEST]
+- [x] GREEN: `scripts/test_plan_readiness.py` and the readiness embedded selftest pass, including the new witnesses; legacy expectations stay unchanged except the named first-error pin, which the rewrite item updates [class: REPOSITORY_TEST]
+- [x] Commit: `scripts: readiness gate reports every failed condition in one pass` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Staging validator names each cascade-suppressed dependent diagnostic
 
@@ -165,13 +167,13 @@ Primary class anchors:
 - `validate_staging_file` in `scripts/validate_review_staging.py`
 - `_validate_stats_sidecar_gates` in `scripts/validate_review_staging.py`
 
-- [ ] Skip-note witness: given a record whose sidecar prerequisite data is malformed, expects the owning gate's error accompanied by explicit skip notes naming each cascade-suppressed dependent diagnostic, never silent suppression and never an exception escape [class: REPOSITORY_TEST]
-- [ ] Emission-order stability witness: given a fully valid record and a record whose errors are all independently evaluable, expects outputs shaped as today with the frozen emission order preserved, the skip notes adding lines only where a suppression actually occurred [class: REPOSITORY_TEST]
-- [ ] Soft-mode compatibility witness: given the soft-mode invocation and a single-violation record, expects the current output shape and exit codes unchanged [class: REPOSITORY_TEST]
-- [ ] RED: run `scripts/test_step31_record_validation_gate.py` and observe the skip-note witness fail against the silent suppression [class: REPOSITORY_TEST]
-- [ ] Implement the skip notes: at the sidecar-gate chain's dependency sequencing point and the self-heal chain walk's first-refusal stop, render one explicit skip note naming each suppressed dependent diagnostic beside the owning gate's ERROR line as a WARN-line warning on the warnings channel, never an errors-list entry, so every embedded selftest pin stays green; the suppression itself, the gate set, the frozen emission order, and every verdict stay identical [class: IMPLEMENTATION_REQUIRED]
-- [ ] GREEN: the staging gate suite, the readiness suite, and both embedded selftests pass with the frozen emission-order pin and legacy expectations unchanged [class: REPOSITORY_TEST]
-- [ ] Commit: `scripts: staging validator names cascade-suppressed diagnostics in skip notes` [class: IMPLEMENTATION_REQUIRED]
+- [x] Skip-note witness: given a record whose sidecar prerequisite data is malformed, expects the owning gate's error accompanied by explicit skip notes naming each cascade-suppressed dependent diagnostic, never silent suppression and never an exception escape [class: REPOSITORY_TEST]
+- [x] Emission-order stability witness: given a fully valid record and a record whose errors are all independently evaluable, expects outputs shaped as today with the frozen emission order preserved, the skip notes adding lines only where a suppression actually occurred [class: REPOSITORY_TEST]
+- [x] Soft-mode compatibility witness: given the soft-mode invocation and a single-violation record, expects the current output shape and exit codes unchanged [class: REPOSITORY_TEST]
+- [x] RED: run `scripts/test_step31_record_validation_gate.py` and observe the skip-note witness fail against the silent suppression [class: REPOSITORY_TEST]
+- [x] Implement the skip notes: at the sidecar-gate chain's dependency sequencing point and the self-heal chain walk's first-refusal stop, render one explicit skip note naming each suppressed dependent diagnostic beside the owning gate's ERROR line as a WARN-line warning on the warnings channel, never an errors-list entry, so every embedded selftest pin stays green; the suppression itself, the gate set, the frozen emission order, and every verdict stay identical [class: IMPLEMENTATION_REQUIRED]
+- [x] GREEN: the staging gate suite, the readiness suite, and both embedded selftests pass with the frozen emission-order pin and legacy expectations unchanged [class: REPOSITORY_TEST]
+- [x] Commit: `scripts: staging validator names cascade-suppressed diagnostics in skip notes` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Refusal contract naming and byte-cap enumeration
 
@@ -191,15 +193,15 @@ Primary class anchors:
 - `validate_discarded_findings` in `scripts/validate_review_staging.py`
 - `evidence_criterion_ids` in `scripts/runtime_capabilities.py`
 
-- [ ] Run-id accepted-form witness: given a later round whose run_id differs from r1's, expects the refusal to state that r1's run_id carries forward unchanged beside the existing rejection, the original sentence kept byte-identical as its prefix [class: REPOSITORY_TEST]
-- [ ] Discard-code accepted-set witness: given a discard reason outside the accepted set, expects the unknown-discard-code warning to list the accepted codes, the warning class and the passing verdict unchanged [class: REPOSITORY_TEST]
-- [ ] Filename-pattern witness: given a record whose sidecar declares extensions.plan_identity while its filename lacks the identity token, validated with --source-plan set, expects the refusal to name the required identity-qualified filename shape [class: REPOSITORY_TEST]
-- [ ] Byte-cap wrapped-refusal witness: given a plan with two criteria over the 512-byte cap driven through the pre-round path, expects one wrapped refusal naming both over-cap items with their sizes, the bare needle kept byte-identical as its prefix [class: REPOSITORY_TEST]
-- [ ] RED: run the three pinned suites and observe the accepted-form, warning-set, and enumeration witnesses fail against the current refusal texts and first-offender wrapper [class: REPOSITORY_TEST]
-- [ ] Implement the naming: prefix-extend the run-id and filename refusal messages with their accepted forms and extend the discard warning with the accepted code set, keeping each existing needle byte-identical as the prefix and each message a deterministic function of its inputs [class: IMPLEMENTATION_REQUIRED]
-- [ ] Implement the byte-cap enumeration: enumerate every over-cap item with its size in the byte-cap check and widen the evidence-limit wrapper to name every over-cap item instead of the first offender; refusal classes, warning classes, verdicts, and exit codes unchanged [class: IMPLEMENTATION_REQUIRED]
-- [ ] GREEN: the three pinned suites, both embedded selftests, and the maintenance pins battery pass with legacy expectations unchanged [class: REPOSITORY_TEST]
-- [ ] Commit: `scripts: record-shape refusals name their accepted forms` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run-id accepted-form witness: given a later round whose run_id differs from r1's, expects the refusal to state that r1's run_id carries forward unchanged beside the existing rejection, the original sentence kept byte-identical as its prefix [class: REPOSITORY_TEST]
+- [x] Discard-code accepted-set witness: given a discard reason outside the accepted set, expects the unknown-discard-code warning to list the accepted codes, the warning class and the passing verdict unchanged [class: REPOSITORY_TEST]
+- [x] Filename-pattern witness: given a record whose sidecar declares extensions.plan_identity while its filename lacks the identity token, validated with --source-plan set, expects the refusal to name the required identity-qualified filename shape [class: REPOSITORY_TEST]
+- [x] Byte-cap wrapped-refusal witness: given a plan with two criteria over the 512-byte cap driven through the pre-round path, expects one wrapped refusal naming both over-cap items with their sizes, the bare needle kept byte-identical as its prefix [class: REPOSITORY_TEST]
+- [x] RED: run the three pinned suites and observe the accepted-form, warning-set, and enumeration witnesses fail against the current refusal texts and first-offender wrapper [class: REPOSITORY_TEST]
+- [x] Implement the naming: prefix-extend the run-id and filename refusal messages with their accepted forms and extend the discard warning with the accepted code set, keeping each existing needle byte-identical as the prefix and each message a deterministic function of its inputs [class: IMPLEMENTATION_REQUIRED]
+- [x] Implement the byte-cap enumeration: enumerate every over-cap item with its size in the byte-cap check and widen the evidence-limit wrapper to name every over-cap item instead of the first offender; refusal classes, warning classes, verdicts, and exit codes unchanged [class: IMPLEMENTATION_REQUIRED]
+- [x] GREEN: the three pinned suites, both embedded selftests, and the maintenance pins battery pass with legacy expectations unchanged [class: REPOSITORY_TEST]
+- [x] Commit: `scripts: record-shape refusals name their accepted forms` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 4: Authoring preflight duty covers every pinned validation command
 
@@ -215,8 +217,18 @@ Prescribed landing snippets (the Validation Commands pins audit these spans; the
 - `agents/skills/plans/validation-authoring-rules.md` rule 29's opening sentence is replaced by: "Run every pinned validation command in the plan's own Validation Commands block over the plan bytes before the first review round:" with the existing mechanical-gate list introduced as members of that set, and the rule's exit-1 clause reads "the enumerated violation report on stderr" instead of "the first structural failure on stderr".
 - `agents/skills/plans/SKILL.md`'s readiness-verdict sentence reads "naming every failed condition" where it reads "naming the first failed condition" today.
 
-- [ ] Preflight duty pointer: land the SKILL.md pointer sentence byte-identical to the prescribed snippet, adding no other operative restatement of the duty [class: IMPLEMENTATION_REQUIRED]
-- [ ] Rule 29 widening and narrowing-word deletion: land the replacement opening sentence and the exit-1 wording byte-identical to the prescribed snippets, deleting the superseded "cheap mechanical format gates" scoping in the same edit [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verdict-sentence widening: land the readiness-verdict sentence edit byte-identical to the prescribed snippet [class: IMPLEMENTATION_REQUIRED]
-- [ ] GREEN: the Validation Commands block's target-state pins for the two widened sentences and the pointer pass, the superseded-wording negation pin flips to its pass polarity, and the em-dash and hygiene scans stay green over the touched skill text [class: REPOSITORY_TEST]
-- [ ] Commit: `plans: authoring preflight duty covers every pinned validation command` [class: IMPLEMENTATION_REQUIRED]
+- [x] Preflight duty pointer: land the SKILL.md pointer sentence byte-identical to the prescribed snippet, adding no other operative restatement of the duty [class: IMPLEMENTATION_REQUIRED]
+- [x] Rule 29 widening and narrowing-word deletion: land the replacement opening sentence and the exit-1 wording byte-identical to the prescribed snippets, deleting the superseded "cheap mechanical format gates" scoping in the same edit [class: IMPLEMENTATION_REQUIRED]
+- [x] Verdict-sentence widening: land the readiness-verdict sentence edit byte-identical to the prescribed snippet [class: IMPLEMENTATION_REQUIRED]
+- [x] GREEN: the Validation Commands block's target-state pins for the two widened sentences and the pointer pass, the superseded-wording negation pin flips to its pass polarity, and the em-dash and hygiene scans stay green over the touched skill text [class: REPOSITORY_TEST]
+- [x] Commit: `plans: authoring preflight duty covers every pinned validation command` [class: IMPLEMENTATION_REQUIRED]
+
+## Execution record
+
+Executed 2026-11-06 by sess_9bd4deb5-c924-4ff4-ac22-e5506e64d056 (zcode runtime) via stale-claim takeover: the original execution run (codex session 01a1acdb, claim updated 2026-11-05T23:42:20Z, no run manifest, no marked checkboxes) had landed all four task commits on the registered branch (2026-11-05-certification-gates-full-reporting) before going silent; the takeover adopted the registered worktree and branch unchanged, re-verified every pinned Validation Command green (readiness, staging-gate, runtime-capabilities suites; both embedded selftests; maintenance pins battery; em-dash and hygiene scans; pre-round gate; the five Task 4 target-state pins), marked the checkboxes, and proceeds to Phase 3 review. The RED-step observations were performed by the original run per its commit sequence (each task commit pairs its witnesses with the implementation).
+
+Phase 3 (2026-11-06): exec r1 fresh-adversarial two-lens panel returned zero blocking findings (record .ai-playbook/reviews/2026-11-06-plan-review-certification-gates-full-violation-reporting-exec-r1{.md,.stats.json}); address round 16b8f5efc fixed the Low items (comment stub, exit-1 fence pins, migrate-skeleton row closure) and deferred two Mediums to durable rows. Scoping decision (skip notes): the notes name within-gate suppressions only; the four caller-side sidecar-dependent consumers are named in the deferred scope row, not the tuples. The exclusivity witness's RED claim is scoped to the enumeration/suppression witnesses; the mixed-input exclusivity witness is the deferred row's deliverable.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-03-certification-gates-sequential-reporting-churn.md (covered origin): deleted at this execution landing; the plan's four tasks discharged the reporting defect family the row captured (readiness/staging full-violation enumeration, refusal contract naming, authoring preflight widening); two non-blocking review residuals were re-filed as their own rows (2026-11-06-readiness-indeterminate-mixed-input-witness.md, 2026-11-06-staging-skip-note-scope-caller-side-consumers.md) and the invocation-telemetry baseline red as 2026-11-06-invocation-telemetry-finalize-pin-recapture.md; the migrate-skeleton stdout-assertion row was closed in-run by the branch's 0f198bff3 fix.

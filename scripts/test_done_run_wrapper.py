@@ -4188,10 +4188,12 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
 class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     """Task 4 repository tests: the finalize subcommand's release ceremony."""
 
-    def run_finalize(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    def run_finalize(
+        self, *args: str, env: dict | None = None, cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["bash", str(RUNNER), "finalize", *args],
-            cwd=str(self.fixture),
+            cwd=str(cwd or self.fixture),
             env=env or self.runner_env(),
             capture_output=True,
             text=True,
@@ -4449,8 +4451,9 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertIn("LANDING DEFERRED", proc.stderr)
         self.assertIn("peer-landing-span", proc.stderr)
         self.assertIn(
-            "re-run finalize or the landing helper's land-worktree mode "
-            "after the lock frees", proc.stderr,
+            f"re-run the bound finalize (finalize --run-id {run_id}) or "
+            "the landing helper's land-worktree mode after the lock frees",
+            proc.stderr,
         )
         self.assertIn(f"the branch tip is {landing}", proc.stderr)
         self.assertIn("complete marking withheld", proc.stdout)
@@ -4503,6 +4506,11 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(acq.returncode, 0, acq.stderr)
         resume_env = self.runner_env()
         resume_env.update(self.eval_exports(acq.stdout))
+        # The resume re-run re-derives its binding: the agreeing DONE_RUN_ID
+        # export (plan docs/history/plans/2026-11-02-done-finalize-resume-
+        # marking-honesty.md Task 2) — the fresh hold's lock exports alone
+        # are never binding evidence.
+        resume_env["DONE_RUN_ID"] = run_id
         second = self.run_finalize(env=resume_env)
         self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
         self.assertNotIn("LANDING DEFERRED", second.stderr)
@@ -4676,6 +4684,14 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         proc = self.run_finalize("--guard-firing", firing, env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("the complete marking above predates this ledger line", proc.stderr)
+        # The second LANDING DEFERRED string's bound-form tail (Task 2's
+        # documentation witness; the 2026-11-05 task-2 review's N3).
+        self.assertIn(
+            "re-run the bound finalize (finalize --run-id " + run_id
+            + ") or the landing helper's land-worktree mode after the "
+            "squash lands",
+            proc.stderr,
+        )
         self.assertIn("branch_commit=", proc.stdout)
         self.assertIn("squash pending", proc.stdout)
         self.assertNotIn("landing_commit=", proc.stdout)
@@ -4749,6 +4765,11 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         lost_env = self.runner_env()
         for var in ("DONE_LOCK_DIR", "DONE_LOCK_TOKEN", "MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN"):
             lost_env.pop(var, None)
+        # The env-lost re-run keeps its run binding through the agreeing
+        # DONE_RUN_ID export (plan docs/history/plans/2026-11-02-done-
+        # finalize-resume-marking-honesty.md Task 2); the lock exports are
+        # absent either way and never bind.
+        lost_env["DONE_RUN_ID"] = run_id
         proc = self.run_finalize("--from-holder", env=lost_env)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("from-holder", proc.stdout + proc.stderr)
@@ -4756,6 +4777,21 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.assertIn(": free", self.lock_status(merge=True))
         record = self.manifest_record(exports)
         self.assertTrue(record.get("complete", False))
+        # The unbound-resolution refusal composition (Task 2): the same
+        # env-lost re-run without any binding evidence refuses fail-loud,
+        # leaves the completed record untouched, and still runs the releases
+        # over the already-free locks.
+        unbound = self.run_finalize(env=self.runner_env())
+        self.assertNotEqual(unbound.returncode, 0)
+        self.assertIn("unbound-resolution refusal", unbound.stderr)
+        self.assertEqual(
+            self.finalization_lines(unbound),
+            ["done_run finalize: finalization: run_id=unbound marking=refused"],
+        )
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+        self.assertIn("done lock status: free", unbound.stdout)
+        self.assertTrue(self.manifest_record(exports).get("complete", False))
 
     def test_finalize_reports_missing_review_records_report_only(self) -> None:
         self.init_fixture_repo()
@@ -5220,6 +5256,1375 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # The real lock released anyway: the append failure is warning-only.
         self.assertIn(": free", self.lock_status())
         self.assertIn("done lock status: free", proc.stdout)
+
+    # ---- finalization-state line (plan
+    #      docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md
+    #      Task 1): every exit that reaches the exit assembly prints exactly
+    #      one `finalization: run_id=<id or none> marking=<...>` line whose
+    #      value matches the classification the FAILED routing consumes; the
+    #      resume duty rides the existing LANDING DEFERRED / do-not-rerun
+    #      advice beside it, and the failed arm names the re-run form. ---- #
+
+    def finalization_lines(self, proc: subprocess.CompletedProcess) -> list[str]:
+        return [
+            line for line in (proc.stdout + proc.stderr).splitlines()
+            if line.startswith("done_run finalize: finalization: run_id=")
+        ]
+
+    def test_finalize_state_line_reports_applied_on_bound_success(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-applied")
+        run_id = exports["DONE_RUN_ID"]
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("marked complete in", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_state_line_reports_already_complete_on_release_only_retry(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-already")
+        run_id = exports["DONE_RUN_ID"]
+        # A completed manifest: this invocation applies nothing, so the line
+        # names the already-complete outcome (a release-only retry).
+        self.rewrite_manifest(Path(exports["DONE_RUN_MANIFEST"]), complete=True)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("already complete; nothing to do", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                f"done_run finalize: finalization: run_id={run_id} "
+                "marking=already-complete"
+            ],
+        )
+
+    def test_finalize_state_line_reports_withheld_besides_deferred_lines(self) -> None:
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "state-withheld")
+        run_id = exports["DONE_RUN_ID"]
+        # A run-branch landing commit the squash never carried to the base.
+        self.git("checkout", "-qb", "run/state-withheld")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(run_id, landing)
+        self.make_checkpoint(run_id)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The line composes beside the existing loud deferral, never replaces
+        # it; the deferral's re-run form names the bound form (Task 2).
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(
+            f"re-run the bound finalize (finalize --run-id {run_id}) or "
+            "the landing helper's land-worktree mode",
+            proc.stderr,
+        )
+        self.assertIn("complete marking withheld", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=withheld"],
+        )
+        self.assertFalse(self.manifest_record(exports).get("complete", False))
+
+    def test_finalize_state_line_reports_refused_beside_do_not_rerun_advice(self) -> None:
+        # Release failure after a refused marking: the line's value matches
+        # the classification the FAILED advice carries, and the existing
+        # do-not-rerun advice stays the refused arm's duty.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-refused")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.rewrite_manifest(
+            manifest, repo_root=hashlib.sha256(b"/elsewhere/repo").hexdigest(),
+        )
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("run-manifest identity mismatch", proc.stdout)
+        self.assert_held_done_lock(proc)
+        self.assertIn(
+            "the finalize above refused this manifest's identity", proc.stderr,
+        )
+        self.assertIn("do not re-run finalize from the primary checkout", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                "done_run finalize: finalization: run_id="
+                f"{exports['DONE_RUN_ID']} marking=refused"
+            ],
+        )
+
+    def test_finalize_identity_refusal_free_lock_reports_exact_refused_line(self) -> None:
+        # The identity-refusal classification is lock-state-independent: with
+        # the setup hold already released (a free status), the state line
+        # still reads exactly `run_id=<id> marking=refused` — the refused
+        # value is keyed on the finalize's own refusal, never on lock state,
+        # and a re-keying of the refused value on the release outcome fails
+        # the exact-line equality. (A pure reordering of the emission is not
+        # caught here; the line's position is unwitnessed — r2 finding 3.)
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "identity-free")
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.rewrite_manifest(
+            manifest, repo_root=hashlib.sha256(b"/elsewhere/repo").hexdigest(),
+        )
+        self.release_setup_hold(exports)
+        # The agreeing DONE_RUN_ID export binds the run (the unbound refusal
+        # otherwise owns this env-lost shape before the finalize-manifest
+        # identity check ever runs); the released hold keeps the status free.
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("run-manifest identity mismatch", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                "done_run finalize: finalization: run_id="
+                f"{exports['DONE_RUN_ID']} marking=refused"
+            ],
+        )
+        # The release ran to free: the classification never waited on it.
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_state_line_reports_failed_and_names_rerun_duty(self) -> None:
+        # A non-identity finalize-manifest failure (the read-only-session
+        # fixture shape): marking=failed plus the concrete re-run duty.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-failed")
+        run_id = exports["DONE_RUN_ID"]
+        self.done_session().chmod(0o555)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("cannot rewrite the run manifest", proc.stdout)
+        self.assertNotIn("run-manifest identity mismatch", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=failed"],
+        )
+        self.assertIn(
+            "re-run finalize to retry the run manifest marking", proc.stderr,
+        )
+
+    def test_finalize_state_line_not_bound_lib_note_names_run_id_arg(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-libnote")
+        # The lib's no-run-manifest note: the --run-id arg names a record the
+        # session directory does not hold, so nothing was bound and the line
+        # names the argument with marking=not-bound, exit 0 preserved.
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize("--run-id", "ghost-run-id", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("no run manifest found for run_id ghost-run-id", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            ["done_run finalize: finalization: run_id=ghost-run-id marking=not-bound"],
+        )
+
+    def test_finalize_state_line_not_bound_resolves_nothing_exit_zero(self) -> None:
+        # The resolves-nothing resolution (an empty done-session directory):
+        # run_id=none, marking=not-bound, exit 0 preserved.
+        self.init_fixture_repo()
+        proc = self.run_finalize()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("no run manifest from setup", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            ["done_run finalize: finalization: run_id=none marking=not-bound"],
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+
+    def test_finalize_state_line_release_failure_preserves_applied_marking(self) -> None:
+        # Release failure over an applied marking: the marking value stands
+        # beside the release-failure FAILED advice with the non-zero exit
+        # preserved.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-rlfail-applied")
+        run_id = exports["DONE_RUN_ID"]
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("done-lock release refused", proc.stderr)
+        self.assertIn("release-only retry", proc.stderr)
+        self.assertTrue(self.manifest_record(exports).get("complete", False))
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_state_line_release_failure_preserves_already_complete(self) -> None:
+        # Release failure over an already-complete marking: the marking value
+        # stands beside the release-failure FAILED advice with the non-zero
+        # exit preserved.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-rlfail-already")
+        run_id = exports["DONE_RUN_ID"]
+        self.rewrite_manifest(Path(exports["DONE_RUN_MANIFEST"]), complete=True)
+        proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("already complete; nothing to do", proc.stdout)
+        self.assertIn("release-only retry", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                f"done_run finalize: finalization: run_id={run_id} "
+                "marking=already-complete"
+            ],
+        )
+
+    def test_finalize_state_line_sanitizes_hostile_run_id_arg(self) -> None:
+        # A hostile --run-id drives the emission through the sanitizer
+        # (newline/CR/tab flattened first, class substitution, the 64-byte
+        # cap): the state line stays exactly one line, so a raw-echo
+        # regression (an embedded newline forging a second finalization line,
+        # a metacharacter smuggled into the output) fails the list equality.
+        # The expected form is derived from the real tr/sed/cut pipeline, not
+        # restated from the sanitizer's comment.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "state-hostile")
+        hostile = (
+            "a\nb\tc\rd e|f;g`h$i'j\"k(l)m&n*o+p,q.r-s" + "Z" * 70
+        )
+        expected = (
+            "a-b-c-d?e?f?g?h?i?j?k?l?m?n?o?p?q.r-s" + "Z" * 27
+        )
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize("--run-id", hostile, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("no run manifest found for run_id", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                "done_run finalize: finalization: "
+                f"run_id={expected} marking=not-bound"
+            ],
+        )
+
+    def test_finalize_landing_deferred_advice_sanitizes_hostile_run_id(self) -> None:
+        # The second emission surface: the LANDING DEFERRED re-run advice
+        # interpolates the bound run id through the same sanitizer
+        # (finalize_bound_advice_id), so a hostile --run-id cannot forge a
+        # second advice line or smuggle metacharacters into the re-run form.
+        self.init_fixture_repo()
+        self.facts_with_base_branch()
+        setup_proc, exports = self.setup_session("--label", "deferred-hostile")
+        # No newline/CR/tab: the hostile bytes must survive as a single-line
+        # ledger filename for the withholding arm to key on.
+        hostile = "a b|c;d$e%f^g&h*i(j)k" + "Z" * 70
+        expected = "a?b?c?d?e?f?g?h?i?j?k" + "Z" * 43
+        self.git("checkout", "-qb", "run/deferred-hostile")
+        (self.fixture / "work.txt").write_text("work\n")
+        self.git("add", "work.txt")
+        self.git("commit", "-qm", "run work")
+        landing = self.git("rev-parse", "HEAD").stdout.strip()
+        self.write_ledger(hostile, landing)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize("--run-id", hostile, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn(
+            f"re-run the bound finalize (finalize --run-id {expected}) or "
+            "the landing helper's land-worktree mode",
+            proc.stderr,
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                "done_run finalize: finalization: "
+                f"run_id={expected} marking=withheld"
+            ],
+        )
+
+    # ---- unbound-resolution refusal (plan
+    #      docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md
+    #      Task 2): a resolution that selects a manifest without binding
+    #      evidence (an explicit --run-id, an explicit --manifest the
+    #      resolver bound, or a non-empty DONE_RUN_ID agreeing with the
+    #      selected manifest's run_id) refuses fail-loud before any
+    #      checkpoint or finalize-manifest mutation on both non-explicit
+    #      arms, names the re-derive-and-retry remedy without ever echoing
+    #      the resolved id, skips the guard-firing and report steps with
+    #      named warnings, and still runs the releases; lock exports are
+    #      never binding evidence. ---- #
+
+    PEER_ID = "20991231T235959Z-peer00000001"
+    # A peer id sorting BELOW a real run id (UTC stamp + hex suffix), so the
+    # newest-glob fallback selects the own record over this peer's.
+    LOW_PEER_ID = "19991231T235959Z-peer00000001"
+
+    def craft_confirmed_marker(self, name: str) -> Path:
+        """A root-confirmed run-start marker at an arbitrary name: the
+        content carries this fixture repo's root digest, so marker_confirms
+        accepts it and the newest-name selection picks it."""
+        top = self.git("rev-parse", "--show-toplevel").stdout.strip().rstrip("/")
+        digest = hashlib.sha256(top.encode()).hexdigest()
+        marker = self.done_session() / name
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f"{int(time.time())} {digest} 424242\n")
+        return marker
+
+    def release_setup_hold(self, exports: dict) -> None:
+        """Release the setup hold so an env-lost finalize's from-holder
+        release arm sees no hold and the release steps report free."""
+        released = self.lock_invocation("release-repo", extra_env=exports)
+        self.assertEqual(released.returncode, 0, released.stderr)
+
+    def assert_unbound_refusal_shape(
+        self, proc: subprocess.CompletedProcess,
+    ) -> None:
+        """The shared refusal witnesses: non-zero exit, the named refusal
+        with the re-derive-and-retry remedy (placeholder plus re-derive
+        sources), and the finalization-state line carrying
+        `run_id=unbound marking=refused`."""
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("unbound-resolution refusal", proc.stderr)
+        self.assertIn("done_run finalize --run-id <run_id>", proc.stderr)
+        self.assertIn("setup echo", proc.stderr)
+        self.assertIn("interrupted-manifest census", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            ["done_run finalize: finalization: run_id=unbound marking=refused"],
+        )
+
+    def test_finalize_unbound_marker_arm_refuses_and_never_echoes(self) -> None:
+        # The newest-confirmed-marker arm: a same-repo peer run whose
+        # confirmed marker is the newest. The env-lost finalize (no exports,
+        # no explicit args) must refuse instead of marking the peer record,
+        # and the marker-resolved peer run id appears nowhere in the output.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "unbound-marker")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        firing = "description-length:catch:fixture-evidence:run_id=unbound-probe"
+        proc = self.run_finalize("--guard-firing", firing, env=self.runner_env())
+        self.assert_unbound_refusal_shape(proc)
+        # Never-echo: the marker-resolved peer id appears nowhere.
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        # The steps under the refusal flag skip with their named warnings
+        # (the guard-firing append, the landing summary plus missing-review
+        # scan, and the landing-cost telemetry append).
+        self.assertIn("guard-liveness rows not appended", proc.stderr)
+        self.assertIn(
+            "re-append them with --guard-firing on a bound re-run", proc.stderr,
+        )
+        self.assertIn(
+            "the landing summary and the missing-review-record scan are "
+            "skipped", proc.stderr,
+        )
+        self.assertIn("re-report them on a bound finalize re-run", proc.stderr)
+        self.assertIn("landing-cost telemetry", proc.stderr)
+        self.assertNotIn("missing-review-record scan:", proc.stdout)
+        self.assertNotIn("landing summary:", proc.stdout)
+        # No checkpoint or finalize-manifest mutation on either record.
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertFalse(
+            (
+                self.done_session()
+                / f"run-checkpoint-{exports['DONE_RUN_ID']}.json"
+            ).exists()
+        )
+        # The releases still ran: the ceremony reached its status-free
+        # verification with both locks free.
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_unbound_fallback_arm_refuses_and_never_echoes(self) -> None:
+        # The newest-glob fallback arm: a peer record claiming the SAME
+        # active marker makes the selector refuse the ambiguity, and the
+        # fallback binds the newest canonical record. The env-lost finalize
+        # must refuse, and the fallback-resolved peer id appears nowhere.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "unbound-fallback")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        active_marker = json.loads(own_manifest.read_text())["marker"]
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=active_marker,
+        )
+        proc = self.run_finalize(env=self.runner_env())
+        self.assert_unbound_refusal_shape(proc)
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_unbound_refusal_with_held_lock_names_refusal_advice(self) -> None:
+        # Refusal plus failed release over a fallback-bound peer manifest
+        # that reads complete: the step-6 routing must take the
+        # refusal-specific advice (re-derive binding, then the bound form;
+        # the releases already ran), never the release-only-safe advice the
+        # complete peer manifest would otherwise earn.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "unbound-held")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        active_marker = json.loads(own_manifest.read_text())["marker"]
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=active_marker, complete=True,
+        )
+        # The held-lock shape without any run binding evidence: the real
+        # lock dir beside a deliberately wrong token (lock exports are never
+        # binding evidence) plus the pinned staleness clocks.
+        env = self.runner_env()
+        env["DONE_LOCK_DIR"] = exports["DONE_LOCK_DIR"]
+        env["DONE_LOCK_TOKEN"] = "0" * 64
+        env.update(self.held_lock_clock_env())
+        proc = self.run_finalize(env=env)
+        self.assert_unbound_refusal_shape(proc)
+        self.assert_held_done_lock(proc)
+        # The release invocation actually ran under the refusal flag: the
+        # release-refusal line prints only from the release's own non-zero
+        # rc, so a skip-the-release-under-the-flag regression fails here
+        # (status-derived hold evidence alone would stay green).
+        self.assertIn("done-lock release refused", proc.stderr)
+        self.assertIn("re-derive the binding", proc.stderr)
+        self.assertIn("already ran", proc.stderr)
+        self.assertNotIn("release-only retry", proc.stderr)
+        self.assertNotIn(
+            "do not re-run finalize from the primary checkout", proc.stderr,
+        )
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        # The refusal touched neither record.
+        self.assertTrue(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+
+    def test_finalize_manifest_only_binds_and_marks_the_named_manifest(self) -> None:
+        # A --manifest-only invocation with no other binding evidence marks
+        # the NAMED manifest: the explicit --manifest is wired through the
+        # resolver (canonical-name validation applies), so the newest-marker
+        # peer record is never bound or marked.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "manifest-bound")
+        own_id = exports["DONE_RUN_ID"]
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        proc = self.run_finalize(
+            "--manifest", str(own_manifest), env=self.runner_env(),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("marked complete in", proc.stdout)
+        self.assertTrue(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={own_id} marking=applied"],
+        )
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+
+    def test_finalize_manifest_resolver_rejected_falls_back_refuses(self) -> None:
+        # The equality arm's identity half: a --manifest the resolver REFUSES
+        # (named-but-absent) must never bind through the newest-glob fallback
+        # the failed resolution hands control to. The fallback selects the
+        # newest canonical record (a same-repo peer's); only equality with
+        # the resolver's verbatim explicit-arm echo binds it — a mere
+        # --manifest presence must not (the presence-only mutant marks the
+        # peer record and exits 0, so this case is RED on that mutant and
+        # GREEN on the real equality).
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "resolver-rejected")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        own_bytes = own_manifest.read_bytes()
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        peer_bytes = peer_manifest.read_bytes()
+        absent = (
+            Path(exports["DONE_RUN_MANIFEST"]).parent
+            / "run-manifest-20991231T235959Z-absent.json"
+        )
+        proc = self.run_finalize(
+            "--manifest", str(absent), env=self.runner_env(),
+        )
+        self.assert_unbound_refusal_shape(proc)
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        self.assertEqual(peer_manifest.read_bytes(), peer_bytes)
+        self.assertEqual(own_manifest.read_bytes(), own_bytes)
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_manifest_shadow_name_falls_back_unbound(self) -> None:
+        # The canonical-shape fence: a shadow-named copy sorts newest, the
+        # resolver's explicit arm refuses the name, and the newest-glob
+        # fallback selects that very file — the equality arm binds only a
+        # name passing the explicit arm's canonical-shape check
+        # (run-manifest-<dot-free id>.json), so the explicit arm's refusal is
+        # never overridable through the fallback and the peer record the
+        # shadow copies is never checkpointed or marked.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "shadow-name")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        own_bytes = own_manifest.read_bytes()
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        peer_bytes = peer_manifest.read_bytes()
+        # The shadow path carries the runner's own session-dir spelling, so
+        # the equality arm (not a path-spelling divergence) is the thing
+        # under test: git's toplevel and the test's tempfile root can spell
+        # the same directory differently (/var vs /private/var), and the
+        # witness must not pass on that accident.
+        shadow = (
+            Path(exports["DONE_RUN_MANIFEST"]).parent
+            / "run-manifest-zz.shadow-copy.json"
+        )
+        shadow.write_text(peer_manifest.read_text())
+        proc = self.run_finalize(
+            "--manifest", str(shadow), env=self.runner_env(),
+        )
+        self.assert_unbound_refusal_shape(proc)
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        self.assertEqual(peer_manifest.read_bytes(), peer_bytes)
+        self.assertEqual(own_manifest.read_bytes(), own_bytes)
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_agreement_clause_keys_line_and_marking_on_selection(self) -> None:
+        # Deterministic pin of the agreement-clause bound path: the state
+        # line and the marked manifest key on selected_run_id, the
+        # resolution the binding evidence validated. This case cannot
+        # witness the divergence re-key itself (the two resolutions cannot
+        # diverge hermetically; deleting the re-key branch leaves the whole
+        # suite green — r2 finding), so the re-key is wrapper-unwitnessed by
+        # construction; its discrimination evidence is the r1 risk probe's
+        # hook-based reproduction (peer marker flip between the two
+        # resolves), recorded in the r1 staging doc's F5 body. The explicit
+        # --run-id sole-evidence shape is exempt by design.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "agreement-rekey")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        checkpoint = self.make_checkpoint(exports["DONE_RUN_ID"])
+        self.release_setup_hold(exports)
+        env = self.runner_env()
+        env["DONE_RUN_ID"] = exports["DONE_RUN_ID"]
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        selected_run_id = json.loads(own_manifest.read_text())["run_id"]
+        self.assertEqual(selected_run_id, exports["DONE_RUN_ID"])
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                "done_run finalize: finalization: "
+                f"run_id={selected_run_id} marking=applied"
+            ],
+        )
+        # The marking landed in exactly run-manifest-<selected_run_id>.json.
+        self.assertTrue(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(checkpoint.exists())
+
+    def test_finalize_bound_fallback_marks_the_record_done_run_id_agrees_with(self) -> None:
+        # The bound side of the fallback arm (Task 2's binding-evidence
+        # predicate; the 2026-11-05 task-2 review's C1 composition): a peer
+        # record claiming the same active marker makes the selector refuse
+        # the ambiguity and the newest-glob fallback selects this run's OWN
+        # record (the low-sorted peer id sorts below it), whose run_id the
+        # non-empty DONE_RUN_ID export agrees with. The invocation is bound:
+        # it marks the record it bound and reports the real run id with
+        # marking=applied, never the false `run_id=none marking=not-bound`
+        # exit 0 over a resolution that selected a record.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "bound-fallback")
+        own_id = exports["DONE_RUN_ID"]
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        checkpoint = self.make_checkpoint(own_id)
+        self.release_setup_hold(exports)
+        active_marker = json.loads(own_manifest.read_text())["marker"]
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.LOW_PEER_ID, marker=active_marker,
+        )
+        env = self.runner_env()
+        env["DONE_RUN_ID"] = own_id
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn("no run manifest from setup", proc.stdout)
+        self.assertNotIn("marking=not-bound", proc.stdout + proc.stderr)
+        self.assertIn("marked complete in", proc.stdout)
+        self.assertTrue(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(checkpoint.exists())
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={own_id} marking=applied"],
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_unbound_marker_arm_refuses_disagreeing_done_run_id(self) -> None:
+        # The agreement clause of the binding-evidence predicate (Task 2;
+        # the 2026-11-05 task-2 review's T1 discrimination witness for the
+        # equality-dropped mutant): the env carries a non-empty DONE_RUN_ID
+        # that DISAGREES with the marker-arm-selected peer record's run_id,
+        # so nothing binds and the invocation refuses with the shared shape;
+        # the selected peer id is never echoed and neither record is
+        # mutated.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "disagreeing-id")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        env = self.runner_env()
+        env["DONE_RUN_ID"] = exports["DONE_RUN_ID"]
+        proc = self.run_finalize(env=env)
+        self.assert_unbound_refusal_shape(proc)
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_unbound_refusal_done_run_manifest_never_binds(self) -> None:
+        # DONE_RUN_MANIFEST never binds (Task 2's hint-only doctrine; the
+        # 2026-11-05 task-2 review's T1 discrimination witness for the
+        # DONE_RUN_MANIFEST-binds mutant): the env carries only the
+        # DONE_RUN_MANIFEST export (no DONE_RUN_ID) while a peer's confirmed
+        # marker is newest, so nothing ties the selected peer record to this
+        # run and the invocation refuses with the shared shape.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "manifest-hint-only")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        env = self.runner_env()
+        env["DONE_RUN_MANIFEST"] = str(own_manifest)
+        proc = self.run_finalize(env=env)
+        self.assert_unbound_refusal_shape(proc)
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_step6_advice_reads_the_marking_target_manifest(self) -> None:
+        # The step-6 completion read target (Task 2; the 2026-11-05 task-2
+        # review's T2 discrimination witness for the read-target-reverted
+        # mutant): the held-lock shape with explicit --run-id of the own run
+        # while a peer's confirmed marker is newest and the two records
+        # DIVERGE (own complete, peer incomplete). The status-not-free advice
+        # must derive from the OWN manifest's state (the marking target,
+        # run-manifest-<RUN_ID>.json): the release-only-safe advice, never
+        # the peer-derived full-retry advice.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "divergent-target")
+        own_id = exports["DONE_RUN_ID"]
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        # The peer record is crafted from the still-incomplete own record,
+        # then the own record diverges to complete: own is the marking
+        # target, the resolver-selected peer stays incomplete.
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        self.rewrite_manifest(own_manifest, complete=True)
+        env = self.runner_env()
+        env["DONE_LOCK_DIR"] = exports["DONE_LOCK_DIR"]
+        env["DONE_LOCK_TOKEN"] = "0" * 64
+        env.update(self.held_lock_clock_env())
+        proc = self.run_finalize("--run-id", own_id, env=env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assert_held_done_lock(proc)
+        self.assertIn("the run manifest is complete", proc.stderr)
+        self.assertIn("release-only retry", proc.stderr)
+        self.assertNotIn("NOT complete", proc.stderr)
+        self.assertNotIn("full finalize re-run", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [
+                f"done_run finalize: finalization: run_id={own_id} "
+                "marking=already-complete"
+            ],
+        )
+        # The peer record the resolver selected stays untouched.
+        self.assertFalse(
+            json.loads(peer_manifest.read_text()).get("complete", False)
+        )
+
+    # ---- Task 3 refusal witnesses (plan
+    #      docs/history/plans/2026-11-02-done-finalize-resume-marking-honesty.md
+    #      Task 3): born-GREEN caller-side witnesses over Task 2's
+    #      implementation: the bare env-lost invocation refuses through the
+    #      marker arm (the wrong-run hazard contained beyond the fallback),
+    #      the agreeing DONE_RUN_ID export keeps the legitimate fresh-shell
+    #      retry marking, and the explicit --run-id alone marks the own
+    #      record while a peer's confirmed marker is newest. ---- #
+
+    def test_finalize_env_lost_no_args_refuses_newest_peer_marker_arm(self) -> None:
+        # Safety witness: a shared done-session directory holding a same-repo
+        # peer run whose confirmed marker IS the newest confirmed marker. The
+        # env-lost finalize (no exports, no explicit args at all) refuses
+        # through the marker arm instead of marking the peer record — the
+        # wrong-run hazard is contained on the marker arm, not only the
+        # newest-glob fallback — and the peer manifest bytes stay untouched.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "safety-marker")
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        peer_bytes = peer_manifest.read_bytes()
+        proc = self.run_finalize(env=self.runner_env())
+        self.assert_unbound_refusal_shape(proc)
+        # Never-echo: the marker-resolved peer id appears nowhere.
+        self.assertNotIn(self.PEER_ID, proc.stdout + proc.stderr)
+        # Neither record was marked: the peer manifest is byte-identical.
+        self.assertEqual(peer_manifest.read_bytes(), peer_bytes)
+        self.assertFalse(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(
+            (self.done_session() / f"run-checkpoint-{self.PEER_ID}.json").exists()
+        )
+        # The releases still ran: both locks verify free.
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_agreeing_done_run_id_export_keeps_marker_arm_marking_applied(self) -> None:
+        # Keep-working witness: a fresh shell (a fresh done-lock hold's
+        # exports standing in for the resume session, the rerun-after-squash
+        # env shape) whose DONE_RUN_ID export agrees with the marker-arm-
+        # selected manifest's run_id stays bound: the marking proceeds
+        # unchanged with marking=applied and the checkpoint is consumed.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "keep-working")
+        own_id = exports["DONE_RUN_ID"]
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        checkpoint = self.make_checkpoint(own_id)
+        self.release_setup_hold(exports)
+        acq = self.lock_invocation("acquire", "--label", "resume-session")
+        self.assertEqual(acq.returncode, 0, acq.stderr)
+        env = self.runner_env()
+        env.update(self.eval_exports(acq.stdout))
+        env["DONE_RUN_ID"] = own_id
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("marked complete in", proc.stdout)
+        self.assertTrue(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertFalse(checkpoint.exists())
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={own_id} marking=applied"],
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def test_finalize_explicit_run_id_sole_evidence_marks_own_leaves_peer_bytes(self) -> None:
+        # Sole-evidence witness: an env-lost fresh shell (no exports) whose
+        # only binding evidence is the explicit --run-id of the own run,
+        # while a peer's confirmed marker is newest. The marking keys on
+        # --run-id: the own manifest is marked complete, the peer record the
+        # resolver selected stays byte-identical, and the line reports the
+        # own id with marking=applied.
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "sole-evidence")
+        own_id = exports["DONE_RUN_ID"]
+        own_manifest = Path(exports["DONE_RUN_MANIFEST"])
+        self.release_setup_hold(exports)
+        peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
+        peer_manifest = self.craft_manifest_file(
+            own_manifest, self.PEER_ID, marker=peer_marker.name,
+        )
+        peer_bytes = peer_manifest.read_bytes()
+        proc = self.run_finalize("--run-id", own_id, env=self.runner_env())
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("marked complete in", proc.stdout)
+        self.assertTrue(
+            json.loads(own_manifest.read_text()).get("complete", False)
+        )
+        self.assertEqual(peer_manifest.read_bytes(), peer_bytes)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={own_id} marking=applied"],
+        )
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    # ---- shadow propagation (plan
+    #      docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md
+    #      Task 2): the finalize leg propagates the finalized manifest bytes
+    #      into the primary checkout's surviving shadow record for the same
+    #      run-id. Every case below runs the real finalize subcommand,
+    #      worktree-dispatched through run_finalize's cwd parameter over the
+    #      existing hermetic fixture; the finalize's own exit semantics and
+    #      FAILED-line arms stay unchanged in every arm. ---- #
+
+    def primary_session(self) -> Path:
+        return self.fixture / "docs" / "tmp" / "done-session"
+
+    def wt_done_session(self, worktree: Path) -> Path:
+        return worktree / "docs" / "tmp" / "done-session"
+
+    def worktree_finalize_session(
+        self, *setup_args: str
+    ) -> tuple[Path, dict, dict]:
+        """An ad-hoc worktree beside the fixture primary with a setup
+        boundary run inside it; returns (worktree, exports, finalize env)
+        with the env keyed to the worktree the way a dispatched closeout
+        invokes the finalize subcommand inside it."""
+        worktree = self.tmp / "shadow-propagation-wt"
+        self.git("worktree", "add", "-b", "shadow-propagation-wt-branch", str(worktree))
+        (worktree / "seed.txt").write_text("seed\nwork\n", encoding="utf-8")
+        env = self.runner_env()
+        env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
+        setup = subprocess.run(
+            ["bash", str(RUNNER), "setup", *setup_args],
+            cwd=str(worktree), env=env, capture_output=True, text=True,
+            timeout=300,
+        )
+        self.assertEqual(setup.returncode, 0, setup.stderr)
+        exports = self.eval_exports(setup.stdout)
+        env = self.runner_env()
+        env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
+        env.update(exports)
+        return worktree, exports, env
+
+    def seed_primary_shadow(self, worktree: Path, run_id: str) -> Path:
+        """The closeout migration's manifest transfer shape: the worktree
+        run's pre-finalize manifest bytes copied verbatim into the primary
+        done-session directory under the same canonical filename."""
+        source = self.wt_done_session(worktree) / f"run-manifest-{run_id}.json"
+        self.primary_session().mkdir(parents=True, exist_ok=True)
+        shadow = self.primary_session() / source.name
+        shadow.write_bytes(source.read_bytes())
+        return shadow
+
+    def seed_transfer_witness(self, slug: str, run_id: str) -> Path:
+        """The closeout migration's transfer record: one verified migrated
+        row whose source names the run's done-session manifest, at the
+        canonical Phase 5 record home under the primary's facts tmp root."""
+        record_dir = self.fixture / "docs" / "tmp" / "execute-plan" / slug
+        record_dir.mkdir(parents=True, exist_ok=True)
+        record = record_dir / "closeout-migration.json"
+        record.write_text(
+            json.dumps(
+                {
+                    "branch": [],
+                    "migrated": [
+                        {
+                            "source": (
+                                f"docs/tmp/done-session/run-manifest-{run_id}.json"
+                            ),
+                            "destination": str(
+                                self.primary_session()
+                                / f"run-manifest-{run_id}.json"
+                            ),
+                            "verified": True,
+                        }
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return record
+
+    def worktree_root_digest(self, worktree: Path) -> str:
+        """The done Step 0 identity digest of the worktree root (the same
+        derivation the manifest's recorded repo_root carries)."""
+        return hashlib.sha256(
+            str(worktree.resolve()).rstrip("/").encode("utf-8")
+        ).hexdigest()
+
+    def git_shim_env(self, base_env: dict) -> dict:
+        """A PATH whose ``git`` refuses exactly ``worktree list`` and
+        delegates everything else to the real binary: the controlled input
+        that makes the finalize leg's primary resolution fail without
+        breaking any other git consumer of the finalize or the locks."""
+        real_git = shutil.which("git")
+        if not real_git:
+            raise AssertionError("no real git binary on PATH")
+        shim_dir = self.tmp / "git-shims"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        shim.write_text(
+            "#!/bin/bash\n"
+            "prev=''\n"
+            "for arg in \"$@\"; do\n"
+            "  if [ \"$prev\" = \"worktree\" ] && [ \"$arg\" = \"list\" ]; then\n"
+            "    echo 'git shim: worktree list refused (fixture)' >&2\n"
+            "    exit 1\n"
+            "  fi\n"
+            "  prev=\"$arg\"\n"
+            "done\n"
+            f"exec {shlex.quote(real_git)} \"$@\"\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env = dict(base_env)
+        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
+        return env
+
+    def test_finalize_propagates_finalized_bytes_to_primary_shadow(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-propagate"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        # The migrated shadow carries the strict pre-finalize shape the
+        # already-terminal guard keys on (the manifest schema always records
+        # the flag; pre-finalize it is false with no disposition record).
+        seeded = json.loads(shadow.read_text())
+        self.assertIs(False, seeded["complete"])
+        self.assertIsNone(seeded["dispositioned"])
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The source copy is finalized and the primary shadow carries the
+        # finalized bytes (same run-id, same canonical filename).
+        record = self.manifest_record(exports)
+        self.assertTrue(record.get("complete", False))
+        payload = json.loads(shadow.read_text())
+        self.assertTrue(payload["complete"])
+        self.assertEqual(payload["run_id"], run_id)
+        self.assertEqual(
+            payload["repo_root"], self.worktree_root_digest(worktree)
+        )
+        # The success report rides the leg's failure channel, not stdout.
+        self.assertIn("shadow propagation:", proc.stderr)
+        self.assertIn(
+            "wrote the finalized bytes over the primary shadow", proc.stderr
+        )
+        self.assertNotIn(
+            "wrote the finalized bytes over the primary shadow", proc.stdout
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_shadow_absent_transfer_witness_writes_surviving_record(self) -> None:
+        self.init_fixture_repo()
+        plan_rel = "docs/history/plans/2026-11-06-shadow-propagation-witness.md"
+        plans = self.fixture / "docs" / "history" / "plans"
+        plans.mkdir(parents=True, exist_ok=True)
+        (self.fixture / plan_rel).write_text("# plan\n", encoding="utf-8")
+        self.git("add", plan_rel)
+        self.git("commit", "-qm", "plans: fixture owned plan")
+        worktree, exports, env = self.worktree_finalize_session(
+            "--owned-path", "seed.txt", "--owned-plan", plan_rel,
+        )
+        run_id = exports["DONE_RUN_ID"]
+        # The shadow is absent; the migration record witnesses the transfer.
+        self.seed_transfer_witness("shadow-propagation-witness", run_id)
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        shadow = self.primary_session() / f"run-manifest-{run_id}.json"
+        self.assertTrue(shadow.is_file(), proc.stderr)
+        payload = json.loads(shadow.read_text())
+        self.assertTrue(payload["complete"])
+        self.assertEqual(payload["owned_plan_paths"], [plan_rel])
+        self.assertIn("witnesses the transfer", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_shadow_absent_without_witness_skips_with_report(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-nowitness"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        shadow = self.primary_session() / f"run-manifest-{run_id}.json"
+        self.assertFalse(shadow.exists())
+        self.assertFalse(
+            (self.primary_session() / f"run-manifest-{run_id}.json.tmp").exists()
+        )
+        self.assertIn(
+            "no primary shadow and no closeout-migration transfer witness",
+            proc.stderr,
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_shadow_identity_mismatch_aborts_both_files_untouched(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-mismatch"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        tampered = json.loads(shadow.read_text())
+        tampered["owned_plan_paths"] = ["docs/history/plans/2026-11-06-other.md"]
+        shadow.write_text(json.dumps(tampered, indent=2, sort_keys=True) + "\n")
+        shadow_before = shadow.read_bytes()
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The finalize itself applied; the propagation aborted named.
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+        self.assertIn("identity mismatch between the primary shadow", proc.stderr)
+        self.assertIn("both files untouched", proc.stderr)
+        # The shadow keeps its tampered bytes; the source copy carries exactly
+        # the finalized bytes the operation itself wrote before the arm ran
+        # (the marking applied; the propagation's abort touches neither file).
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        finalized = json.loads(
+            (
+                self.wt_done_session(worktree) / f"run-manifest-{run_id}.json"
+            ).read_text()
+        )
+        self.assertIs(True, finalized["complete"])
+
+    def test_finalize_withheld_marks_nothing_and_propagates_nothing(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-withheld"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        # The deferred-squash shape at the worktree: a run-branch landing
+        # commit the squash never carried to the base branch. The base branch
+        # is the primary checkout's own branch (the worktree branched from
+        # its HEAD), derived - never hardcoded - because the hermetic env
+        # drops init.defaultBranch and the fixture's default branch name is
+        # whatever this git's compiled default is.
+        base_branch = self.git("symbolic-ref", "--short", "HEAD").stdout.strip()
+        wt_facts = worktree / ".ai-playbook" / "facts.md"
+        wt_facts.write_text(
+            wt_facts.read_text() + f'base_branch = "{base_branch}"\n'
+        )
+        self.git("checkout", "-qb", "run/shadow-withheld", repo=worktree)
+        (worktree / "work.txt").write_text("work\n", encoding="utf-8")
+        self.git("add", "work.txt", repo=worktree)
+        self.git("commit", "-qm", "run work", repo=worktree)
+        landing = self.git("rev-parse", "HEAD", repo=worktree).stdout.strip()
+        ledger = self.wt_done_session(worktree) / f"owned-commits-{run_id}.txt"
+        self.wt_done_session(worktree).mkdir(parents=True, exist_ok=True)
+        ledger.write_text(landing + "\n", encoding="utf-8")
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        shadow_before = shadow.read_bytes()
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("LANDING DEFERRED", proc.stderr)
+        self.assertIn("complete marking withheld", proc.stdout)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=withheld"],
+        )
+        # The withheld marking propagates nothing: no propagation line ran
+        # and the shadow keeps its pre-finalize bytes.
+        self.assertNotIn("shadow propagation", proc.stdout + proc.stderr)
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        self.assertFalse(self.manifest_record(exports).get("complete", False))
+
+    def test_finalize_primary_dispatch_is_silent_noop_no_rewrite_no_report(self) -> None:
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "shadow-primary-dispatch")
+        run_id = exports["DONE_RUN_ID"]
+        manifest = Path(exports["DONE_RUN_MANIFEST"])
+        env = self.runner_env()
+        env.update(exports)
+        # The primary-dispatched finalize: the resolved primary shadow path
+        # is the file the finalize itself owns - silent no-op, no report.
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertNotIn("shadow propagation", proc.stdout + proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+        # The already-complete re-run: the arm no-ops silently again, and
+        # nothing rewrote the manifest bytes.
+        before_stat = manifest.stat().st_mtime_ns
+        before_bytes = manifest.read_bytes()
+        proc2 = self.run_finalize(env=env)
+        self.assertEqual(proc2.returncode, 0, proc2.stderr + proc2.stdout)
+        self.assertIn("already complete; nothing to do", proc2.stdout)
+        self.assertNotIn("shadow propagation", proc2.stdout + proc2.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc2),
+            [
+                f"done_run finalize: finalization: run_id={run_id} "
+                "marking=already-complete"
+            ],
+        )
+        self.assertEqual(manifest.stat().st_mtime_ns, before_stat)
+        self.assertEqual(manifest.read_bytes(), before_bytes)
+
+    def test_finalize_propagation_leaves_primary_boundary_finalized_setup_continues(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-boundary"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The canonical boundary classifier reads the propagated shadow as
+        # terminal.
+        classify = subprocess.run(
+            [
+                "python3",
+                str(REPO_ROOT / "scripts" / "done_sweep_gates_lib.py"),
+                "classify-run-boundary",
+                "--session-dir", str(self.primary_session()),
+                "--manifest", str(shadow),
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(classify.returncode, 0, classify.stderr)
+        self.assertIn("verdict: finalized", classify.stdout)
+        self.assertIn(f"run_id: {run_id}", classify.stdout)
+        # Setup at the primary continues with a fresh boundary: the terminal
+        # shadow is no false-interruption evidence.
+        setup_proc = self.run_setup("--label", "fresh-after-propagation")
+        self.assertEqual(setup_proc.returncode, 0, setup_proc.stderr)
+        fresh_exports = self.eval_exports(setup_proc.stdout)
+        self.assertTrue(fresh_exports.get("DONE_RUN_ID"))
+        self.assertNotEqual(fresh_exports["DONE_RUN_ID"], run_id)
+
+    def test_finalize_terminal_complete_shadow_skipped_never_overwritten(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-complete"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        payload = json.loads(shadow.read_text())
+        payload["complete"] = True
+        shadow.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        shadow_before = shadow.read_bytes()
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn(
+            "already carries terminal state (complete=true)", proc.stderr
+        )
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_dispositioned_shadow_skipped_never_overwritten(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-dispositioned"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        payload = json.loads(shadow.read_text())
+        payload["dispositioned"] = {
+            "reason": "work-verified-landed",
+            "date": "2026-11-06",
+            "note": "closed elsewhere",
+        }
+        shadow.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        shadow_before = shadow.read_bytes()
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn(
+            "already carries terminal state (a dispositioned record)",
+            proc.stderr,
+        )
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_unresolvable_primary_reports_miss_outcome_arms_unchanged(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-unresolvable"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        shadow_before = shadow.read_bytes()
+        proc = self.run_finalize(env=self.git_shim_env(env), cwd=worktree)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        # The miss is reported on the failure channel and the finalize's own
+        # outcome and FAILED arms are unchanged (applied, no finalize FAILED
+        # line, no identity-mismatch routing).
+        self.assertIn("shadow propagation:", proc.stderr)
+        self.assertIn("primary checkout unresolved", proc.stderr)
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("the run manifest finalize did not complete", combined)
+        self.assertNotIn("run-manifest identity mismatch", combined)
+        # Nothing was written behind the unresolvable resolution.
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+
+    def test_finalize_shadow_write_refused_reports_no_partial_write(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-write-refused"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        shadow_before = shadow.read_bytes()
+        self.primary_session().chmod(0o555)
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.primary_session().chmod(0o755)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("cannot write", proc.stderr)
+        self.assertIn("no partial write", proc.stderr)
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        self.assertFalse(
+            (self.primary_session() / f"run-manifest-{run_id}.json.tmp").exists()
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_propagation_lines_never_trip_identity_mismatch_routing(self) -> None:
+        # The write-refused propagation miss rides the output beside the
+        # applied marking: no line carries the finalize's own identity-refusal
+        # wording, the refused routing's advice never prints, and the state
+        # line stays exactly `marking=applied`.
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-routing"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        self.seed_primary_shadow(worktree, run_id)
+        self.primary_session().chmod(0o555)
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.primary_session().chmod(0o755)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("shadow propagation:", proc.stderr)
+        self.assertNotIn("run-manifest identity mismatch", combined)
+        self.assertNotIn(
+            "do not re-run finalize from the primary checkout", combined
+        )
+        self.assertEqual(
+            self.finalization_lines(proc),
+            [f"done_run finalize: finalization: run_id={run_id} marking=applied"],
+        )
+
+    def test_finalize_rerun_after_skipped_propagation_still_propagates(self) -> None:
+        self.init_fixture_repo()
+        worktree, exports, env = self.worktree_finalize_session(
+            "--label", "shadow-rerun"
+        )
+        run_id = exports["DONE_RUN_ID"]
+        shadow = self.seed_primary_shadow(worktree, run_id)
+        shadow_before = shadow.read_bytes()
+        # First finalize: the marking applies but the shadow write is
+        # refused (the primary done-session directory is read-only).
+        self.primary_session().chmod(0o555)
+        proc = self.run_finalize(env=env, cwd=worktree)
+        self.primary_session().chmod(0o755)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("no partial write", proc.stderr)
+        self.assertEqual(shadow.read_bytes(), shadow_before)
+        # The re-run: the already-complete early return still runs the
+        # propagation arm and lands the same finalized bytes.
+        rerun_env = self.runner_env()
+        rerun_env["DONE_SWEEP_REPO_ROOT"] = str(worktree)
+        proc2 = self.run_finalize("--run-id", run_id, env=rerun_env, cwd=worktree)
+        self.assertEqual(proc2.returncode, 0, proc2.stderr + proc2.stdout)
+        self.assertIn("already complete; nothing to do", proc2.stdout)
+        self.assertIn(
+            "wrote the finalized bytes over the primary shadow", proc2.stderr
+        )
+        payload = json.loads(shadow.read_text())
+        self.assertTrue(payload["complete"])
+        self.assertEqual(payload["run_id"], run_id)
 
 
 class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):

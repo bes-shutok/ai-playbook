@@ -3,6 +3,7 @@
 Authoring claim: done-finalize-resume-marking-honesty.md (session sess_8ef45ec3-0098-413e-ab29-ac17d2bf6cd4)
 
 Backlog origin: none
+Executed: yes (ad37c974fa9671e0fbc93cd6966620d17159623b)
 Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-02-plan-review-done-finalize-resume-marking-honesty-p786745a1-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 Execution budget: 2.5h total, largest task 1.0h
@@ -110,17 +111,17 @@ Files:
 Primary class anchors:
 - `cmd_finalize` in `scripts/done_run.sh`
 
-- [ ] `cmd_finalize` delivers `finalization-state reporting`: given any finalize invocation reaching its exit assembly, expects exactly one `done_run finalize: finalization: run_id=<id or none> marking=<applied|already-complete|withheld|refused|failed|not-bound>` line plus, on the arms that have one (withheld, refused, failed), the concrete resume duty (the re-run form or the disposition command) [class: IMPLEMENTATION_REQUIRED]
-- [ ] The marking outcome is classified at exactly one point and the line and the existing `FAILED` routing both consume that single classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Mapping: `marking=applied` requires the lib's marked-complete output or a post-read `complete=true` from the manifest the marking targeted (`run-manifest-<RUN_ID>.json`), never the resolver-selected `RUN_MANIFEST` when the two diverge [class: IMPLEMENTATION_REQUIRED]
-- [ ] Mapping: the lib's no-run-manifest note and the resolves-nothing resolution (an empty done-session directory) map to `marking=not-bound` with `run_id=<arg>` or `run_id=none`; the already-complete note maps to `marking=already-complete`; a non-identity finalize-manifest failure maps to `marking=failed` (a release failure over a successful marking keeps the marking value) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Mapping: the interpolated run id is shape-validated or sanitized before emission [class: IMPLEMENTATION_REQUIRED]
-- [ ] The line composes with existing paths: given a deferred-squash run, expects `marking=withheld` beside the existing `LANDING DEFERRED` lines; given an identity-mismatch refusal, expects `marking=refused` beside the existing do-not-rerun advice; given no manifest, expects `marking=not-bound` with exit 0 preserved [class: REPOSITORY_TEST]
-- [ ] The line composes with release failures: given a release failure after a refused marking, expects the line's value to match the classification the FAILED advice carries; given a release failure over an applied or already-complete marking, expects the marking value preserved (`applied` or `already-complete`) beside the release-failure FAILED advice with the non-zero exit preserved [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: new hermetic wrapper cases asserting the line's presence and value on the applied, already-complete (release-only retry), withheld, refused (identity mismatch), failed (a non-identity finalize-manifest failure; the read-only-session fixture shape), not-bound (lib note and resolves-nothing sub-shapes), and release-failure-over-applied-or-already-complete-marking composition paths [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation in `cmd_finalize` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: finalize prints one finalization-state line on every exit path` [class: IMPLEMENTATION_REQUIRED]
+- [x] `cmd_finalize` delivers `finalization-state reporting`: given any finalize invocation reaching its exit assembly, expects exactly one `done_run finalize: finalization: run_id=<id or none> marking=<applied|already-complete|withheld|refused|failed|not-bound>` line plus, on the arms that have one (withheld, refused, failed), the concrete resume duty (the re-run form or the disposition command) [class: IMPLEMENTATION_REQUIRED]
+- [x] The marking outcome is classified at exactly one point and the line and the existing `FAILED` routing both consume that single classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Mapping: `marking=applied` requires the lib's marked-complete output or a post-read `complete=true` from the manifest the marking targeted (`run-manifest-<RUN_ID>.json`), never the resolver-selected `RUN_MANIFEST` when the two diverge [class: IMPLEMENTATION_REQUIRED]
+- [x] Mapping: the lib's no-run-manifest note and the resolves-nothing resolution (an empty done-session directory) map to `marking=not-bound` with `run_id=<arg>` or `run_id=none`; the already-complete note maps to `marking=already-complete`; a non-identity finalize-manifest failure maps to `marking=failed` (a release failure over a successful marking keeps the marking value) [class: IMPLEMENTATION_REQUIRED]
+- [x] Mapping: the interpolated run id is shape-validated or sanitized before emission [class: IMPLEMENTATION_REQUIRED]
+- [x] The line composes with existing paths: given a deferred-squash run, expects `marking=withheld` beside the existing `LANDING DEFERRED` lines; given an identity-mismatch refusal, expects `marking=refused` beside the existing do-not-rerun advice; given no manifest, expects `marking=not-bound` with exit 0 preserved [class: REPOSITORY_TEST]
+- [x] The line composes with release failures: given a release failure after a refused marking, expects the line's value to match the classification the FAILED advice carries; given a release failure over an applied or already-complete marking, expects the marking value preserved (`applied` or `already-complete`) beside the release-failure FAILED advice with the non-zero exit preserved [class: REPOSITORY_TEST]
+- [x] Run → expect RED: new hermetic wrapper cases asserting the line's presence and value on the applied, already-complete (release-only retry), withheld, refused (identity mismatch), failed (a non-identity finalize-manifest failure; the read-only-session fixture shape), not-bound (lib note and resolves-nothing sub-shapes), and release-failure-over-applied-or-already-complete-marking composition paths [class: REPOSITORY_TEST]
+- [x] Write minimal implementation in `cmd_finalize` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: finalize prints one finalization-state line on every exit path` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Unbound-resolution refusal predicate and flow
 
@@ -134,22 +135,22 @@ Primary class anchors:
 - `cmd_finalize` in `scripts/done_run.sh`
 - `resolve_manifest_path` in `scripts/done_run.sh`
 
-- [ ] `cmd_finalize` delivers `unbound-resolution refusal`: given a finalize whose resolution would bind a manifest without binding evidence, on either non-explicit arm (the newest-confirmed-marker selection or the newest-glob fallback), expects a named refusal before any checkpoint or finalize-manifest mutation [class: IMPLEMENTATION_REQUIRED]
-- [ ] The refusal names the re-derive-and-retry remedy as a placeholder plus the re-derive source (the run's own setup echo in session context, or the operator-owned census entry; never the fallback-resolved id), with the done-lock and merge-lock releases still running [class: IMPLEMENTATION_REQUIRED]
-- [ ] The binding-evidence predicate is identity-bearing and agreement-checked: when the resolution selected a manifest, refuse unless explicit `--run-id` is given, an explicit `--manifest` wired through the resolver names it, or a non-empty `DONE_RUN_ID` equals the selected manifest's run_id; a resolution that selects nothing stays the `not-bound` path, exit 0 [class: IMPLEMENTATION_REQUIRED]
-- [ ] `DONE_RUN_MANIFEST` never binds (the resolver's own hint-only doctrine) and lock exports are never binding evidence [class: IMPLEMENTATION_REQUIRED]
-- [ ] The refusal sets a refusal flag, exits non-zero, and falls through to the releases and exit assembly (never `finalize_die`) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Under the refusal flag, the guard-firing append step (3b) and the report steps (step 7: landing summary plus missing-review scan; step 8: the landing-cost telemetry append) skip with a named warning advising re-append or re-report on a bound re-run [class: IMPLEMENTATION_REQUIRED]
-- [ ] The step-6 status-not-free routing reads the manifest the marking targeted (`run-manifest-<RUN_ID>.json`), never the resolver-selected `RUN_MANIFEST`, when the two diverge, and gains a refusal-specific advice arm (re-derive binding, then the bound form; the releases already ran) that also wins over the release-only-safe advice when the fallback-bound peer manifest reads complete [class: IMPLEMENTATION_REQUIRED]
-- [ ] Explicit `--manifest` becomes real binding: `FINALIZE_MANIFEST` is wired into the resolution (`COMMIT_MANIFEST="$FINALIZE_MANIFEST"` ahead of the resolve call, the explicit arm's canonical-name validation applying); a `--manifest`-only invocation with no other binding evidence marks the named manifest [class: IMPLEMENTATION_REQUIRED]
-- [ ] Documentation witness (in-script): the two in-script `LANDING DEFERRED` re-run advice strings (done_run.sh:2509 and :2746) name the bound form [class: IMPLEMENTATION_REQUIRED]
-- [ ] Re-baseline the two named env-lost finalize fixtures (`test_finalize_rerun_after_squash_lands_consumes_withheld_state`'s resume env and `test_finalize_from_holder_accepts_a_verifiably_alive_recorded_holder`): give each the agreeing `DONE_RUN_ID` export (or `--run-id`), and extend the from-holder case to also assert the refusal-plus-release composition when run without binding evidence [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: hermetic cases for the refusal on both arms, asserting the finalization-state line's `marking=refused` value, the positive `run_id=unbound` field value, and the never-echo negative assertion that the fallback-resolved run id appears nowhere in the refusal output [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: hermetic cases for the refusal-plus-failed-release composition with the peer manifest `complete=true`, asserting the refusal-specific advice over the release-only-safe advice [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: the hermetic `--manifest`-only marks case (finalize's `FINALIZE_MANIFEST` is not wired into the resolver today, so the invocation marks the newest-marker manifest instead of the named one) [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: finalize refuses an unbound manifest resolution fail-loud` [class: IMPLEMENTATION_REQUIRED]
+- [x] `cmd_finalize` delivers `unbound-resolution refusal`: given a finalize whose resolution would bind a manifest without binding evidence, on either non-explicit arm (the newest-confirmed-marker selection or the newest-glob fallback), expects a named refusal before any checkpoint or finalize-manifest mutation [class: IMPLEMENTATION_REQUIRED]
+- [x] The refusal names the re-derive-and-retry remedy as a placeholder plus the re-derive source (the run's own setup echo in session context, or the operator-owned census entry; never the fallback-resolved id), with the done-lock and merge-lock releases still running [class: IMPLEMENTATION_REQUIRED]
+- [x] The binding-evidence predicate is identity-bearing and agreement-checked: when the resolution selected a manifest, refuse unless explicit `--run-id` is given, an explicit `--manifest` wired through the resolver names it, or a non-empty `DONE_RUN_ID` equals the selected manifest's run_id; a resolution that selects nothing stays the `not-bound` path, exit 0 [class: IMPLEMENTATION_REQUIRED]
+- [x] `DONE_RUN_MANIFEST` never binds (the resolver's own hint-only doctrine) and lock exports are never binding evidence [class: IMPLEMENTATION_REQUIRED]
+- [x] The refusal sets a refusal flag, exits non-zero, and falls through to the releases and exit assembly (never `finalize_die`) [class: IMPLEMENTATION_REQUIRED]
+- [x] Under the refusal flag, the guard-firing append step (3b) and the report steps (step 7: landing summary plus missing-review scan; step 8: the landing-cost telemetry append) skip with a named warning advising re-append or re-report on a bound re-run [class: IMPLEMENTATION_REQUIRED]
+- [x] The step-6 status-not-free routing reads the manifest the marking targeted (`run-manifest-<RUN_ID>.json`), never the resolver-selected `RUN_MANIFEST`, when the two diverge, and gains a refusal-specific advice arm (re-derive binding, then the bound form; the releases already ran) that also wins over the release-only-safe advice when the fallback-bound peer manifest reads complete [class: IMPLEMENTATION_REQUIRED]
+- [x] Explicit `--manifest` becomes real binding: `FINALIZE_MANIFEST` is wired into the resolution (`COMMIT_MANIFEST="$FINALIZE_MANIFEST"` ahead of the resolve call, the explicit arm's canonical-name validation applying); a `--manifest`-only invocation with no other binding evidence marks the named manifest [class: IMPLEMENTATION_REQUIRED]
+- [x] Documentation witness (in-script): the two in-script `LANDING DEFERRED` re-run advice strings (done_run.sh:2509 and :2746) name the bound form [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-baseline the two named env-lost finalize fixtures (`test_finalize_rerun_after_squash_lands_consumes_withheld_state`'s resume env and `test_finalize_from_holder_accepts_a_verifiably_alive_recorded_holder`): give each the agreeing `DONE_RUN_ID` export (or `--run-id`), and extend the from-holder case to also assert the refusal-plus-release composition when run without binding evidence [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: hermetic cases for the refusal on both arms, asserting the finalization-state line's `marking=refused` value, the positive `run_id=unbound` field value, and the never-echo negative assertion that the fallback-resolved run id appears nowhere in the refusal output [class: REPOSITORY_TEST]
+- [x] Run → expect RED: hermetic cases for the refusal-plus-failed-release composition with the peer manifest `complete=true`, asserting the refusal-specific advice over the release-only-safe advice [class: REPOSITORY_TEST]
+- [x] Run → expect RED: the hermetic `--manifest`-only marks case (finalize's `FINALIZE_MANIFEST` is not wired into the resolver today, so the invocation marks the newest-marker manifest instead of the named one) [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: finalize refuses an unbound manifest resolution fail-loud` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Refusal witnesses and documentation
 
@@ -162,12 +163,12 @@ Files:
 Primary class anchors:
 - `cmd_finalize` in `scripts/done_run.sh`
 
-- [ ] Safety witness: given a shared done-session directory holding a same-repo peer run whose confirmed marker IS the newest confirmed marker, expects the env-lost finalize (no exports, no explicit args) to refuse instead of marking the peer manifest (the wrong-run hazard is contained through the marker arm, not only the fallback) [class: REPOSITORY_TEST]
-- [ ] Keep-working witness: given a fresh shell with `DONE_RUN_ID` exported and agreeing with the marker-arm-selected manifest's run_id (the existing `test_finalize_rerun_after_squash_lands_consumes_withheld_state` env shape plus the id export), expects the marking to proceed unchanged with `marking=applied` [class: REPOSITORY_TEST]
-- [ ] Sole-evidence witness: given an env-lost fresh shell (no exports) with explicit `--run-id` of the own run while a peer's confirmed marker is newest, expects the own manifest marked and the peer manifest bytes unchanged (pins the sole-evidence marks behavior; born-GREEN, the explicit-arm marking already keys on `--run-id`) [class: REPOSITORY_TEST]
-- [ ] Documentation witness: `agents/skills/done/SKILL.md` Step 6 (its exports-lost recovery paragraph, and the cross-checkout sentence's `--manifest` mention, now the wired form) documents the bound invocation form (re-export `DONE_RUN_ID` or pass `--run-id`) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the safety witness, keep-working witness, and sole-evidence witness cases pass against Task 2's implementation [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: finalize refusal witnesses and done skill docs` [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness: given a shared done-session directory holding a same-repo peer run whose confirmed marker IS the newest confirmed marker, expects the env-lost finalize (no exports, no explicit args) to refuse instead of marking the peer manifest (the wrong-run hazard is contained through the marker arm, not only the fallback) [class: REPOSITORY_TEST]
+- [x] Keep-working witness: given a fresh shell with `DONE_RUN_ID` exported and agreeing with the marker-arm-selected manifest's run_id (the existing `test_finalize_rerun_after_squash_lands_consumes_withheld_state` env shape plus the id export), expects the marking to proceed unchanged with `marking=applied` [class: REPOSITORY_TEST]
+- [x] Sole-evidence witness: given an env-lost fresh shell (no exports) with explicit `--run-id` of the own run while a peer's confirmed marker is newest, expects the own manifest marked and the peer manifest bytes unchanged (pins the sole-evidence marks behavior; born-GREEN, the explicit-arm marking already keys on `--run-id`) [class: REPOSITORY_TEST]
+- [x] Documentation witness: `agents/skills/done/SKILL.md` Step 6 (its exports-lost recovery paragraph, and the cross-checkout sentence's `--manifest` mention, now the wired form) documents the bound invocation form (re-export `DONE_RUN_ID` or pass `--run-id`) [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the safety witness, keep-working witness, and sole-evidence witness cases pass against Task 2's implementation [class: REPOSITORY_TEST]
+- [x] Commit: `feat: finalize refusal witnesses and done skill docs` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 4: Disposition the witnessed stranded run
 
@@ -178,8 +179,12 @@ Files: none (operational disposition through existing tooling; repository-state 
 Primary class anchors:
 - `disposition-manifest` in `scripts/done_sweep_gates_lib.py`
 
-- [ ] First action of the executing session: identify the stranded witnessed run from the interrupted-manifest census by the full conjunction: the candidate that is `complete=false`, undisposed, whose owned plan's main-reachable landing digest matches the digest re-derived at execution time (`284f89a72` at authoring), AND whose sibling resumable-closeout checkpoint survives [class: IMPLEMENTATION_REQUIRED]
-- [ ] If more than one census candidate matches the conjunction (or identification is otherwise ambiguous), stop and report, never pick between candidates [class: IMPLEMENTATION_REQUIRED]
-- [ ] Re-derive the manifest's recorded repo_root: a dead root runs `disposition-manifest --run-id <derived id> --note "work verified landed: <main-reachable digest>"`, a live root runs the lib's routed `recover-manifest` arm instead; then remove the sibling checkpoint; expects the interrupted-manifest census to return to baseline [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the census no longer lists the disposed run [class: REPOSITORY_TEST]
-- [ ] Commit: none (state-only disposition; no tracked bytes change) [class: IMPLEMENTATION_REQUIRED]
+- [x] First action of the executing session: identify the stranded witnessed run from the interrupted-manifest census by the full conjunction: the candidate that is `complete=false`, undisposed, whose owned plan's main-reachable landing digest matches the digest re-derived at execution time (`284f89a72` at authoring), AND whose sibling resumable-closeout checkpoint survives [class: IMPLEMENTATION_REQUIRED]
+- [x] If more than one census candidate matches the conjunction (or identification is otherwise ambiguous), stop and report, never pick between candidates [class: IMPLEMENTATION_REQUIRED]
+- [x] Re-derive the manifest's recorded repo_root: a dead root runs `disposition-manifest --run-id <derived id> --note "work verified landed: <main-reachable digest>"`, a live root runs the lib's routed `recover-manifest` arm instead; then remove the sibling checkpoint; expects the interrupted-manifest census to return to baseline [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the census no longer lists the disposed run [class: REPOSITORY_TEST]
+- [x] Commit: none (state-only disposition; no tracked bytes change) [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-02-done-finalize-resume-marking-honesty-r4-residuals.md (plan-review r4 certification residuals, two scope arms): both arms delivered by this execution and deleted in the archive commit. The `run_id=unbound` positive assertion arm is delivered by Task 2's refusal RED cases (`test_finalize_unbound_marker_arm_refuses_and_never_echoes`, `test_finalize_unbound_fallback_arm_refuses_and_never_echoes` assert `run_id=unbound marking=refused` as a positive exact-line value beside the never-echo negative). The refused-plus-release-failure line-value arm is delivered by Task 2's refusal-plus-failed-release composition case (peer manifest `complete=true`, refusal-specific advice winning over the release-only-safe advice) and the Task 1 release-failure composition cases (`test_finalize_state_line_release_failure_preserves_applied_marking`, `test_finalize_state_line_release_failure_preserves_already_complete`). Origin row deleted with this fold per the plans lifecycle (a bare deletion without this fold fails closed).

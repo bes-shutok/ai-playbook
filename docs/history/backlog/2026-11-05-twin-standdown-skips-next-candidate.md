@@ -1,6 +1,6 @@
 # Backlog: twin-standdown deconfliction skips remaining target-disjoint candidates
 
-- **Status:** covered-pending-execution (docs/history/plans/2026-11-05-claimed-top-target-skip-and-continue.md)
+- **Status:** covered (docs/history/plans/completed/2026-11-05-claimed-top-target-skip-and-continue.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving

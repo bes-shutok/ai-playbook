@@ -150,18 +150,28 @@ class PlanReadinessFenceBalanceTest(unittest.TestCase):
         opener_line = plan_text.split("\n").index("```bash") + 1
         plan = self._write_fixture(plan_text)
         rc, out, err = self._run_main([str(plan)])
-        self.assertNotEqual(rc, 0, (out, err))
+        self.assertEqual(rc, 1, (out, err))
         self.assertIn("unclosed fence", err)
         self.assertIn(f"line {opener_line}", err)
+        self.assertIn("skipped probes:", err)
+        self.assertIn("decision-points trailer", err)
+        self.assertIn("Review Scope", err)
+        self.assertIn("plan ownership", err)
+        self.assertIn("scope classification", err)
+        self.assertIn("anchors block", err)
+        self.assertIn("extraction-rule executability", err)
+        self.assertNotIn("missing decision-points trailer", err)
         # Pre-round entry: same structural failure through the pre-round
         # channel, before any probe evaluates the stripped text.
         rc, out, err = self._run_main(["--pre-round", str(plan)])
-        self.assertNotEqual(rc, 0, (out, err))
+        self.assertEqual(rc, 1, (out, err))
         self.assertIn(
             f"readiness PRE-ROUND FAILED: unclosed fence opener at line "
             f"{opener_line}",
             err,
         )
+        self.assertIn("skipped probes:", err)
+        self.assertNotIn("missing decision-points trailer", err)
 
     def test_balanced_fences_still_pass(self):
         plan = self._write_fixture(BALANCED_PLAN)
@@ -1904,9 +1914,7 @@ class CanonicalStatsSkipWaiverTest(unittest.TestCase):
 
 
 class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
-    """The shared gate's FIRST error keeps its routed reason when several
-    routed diagnostics coexist (review-staging hard-validator fail-fast
-    iteration plan, Task 2).
+    """The shared gate keeps every routed reason when diagnostics coexist.
 
     The hard-mode validation result carries multiple independently
     evaluable defects across distinct reason families (source_kind,
@@ -1970,7 +1978,7 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
         )
         return result
 
-    def test_first_error_reason_is_stable_under_coexistence(self):
+    def test_every_error_reason_is_stable_under_coexistence(self):
         result = self._gate_result()
         errors = result.errors
         # Several routed diagnostics coexist across at least three distinct
@@ -1985,11 +1993,12 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
         self.assertTrue(
             any("finding conservation" in error for error in errors), errors
         )
-        # The established first error is the source_kind mismatch, and the
-        # readiness router maps exactly that error into its family.
-        first = errors[0]
+        # The source_kind mismatch retains its established family mapping.
+        source_kind_error = next(
+            error for error in errors if "source_kind mismatch" in error
+        )
         self.assertEqual(
-            first,
+            source_kind_error,
             "source_kind mismatch: validator got 'plan' but sidecar "
             "declares 'code'",
         )
@@ -1997,30 +2006,95 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
             "sidecar source_kind is 'code', expected 'plan' (round r1)"
         )
         self.assertEqual(
-            plan_readiness._first_gate_error_reason(first, self.payload, 1),
+            plan_readiness._first_gate_error_reason(
+                source_kind_error, self.payload, 1
+            ),
             expected_reason,
         )
-        # End-to-end: evaluate_readiness returns exactly the errors[0]
-        # family, unchanged by the coexisting digest/schema/conservation
-        # diagnostics.
+        # End-to-end: every validator diagnostic routes through the existing
+        # family classifier and remains in the readiness reason.
         ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
         self.assertFalse(ok)
-        self.assertEqual(reason, expected_reason)
-        # The picked reason names no later error's family or text.
-        self.assertNotIn("stale", expected_reason)
-        self.assertNotIn("finding conservation", expected_reason)
-        self.assertNotIn("invalid reachability", expected_reason)
-        # Discriminator: a later error routes to a DIFFERENT family, so the
-        # first-error pick is load-bearing, not family-convergent.
-        digest_reason = plan_readiness._first_gate_error_reason(
-            next(
-                error for error in errors if "source_digest is stale" in error
-            ),
-            self.payload,
-            1,
+        self.assertIsNotNone(reason)
+        routed = [
+            plan_readiness._first_gate_error_reason(error, self.payload, 1)
+            for error in errors
+        ]
+        for expected in routed:
+            self.assertIn(expected, reason)
+        self.assertIn(expected_reason, reason)
+        self.assertIn("sidecar source_digest is stale", reason)
+        self.assertIn("malformed stats sidecar (schema validation failed)", reason)
+
+
+class ReadinessViolationAggregationTest(unittest.TestCase):
+    """Independent plan probes are all reported in one gate pass."""
+
+    PLAN = (
+        "# P\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: pending unresolved choice.\n\n"
+        "## Tasks\n\n"
+        "### Task 1: Implement the missing module\n\n"
+        "Files:\n- `scripts/missing.py`\n\n"
+        "- [ ] Implement the module.\n\n"
+        "## Review Scope\n\n"
+        "**Documentation:**\n- scripts/missing.py\n"
+    )
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="readiness-aggregation-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
         )
-        self.assertIn("sidecar source_digest is stale", digest_reason)
-        self.assertNotEqual(digest_reason, expected_reason)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        self.plan, _ = plan_readiness._write_clean_state(
+            self.plans,
+            self.reviews,
+            plan_text=self.PLAN,
+            date=_GATED_SIDECAR_DATE,
+            slug="multiple-probes",
+        )
+
+    def _assert_all_probe_failures(self, text):
+        for evidence in (
+            "unresolved decision-points trailer",
+            "Review Scope lists scripts/missing.py",
+            "Files: path scripts/missing.py",
+            "carries no [class: ...] classification tag",
+        ):
+            self.assertIn(evidence, text)
+
+    def test_evaluate_readiness_reports_each_independent_probe(self):
+        ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self._assert_all_probe_failures(reason)
+
+    def test_pre_round_reports_each_probe_once_and_returns_one_failure(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = plan_readiness.run_pre_round(self.plan, self.plans)
+        self.assertEqual(rc, 1, err.getvalue())
+        report = err.getvalue()
+        self._assert_all_probe_failures(report)
+        self.assertEqual(report.count("readiness PRE-ROUND FAILED:"), 1)
+
+    def test_cli_reports_each_probe_and_keeps_failure_outcome_tail(self):
+        rc, out, err = PlanReadinessFenceBalanceTest._run_main(
+            self, [str(self.plan)]
+        )
+        self.assertEqual(rc, 1, (out, err))
+        self._assert_all_probe_failures(err)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
 
 
 class _SidecarRepairFixture:
@@ -2829,12 +2903,20 @@ class RegeneratedSidecarIntegrationTest(
             r3, hard=True, expected_digest=self.digest, source_kind="plan"
         )
         self.assertFalse(result.ok, result.errors)
+        run_id_error = next(
+            error
+            for error in result.errors
+            if "run_id cannot change after r1" in error
+        )
         self.assertTrue(
-            any(
-                "run_id cannot change after r1" in error
-                for error in result.errors
+            run_id_error.startswith(
+                "run_id cannot change after r1 in the same artifact chain"
             ),
-            result.errors,
+            run_id_error,
+        )
+        self.assertTrue(
+            "r1's run_id must carry forward unchanged in later rounds" in run_id_error,
+            run_id_error,
         )
 
         # Bounded retry: r3's own marker-bearing sidecar permits the
@@ -4315,7 +4397,10 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self._write_round(
             fx,
             _graded_payload(cr.sha256_hex(_GRADED_D1))
-            | {"extensions": {"corrections": [row]}},
+            | {
+                "extensions": {"corrections": [row]},
+                "verdict": "no",
+            },
             _graded_markdown(),
         )
         rc, out, err = self._run_gate(fx)
@@ -4323,6 +4408,11 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("OUTCOME: indeterminate"), out)
         self.assertIn(cr.MARKER_PREFIX, err)
         self.assertIn("no resolvable entry", err)
+        self.assertEqual(
+            err.count(cr.MARKER_PREFIX), 1,
+            "indeterminate reason must remain exclusive",
+        )
+        self.assertNotIn("verdict field reports 'no'", err)
 
     def test_marker_check_outranks_the_substring_branches(self):
         # Routing home: the corrections marker check is the FIRST test in
@@ -5323,6 +5413,33 @@ class ReadinessSingleFileUnchangedTest(unittest.TestCase):
         self.assertIn(
             "evidence criterion exceeds UTF-8 item byte limit", proc.stderr
         )
+        over_cap = []
+        for _title, body in plan_readiness._plan_task_sections(
+            fixture_plan.read_text(encoding="utf-8")
+        ):
+            criteria, _actions = runtime_capabilities.derive_plan_checklist_actions(body)
+            over_cap.extend(
+                (len(criterion.encode("utf-8")), criterion)
+                for criterion in criteria
+                if len(criterion.encode("utf-8"))
+                > runtime_capabilities.MAX_EVIDENCE_ITEM_BYTES
+            )
+        self.assertEqual([size for size, _criterion in over_cap], [538, 981])
+        evidence_line = next(
+            line
+            for line in proc.stderr.splitlines()
+            if "evidence criterion exceeds UTF-8 item byte limit" in line
+        )
+        self.assertRegex(
+            evidence_line,
+            r"task 'task-[^']+': evidence criterion exceeds UTF-8 item byte limit "
+            r"\(over-cap criteria: ",
+        )
+        for size, criterion in over_cap:
+            self.assertIn(
+                f"{size} UTF-8 bytes, limit 512): {criterion}",
+                evidence_line,
+            )
         self.assertEqual(proc.stdout, "OUTCOME: fail\n")
 
     def test_file_operand_digest_matches_raw_bytes(self):
@@ -5811,6 +5928,23 @@ class ExtractionRuleParityTest(unittest.TestCase):
         expected = _named_evidence_label([criterion])
         self.assertIsNotNone(reason, "certification must fail on the item-bytes ground")
         self.assertIn(expected, reason)
+
+    def test_evidence_item_tuple_diagnostic_names_every_over_cap_criterion(self):
+        criteria = ("x" * 600, "y" * 601)
+        reason = plan_readiness.extraction_rule_executability_problem(
+            derived_task_map={
+                "task-1": {
+                    "task_body": "",
+                    "checklist_actions": [],
+                    "required_criteria": criteria,
+                }
+            }
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("over-cap criteria:", reason)
+        self.assertIn("600 UTF-8 bytes, limit 512): " + criteria[0], reason)
+        self.assertIn("601 UTF-8 bytes, limit 512): " + criteria[1], reason)
 
     def test_evidence_aggregate_bytes_parity(self):
         criteria = [f"c{index}-" + "y" * 500 for index in range(9)]

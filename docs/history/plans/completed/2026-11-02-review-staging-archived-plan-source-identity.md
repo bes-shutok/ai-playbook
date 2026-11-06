@@ -8,6 +8,7 @@ Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-02-plan-review-review-staging-archived-plan-source-identity-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 
 Execution budget: 2h total, largest task 1h
+Executed: yes (a6ed2e20f)
 
 Authoring claim: review-staging-archived-plan-source-identity.md (session sess_175f4067-23d2-4a64-b802-b1ce6674e2d1)
 
@@ -125,15 +126,15 @@ Primary class anchors:
 - `_coverage_linked_round` in `scripts/validate_review_staging.py`
 - `facts_paths` in `scripts/validate_review_staging.py`
 
-- [ ] The twin-resolution helper delivers in-scope twin derivation: given a relative recorded path whose parent resolves to the facts-resolved plans layout, expects the completed twin (facts-resolved `plans_completed_dir` + basename) appended as the trailing candidate; given an absolute recorded path, expects no twin candidate [class: IMPLEMENTATION_REQUIRED]
-- [ ] The twin-resolution helper delivers the containment refusals: given a recorded path outside the plans layout (a backlog row), expects no twin candidate; given a `..`-bearing value whose twin would escape the plans layout or the repository root, expects no twin candidate (the confinement arm) [class: IMPLEMENTATION_REQUIRED]
-- [ ] `_coverage_link_paths` delivers the unconditional trailing append: given an in-scope relative recorded path, expects the twin appended last without any existence probe inside the helper; given a recorded path with an existing primary candidate, expects outcome equivalence (the primary resolves first; the twin resolves only when primaries are absent) across the attempts, replacement, and inherited consumers [class: IMPLEMENTATION_REQUIRED]
-- [ ] The coverage consumers keep their evidence bar over the twin: given a local-mode attempt whose artifact and sidecar live only at the completed twin, expects the existing artifact-exists and sidecar-parses checks to pass with today's error vocabulary [class: IMPLEMENTATION_REQUIRED]
-- [ ] The linked-round consumer keeps its priced stop and the parse guard stays byte-stable: given a present-but-non-dict primary sidecar, expects the first-existing stop to keep today's verdict (the twin resolves only when no earlier candidate exists, per the Terms-priced exception); given a twin sidecar that does not parse, expects the same sidecar error as today [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the coverage-twin pin fails against the current validator (the twin shape is unresolved today) [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation: the scoping helper (facts keys, normalization, confinement) and the `_coverage_link_paths` append [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the coverage-twin pin; the unparseable-twin-sidecar pin and the plans-layout-scoping pin hold GREEN before and after (byte-stable refusal regression guards) [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: resolve coverage attempt links through the completed archive twin` [class: IMPLEMENTATION_REQUIRED]
+- [x] The twin-resolution helper delivers in-scope twin derivation: given a relative recorded path whose parent resolves to the facts-resolved plans layout, expects the completed twin (facts-resolved `plans_completed_dir` + basename) appended as the trailing candidate; given an absolute recorded path, expects no twin candidate [class: IMPLEMENTATION_REQUIRED]
+- [x] The twin-resolution helper delivers the containment refusals: given a recorded path outside the plans layout (a backlog row), expects no twin candidate; given a `..`-bearing value whose twin would escape the plans layout or the repository root, expects no twin candidate (the confinement arm) [class: IMPLEMENTATION_REQUIRED]
+- [x] `_coverage_link_paths` delivers the unconditional trailing append: given an in-scope relative recorded path, expects the twin appended last without any existence probe inside the helper; given a recorded path with an existing primary candidate, expects outcome equivalence (the primary resolves first; the twin resolves only when primaries are absent) across the attempts, replacement, and inherited consumers [class: IMPLEMENTATION_REQUIRED]
+- [x] The coverage consumers keep their evidence bar over the twin: given a local-mode attempt whose artifact and sidecar live only at the completed twin, expects the existing artifact-exists and sidecar-parses checks to pass with today's error vocabulary [class: IMPLEMENTATION_REQUIRED]
+- [x] The linked-round consumer keeps its priced stop and the parse guard stays byte-stable: given a present-but-non-dict primary sidecar, expects the first-existing stop to keep today's verdict (the twin resolves only when no earlier candidate exists, per the Terms-priced exception); given a twin sidecar that does not parse, expects the same sidecar error as today [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the coverage-twin pin fails against the current validator (the twin shape is unresolved today) [class: REPOSITORY_TEST]
+- [x] Write minimal implementation: the scoping helper (facts keys, normalization, confinement) and the `_coverage_link_paths` append [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the coverage-twin pin; the unparseable-twin-sidecar pin and the plans-layout-scoping pin hold GREEN before and after (byte-stable refusal regression guards) [class: REPOSITORY_TEST]
+- [x] Commit: `fix: resolve coverage attempt links through the completed archive twin` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: the new pins run under the battery's chdir fixture pattern inside the battery root with non-colliding placeholder basenames (no probe touches the live tree); pins red before the fix where RED is claimed, green after; the battery passes; a record binding an existing primary path produces byte-identical validation output.
 
@@ -149,13 +150,13 @@ Primary class anchors:
 - `normalize_plan_path` in `scripts/validate_review_staging.py`
 - `_SOURCE_PATH_FOR_ERROR` in `scripts/validate_review_staging.py`
 
-- [ ] `main` delivers the source-flag twin arm, kind-gated to plan: given `--source-plan` naming a missing plans-layout path whose completed twin exists (a regular file), expects the bytes read from the twin and the stale-source gate to bind those bytes; given `--source-doc` or `--source-record`, expects no twin resolution (today's refusal unchanged) [class: IMPLEMENTATION_REQUIRED]
-- [ ] The twin refusals keep today's shapes: given a twin whose bytes hash differently from the sidecar's `source_digest`, expects the existing stale-source refusal with the hint naming the resolved twin path; given a missing twin, expects today's `source file not found` tool error unchanged [class: IMPLEMENTATION_REQUIRED]
-- [ ] Identity stability: given the twin resolution fired, expects plan identity derivation (`normalize_plan_path`, the filename identity-token comparison, and the `extensions.plan_identity` comparison) to use the original pre-archive operand path while the stale-source hint carries the resolved twin path, so an identity-qualified record and its sidecar validate exactly as they did pre-archive [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: the source-flag-twin pin, the drift-mutant pin, and the identity-stability pin fail against the current validator [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation: resolve before the not-found refusal; split the bytes source and the hint path from the identity source [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the three RED pins; the missing-twin pin and the file-shaped-twin pin hold GREEN before and after (byte-stable refusal regression guards) [class: REPOSITORY_TEST]
-- [ ] Commit: `fix: resolve the source-plan operand through the completed archive twin with identity stability` [class: IMPLEMENTATION_REQUIRED]
+- [x] `main` delivers the source-flag twin arm, kind-gated to plan: given `--source-plan` naming a missing plans-layout path whose completed twin exists (a regular file), expects the bytes read from the twin and the stale-source gate to bind those bytes; given `--source-doc` or `--source-record`, expects no twin resolution (today's refusal unchanged) [class: IMPLEMENTATION_REQUIRED]
+- [x] The twin refusals keep today's shapes: given a twin whose bytes hash differently from the sidecar's `source_digest`, expects the existing stale-source refusal with the hint naming the resolved twin path; given a missing twin, expects today's `source file not found` tool error unchanged [class: IMPLEMENTATION_REQUIRED]
+- [x] Identity stability: given the twin resolution fired, expects plan identity derivation (`normalize_plan_path`, the filename identity-token comparison, and the `extensions.plan_identity` comparison) to use the original pre-archive operand path while the stale-source hint carries the resolved twin path, so an identity-qualified record and its sidecar validate exactly as they did pre-archive [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: the source-flag-twin pin, the drift-mutant pin, and the identity-stability pin fail against the current validator [class: REPOSITORY_TEST]
+- [x] Write minimal implementation: resolve before the not-found refusal; split the bytes source and the hint path from the identity source [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the three RED pins; the missing-twin pin and the file-shaped-twin pin hold GREEN before and after (byte-stable refusal regression guards) [class: REPOSITORY_TEST]
+- [x] Commit: `fix: resolve the source-plan operand through the completed archive twin with identity stability` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: the identity-stability pin builds a throwaway git repository inside the battery root so `repository_root` resolves and the three identity comparisons actually fire, and documents the semantic decision (naming the Terms pricing of identity derivation over an equivalence comparison); the battery passes; a primary-path invocation produces byte-identical output.
 
@@ -171,10 +172,14 @@ Files:
 Primary class anchors:
 - `validate_coverage_contract` in `scripts/validate_review_staging.py`
 
-- [ ] The review-staging coverage contract states the archive-twin candidate arm scoped to the plans layout via the facts keys, with the evidence-bar scoping (existence plus parse on the coverage arms, digest binding on the source-flag arm) stated explicitly [class: IMPLEMENTATION_REQUIRED]
-- [ ] The plans archive move bullet and the done final gate region state the resolution: the archive bullet gains one line stating that records citing the pre-archive path resolve through the completed twin and that no archive-time record relocation happens; the done gate region gains one line naming the resolution at re-validation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pins-suite reconciliation: given the pins suite tokenizes validator and skill text, expects `scripts/check_maintenance_pins.sh` exit 0 after the edits, with any newly pinned line added only if a pin's grammar demands it (the default is no pin change) [class: REPOSITORY_TEST]
-- [ ] Full readiness gate over the final assembled series exits 0 [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: state the archive-aware source resolution on the three contract surfaces` [class: IMPLEMENTATION_REQUIRED]
+- [x] The review-staging coverage contract states the archive-twin candidate arm scoped to the plans layout via the facts keys, with the evidence-bar scoping (existence plus parse on the coverage arms, digest binding on the source-flag arm) stated explicitly [class: IMPLEMENTATION_REQUIRED]
+- [x] The plans archive move bullet and the done final gate region state the resolution: the archive bullet gains one line stating that records citing the pre-archive path resolve through the completed twin and that no archive-time record relocation happens; the done gate region gains one line naming the resolution at re-validation [class: IMPLEMENTATION_REQUIRED]
+- [x] Pins-suite reconciliation: given the pins suite tokenizes validator and skill text, expects `scripts/check_maintenance_pins.sh` exit 0 after the edits, with any newly pinned line added only if a pin's grammar demands it (the default is no pin change) [class: REPOSITORY_TEST]
+- [x] Full readiness gate over the final assembled series exits 0 [class: REPOSITORY_TEST]
+- [x] Commit: `docs: state the archive-aware source resolution on the three contract surfaces` [class: IMPLEMENTATION_REQUIRED]
 
 Evidence: each doc surface read against the behavior it documents (coverage contract ↔ the Task 1 arm with the digest scoping; archive move ↔ the no-relocation invariant; done gate ↔ the Task 2 arm); pins suite green; `python3 scripts/plan_readiness.py <plan>` exit 0 over the final series.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-11-02-review-staging-archived-source-path.md: covered by this plan (executed under branch 2026-11-06-review-staging-archived-source, pre-squash tip a6ed2e20f); the row's scope arms (archive-twin resolution for coverage links and the source-plan operand) are implemented and pinned; the deferred residuals live in docs/history/backlog/2026-11-06-validator-twin-anchor-memoization.md and docs/history/backlog/2026-11-06-twin-battery-anchor-determinism.md, and the confinement-pin coverage residual is recorded in the r5 review record's deferred-residual list.

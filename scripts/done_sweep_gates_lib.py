@@ -70,7 +70,11 @@ gate and does not touch the gate registry. It also reports interrupted runs
 other manifest adopts): a retry continues an interrupted run's boundary only
 through an explicit ``--adopt <run_id>`` boundary copy, never implicitly.
 The ``finalize-manifest`` sub-command sets a run manifest's ``complete`` flag
-to true in place (done Step 6, immediately before the done-lock release).
+to true in place (done Step 6, immediately before the done-lock release) and
+propagates the finalized bytes into the primary checkout's surviving shadow
+record for the same run-id (its success path and already-complete early
+return only; misses report on the failure channel without failing the
+finalize).
 The ``disposition-manifest`` sub-command stamps a one-time ``dispositioned``
 record onto an unadoptable interrupted manifest (a recorded ``repo_root`` no
 checkout satisfies, so adoption and finalize refuse it forever) after its
@@ -9516,10 +9520,245 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     return 0
 
 
+_SHADOW_PROPAGATION_PREFIX = "finalize-manifest: shadow propagation:"
+
+
+def _shadow_propagation_report(message: str) -> None:
+    """One propagation-arm report line on the operation's failure channel.
+    The ``shadow propagation:`` prefix is distinct from every finalize
+    outcome string the wrapper's grep-classified advice arms match on (plan
+    docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md), so a
+    miss report can never re-route the finalize's own FAILED-line arms."""
+    print(f"{_SHADOW_PROPAGATION_PREFIX} {message}", file=sys.stderr)
+
+
+def _propagate_finalized_shadow(ctx: GateContext, manifest: RunManifest) -> None:
+    """The finalize leg's terminal-state propagation (plan
+    docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md, Task 2):
+    write the run's finalized manifest bytes over the surviving primary
+    shadow record (``run-manifest-<run-id>.json`` in the primary checkout's
+    done-session directory) so a completed worktree run stops
+    re-classifying as interrupted after its source copy and worktree are
+    gone. This arm is the one authoritative terminal-state writer into the
+    primary shadow: only this operation's success path and its
+    already-complete early return reach it (idempotent - the same finalized
+    bytes), and no standalone command, no closeout-migration write, and no
+    classifier write-back participates.
+
+    Every outcome keeps the finalize's own exit semantics unchanged: the arm
+    reports on the failure channel under the ``shadow propagation:`` prefix
+    and returns; a miss never fails the finalize. Arms, in order:
+
+    - the invocation checkout already is the primary checkout (the resolved
+      primary done-session directory equals this checkout's own): a silent
+      no-op skip - no rewrite, no miss report;
+    - the primary checkout cannot be resolved, the migration helpers are
+      unavailable, or the finalized source bytes cannot be read: one miss
+      report, nothing written;
+    - the shadow payload already carries terminal state (``complete`` true
+      or a non-null ``dispositioned`` record): skipped with a report, never
+      overwritten, so a sanctioned closure record is never destroyed;
+    - the shadow payload disagrees with the finalized source identity
+      (``run_id``, ``repo_root``, ``owned_plan_paths``), is unreadable, or
+      carries a ``complete`` value that is not the strict pre-finalize
+      false: one abort report, both files untouched;
+    - the shadow is the strict pre-finalize twin: the finalized source
+      bytes replace it atomically (a write refusal reports the miss with no
+      partial write);
+    - the shadow is absent: the run's closeout-migration record must
+      witness the manifest's transfer (a verified ``migrated``/``renamed``/
+      ``replaced`` row whose source names this manifest under a
+      ``done-session`` directory, located through the migration helpers'
+      session-slug and record-path resolution over the run's owned plan
+      claims) before the finalized bytes are written as the surviving
+      record; with neither the shadow nor a witness, one skip report and
+      nothing is invented.
+    """
+    try:
+        finalized_bytes = _manifest_path(
+            ctx.done_session_dir, manifest.run_id
+        ).read_bytes()
+    except OSError as exc:
+        _shadow_propagation_report(
+            f"cannot read the finalized source bytes ({exc}); nothing propagated"
+        )
+        return
+    try:
+        from worktree_closeout_migrate import (  # stale deployed siblings degrade the arm to a report, never to a guess
+            _closeout_manifest_candidate,
+            _facts_tmp_root,
+        )
+    except Exception as exc:
+        _shadow_propagation_report(
+            "worktree_closeout_migrate helpers unavailable "
+            f"({exc}); nothing propagated"
+        )
+        return
+    primary, primary_err = _resolve_primary_checkout(ctx)
+    if primary is None:
+        _shadow_propagation_report(
+            "primary checkout unresolved "
+            f"({(primary_err or '').strip()[:200]}); nothing propagated"
+        )
+        return
+    try:
+        primary_session = _facts_tmp_root(primary) / "done-session"
+    except Exception as exc:
+        _shadow_propagation_report(
+            f"primary facts tmp_dir unresolved ({exc}); nothing propagated"
+        )
+        return
+    try:
+        same_checkout = os.path.realpath(str(primary_session)) == os.path.realpath(
+            str(ctx.done_session_dir)
+        )
+    except OSError:
+        same_checkout = str(primary_session) == str(ctx.done_session_dir)
+    if same_checkout:
+        # The primary-dispatched closeout: the resolved primary shadow path
+        # is the file the operation itself just finalized - a silent no-op
+        # skip with no rewrite and no miss report.
+        return
+    shadow = primary_session / f"run-manifest-{manifest.run_id}.json"
+    created_from_witness = False
+    if not shadow.is_file():
+        manifest_name = f"run-manifest-{manifest.run_id}.json"
+        for plan_rel in manifest.owned_plan_paths:
+            record, _explicit = _closeout_manifest_candidate(
+                primary, Path(plan_rel), None
+            )
+            if record is None:
+                continue
+            try:
+                payload = json.loads(record.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for section in ("migrated", "renamed", "replaced"):
+                rows = payload.get(section)
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    source_raw = row.get("source")
+                    if (
+                        row.get("verified") is True
+                        and isinstance(source_raw, str)
+                        and posixpath.basename(source_raw) == manifest_name
+                        and "done-session" in posixpath.normpath(source_raw).split("/")
+                    ):
+                        created_from_witness = True
+                        break
+                if created_from_witness:
+                    break
+            if created_from_witness:
+                break
+            # Each owned plan claim contributes its canonical session-slug
+            # record home (the migration helpers' own resolution, canonical
+            # ``closeout-migration.json`` first, legacy twin second); the
+            # first witness anywhere in the run's claim set authorizes the
+            # surviving-record write.
+        if not created_from_witness:
+            _shadow_propagation_report(
+                "no primary shadow and no closeout-migration transfer "
+                f"witness for {manifest_name}; skipped (nothing invented)"
+            )
+            return
+    else:
+        try:
+            payload = json.loads(shadow.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _shadow_propagation_report(
+                "the primary shadow payload is unreadable "
+                f"({exc}); run identity unverifiable; aborted, both files "
+                "untouched"
+            )
+            return
+        if not isinstance(payload, dict):
+            _shadow_propagation_report(
+                "the primary shadow payload is not an object; run identity "
+                "unverifiable; aborted, both files untouched"
+            )
+            return
+        if payload.get("complete") is True or payload.get("dispositioned") is not None:
+            state = (
+                "complete=true"
+                if payload.get("complete") is True
+                else "a dispositioned record"
+            )
+            _shadow_propagation_report(
+                f"the primary shadow already carries terminal state ({state}); "
+                "skipped without overwrite"
+            )
+            return
+        mismatches: list[str] = []
+        if payload.get("run_id") != manifest.run_id:
+            mismatches.append(
+                "run_id "
+                + _sanitize_manifest_error_value(payload.get("run_id"))
+            )
+        if payload.get("repo_root") != manifest.repo_root:
+            mismatches.append(
+                "repo_root "
+                + _sanitize_manifest_error_value(payload.get("repo_root"))
+            )
+        if payload.get("owned_plan_paths") != list(manifest.owned_plan_paths):
+            mismatches.append("owned_plan_paths differs from the finalized source")
+        if payload.get("complete") is not False:
+            mismatches.append(
+                "complete "
+                + _sanitize_manifest_error_value(payload.get("complete"))
+                + " is not the strict pre-finalize false"
+            )
+        if mismatches:
+            _shadow_propagation_report(
+                "identity mismatch between the primary shadow and the "
+                f"finalized source ({'; '.join(mismatches)}); aborted, both "
+                "files untouched"
+            )
+            return
+    try:
+        shadow.parent.mkdir(parents=True, exist_ok=True)
+        tmp = shadow.parent / (shadow.name + ".tmp")
+        try:
+            tmp.write_bytes(finalized_bytes)
+            os.replace(tmp, shadow)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        _shadow_propagation_report(
+            f"cannot write {shadow} ({exc}); no partial write; the shadow is "
+            "untouched"
+        )
+        return
+    if created_from_witness:
+        _shadow_propagation_report(
+            "no shadow present and the closeout-migration record witnesses "
+            f"the transfer; wrote the finalized bytes as the surviving "
+            f"record {shadow}"
+        )
+    else:
+        _shadow_propagation_report(
+            f"wrote the finalized bytes over the primary shadow {shadow}"
+        )
+
+
 def _cmd_finalize_manifest(argv: list[str]) -> int:
     """Set the run manifest's ``complete`` flag to true in place (done Step 6,
     immediately before the done-lock release): the run reached the end, so it
-    is never an interrupted run for a later Step 0. Two-way identity
+    is never an interrupted run for a later Step 0. The success path and the
+    already-complete early return also propagate the finalized bytes into the
+    primary checkout's surviving shadow record for the same run-id (the
+    terminal-state writer of plan
+    docs/history/plans/2026-11-05-done-finalized-manifest-shadow.md; the arm
+    reports on the failure channel and never changes the exit). Two-way
+    identity
     contract: an absent manifest file keeps the explicit not-found note with
     a zero exit (the Step 6 recipe's tolerance clause; a run without a
     manifest skips finalization without failing), while a present manifest
@@ -9590,6 +9829,9 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
             f"finalize-manifest: run {manifest.run_id} is already complete; "
             "nothing to do"
         )
+        # Idempotent propagation: a re-run after an earlier skipped or
+        # refused propagation still lands the same finalized bytes.
+        _propagate_finalized_shadow(ctx, manifest)
         return 0
     manifest.complete = True
     try:
@@ -9597,6 +9839,7 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
     except OSError as exc:
         return _cli_fail(f"finalize-manifest: cannot rewrite the run manifest: {exc}")
     print(f"finalize-manifest: run {manifest.run_id} marked complete in {path}")
+    _propagate_finalized_shadow(ctx, manifest)
     return 0
 
 

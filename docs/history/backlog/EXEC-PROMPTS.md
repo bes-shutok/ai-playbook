@@ -157,6 +157,58 @@ Machinery admission: no new gate, validator, lock, ledger, or required ceremony 
 
 Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add a concise handoff in `agents/skills/receiving-review/SKILL.md` from completed review fixes to `doing-code-review`'s focused panel workflow. State that the panel covers the exact final diff and that a qualifying panel already run on those exact bytes satisfies the handoff. Preserve the panel skill as the single procedure; do not create a new review round, validator, or blocking gate. Run the required focused skill checks and focused review panel on the exact diff, then commit only the receiving-review skill file.
 
+## review-residual-filing-selector-shape
+
+Added: 2026-11-06, investigate over the 2026-11-06 harvest's skills-corpus capture
+
+Rejected alternatives:
+- Add a warning-only validator that open top-level backlog rows carry the selector block: rejected for now, one witnessed batch and the pointer-sized fix prevents the drift at zero machinery cost; revisit only on a second witnessed batch, and any future check lands warning-only per the machinery admission protocol (evidence basis: the origin row's gate-coverage evidence, the three `scripts/check_backlog_*.py` validators owning claimed rows, inbox location, and root closure)
+- Migrate the review-findings body template (Driving force / Source / Finding / Remedy / Acceptance) into the canonical row shape: rejected, the bodies read correctly once selectable; the defect is the missing selector block, not the body shape, and a template migration would churn every existing row for no observed body failure (evidence basis: docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md, the seven repaired rows in its evidence)
+- Leave batch repair to the next harvest pass: rejected, harvest-time discovery is luck-based grep work (this batch surfaced only by grepping the landing's diff), while filing-time shape costs one block per row (evidence basis: docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md, Observed vs expected)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the carrying-a-body-named-single-surface-fix-with-no-open-design-choice clause admits it; the remedy is one pointer-class sentence at each named filing surface (the execute-plan light-boundary backlogged-candidates filing text, plus the done closeout's matching text only where it files residual rows), the validator arm is rejected above leaving no design choice open, and the surfaces are tracked skill text, never guard-bearing paths.
+
+Origins:
+- docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md
+
+Stage 1 roster: docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md (single origin; the seven repaired rows cluster to it as same-family filings, not separate origins)
+
+Urgency: medium - the seven-row batch repair already landed in this harvest's change set, so no filed finding is currently stranded; the remaining cost is recurrence, since every review-residual filing can silently repeat the drift until the filing step names the selector block, and each recurrence strands filed findings from the fleet's survey until a harvest happens to grep them out.
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony (filing-step pointer sentences only); the warning-only check arm is rejected above with its revisit condition named.
+
+Scope arms: (1) add the one-sentence selector-shape requirement (Status, Priority, Class, Origin class at filing time) to the execute-plan light-boundary text where backlogged-candidate rows are filed; (2) mirror the same sentence in the done closeout text only where that text files residual rows; (3) add no validator and migrate no template.
+
+Orientation: docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md (the origin row), agents/skills/learn/step-1-extract.md Steps 1.8/1.9 (the row-shape contract and its `Status: open` survey), agents/skills/execute-plan/SKILL.md light-boundary text, agents/skills/done/SKILL.md closeout text, the repaired seven-row batch in this change set.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add the selector-shape sentence to the execute-plan light-boundary filing text (and the done closeout text where it files residual rows), naming the four fields as a filing-time requirement; add no validator and migrate no template; run the hygiene scan and the pins suite, fold any review findings, and commit only the touched skill files.
+
+## chained-entry-phase0-baseline-capture
+
+Added: 2026-11-06, investigate over the 02:35 WET harvest's filed origin row (entry owed since filing)
+
+Rejected alternatives:
+- Re-state the Phase 0 contract at its definition site: rejected, the contract text is correct and was honored both times through honest deviation records; the gap is that the chain-entry moment never re-anchors it, so a definition-site restatement adds no new anchor (evidence basis: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md, Observed vs expected and Evidence sections)
+- Add a warning-only entry-time check that the baseline capture preceded the first owned edit: rejected machinery arm, no second witnessed incident class, and defining the owned-edit boundary for the check is a design choice the row's ship-when explicitly excludes (no gate or validator added) (evidence basis: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md, Ship when)
+- Keep the deviation recording as the only arm: rejected, two same-evening witnesses in one mandate chain show the deviation arm operating as the mode, not the exception, on chained entries (evidence basis: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md, Evidence section, two witnesses within roughly one hour)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the carrying-a-body-named-single-surface-fix-with-no-open-design-choice clause admits it; the row's root area and ship-when name a pointer-class sentence at the chain-entry path and exclude gates and validators, leaving no design choice open.
+
+Origins:
+- docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md
+
+Stage 1 roster: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md (single origin; the row's own Cluster lines bind it to the capture-contract surface rows, which own different triggers)
+
+Urgency: medium - the contract held both witnessed times (honest deviations, no closeout corruption), but the deviation mode repeats on every chained entry until the entry path re-anchors the capture, and each occurrence costs a done-setup re-derivation plus a recorded deviation in the closeout.
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony (one pointer-class sentence at the entry path); the check arm is rejected above with the missing-incident absence named.
+
+Scope arms: (1) add the one-sentence entry-order pointer where the maintenance chain enters plan-scoped work (the next-pick and continuation flows): the Phase 0 baseline capture precedes the first owned edit exactly as on a cold start; (2) confirm the execute-plan Phase 0 contract text needs no change (the row certifies it correct); (3) keep the deviation recording untouched as the backstop.
+
+Orientation: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md (the origin row), agents/skills/execute-plan/SKILL.md Phase 0 prose, the maintenance auth/exec chained-entry flows (next-pick selection and continuation entry), the two witnessed session records cited in the row.
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add the single entry-order pointer sentence at the chained-entry path named by the origin row, verify the Phase 0 contract text needs no edit, add no gate or validator, run the hygiene scan, fold any review findings, and commit only the touched skill files.
+
 ## unit-test-runner-private-image-auth-explanation
 
 Added: 2026-11-05, investigate after learn Step 1.8 capture
@@ -1971,3 +2023,13 @@ Rejected alternatives:
 
 Machinery admission: the census pass is read-only probing plus text and pinning arms; the gate arm is rejected above with the missing-incident absence named.
 
+
+## 2026-11-06 exec closeout: closeout-migrate-supplemental execution landed cd385e428
+
+Urgency: low - record entry; the work is landed and the residuals are filed.
+
+Rejected alternatives:
+- Re-open the landed execution to fold the residual rows in-landing: rejected, the residuals were filed deliberately as durable rows and the plan is archived with its execution flips and disposition fold (evidence basis: docs/history/plans/completed/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md)
+- Treat the skipped done-run completion marking as work owed on this entry: rejected, the marking's refusal warnings are on record, the locks released free, and the landing evidence lives in the landing commit and the plans archive for any future re-derivation (evidence basis: cd385e428, the record entry's own residual note)
+
+Entry: the one-shot exec carrier (automation-7da743f2, armed 2026-11-05 for 23:00 WET, fired late by the operator's restart) executed docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md end to end: four TDD tasks with per-task light boundaries, anchor design review 0 blocking (3 advisory folded as guard-rails), intermediate reviews clean/backlogged-candidates, Phase 3 fresh adversarial panel (correctness + fidelity lenses) 0 blocking; squash-landed cd385e428 on main after a mid-closeout rebase over the peer's harvest landing (lessons renumbered additively 409-412 over the peer's 407-408; the renumbering is the citation-consistency witness for the corpus-append-at-tail discipline); plan archived to completed with the 8 origin rows' execution flips and disposition fold; 7 durable residual backlog rows filed 2026-11-06; migrate suite 438 passed + the peer-adjudicated baseline red; pins/hygiene exit 0; staging pairs validated (design-review canonical pair + the exec-r1 completion record backfilling the plan-egress evidence leg). Closeout residual: the done-run manifest's completion marking was skipped (finalize ran from the primary after the worktree removal had taken the owner checkout's done-session scratch; the unbound-resolution refusal warnings are on record; locks released free) - the landing evidence lives in cd385e428 and the plans archive; a future run re-derives from those, and the ordering lesson (finalize before worktree removal) is folded into lesson 405's witness family.

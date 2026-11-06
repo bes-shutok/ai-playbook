@@ -2400,6 +2400,7 @@ def validate_self_heal_attempt_state(
         )
         if record_result is not result:
             result.errors.extend(record_result.errors)
+            result.warnings.extend(record_result.warnings)
 
 
 def _validate_self_heal_record(
@@ -2542,9 +2543,18 @@ def _validate_self_heal_record(
     if not prior_valid or not prior_post_fence:
         if status != "unknown" or run_id != current_review_id:
             result.add_error("missing, malformed, or legacy prior round requires unknown state bound to this review-run-id")
+        if prior_number > 1:
+            result.add_warning(
+                "skipped self-heal chain validation for earlier rounds "
+                f"r1 through r{prior_number - 1}: prior round r{prior_number} "
+                "is missing, malformed, or legacy"
+            )
         return
     if prior_state["run_id"] != run_id:
-        result.add_error("run_id cannot change after r1 in the same artifact chain")
+        result.add_error(
+            "run_id cannot change after r1 in the same artifact chain; "
+            "r1's run_id must carry forward unchanged in later rounds"
+        )
         return
     if prior_state["status"] in {"consumed", "unknown"}:
         if state != prior_state:
@@ -3138,7 +3148,10 @@ def validate_discarded_findings(content: str, result: ValidationResult) -> None:
             continue
         _agent, _sev, _pattern, _theme, reason, notes = cells[:6]
         if reason not in VALID_DISCARD_REASONS:
-            result.add_warning(f"unknown discard reason code: {reason}")
+            accepted = ", ".join(sorted(VALID_DISCARD_REASONS))
+            result.add_warning(
+                f"unknown discard reason code: {reason}; accepted codes: {accepted}"
+            )
         if reason == "wrong-owner" and not re.search(r"lead:\s*\w+", notes, re.IGNORECASE):
             result.add_error(
                 "wrong-owner discard row missing Notes lead: <agent-id>"
@@ -3527,16 +3540,87 @@ def _scaffold_envelope() -> dict:
     }
 
 
+PLANS_DIR_DEFAULT = "docs/history/plans"
+PLANS_COMPLETED_DIR_DEFAULT = "docs/history/plans/completed"
+
+
+def _coverage_plans_layout(anchor: Path) -> tuple[Path, Path]:
+    """The facts-resolved plans layout under ``anchor`` (the repository
+    root): the ``plans_dir`` and ``plans_completed_dir`` facts keys read
+    through the existing ``facts_paths`` import (raw values anchored at the
+    repository root, not the process cwd), each falling back to its
+    conventional default under the anchor when the facts file or the key is
+    absent."""
+    plans_raw = completed_raw = None
+    if facts_paths is not None:
+        plans_raw = facts_paths.resolve_toml_key_raw(anchor, "plans_dir")
+        completed_raw = facts_paths.resolve_toml_key_raw(
+            anchor, "plans_completed_dir"
+        )
+    plans_dir = (
+        anchor / Path(plans_raw).expanduser()
+        if plans_raw
+        else anchor / PLANS_DIR_DEFAULT
+    )
+    completed_dir = (
+        anchor / Path(completed_raw).expanduser()
+        if completed_raw
+        else anchor / PLANS_COMPLETED_DIR_DEFAULT
+    )
+    return plans_dir.resolve(), completed_dir.resolve()
+
+
+def _coverage_archive_twin(value: str) -> Path | None:
+    """Archive-twin resolution (archive-aware source resolution plan, Task
+    1): for a relative recorded path whose parent resolves to the
+    facts-resolved plans layout, the completed twin (``plans_completed_dir``
+    plus the basename), derived unconditionally with no existence probe
+    (the consumers' first-existing candidate semantics gate the outcome).
+    An absolute path, a path outside the plans layout (a backlog row, a
+    source file, a document), and a value whose normalized form or whose
+    twin escapes the repository root derive no twin. The anchor is the
+    enclosing git repository root, falling back to the process cwd outside
+    any repository (the embedded battery's chdir fixtures)."""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return None
+    try:
+        cwd = Path.cwd()
+        anchor = repository_root(cwd) or cwd.resolve()
+        recorded = (anchor / candidate).resolve()
+        recorded.relative_to(anchor)
+        plans_dir, completed_dir = _coverage_plans_layout(anchor)
+        if recorded.parent != plans_dir:
+            return None
+        twin = (completed_dir / recorded.name).resolve()
+        twin.relative_to(anchor)
+    except (OSError, ValueError):
+        # A pathological recorded value (an embedded NUL, an unresolvable
+        # path) derives no twin and leaves today's named error vocabulary
+        # intact; the helper only ever adds resolution, never a new exit
+        # shape.
+        return None
+    return twin
+
+
 def _coverage_link_paths(value) -> list[Path]:
     """Resolve a coverage link value (artifact or sidecar path string)
-    against the process cwd and, when relative, also as recorded. Returns
-    the candidate paths for existence checks."""
+    against the process cwd and, when relative, also as recorded, then the
+    completed archive twin for an in-scope plans-layout path (appended
+    last, unconditionally; see ``_coverage_archive_twin``). Returns the
+    candidate paths for existence checks; consumers resolve the first
+    existing candidate, so the twin enters only when no earlier candidate
+    exists."""
     if not isinstance(value, str) or not value.strip():
         return []
     candidate = Path(value)
     if candidate.is_absolute():
         return [candidate]
-    return [candidate, Path.cwd() / candidate]
+    paths = [candidate, Path.cwd() / candidate]
+    twin = _coverage_archive_twin(value)
+    if twin is not None:
+        paths.append(twin)
+    return paths
 
 
 def _coverage_artifact_exists(value) -> bool:
@@ -3556,15 +3640,19 @@ def _coverage_sidecar_parses(value) -> bool:
 
 def _coverage_linked_round(value) -> dict | None:
     """Load the linked original sidecar payload for a replacement or
-    inherited entry (first existing candidate that parses to a dict)."""
+    inherited entry: the first existing candidate decides (a dict parse is
+    returned, any other parse result is ``None``), so a present primary
+    precludes twin substitution and the archive twin enters only when no
+    earlier candidate exists (the archive-aware source resolution plan's
+    priced first-existing stop; output-identical over the pre-twin
+    candidate list, whose second candidate is the cwd duplicate)."""
     for candidate in _coverage_link_paths(value):
         if candidate.is_file():
             try:
                 parsed = json.loads(candidate.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 return None
-            if isinstance(parsed, dict):
-                return parsed
+            return parsed if isinstance(parsed, dict) else None
     return None
 
 
@@ -5472,6 +5560,29 @@ def validate_version1_payload(
             )
 
 
+def _warn_skipped_sidecar_diagnostics(
+    result: ValidationResult, reason: str
+) -> None:
+    """Report which sidecar-dependent checks cannot run without its payload."""
+    for diagnostic in (
+        "version-1 sidecar schema validation",
+        "record-kind enum validation",
+        "cap-closure contract validation",
+        "corrections extension validation",
+        "last-fix commit agreement",
+        "current sidecar field and finding validation",
+        "finding conservation",
+        "counts parity",
+        "coverage Markdown agreement",
+        "soften-watchlist agreement",
+        "discarded-row ownership validation",
+        "sidecar-surface witness-ledger shape validation",
+    ):
+        result.add_warning(
+            f"skipped {diagnostic}: {reason} prevents evaluation"
+        )
+
+
 def _validate_stats_sidecar_gates(
     staging_path: Path,
     content: str,
@@ -5516,10 +5627,14 @@ def _validate_stats_sidecar_gates(
             f"missing required stats sidecar: "
             f"{stats_sidecar_path(staging_path).name}"
         )
+        _warn_skipped_sidecar_diagnostics(result, "the stats sidecar is missing")
         return None, None
     if sidecar_read.error is not None:
         result.add_error(
             f"invalid stats sidecar JSON: {sidecar_read.error}"
+        )
+        _warn_skipped_sidecar_diagnostics(
+            result, "the stats sidecar JSON is malformed"
         )
         return None, None
     payload = sidecar_read.payload
@@ -6902,7 +7017,10 @@ def validate_staging_file(
         if qualified and qualified.group(1) != plan_identity_token(expected_plan_identity):
             result.add_error("review filename plan-identity token does not match --source-plan path")
         if declared_identity is not None and not qualified:
-            result.add_error("sidecar plan_identity requires an identity-qualified review filename")
+            result.add_error(
+                "sidecar plan_identity requires an identity-qualified review filename; "
+                "required form: -p<8 lowercase hex>-r<N>.md"
+            )
         if qualified and actual_identity is None:
             result.add_error("identity-qualified review filename requires a plan identity")
     sidecar_date = None
@@ -15180,6 +15298,536 @@ def _selftest_coverage_contract(root: Path, check) -> None:
     )
 
 
+def _selftest_coverage_archive_twin(root: Path, check) -> None:
+    """Family: archive-twin resolution for coverage links (archive-aware
+    source resolution plan, Task 1). RED-first: the coverage-twin pins fail
+    until ``_coverage_archive_twin`` exists and ``_coverage_link_paths``
+    appends the completed twin as its trailing candidate; the
+    unparseable-twin-sidecar pin, the linked-round first-existing stop pin,
+    and the plans-layout-scoping pins hold GREEN before and after
+    (byte-stable refusal regression guards). The family runs under the
+    battery's chdir fixture pattern (save, chdir into a subdirectory of the
+    battery root, restore in finally); the fixture subdirectory is no git
+    repository, so the helper's repository anchor falls back to the process
+    cwd and every probe stays inside the battery root, and the placeholder
+    basenames never collide with the live tree."""
+    import os
+
+    base = _version1_payload()
+    fixture_root = root / "archive-twin"
+    plans_dir = fixture_root / "docs" / "history" / "plans"
+    completed_dir = plans_dir / "completed"
+    backlog_dir = fixture_root / "docs" / "history" / "backlog"
+    backlog_completed_dir = backlog_dir / "completed"
+    completed_dir.mkdir(parents=True, exist_ok=True)
+    backlog_completed_dir.mkdir(parents=True, exist_ok=True)
+    placeholder_stem = "2026-09-16-plan-review-vrs-archive-twin-placeholder"
+
+    def local_attempt_coverage(artifact: str, sidecar: str) -> dict:
+        return {
+            "outcome": "clean",
+            "material_lens_set": ["testing"],
+            "completed": ["testing"],
+            "missing": [],
+            "attempts": [
+                {
+                    "attempt_id": "twin1",
+                    "started_at": "2026-09-16T10:00:00Z",
+                    "deadline": "2026-09-16T10:15:00Z",
+                    "outcome": "complete",
+                    "attempt_number": 1,
+                    "contributed_coverage": True,
+                    "execution_mode": "local",
+                    "lenses": ["testing"],
+                    "prompt_scope": "testing lens only, narrowed evidence",
+                    "artifact": artifact,
+                    "sidecar": sidecar,
+                }
+            ],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 15,
+                "per_worker_max": 2,
+            },
+        }
+
+    def contract_errors(artifact: str, sidecar: str) -> list[str]:
+        res = ValidationResult(Path("x"))
+        validate_coverage_contract(
+            _coverage_fixture_payload(
+                base, local_attempt_coverage(artifact, sidecar)
+            ),
+            res,
+            coverage_exempt=False,
+        )
+        return res.errors
+
+    # ---- Twin-only pair: the artifact and sidecar exist only under the
+    # completed directory; the record keeps citing the pre-archive path.
+    twin_only_name = f"{placeholder_stem}-twin-only-r1.md"
+    twin_only_doc = _write_staging(
+        completed_dir,
+        twin_only_name,
+        _version1_markdown(),
+        _coverage_fixture_payload(base, None, date="2026-09-16"),
+    )
+    twin_only_artifact = f"docs/history/plans/{twin_only_name}"
+    twin_only_sidecar = twin_only_artifact[:-3] + ".stats.json"
+    # ---- Primary-present pair: the primary sidecar parses to a dict with
+    # a marker, and a distinguishable twin sidecar sits under completed.
+    primary_name = f"{placeholder_stem}-primary-r1.md"
+    _write_staging(
+        plans_dir, primary_name, _version1_markdown(), {"marker": "primary"}
+    )
+    _write_staging(
+        completed_dir, primary_name, _version1_markdown(), {"marker": "twin"}
+    )
+    primary_artifact = f"docs/history/plans/{primary_name}"
+    primary_sidecar = primary_artifact[:-3] + ".stats.json"
+    # ---- Non-dict primary: the primary sidecar parses to a list while the
+    # twin sidecar parses to a dict (the Terms-priced linked-round stop).
+    nondict_name = f"{placeholder_stem}-nondict-r1.md"
+    _write_staging(plans_dir, nondict_name, _version1_markdown(), "[]")
+    _write_staging(
+        completed_dir, nondict_name, _version1_markdown(), {"marker": "twin"}
+    )
+    nondict_sidecar = f"docs/history/plans/{nondict_name}"[:-3] + ".stats.json"
+    # ---- Unparseable twin sidecar: the artifact exists only at the twin
+    # and the twin sidecar is not JSON.
+    broken_name = f"{placeholder_stem}-broken-sidecar-r1.md"
+    _write_staging(
+        completed_dir, broken_name, _version1_markdown(), "{not json"
+    )
+    broken_artifact = f"docs/history/plans/{broken_name}"
+    broken_sidecar = broken_artifact[:-3] + ".stats.json"
+    # ---- Out-of-layout row: a backlog-shaped recorded path whose
+    # parent-sibling ``completed/`` directory exists and holds the file.
+    backlog_name = f"{placeholder_stem}-backlog-row.md"
+    _write_staging(backlog_completed_dir, backlog_name, "# landed row\n")
+    backlog_artifact = f"docs/history/backlog/{backlog_name}"
+    # ---- Escape values: ``..``-bearing recorded values whose normalized
+    # form leaves the fixture anchor (the confinement arm).
+    escape_values = [
+        f"../docs/history/plans/{twin_only_name}",
+        f"docs/history/plans/../../../../{twin_only_name}",
+    ]
+
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(fixture_root)
+        expected_twin = twin_only_doc.resolve()
+        paths = _coverage_link_paths(twin_only_artifact)
+        check(
+            "coverage archive twin: an in-scope relative recorded path "
+            "appends the completed twin as the trailing candidate",
+            len(paths) == 3 and paths[-1].resolve() == expected_twin,
+        )
+        normalized_paths = _coverage_link_paths(
+            f"docs/history/plans/completed/../{twin_only_name}"
+        )
+        check(
+            "coverage archive twin: a ..-bearing value that normalizes "
+            "inside the plans layout derives the same trailing twin",
+            len(normalized_paths) == 3
+            and normalized_paths[-1].resolve() == expected_twin,
+        )
+        check(
+            "coverage archive twin: a twin-only artifact/sidecar pair passes "
+            "the artifact-exists and sidecar-parses checks",
+            _coverage_artifact_exists(twin_only_artifact)
+            and _coverage_sidecar_parses(twin_only_sidecar),
+        )
+        check(
+            "coverage archive twin: a local-mode attempt citing the "
+            "pre-archive pair validates through the completed twin",
+            contract_errors(twin_only_artifact, twin_only_sidecar) == [],
+        )
+        check(
+            "coverage archive twin: a twin-only linked sidecar loads through "
+            "the linked-round consumer",
+            _coverage_linked_round(twin_only_sidecar) is not None,
+        )
+
+        # ---- Outcome equivalence (GREEN before and after): an existing
+        # primary resolves first across the consumers; the twin never
+        # substitutes for a present primary.
+        linked_primary = _coverage_linked_round(primary_sidecar)
+        check(
+            "coverage archive twin: a present primary sidecar resolves "
+            "first in the linked-round consumer (the twin never substitutes)",
+            isinstance(linked_primary, dict)
+            and linked_primary.get("marker") == "primary",
+        )
+        check(
+            "coverage archive twin: a present primary pair keeps the "
+            "artifact-exists and sidecar-parses verdicts",
+            _coverage_artifact_exists(primary_artifact)
+            and _coverage_sidecar_parses(primary_sidecar),
+        )
+        check(
+            "coverage archive twin: a present-but-non-dict primary sidecar "
+            "keeps today's verdict (first-existing stop; no twin "
+            "substitution)",
+            _coverage_linked_round(nondict_sidecar) is None
+            and not _coverage_sidecar_parses(nondict_sidecar),
+        )
+
+        # ---- Unparseable twin sidecar (GREEN before and after): the
+        # existing sidecar vocabulary fires, no twin acceptance.
+        broken_errors = contract_errors(broken_artifact, broken_sidecar)
+        check(
+            "coverage archive twin: an unparseable twin sidecar keeps "
+            "today's local-mode attempt error",
+            not _coverage_sidecar_parses(broken_sidecar)
+            and _coverage_linked_round(broken_sidecar) is None
+            and any("local-mode attempt" in e for e in broken_errors)
+            and all(
+                e.startswith("coverage local-mode attempt")
+                for e in broken_errors
+            ),
+        )
+
+        # ---- Plans-layout scoping (GREEN before and after): absolute
+        # paths, out-of-layout rows, and escaping values derive no twin.
+        absolute_paths = _coverage_link_paths(str(plans_dir / twin_only_name))
+        check(
+            "coverage archive twin: an absolute recorded path derives no "
+            "twin candidate",
+            len(absolute_paths) == 1,
+        )
+        backlog_paths = _coverage_link_paths(backlog_artifact)
+        check(
+            "coverage archive twin: a backlog-row recorded path outside the "
+            "plans layout derives no twin candidate (inert even though the "
+            "sibling completed directory holds the file)",
+            len(backlog_paths) == 2
+            and not _coverage_artifact_exists(backlog_artifact),
+        )
+        check(
+            "coverage archive twin: a ..-bearing value that escapes the "
+            "repository anchor derives no twin candidate",
+            all(
+                len(_coverage_link_paths(value)) == 2
+                for value in escape_values
+            ),
+        )
+        # A pathological recorded value (an embedded NUL, valid sidecar
+        # JSON) derives no twin and keeps today's named error vocabulary:
+        # the helper must not introduce a new exit shape (uncaught
+        # ValueError/OSError out of the coverage contract).
+        nul_paths = _coverage_link_paths(f"docs/history/plans/{twin_only_name}\x00")
+        check(
+            "coverage archive twin: a recorded value with an embedded NUL "
+            "derives no twin candidate (no new exit shape)",
+            len(nul_paths) == 2,
+        )
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "coverage archive twin: the cwd is restored after the fixture",
+        os.getcwd() == prior_cwd,
+    )
+
+
+def _selftest_source_flag_archive_twin(root: Path, check) -> None:
+    """Family: the ``--source-plan`` not-found arm resolves the completed
+    archive twin (archive-aware source resolution plan, Task 2). RED-first:
+    the source-flag-twin, drift-mutant, and identity-stability pins fail
+    against the pre-change validator (a missing plans-layout operand
+    refuses as the ``source file not found`` tool error today); the
+    missing-twin, file-shaped-twin, and kind-gate pins hold GREEN before
+    and after (byte-stable refusal regression guards). The chdir fixture
+    pattern (save, chdir into a subdirectory of the battery root, restore
+    in finally) keeps every probe inside the battery root with placeholder
+    basenames that never collide with the live tree. The identity-stability
+    pin builds a hermetic throwaway ``ScratchRepo`` git repository in its
+    own temporary directory so ``repository_root`` resolves and the three
+    identity comparisons actually fire (the ``normalize_plan_path`` derivation, the filename
+    identity-token comparison, and the ``extensions.plan_identity``
+    comparison). Semantic decision (the plan's Terms pricing): identity
+    derivation stays bound to the pre-archive operand path rather than
+    introducing an identity-equivalence comparison, because deriving
+    identity from the original path keeps the record-side contract
+    untouched and an equivalence comparison would widen every identity
+    check to justify one call site."""
+    import os
+
+    fixture_root = root / "source-flag-twin"
+    plans_dir = fixture_root / "docs" / "history" / "plans"
+    completed_dir = plans_dir / "completed"
+    completed_dir.mkdir(parents=True, exist_ok=True)
+    stem = "2026-09-22-plan-review-vrs-source-twin-placeholder"
+
+    def fresh_bytes(tag: str) -> bytes:
+        return f"# source-flag twin plan ({tag}): reviewed bytes\n".encode(
+            "utf-8"
+        )
+
+    def twin_operand(tag: str, plan_bytes: bytes) -> tuple[str, Path]:
+        """Park the plan bytes only at the completed archive twin and
+        return the (pre-archive operand, resolved twin path) pair."""
+        name = f"{stem}-{tag}.md"
+        twin = completed_dir / name
+        twin.write_bytes(plan_bytes)
+        return f"docs/history/plans/{name}", twin.resolve()
+
+    def record(
+        tag: str, plan_bytes: bytes, *, declared_kind: str = "plan"
+    ) -> Path:
+        """A post-window canonical record whose sidecar binds the given
+        plan bytes' digest and declares the given source kind."""
+        payload = _post_window_fixture_payload(declared_kind)
+        payload["source_kind"] = declared_kind
+        payload["source_digest"] = compute_source_digest(
+            declared_kind, plan_bytes
+        )
+        return _write_staging(
+            fixture_root,
+            f"{stem}-{tag}.md",
+            _post_window_fixture_markdown(declared_kind),
+            payload,
+        )
+
+    # ---- Twin-only fixtures (the primary plans-root path is absent).
+    fresh_plan = fresh_bytes("fresh")
+    fresh_operand, fresh_twin = twin_operand("fresh", fresh_plan)
+    # ---- Drift fixture: the record binds the reviewed bytes' digest, and
+    # the twin's bytes then drift (the mutated bytes live only at the twin).
+    drift_plan = fresh_bytes("drift")
+    drifted_plan = drift_plan.replace(b"reviewed", b"drifted")
+    assert drifted_plan != drift_plan
+    drift_operand, drift_twin = twin_operand("drift", drifted_plan)
+    doc_operand, _doc_twin = twin_operand("kinddoc", fresh_bytes("kinddoc"))
+    rfc_operand, _rfc_twin = twin_operand("kindrfc", fresh_bytes("kindrfc"))
+    # ---- Absent twin: nothing at the primary and nothing under the
+    # completed directory.
+    absent_operand = f"docs/history/plans/{stem}-absent.md"
+    # ---- Directory-shaped twin: the completed entry is a directory, not
+    # a regular file (the known limitation keeps today's refusal).
+    dirshape_operand = f"docs/history/plans/{stem}-dirshape.md"
+    (completed_dir / f"{stem}-dirshape.md").mkdir()
+
+    fresh_record = record("rec-fresh", fresh_plan)
+    drift_record = record("rec-drift", drift_plan)
+    absent_record = record("rec-absent", fresh_plan)
+    dirshape_record = record("rec-dirshape", fresh_plan)
+    doc_record = record(
+        "rec-kinddoc", fresh_bytes("kinddoc"), declared_kind="document"
+    )
+    rfc_record = record(
+        "rec-kindrfc", fresh_bytes("kindrfc"), declared_kind="rfc"
+    )
+
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(fixture_root)
+        # ---- Source-flag-twin pin (RED): the operand names a missing
+        # plans-layout path whose completed twin holds the reviewed bytes;
+        # the validation must read the twin's bytes into the stale-source
+        # gate and exit 0.
+        rc_fresh = main(
+            ["--hard", str(fresh_record), "--source-plan", fresh_operand]
+        )
+        check(
+            "source-flag archive twin: a missing plans-layout operand "
+            "resolves the completed twin and binds its bytes (exit 0)",
+            rc_fresh == 0,
+        )
+        # ---- Drift-mutant pin (RED): the twin's bytes hash differently
+        # from the sidecar's source_digest; the existing stale-source
+        # refusal fires with the hint naming the resolved twin path.
+        with _stderr_captured() as buf_drift:
+            rc_drift = main(
+                ["--hard", str(drift_record), "--source-plan", drift_operand]
+            )
+        drift_text = buf_drift.getvalue()
+        check(
+            "source-flag archive twin: drifted twin bytes die at the "
+            "stale-source gate naming the resolved twin path",
+            rc_drift == 1
+            and "stale" in drift_text
+            and "source_digest" in drift_text
+            and str(drift_twin) in drift_text,
+        )
+        # ---- Kind-gate guard (GREEN before and after): --source-doc and
+        # --source-rfc get no twin resolution; the missing operand keeps
+        # today's tool error text, not just the exit code.
+        with _stderr_captured() as buf_doc:
+            rc_doc = main(
+                ["--hard", str(doc_record), "--source-doc", doc_operand]
+            )
+        with _stderr_captured() as buf_rfc:
+            rc_rfc = main(
+                ["--hard", str(rfc_record), "--source-rfc", rfc_operand]
+            )
+        check(
+            "source-flag archive twin: --source-doc and --source-rfc "
+            "resolve no twin (the missing operand keeps the tool error "
+            "text and code)",
+            rc_doc == 3
+            and rc_rfc == 3
+            and "source file not found" in buf_doc.getvalue()
+            and "source file not found" in buf_rfc.getvalue(),
+        )
+        # ---- Missing-twin guard (GREEN before and after): no primary and
+        # no twin keeps today's refusal shape.
+        with _stderr_captured() as buf_absent:
+            rc_absent = main(
+                ["--hard", str(absent_record), "--source-plan", absent_operand]
+            )
+        check(
+            "source-flag archive twin: a missing twin keeps today's "
+            "source file not found tool error",
+            rc_absent == 3 and "source file not found" in buf_absent.getvalue(),
+        )
+        # ---- File-shaped-twin guard (GREEN before and after): a
+        # directory-shaped completed entry is not a twin candidate.
+        with _stderr_captured() as buf_dirshape:
+            rc_dirshape = main(
+                ["--hard", str(dirshape_record), "--source-plan",
+                 dirshape_operand]
+            )
+        check(
+            "source-flag archive twin: a directory-shaped completed entry "
+            "keeps today's source file not found tool error",
+            rc_dirshape == 3
+            and "source file not found" in buf_dirshape.getvalue(),
+        )
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "source-flag archive twin: the cwd is restored after the fixture",
+        os.getcwd() == prior_cwd,
+    )
+
+    # ---- Identity-stability pin (RED): the throwaway git repository
+    # below gives the plans-layout operand an existing parent directory
+    # inside a repository, which is what lets ``repository_root`` resolve
+    # and the three identity comparisons actually fire (the
+    # ``normalize_plan_path`` derivation, the filename identity-token
+    # comparison, and the ``extensions.plan_identity`` comparison) over a
+    # twin-resolved validation; a nonexistent operand parent would leave
+    # ``repository_root`` None and silently skip them all. Semantic
+    # decision (the plan's Terms pricing): identity derivation stays bound
+    # to the pre-archive operand path rather than introducing an
+    # identity-equivalence comparison; deriving identity from the original
+    # path keeps the record-side contract untouched, and an equivalence
+    # comparison would widen every identity check to justify one call site.
+    cr = _sibling("corrections_record")
+    cleanup = _GradingCleanup()
+    repo = cr.build_scratch_repo(cleanup, name="identity-twin-repo")
+    identity_rel = f"docs/history/plans/{stem}-identity.md"
+    identity_plan = fresh_bytes("identity")
+    identity_completed = repo.root / "docs" / "history" / "plans" / "completed"
+    identity_completed.mkdir(parents=True, exist_ok=True)
+    (identity_completed / f"{stem}-identity.md").write_bytes(identity_plan)
+    identity_token = plan_identity_token(identity_rel)
+    identity_payload = _post_window_fixture_payload("plan")
+    identity_payload["source_kind"] = "plan"
+    identity_payload["source_digest"] = compute_source_digest(
+        "plan", identity_plan
+    )
+    identity_payload["extensions"] = {"plan_identity": identity_rel}
+    identity_record = _write_staging(
+        repo.root,
+        f"{stem}-identity-p{identity_token}-r1.md",
+        _post_window_fixture_markdown("plan"),
+        identity_payload,
+    )
+    # The wrong-identity twin of the pin: the same twin-resolved
+    # validation with a declared identity naming the completed path must
+    # refuse naming the original operand, proving the identity comparisons
+    # bind the pre-archive path through the twin resolution (a derivation
+    # that switched to the twin path would accept this record instead).
+    wrong_payload = json.loads(json.dumps(identity_payload))
+    wrong_payload["extensions"] = {
+        "plan_identity": f"docs/history/plans/completed/{stem}-identity.md"
+    }
+    wrong_record = _write_staging(
+        repo.root,
+        f"{stem}-identity-wrong-p{identity_token}-r1.md",
+        _post_window_fixture_markdown("plan"),
+        wrong_payload,
+    )
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(repo.root)
+        rc_identity = main(
+            ["--hard", str(identity_record), "--source-plan", identity_rel]
+        )
+        check(
+            "source-flag archive twin: identity stays the pre-archive path "
+            "through the twin resolution (the identity-qualified record and "
+            "its sidecar validate exactly as they did pre-archive)",
+            rc_identity == 0,
+        )
+        with _stderr_captured() as buf_wrong:
+            rc_wrong = main(
+                ["--hard", str(wrong_record), "--source-plan", identity_rel]
+            )
+        wrong_text = buf_wrong.getvalue()
+        check(
+            "source-flag archive twin: a twin-resolved validation binds "
+            "identity to the original operand (a completed-path declared "
+            "identity refuses naming the pre-archive path)",
+            rc_wrong == 1 and f"--source-plan {identity_rel!r}" in wrong_text,
+        )
+        # ---- Dual-anchor gate pin (RED): from a subdirectory cwd the
+        # plain relative operand reads differently under the two anchors
+        # (the helper anchors at the git root, ``source_path`` at the
+        # process cwd, whose parent directory does not even exist here),
+        # so the twin must not arm. Pre-fix the twin armed on the git-root
+        # reading, ``repository_root`` on the nonexistent cwd-anchored
+        # parent came back None, all three identity comparisons were
+        # silently skipped, and this wrong-identity record passed.
+        sub_dir = repo.root / "sub"
+        sub_dir.mkdir(exist_ok=True)
+        try:
+            os.chdir(sub_dir)
+            with _stderr_captured() as buf_sub:
+                rc_sub = main(
+                    ["--hard", str(wrong_record), "--source-plan",
+                     identity_rel]
+                )
+            sub_text = buf_sub.getvalue()
+            check(
+                "source-flag archive twin: a divergent-anchor subdirectory "
+                "cwd arms no twin (the wrong-identity record keeps today's "
+                "source-not-found refusal)",
+                rc_sub == 3 and "source file not found" in sub_text,
+            )
+            # ---- Layout-landing complement (RED against the pass-1
+            # raw-operand arm, GREEN with the layout-parent gate): a
+            # subdirectory operand whose cwd reading lands in the plans
+            # layout still resolves the twin, and the wrong-identity
+            # record refuses naming the pre-archive path -- identity
+            # derivation stays live whenever the twin arms.
+            parent_operand = f"../{identity_rel}"
+            with _stderr_captured() as buf_wrong_sub:
+                rc_wrong_sub = main(
+                    ["--hard", str(wrong_record), "--source-plan",
+                     parent_operand]
+                )
+            wrong_sub_text = buf_wrong_sub.getvalue()
+            check(
+                "source-flag archive twin: an anchor-agreeing subdirectory "
+                "operand still resolves the twin and binds identity to the "
+                "pre-archive path (the wrong-identity record refuses "
+                "naming it)",
+                rc_wrong_sub == 1
+                and f"--source-plan {identity_rel!r}" in wrong_sub_text,
+            )
+        finally:
+            os.chdir(prior_cwd)
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "source-flag archive twin: the cwd is restored after the identity "
+        "fixture",
+        os.getcwd() == prior_cwd,
+    )
+    cleanup.run()
+
+
 def _selftest_coverage_readiness_gate(root: Path, check) -> None:
     """Family: the coverage gates end to end through
     ``validate_staging_file`` (review-runner bounded-timeout plan, Task 2):
@@ -21016,6 +21664,11 @@ def _run_selftest_body() -> int:
                 _selftest_sidecar_read_consolidation,
             ),
             ("coverage_contract", _selftest_coverage_contract),
+            ("coverage_archive_twin", _selftest_coverage_archive_twin),
+            (
+                "source_flag_archive_twin",
+                _selftest_source_flag_archive_twin,
+            ),
             (
                 "coverage_readiness_gate",
                 _selftest_coverage_readiness_gate,
@@ -21619,7 +22272,12 @@ def _main(argv: list[str] | None = None) -> int:
     # freshness check at all, r4 F4).
     if supplied:
         source_flag_name, dest, source_kind = supplied[0]
-        source_path = Path(getattr(args, dest)).expanduser().resolve()
+        # The raw operand string is kept beside the resolved path: the
+        # archive-twin resolution (archive-aware source resolution plan,
+        # Task 2) compares recorded values against the repository root,
+        # and only a repository-relative recorded value derives a twin.
+        source_operand = getattr(args, dest)
+        source_path = Path(source_operand).expanduser().resolve()
 
     if source_kind is not None:
         # Directory plans (plan-directory-shape plan, Task 1): the plan
@@ -21631,6 +22289,10 @@ def _main(argv: list[str] | None = None) -> int:
         # for directory operands (a named tool error), never a crash, and
         # a malformed directory refuses through the resolver's named arms.
         source_shape = None
+        # The archive-twin resolution (archive-aware source resolution
+        # plan, Task 2) stays inert unless the regular-file arm below
+        # resolves a completed twin for a missing plans-layout operand.
+        twin_source = None
         if source_kind == "plan" and source_path.is_dir():
             ps_module = _sibling_module("plan_shape")
             if ps_module is None:
@@ -21665,7 +22327,55 @@ def _main(argv: list[str] | None = None) -> int:
                     print("OUTCOME: %s" % OUTCOME_LABELS[3])
                 return 3
         if source_shape is None:
-            if not source_path.is_file():
+            # Archive-twin resolution (archive-aware source resolution
+            # plan, Task 2): kind-gated to plan and consulted only when
+            # the operand is missing, before today's not-found refusal.
+            # When the operand names a plans-layout path whose completed
+            # twin exists as a regular file, the twin supplies the digest
+            # bytes and the stale-source hint path below; identity
+            # derivation further down keeps the original pre-archive
+            # operand path (the record-side contract is untouched; the
+            # plan's Terms price identity derivation over an equivalence
+            # comparison). A missing twin, a directory-shaped twin, and a
+            # non-plan kind all keep today's refusal shapes unchanged.
+            #
+            # Dual-anchor gate (pass 2, review F1): the twin arms only
+            # when the operand as read through the process cwd
+            # (``source_path``, the identity source below) is a relative
+            # path landing exactly in the anchor-resolved plans layout,
+            # and the helper is then fed that same anchor-relative
+            # reading. Arming on the raw operand instead let the bytes
+            # source (git-root reading) diverge from the identity source
+            # (cwd reading): from a repository subdirectory a plain
+            # relative operand armed the twin while the cwd-anchored
+            # operand parent did not exist, ``repository_root`` came back
+            # None, all three identity comparisons were silently skipped,
+            # and a wrong-identity record was accepted. Absolute operands
+            # keep today's no-twin refusal.
+            if source_kind == "plan" and not source_path.is_file():
+                twin_anchor = Path(
+                    repository_root(Path.cwd()) or Path.cwd().resolve()
+                ).resolve()
+                if (
+                    not Path(source_operand).is_absolute()
+                    and source_path.parent
+                    == _coverage_plans_layout(twin_anchor)[0]
+                ):
+                    try:
+                        twin_value = source_path.relative_to(
+                            twin_anchor
+                        ).as_posix()
+                    except ValueError:
+                        twin_value = None
+                    if twin_value is not None:
+                        resolved_twin = _coverage_archive_twin(twin_value)
+                        if (
+                            resolved_twin is not None
+                            and resolved_twin.is_file()
+                        ):
+                            twin_source = resolved_twin
+            bytes_source = twin_source or source_path
+            if not bytes_source.is_file():
                 payload = {
                     "ok": False,
                     "errors": [f"source file not found: {source_path}"],
@@ -21678,7 +22388,7 @@ def _main(argv: list[str] | None = None) -> int:
                     print("OUTCOME: %s" % OUTCOME_LABELS[3])
                 return 3
             try:
-                source_bytes = source_path.read_bytes()
+                source_bytes = bytes_source.read_bytes()
             except OSError as exc:
                 payload = {
                     "ok": False,
@@ -21696,8 +22406,13 @@ def _main(argv: list[str] | None = None) -> int:
         expected_digest = compute_source_digest(source_kind, source_bytes)
         # Stash the path so the stale-digest error can name it (F7: an agent
         # that points the source flag at the wrong file gets an actionable hint
-        # instead of an opaque "artifact may have changed").
-        _SOURCE_PATH_FOR_ERROR = str(source_path)
+        # instead of an opaque "artifact may have changed"). With the twin
+        # resolution armed, the hint names the resolved twin path -- the
+        # bytes the digest was computed over -- while the identity stays
+        # derived from the original operand path below.
+        _SOURCE_PATH_FOR_ERROR = str(
+            bytes_source if twin_source is not None else source_path
+        )
         # The plan family's corrections context: the certified artifact's
         # repository is the git repository containing the plan file; a plan
         # outside any repository keeps the legacy exact-match disposition

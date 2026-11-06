@@ -1,4 +1,4 @@
-Status: covered-pending-execution (docs/history/plans/2026-11-05-automation-fire-time-failure-verification.md)
+Status: covered (docs/history/plans/2026-11-05-automation-fire-time-failure-verification.md)
 Priority: high
 Class: fix-class
 Origin class: witnessed defect (2026-11-05 cross-session learn+investigate harvest over the 24h runtime telemetry)
@@ -20,6 +20,7 @@ Expected: a fired carrier's outcome is recorded by a verification surface (a pos
 - 2026-11-05 02:00:09Z carrier session start; 02:00:10Z first provider request; 02:00:11Z request failed, provider reason invalid_request, statusMessage exceed quota limit, retryable false, attempt 1 of 11 never retried; 02:00:11Z turn.failed; 02:00:12Z session deactivated. The armed prompt payload (auth-mode maintenance mandate) never ran.
 - The armed record and the memory index entry written at scheduling time (2026-11-04 21:24Z) still describe the carrier as scheduled-not-executed; no mechanism flags the outcome.
 - Sibling class witnesses: `docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md` (the silent-strand class home) and the open Cluster sibling (the chain fire path's discharge-without-launch-receipt shape).
+- 2026-11-06 harvest append (second and third silent-failure instances plus a dispatch-race signature; project lessons #407/#408 carry the observation rules): the 10:00 WET 2026-11-05 one-shot recorded outcome failed at 10:06Z (attempts 0, empty error field) with no payload execution, yet its mandate's execution landing (998d1dade) exists because the same session was resumed out-of-band at 00:20Z and landed the work at 00:26Z, so the ledger reads failed over completed work and the cause survives only in host telemetry. The 01:46 WET 2026-11-06 one-shot died at 01:46:56Z with the same empty-error ledger shape after its first send hit the host's session-not-found dispatch rejection; two sibling fires the same evenings recovered on retries 30-80s later. The race recurred 4 times across two nights: 2 recoveries, 2 silent deaths. Both instances raise the urgency of executing the covering plan's post-fire liveness verification arm (plan authored and certified, Executed: no).
 
 ## Suspected root area
 

@@ -1,6 +1,6 @@
 # Backlog: worktree-closeout-migrate skeleton-producer test still asserts stdout after the eval-safe stderr split
 
-Status: open
+Status: done (fix lands with the 2026-11-03-certification-gates-full-violation-reporting landing, commit 0f198bff3)
 Priority: high
 Class: fence-class
 Driving force: reliability

@@ -15,6 +15,7 @@ Before finishing, verify:
 - Step 1.8 ran: skill-usage issues were captured as backlog items, duplicates were folded into existing open items, or none were needed
 - every Step 1.8 backlog item text passed the scrub review (the landing sweep's sensitive-data-scan gate discipline and Step 1.7 proper-noun review) before writing
 - learn-authored skills-repo artifacts were committed by explicit path (Step 1.8 commit rule), or the failure was reported with a one-line issue summary per the failure semantics
+- capture-freshness re-probe ran before a multi-boundary run reported capture complete: the run's own earlier capture artifacts were re-read against the run's current evidence set, landing dated extensions, the missed row, or the none-found note (Step 1.8's self-omission rule in step-1-extract.md names the omission class this re-probe re-opens)
 - incident-repo == cwd-repo verified for every `UL#N` capture (Step 1.2 item 3b), OR a deferred capture was routed to the incident repo's project corpus; AND the fork-4 project-corpus existence check (Step 2 mechanical gate) ran for every project-specific candidate  -  no project-specific incident was written into the UL corpus on the grounds that the UL file was the only corpus available in the current cwd
 - company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson wherever required by fork (2b), item 4c, or item 5c (not run outside the company root; under the root with config drift the grep may return empty without counting against company scope, per fork (2b)); a placement receipt (item 5c), stating the residual dependency for every fork (4) placement, was emitted for every placed lesson
 - Step 6.6 concision gate passed: every new/edited lesson sits near the corpus word-count median (≤1.5×), has at most one Distinguishing subsection, and the title is ≤~12 words
@@ -25,3 +26,6 @@ Before finishing, verify:
 - RFC-workflow lessons updated in skill/example files where applicable
 - changed API docs and OpenAPI artifacts remain synchronized
 - the learn counter file (`/tmp/learn-counter-${PPID}-<dir_hash>`) has been deleted so the nudge timer restarts
+
+### Capture-freshness re-probe mechanics
+A multi-boundary run spans two or more capture boundaries. The re-probe's artifacts are exactly those the run's own `committed:` receipts and `task_boundary:` manifest rows name, and the evidence set is the run's current final state. The actions are a dated extension on an existing artifact, the missed row filed through the existing Step 1.8 and 1.9 discipline, or the none-found note recorded in the run output when clean. The re-probe is read-only over artifacts the run did not author and never reverts a peer's line; an artifact whose receipt cannot be resolved is reported unverifiable, never silently skipped.

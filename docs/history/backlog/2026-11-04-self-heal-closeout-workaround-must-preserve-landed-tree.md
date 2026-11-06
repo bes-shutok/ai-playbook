@@ -1,7 +1,7 @@
 # Backlog: closeout recovery must not fabricate a landing commit
 
 - **Filed:** 2026-11-04, operator-directed recovery of an already-landed plan's worktree and branch
-- **Status:** open
+- **Status:** covered-pending-execution (docs/history/plans/2026-11-06-self-heal-closeout-workaround-must-preserve-landed-tree.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving

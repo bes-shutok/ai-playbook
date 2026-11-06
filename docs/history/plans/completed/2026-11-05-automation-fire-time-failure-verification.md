@@ -4,7 +4,7 @@ Backlog origin: docs/history/backlog/2026-11-05-automation-fire-time-failure-ver
 Driving force: automation
 Plan review record: the staging series .ai-playbook/reviews/2026-11-05-plan-review-automation-fire-time-failure-verification-p4167ddfc-r*.md
 Execution budget: 1.5h total, largest task 1.0h
-Executed: no
+Executed: yes (0446f7cb19bdb483a4cf9d95c32b4977bb915aaa)
 Authoring claim: 2026-11-05-automation-fire-time-failure-verification.md (session 01a1aaae-8c68-7b13-86ad-37de874170b7)
 
 ## Terms
@@ -129,18 +129,22 @@ Evidence:
 - `scripts/maintenance_fire_outcomes.py` owns the read-only runtime query and bounded state-note adapter with injectable database and state paths.
 
 Acceptance:
-- [ ] Record explicit terminal session success or failure once in `notes[]`, keyed by automation id and fire time. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Leave state and memory unchanged and report unknown for missing, ambiguous, or nonterminal lifecycle evidence. [class: IMPLEMENTATION_REQUIRED]
-- [ ] For either outcome, append a keyed correction without rewriting the armed memory line; for failure include fire time and available error class (or `unknown`), and for success include fire time and linked session id. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Make outcome-note writes idempotent by `(automation_id, scheduled_at)` using the existing targeted state edit and drift retry; reuse an identical note, suppress a peer's identical append, and report conflicting outcome data as unknown. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Before memory append, read the exact correction key. On each survey re-derive missing corrections from terminal runtime rows, including after their outcome notes age out; coalesce identical concurrent entries, report conflicts as ambiguous, and mark a note resolved only after the index confirms the correction. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the armed memory line immutable; append a correction with an explicit supersedes identity. The survey treats an exact-key correction as authoritative and suppresses the old pending wording; an absent or non-unique target is reported without correction. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Read outcomes from the task-index SQLite `automation_runs` table in read-only mode, scoped to automation id and workspace key. Require one terminal row at the expected `scheduled_at`; missing database/schema or absent, ambiguous, or nonterminal rows yield unknown. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Join the linked task by workspace key and session id. Read structured `lastError.attribution` only; persist the `exceptionKind`, `reason`, and retryability, or `unknown` when absent. Never persist raw detail, message, request id, or provider payload. [class: IMPLEMENTATION_REQUIRED]
-- [ ] After firing, compare all recent runs in the same workspace, including recurring carriers, and report overlapping intervals (`scheduled_at` through terminal `updated_at`) as candidates. Include both run ids; compare normalized prompts only when both are available, otherwise say the mandate match is unknown. The report is post-fire and report-only. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Store outcome records in the existing `{at,note}` shape with a fixed `one-shot-fire-outcome|` prefix. Retain at most the newest 30 records regardless of correction status; preserve unrelated `notes[]` entries. Re-derive a missing correction from retained runtime rows after its state note ages out. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the monitor warning-only and preserve the existing children outcome and lane-capacity semantics. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Add fixtures for idempotent outcomes, failed-append recovery, concurrent identical observation, conflicting outcomes, success/failure supersession, unknown DB/schema, sensitive-field omission, recurring overlap with missing prompt, and retention. Inject temporary database and scheduler-state paths and fixed UTC epochs; assert the live scheduler state is unchanged. [class: REPOSITORY_TEST]
-- [ ] Preserve the fire path without pre-fire lookup, retries, or dispatch blocking. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Keep the admission incident, frequency, false-positive cost, and 2026-12-05 review date visible in operative instructions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the listed pytest and maintenance pin commands successfully. [class: REPOSITORY_TEST]
+- [x] Record explicit terminal session success or failure once in `notes[]`, keyed by automation id and fire time. [class: IMPLEMENTATION_REQUIRED]
+- [x] Leave state and memory unchanged and report unknown for missing, ambiguous, or nonterminal lifecycle evidence. [class: IMPLEMENTATION_REQUIRED]
+- [x] For either outcome, append a keyed correction without rewriting the armed memory line; for failure include fire time and available error class (or `unknown`), and for success include fire time and linked session id. [class: IMPLEMENTATION_REQUIRED]
+- [x] Make outcome-note writes idempotent by `(automation_id, scheduled_at)` using the existing targeted state edit and drift retry; reuse an identical note, suppress a peer's identical append, and report conflicting outcome data as unknown. [class: IMPLEMENTATION_REQUIRED]
+- [x] Before memory append, read the exact correction key. On each survey re-derive missing corrections from terminal runtime rows, including after their outcome notes age out; coalesce identical concurrent entries, report conflicts as ambiguous, and mark a note resolved only after the index confirms the correction. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the armed memory line immutable; append a correction with an explicit supersedes identity. The survey treats an exact-key correction as authoritative and suppresses the old pending wording; an absent or non-unique target is reported without correction. [class: IMPLEMENTATION_REQUIRED]
+- [x] Read outcomes from the task-index SQLite `automation_runs` table in read-only mode, scoped to automation id and workspace key. Require one terminal row at the expected `scheduled_at`; missing database/schema or absent, ambiguous, or nonterminal rows yield unknown. [class: IMPLEMENTATION_REQUIRED]
+- [x] Join the linked task by workspace key and session id. Read structured `lastError.attribution` only; persist the `exceptionKind`, `reason`, and retryability, or `unknown` when absent. Never persist raw detail, message, request id, or provider payload. [class: IMPLEMENTATION_REQUIRED]
+- [x] After firing, compare all recent runs in the same workspace, including recurring carriers, and report overlapping intervals (`scheduled_at` through terminal `updated_at`) as candidates. Include both run ids; compare normalized prompts only when both are available, otherwise say the mandate match is unknown. The report is post-fire and report-only. [class: IMPLEMENTATION_REQUIRED]
+- [x] Store outcome records in the existing `{at,note}` shape with a fixed `one-shot-fire-outcome|` prefix. Retain at most the newest 30 records regardless of correction status; preserve unrelated `notes[]` entries. Re-derive a missing correction from retained runtime rows after its state note ages out. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the monitor warning-only and preserve the existing children outcome and lane-capacity semantics. [class: IMPLEMENTATION_REQUIRED]
+- [x] Add fixtures for idempotent outcomes, failed-append recovery, concurrent identical observation, conflicting outcomes, success/failure supersession, unknown DB/schema, sensitive-field omission, recurring overlap with missing prompt, and retention. Inject temporary database and scheduler-state paths and fixed UTC epochs; assert the live scheduler state is unchanged. [class: REPOSITORY_TEST]
+- [x] Preserve the fire path without pre-fire lookup, retries, or dispatch blocking. [class: IMPLEMENTATION_REQUIRED]
+- [x] Keep the admission incident, frequency, false-positive cost, and 2026-12-05 review date visible in operative instructions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the listed pytest and maintenance pin commands successfully. [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+Origin row docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md: Status: covered (docs/history/plans/completed/2026-11-05-automation-fire-time-failure-verification.md), execution witness 0446f7cb19bdb483a4cf9d95c32b4977bb915aaa. No other backlog origins; the two residual rows captured during execution (2026-11-06-fire-outcomes-robustness-residuals.md, 2026-11-06-fire-outcomes-pin-and-guard-accuracy.md) are new findings, not migrated items.
