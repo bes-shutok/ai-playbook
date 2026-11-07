@@ -67,6 +67,20 @@ readers (each builder called twice yields identical output with no
 context mutation, and ``build_payload`` runs first without depending on
 ``build_markdown``).
 
+Self-heal chain rewiring (producer-code-family-record-arm plan, Task 2):
+the producer reads the chain grammar from the validator's public seam
+instead of re-encoding it. A source-level drift canary pins that the
+producer source defines none of the three chain-grammar functions nor
+the round-tail regex constant and reaches none of the validator
+privates, while the ``vrs.self_heal_chain_state(`` and
+``vrs.calendar_valid_record_date(`` call sites are present; a
+delegation pin monkeypatches the seam function on the validator module
+the producer imported and asserts ``build_context`` carries its return;
+the ambiguity mapping turns the seam's ambiguous-predecessor raise into
+the producer refusal carrying the exact message text; and the
+non-calendar ``--date`` tool-error refusal is pinned as a regression
+arm.
+
 Run from the repository root:
 
     PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_produce_exec_review_record.py'
@@ -1308,6 +1322,228 @@ class FlagSurfaceAndLensSingleHomingTest(unittest.TestCase):
         )
         self.assertEqual(clean_ctx["verdict_field"], "yes")
         self.assertEqual(producer.build_payload(clean_ctx)["verdict"], "yes")
+
+
+class SeamRewiringTest(unittest.TestCase):
+    """Task 2 (producer-code-family-record-arm plan): the producer reads
+    the self-heal chain grammar from the validator's public seam.
+
+    Pinned: the source-level drift canary (the producer source defines
+    none of the three chain-grammar functions nor the round-tail regex
+    constant and reaches none of the validator privates, while the two
+    public-seam call sites are present), the delegation pin
+    (``build_context`` carries the seam function's return), the ambiguity
+    mapping (two dated records for the same chain stem and prior round
+    end in the producer refusal carrying the seam exception's exact
+    message text), and the non-calendar ``--date`` tool-error regression
+    pin."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="produce-seam-rewiring-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.metrics_home = self.root / "metrics"
+        if vrs.invocation_telemetry is not None:
+            patcher = mock.patch.object(
+                vrs.invocation_telemetry,
+                "resolve_metrics_home",
+                lambda: self.metrics_home,
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.plan_path = self.root / "sample-plan.md"
+        self.plan_path.write_text(PLAN_BODY, encoding="utf-8")
+
+    # -- fixture and runner helpers ---------------------------------------
+
+    def _write_findings_json(self, findings, name="findings.json"):
+        path = self.root / name
+        path.write_text(json.dumps({"findings": findings}), encoding="utf-8")
+        return path
+
+    def _argv(self, findings_json, out_dir, **overrides):
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "producer demo session",
+            "--plan", str(self.plan_path),
+            "--findings-json", str(findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+        ]
+        for key, value in overrides.items():
+            argv.extend(["--" + key.replace("_", "-"), str(value)])
+        return argv
+
+    def _namespace(self, out_dir, findings_json, **overrides):
+        """The argparse namespace build_context reads, mirroring the CLI's
+        parsed flags (the producer's parser is not module-exposed)."""
+        values = {
+            "out_dir": str(out_dir),
+            "session": "producer demo session",
+            "plan": str(self.plan_path),
+            "range": None,
+            "findings_json": str(findings_json),
+            "review_mode": None,
+            "round": None,
+            "date": DATE,
+            "artifact_slug": SLUG,
+            "review_run_id": RUN_ID,
+            "review_started_at_ms": STARTED_MS,
+            "prior_findings_filter": "no",
+            "last_fix_commit": None,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def _run_main(self, argv):
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            try:
+                code = producer.main(argv)
+            except SystemExit as exc:  # argparse usage-error channel
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def _final_outcomes(self, text):
+        return [
+            row.strip()
+            for row in text.splitlines()
+            if row.strip().startswith("OUTCOME:")
+        ]
+
+    # -- drift canary (source-level) ---------------------------------------
+
+    def test_drift_canary_producer_carries_no_chain_grammar_and_reads_the_seam(self):
+        """Source-level drift canary over the producer's bytes: none of the
+        three chain-grammar functions nor the round-tail regex constant is
+        defined (``def <name>`` needles; the constant by its plain name),
+        none of the four validator-private reaches appears (exact string
+        needles), and the two public-seam call sites are required
+        present."""
+        source = (SCRIPTS_DIR / "produce_exec_review_record.py").read_text(
+            encoding="utf-8"
+        )
+        for needle in (
+            # Grammar re-encoding needles (def <name> forms; the constant
+            # by its plain name, which no call site may mention either).
+            "def _well_formed_self_heal_state",
+            "def _valid_prior_chain_state",
+            "def self_heal_chain_state",
+            "_ROUND_TAIL_RE",
+            # Validator-private reaches (exact string needles).
+            "vrs._date_fence",
+            "vrs._calendar_valid_record_date",
+            "vrs.ValidationResult",
+            "vrs.validate_usage_mint_gate",
+        ):
+            self.assertNotIn(
+                needle, source,
+                f"forbidden needle present in producer source: {needle!r}",
+            )
+        for needle in ("vrs.self_heal_chain_state(", "vrs.calendar_valid_record_date("):
+            self.assertIn(
+                needle, source,
+                f"required seam call site absent from producer source: {needle!r}",
+            )
+
+    # -- delegation pin -----------------------------------------------------
+
+    def test_delegation_pin_build_context_carries_the_seam_return(self):
+        """Monkeypatching ``self_heal_chain_state`` on the validator module
+        the producer imported makes ``build_context`` carry that function's
+        return verbatim and call it with the record path and run id (a
+        producer-local re-encoding would ignore the patch and fail this
+        pin; ``producer.vrs`` is the patch target because this suite's
+        path-loader yields distinct module instances for the same file)."""
+        findings_json = self._write_findings_json(
+            VARIED_FINDINGS, name="delegate.json"
+        )
+        out_dir = self.root / "delegate"
+        sentinel = {"status": "unused", "run_id": RUN_ID, "delegation": "sentinel"}
+        calls = []
+
+        def fake_chain_state(record_path, run_id):
+            calls.append((record_path, run_id))
+            return sentinel
+
+        with mock.patch.object(
+            producer.vrs, "self_heal_chain_state", fake_chain_state
+        ):
+            ctx = producer.build_context(
+                self._namespace(out_dir, findings_json),
+                producer.load_findings_input(findings_json),
+            )
+        self.assertIs(ctx["self_heal_state"], sentinel)
+        self.assertEqual(
+            calls,
+            [(out_dir / f"{DATE}-plan-review-{SLUG}-r1.md", RUN_ID)],
+        )
+
+    # -- ambiguity mapping ---------------------------------------------------
+
+    def test_ambiguous_predecessor_maps_seam_raise_to_producer_refusal(self):
+        """Two dated records resolving to the same chain stem and prior
+        round: the round-2 production refuses (exit 1, OUTCOME: fail)
+        before anything is written, and the refusal text is byte-identical
+        to the message the seam's ``AmbiguousChainPredecessor`` raises for
+        the same directory (the mapping arm of the ambiguity checkbox)."""
+        findings_json = self._write_findings_json(
+            VARIED_FINDINGS, name="ambiguous.json"
+        )
+        out_dir = self.root / "ambiguous"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 0, err + out)
+        r1 = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        self.assertTrue(r1.is_file())
+        # A second dated record for the same chain stem and round r1: the
+        # unnumbered twin of the r1 record (content irrelevant; the
+        # ambiguity fires before any prior validation). The producer
+        # always emits -rN names, so the duplicate candidate is written
+        # directly.
+        unnumbered = out_dir / f"{DATE}-plan-review-{SLUG}.md"
+        unnumbered.write_bytes(r1.read_bytes())
+        r2 = out_dir / f"{DATE}-plan-review-{SLUG}-r2.md"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir, round=2))
+        self.assertEqual(code, 1)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: fail"])
+        self.assertFalse(r2.exists(), "a refused production writes no record")
+        self.assertFalse(
+            r2.with_suffix(".stats.json").exists(),
+            "a refused production writes no sidecar",
+        )
+        with self.assertRaises(vrs.AmbiguousChainPredecessor) as caught:
+            vrs.self_heal_chain_state(r2, RUN_ID)
+        self.assertIn(
+            f"REFUSED: {caught.exception}", out,
+            "the producer refusal must carry the seam exception's message verbatim",
+        )
+        self.assertIn(
+            "ambiguous prior-round records for chain "
+            f"'plan-review-{SLUG}' round r1: [", out,
+        )
+        self.assertIn("disambiguate the directory first", out)
+
+    # -- date pre-flight regression pin ---------------------------------------
+
+    def test_non_calendar_date_refuses_as_the_same_tool_error(self):
+        """A non-calendar ``--date`` (a shape-valid string that is not a
+        real calendar day) keeps the exit-3 ``ProducerToolError`` refusal
+        with its exact message text, through the public
+        ``vrs.calendar_valid_record_date`` pre-flight; no pair is
+        written."""
+        findings_json = self._write_findings_json(VARIED_FINDINGS, name="date.json")
+        out_dir = self.root / "non-calendar"
+        code, out, err = self._run_main(
+            self._argv(findings_json, out_dir, date="2026-02-30")
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn(
+            "date '2026-02-30' must be a calendar-valid YYYY-MM-DD date", err
+        )
+        self.assertEqual(list(out_dir.glob("*")), [])
 
 
 if __name__ == "__main__":

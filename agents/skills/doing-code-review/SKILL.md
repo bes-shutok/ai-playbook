@@ -28,7 +28,7 @@ Review findings are evidence to assess, not authorization to broaden the reviewe
 | **Direct** | "review and post directly", "skip staging" | Post findings immediately to PR (legacy behavior), still write staging doc as record |
 | **Fix** | "review and fix", "fix mode" | Fix confirmed issues, commit, signal for re-review |
 
-**Always produce the staging doc**, regardless of mode. For local branch reviews (not GitHub PRs), use branch-based naming. The staging doc serves as both approval artifact (for PRs) and persistent record (for all reviews).
+**Always produce the staging doc**, regardless of mode. For local branch reviews (not GitHub PRs), use branch-based naming. The staging doc serves as both approval artifact (for PRs) and persistent record (for all reviews). Draft the staging record pair per `review-staging`'s Finding-construction recipe (scaffold before drafting; `validate_review_staging.py --scaffold`), never by imitating a recent record.
 
 ### Hard Gates (apply before and after every step)
 

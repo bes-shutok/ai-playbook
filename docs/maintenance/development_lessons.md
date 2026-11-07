@@ -129,7 +129,10 @@ way. This run's baseline capture succeeded only with the single quoted space-sep
 **See also:** Lesson 4 (skill prose versus machine contract precedence);
 `agents/skills/execute-plan/SKILL.md` (capture recipe; since the 2026-10-22 landing it passes no `--dirs` and resolves all four dirs from facts).
 
-**Second witness (2026-10-21, execution closeout):** the same `--dirs` operand is also a hand-maintained twin of the script's facts-resolved family: the recipe pins three dirs while `FACTS_DIR_KEYS` resolves four (`review_certs_dir` joined on 2026-10-18), so the run's code-family seal was never baselined and had to be mirrored by hand before teardown; when the script can resolve the list from facts, pass no operand (the 2026-10-22 landing removed the operand from the recipe; the origin row is deleted per the covered-row rule). Shell corollary from the same closeout: zsh does not word-split an unquoted variable, so `--files $LIST` with a newline-joined list arrives as one path (`path must not contain a newline`); pipe through `xargs` or use `${=LIST}`.
+**Second witness (2026-10-21, execution closeout):** the same `--dirs` operand is also a hand-maintained twin of the script's facts-resolved family: the recipe pins three dirs while `FACTS_DIR_KEYS` resolves four (`review_certs_dir` joined on 2026-10-18), so the run's code-family seal was never baselined and had to be mirrored by hand before teardown; when the script can resolve the list from facts, pass no operand (the 2026-10-22 landing removed the operand from the recipe; the origin row is deleted per the covered-row rule). Shell corollary from the same closeout: zsh does not word-split an unquoted variable, so `--files $LIST` with a newline-joined list arrives as one path (`path must not contain a newline`); pipe through `xargs` or use `${=LIST}`. Third witness (2026-11-07, done setup):
+a multi-flag claim set built into a shell variable and passed as `$CLAIMS` arrived
+as one argument (`unknown argument: --owned-review ...`); the fix is bash array
+expansion (`"${CLAIMS[@]}"` under `bash -c`), not a zsh variable.
 
 ## 10. Prove the Landing Base and the Completion Marks, Not the Diff Shape
 
@@ -638,6 +641,17 @@ schema reference has to cover those too.
 Re-witnessed 2026-10-20 (playbook repo, execution run closeout): two code-review staging records drafted from memory were repaired against `validate_review_staging.py` one error class at a time (freshness Metadata lines, Record kind, usage mint pair, Panel and Counts grammar, per-finding sections with Pattern, the per-worker Low budget, lens-taxonomy coverage names, the producer-written sidecar the repair tool refuses to invent for non-zero findings) across roughly ten fix cycles; reading the validator's check families and fixture builders first would have been one draft. Re-witnessed 2026-10-22 (playbook repo, execute-plan Phase 3): the same one-error-class-at-a-time repair over an unstaged validator run (canonical headings, Metadata lines, a review-run-id rejected for non-hex shape until minted fresh, extension-nested self-heal block), resolved only after reading the validator's refusals as the schema of record. Re-witnessed 2026-10-25 (playbook repo, authoring run, plan-review r1 preflight): the same one-error-at-a-time repair over the record-selection staging pair (an admission-state vocabulary token, an exhaustion reason that must be exactly a retryable class token, a verdict enum limited to yes/no, a coverage key the pair rejects, plus local-fallback attempts counting toward coverage only with an existing artifact/sidecar pair on disk and a launched-worker count equal to the panel rows). Re-witnessed 2026-10-27 (playbook repo, ad-hoc exec run): two ad-hoc landing record pairs drafted and repaired against the validator's refusals (finding conservation demanding `#### F<N>` blocks for triaged-fixed findings too, the launched-worker count covering every confirm round's panel row, the mint pair bound across all rounds, and a BSD `date +%s%3N` printing a literal instead of epoch milliseconds until the milliseconds came from python). Re-witnessed 2026-10-28 (playbook repo, authoring run r2 certification preflight): a soften watchlist hand-drafted as Markdown bullets parsed as zero rows because the validator counts only pipe-delimited table rows, and a coverage-outcome value written outside the enum ('complete' for 'clean'); both cleared in one draft after reading the validator's check list.
 
 Re-witnessed 2026-11-04 (playbook repo, the closeout-migrate clobber-guard execution's Phase 3 pair): two refusals neither prior witness names — findings whose `workers` arrays were left empty pooled into "the unattributed pool", which failed the per-worker non-blocking Low budget (max 2) as one synthetic worker, so every finding row needs real worker attribution, not just the counts; and a `risk_signals` value outside the closed tag vocabulary refused even though the free-text Metadata line read fine, so invented descriptive tags never pass. Also re-confirmed the code-source gate's pairing shape (`--source-code-repo` plus `--source-code-plan` pointing at the SIDECAR path, not the markdown).
+
+**Third witness (2026-11-07, authoring closeout, plan-review series r5):** the shape
+itself is date-fenced: a record copied from the immediately prior round's validated
+pair still failed the validator because the fence date had crossed (the extended
+freshness fields, record_kind, the coverage object with attempt timestamps, the
+self-heal state, and the per-worker Low budget moving surplus rows to overflow),
+while the prior rounds' records sat legacy under their own older fence and only
+warned. On the first record of a new date period, re-derive the shape from the
+validator and the scaffold (`validate_review_staging.py --scaffold`), run the
+validator in soft mode before finalizing, and never treat last round's passing
+pair as the current contract.
 
 ## 31. Worktree Recreation Is Not Recovery for Untracked Run Artifacts
 
@@ -3566,7 +3580,7 @@ done-lock.sh source read after two fixture debug cycles.
 
 **Trigger:** a done closeout or landing whose `post-landing-staging` gate refuses on primary residue, or a `reconcile_post_landing` receipt whose block rows name `fresh-mtime`.
 
-**Why:** witnessed twice in one session (2026-10-23, playbook repo): a peer landing (1763c1601) had left the primary index and worktree on two paths at the pre-landing parent bytes (its reconcile never completed), which blocked this session's done commit until the blobs were proven equal to the pre-tip tree and the gate's escape applied; the same discriminator then blocked this session's own landing on three paths whose blobs were provably the pre-landing parent, each fast-forwarded after verification. The fresh mtimes came from the reconciler's own earlier sync passes, not from any live writer.
+**Why:** witnessed twice in one session (2026-10-23, playbook repo): a peer landing (1763c1601) had left the primary index and worktree on two paths at the pre-landing parent bytes (its reconcile never completed), which blocked this session's done commit until the blobs were proven equal to the pre-tip tree and the gate's escape applied; the same discriminator then blocked this session's own landing on three paths whose blobs were provably the pre-landing parent, each fast-forwarded after verification. The fresh mtimes came from the reconciler's own earlier sync passes, not from any live writer. Re-witnessed 2026-11-07 (playbook repo, an authoring landing): the landing session set a peer's live unstaged log entry aside for the swap and re-applied it afterward, so its own rewrite minted the fresh-mtime block on the rolling log; the index sat at the pre-landing parent while the worktree held new bytes, and the live-dirt branch of this rule (restore the index only, keep the peer's worktree bytes) cleared it under the done lock.
 
 **See also:** #43 (worktree cwd resets between shell calls), #183 (verify scripted structural edits), the post-landing reconciliation implementation in `agents/skills/execute-plan/worktree-first.md`.
 
@@ -5829,7 +5843,7 @@ Seventh witness extension to #65 (2026-11-02, execution run landing, main-rider 
 
 **Rule:** read the convergence ledger per class, not the total: when new-root findings fall toward the fresh-panel floor while fold-defect findings hold flat, the fix loop has become the primary finding source, and the highest-value next action is a fold-time mechanism walk (exercise every amended check against its exact byte arithmetic and clause neighbors before committing the fold) plus the churn-trigger exit, not another round. Compression under caps is the mechanism: fixing a finding compresses prose, compression creates ambiguity, disambiguation regrows bytes, the cap forces splits and more compression, so each fold manufactures the next round's findings.
 
-**Why:** witnessed 2026-11-03 (playbook repo, five-round authoring series): new-root staged findings fell 7, 6, 4, 4 across r2-r5 while fold-defect findings went 2, 5, 5, 5; every blocker after r3 was introduced by a fix fold (an unsatisfiable derived formula, a tail measure that could never fire, an enumeration omission), both churn triggers fired, and the loop exited through the operator-authorized cap-closure terminal shape; the rounds a fold-time mechanism walk would have front-loaded are exactly the fold-defect class.
+**Why:** witnessed 2026-11-03 (playbook repo, five-round authoring series): new-root staged findings fell 7, 6, 4, 4 across r2-r5 while fold-defect findings went 2, 5, 5, 5; every blocker after r3 was introduced by a fix fold (an unsatisfiable derived formula, a tail measure that could never fire, an enumeration omission), both churn triggers fired, and the loop exited through the operator-authorized cap-closure terminal shape; the rounds a fold-time mechanism walk would have front-loaded are exactly the fold-defect class. Second witness 2026-11-07 (playbook repo, dispatch-admission authoring series, blockers 6, 7, 1, 2, 2 to an operator-authorized cap closure): the r4 and r5 blockers were folds naming a new input (a manifest operand source, a session identity inside a lib arm) that the consuming code path could not reach; the walk includes tracing every input a fold introduces to its reachable source.
 
 **See also:** #380 (one-violation-per-run gates mint rounds: the same round-burning shape from the gate side), #381 and #382 (per-fold discipline: the diff is the landed-ness; sweep the claim class).
 
@@ -6176,3 +6190,97 @@ When an execution run goes silent and its claim goes stale (no run manifest, zer
 **Why:** witnessed 2026-11-06 (playbook repo, authoring run's PLAN-PROMPTS freeze write): the freeze transaction eval'd the acquire output through a re-prefixing sed, the env never materialized, the done_run commit landed fine, and the post-commit release refused `release requires DONE_LOCK_DIR and DONE_LOCK_TOKEN in env`; the hold was closed through release-orphaned (holder pid verified dead) instead of the token-checked env arm. The acquire script had been pinned eval-safe by construction (its stdout is exactly the export lines), so the only defect was the wrapper.
 
 **See also:** the acquire-output-handling family in the lock lessons above (capture whole, never tail-filter; compose and export in one shell; alias DONE_LOCK_* to MERGE_LOCK_* when the consumer differs), #389 (one acquire per closeout generation).
+
+## 415. The Readiness Byte-Cap Probe Reports Only the First Offending Task; Split Every Over-Cap Item in One Pass
+
+The readiness validator's executability probe (`scripts/plan_readiness.py`, `extraction_rule_executability_problem`) reports only the first over-cap checklist item in task-sorted order, so a fold that grows acceptance bullets past the per-item cap (512 UTF-8 bytes) in two tasks surfaces one task per gate run and the second defect hides behind the first until the next round. Witnessed 2026-11-07 (plan `docs/history/plans/2026-11-07-producer-code-family-record-arm.md`): the review round's split fixed task-1's 1027-byte bullet, the gate went green on task-1, and only the next certification panel's probe run exposed task-2's 617-byte drift-canary bullet behind it. When any fold or split grows acceptance items, run the readiness probe over the whole plan before re-staging and split every over-cap item in the same pass; the per-task aggregate cap (4096 bytes) hides behind the same first-task-wins reporting.
+
+## 416. Slug-Keyed Certification Seal Files Collide Across Same-Slug Plans
+
+The round-close seal file `.ai-playbook/review-certs/<artifact-slug>.md` keys on the artifact slug (the filename stem minus its date prefix) and accumulates one `## round N` block per certified round; `corrections_record.load_seal_entry` returns None when a round number matches multiple plan-family blocks ("zero or multiple family matches"), so a plan whose stem shares a landed sibling's slug inherits the sibling's seal blocks in its transferred worktree copy and its own certification-seal lookup degrades to the exact-match digest rule (the staging gate's `corrections grading degraded` warning). Witnessed 2026-11-07: the 2026-11-04 sibling plan's `## round 3` block collided with the 2026-11-07 plan's `## round 3` in the same slug-keyed file. Before a certification round whose slug matches a landed plan, move the foreign same-round blocks out of the local seal copy (the primary checkout's durable file keeps them; append own blocks to it at closeout) and re-run the staging gate so grading is not degraded.
+
+## 417. Date-Stripped Session Slugs Collide Across Sibling Plans Sharing a Stem
+
+The execute-plan session directory (`{tmp_dir}/execute-plan/<PLAN_SLUG>/`) keys on the date-stripped artifact slug, so a plan whose stem shares a landed sibling's slug (here `producer-code-family-record-arm`, 2026-11-04 authoring run and 2026-11-07 execution run) resolves to the SAME primary session directory, and the boundary mirror's stable-tuple check reads the sibling's manifest first (invocation-validation refusal) while a naive mirror would clobber the sibling's retained `manifest.md`/`runtime_state.json`. Witnessed 2026-11-07 (execution run for `docs/history/plans/2026-11-07-producer-code-family-record-arm.md`): the boundary-mirror refusal named the 2026-11-04 run's session id; the sibling records were backed up as `*.prev-20261104.*` before mirroring. Before a run whose slug matches a landed sibling, inventory the primary session directory at Phase 0, back up the foreign records, and pass the worktree manifest by ABSOLUTE path to every mirror invocation (the relative form resolves against the shell's post-reset cwd, the primary checkout, not the worktree).
+
+## 418. Check a Proposed Record Shape Against Its Validator Before Offering It as an Option
+
+**Principle:** Family A (verify against the owning contract before acting; an operator approval does not make an uninstallable shape installable).
+
+**Trigger:** offering the operator a reconstruction, backfill, or substitute review record as a recovery option, before writing it.
+
+**Rule:** draft the proposed record in a temporary directory with the owning producer or the validator's scaffold, run the hard validator over it, and only then name the shape as an option; state in the option which fields the contract forces (for example a required digest), and never offer a shape that has not passed.
+
+**Why:** witnessed 2026-11-07 (playbook repo, an archive-ceremony recovery): an approved "honest-minimal" exec-review reconstruction that omitted any digest claim proved uninstallable at execution, because the staging validator requires a stats sidecar with `source_digest` even for `legacy-import` records. The approval cost a parked run and a second operator decision; the workable shape (producer-emitted, digest labelled as attachment identity only, sidecar verdict `no`) was derivable from one validator run before the offer.
+
+**See also:** #346 (draft structured records from the validator's scaffold).
+
+## 419. A Range-Scoped Gate Going Green Is Not Proof the Defect Was Repaired
+
+**Principle:** Family A (a gate verdict is evidence only over the targets its derivation surfaced).
+
+**Trigger:** a landing-sweep gate that derives its targets from the active run manifest's diff range (archive-ceremony shape (b) and similar) reads green on a defect nobody repaired.
+
+**Rule:** before recording a gate red as resolved, re-run the gate's own target derivation and confirm the defect left the target set because it was fixed, not because the active manifest's `start_commit` moved past it. When it only fell out of range, record it as latent (it returns under any boundary that starts earlier) and keep its repair or backlog row open.
+
+**Why:** witnessed 2026-11-07 (playbook repo): an archived plan lacked its exec-review record; by the next session the active manifest started after the archive commit, so a "check whether it is already fixed" step saw no finding for it while the gate failed on a different archive. No record existed; enumerating the derivation's surfaced archives showed the plan had simply left the range.
+
+**See also:** `docs/history/backlog/2026-11-07-archive-ceremony-exec-review-record-gap.md` (the incident row and its post-rider re-sweep arm); #191 (classify by content, not by the gate's heuristic).
+
+## 420. Read a Refused Write's Standing Rules, Not Only Its Script, Before Improvising Around It
+
+**Principle:** Family A (the remedy for a refusal is often owned by rule text beside the code, not by the code that refuses).
+
+**Trigger:** a primary-log or landing transaction refuses on foreign state, and the next step is a hand-rolled workaround.
+
+**Rule:** before improvising, read the refused transaction's own standing rules (for rolling-log writes, the `Write boundary rule` in the log's Standing rules block) as well as the refusing script. When the rule defines an operator-gated remedy, take it exactly (record blob ids first, act only on explicit operator direction for that path) or stand down; never substitute a set-aside of your own.
+
+**Why:** witnessed 2026-11-07 (playbook repo, an authoring freeze): the session read the runner's pre-stage guard source, missed the log's operator-gated foreign-staged remedy, and unstaged a peer's staged bytes without direction or a recorded blob id. The bytes survived only because the peer re-staged the same blob later.
+
+**See also:** #191 (dead-residue classification); #290 (pathspec commits land worktree bytes); `docs/history/backlog/2026-11-07-rolling-log-freeze-foreign-bytes-setaside-recipe.md`.
+
+## 421. A Fold That Moves a Contract or Boundary Re-Derives the Far Side
+
+**Principle:** Family D adjacent (a fold's fix is itself a state-changing transaction; its blast radius is derived from the system, not read off the finding's text).
+
+**Trigger:** a review-round fix changes a contract surface (an exit code, a mode, a threshold, a cap) rather than prose.
+
+**Rule:** the fold-time mechanism walk (#384) gains two arms for contract-moving folds. (1) Trace every contract the fix changes (exit semantics, output shape, state) to its downstream consumers and reconcile each consumer's expectation in the same change; when one consumer requires green while the promoted gate must fail, design the two-surface exit contract (the gate fails on its own surface; the suite-facing mode reports and exits 0) inside the same fold, never as a later patch. (2) When the fix moves a classification boundary (lowers a cap, tightens a threshold), re-derive the complete population on the new far side from disk or state; a row that was green under the old boundary carries no exemption, and a plan task that closes the breach set must be sized for the re-derived set, not the remembered one.
+
+**Why:** witnessed 2026-11-07 (playbook repo, operative-file-read-budget-gate authoring r2-r3): the r1 fix promoted the existing warning-only byte-budget gate to blocking exit-1 while the pins suite's capture arm treats any non-zero gate exit as a suite failure; the two expectations were mutually unsatisfiable until a two-surface exit contract and a pins rewire joined the fold, and the same fold annotated an existing test file `*(new)*` without checking disk. The r3 blind probe then caught the calibration arm: lowering the ceiling to the single-read budget left the sub-ceiling ratchet caps breaching (six breach rows instead of four), and the closure task was unclosable until a two-class taxonomy (blocking ceiling class, advisory sub-ceiling growth watch) re-derived the design.
+
+**See also:** #384 (the fix loop as finding source; these are two more arms of its fold-time mechanism walk), #304 (prove a restatement's blast radius by running the pre-change validator against the post-change tree), #206 (the blind probe is the only instrument over the fold's coverage claims; the re-derived breach set was exactly its catch).
+
+## 422. A Live Foreign Hold on the Closeout Commit Resolves Through Sanctioned Partial State Past One Bounded Wait
+
+**Principle:** Family D (state-first: the run's records are already durable before the marking leg; a deferred leg with a bound re-entry beats an open-ended wait while holding own locks).
+
+**Trigger:** a closeout or landing commit is refused on live foreign state (a peer's staged writes, a held lock) and the holder is not reclaimable.
+
+**Rule:** wait one bounded window sized to the surface's normal span. If the hold persists, take the sanctioned partial state: release only own locks, record a bound re-entry one-liner (the exact commands and the manifest id) on the durable state surface the next session reads, complete the teardown (worktree removed, branch deleted at the expected OID, claim released after an ownership re-check), and leave the marking leg to the next session that finds the blocking surface clean. Never touch the peer's bytes, never hold own locks through an open-ended wait, and never strand the run's records as untracked residue; the manifest, seal, and review series are preserved to primary before the deferral.
+
+**Why:** witnessed twice 2026-11-07 in one session (playbook repo, two authoring closeouts): the first run's done commit was held by a peer staged write and a roughly 75-second poll outlasted it, so the run completed in-lane; the same day's second run was held over four minutes by a live peer's staged PLAN-PROMPTS.md write (49 insertions), the bounded wait expired, and the run took the sanctioned partial state (lock released, recovery one-liner on the scheduler state's children entry, worktree removed, branch deleted at the expected OID, claim file deleted after an ownership re-check, dispatch carrier verified still armed). The pair sizes the boundary: the bounded wait is the whole difference between the two outcomes.
+
+**See also:** `docs/history/backlog/2026-11-05-merge-lock-held-after-wait-refusal-lacks-age-deferral-guidance.md` (the same defer-versus-retry gap on the merge-landing surface, with hold-age evidence the refusal could branch on), #389 (acquire a lock once per closeout generation), #420 (read the refused transaction's standing rules before improvising).
+
+## 423. A Fold Verifies Each Imported Finding Premise Against the Source
+
+**Principle:** Family C adjacent (evidence and restatement: a staged finding is a claim about the source, and a fold that restates the claim without re-deriving it imports the claim's errors into the reviewed artifact).
+
+**Trigger:** a plan or review fold batch writes a mechanism claim (a function's inputs, a caller's behavior, a field's presence, a call-site contract) that originates from a review worker's report rather than from the folder's own read of the source.
+
+**Rule:** before writing each folded finding into the artifact, re-derive the finding's load-bearing factual premises from the on-disk source in the same bounded pass: the named function's actual signature and inputs, the cited call sites' actual shapes, and any cross-family claim the fix's wording leans on. A premise the folder cannot verify in one read is either verified with one more targeted read or reworded to the verified subset before it enters the artifact. The fold batch also runs the accounting-surface re-derivation (its pinned duty) in the same change; skipping it is the propagation half of the same defect.
+
+**Why:** witnessed 2026-11-07 (playbook repo, budget-resume-carrier-gc authoring r3-r4): the r3 fold batch wrote three unverified premises from worker reports into the plan, that clocked-order arm requests carry the discriminator field (they carry a different family id; a required-key lookup would break every clocked-order schedule and re-arm), that the census operation could register under the state-path-requiring dispatch family (every survey call would fail before dispatch), and that the fire path leaves the receipt the closeout discharge reads (the fire-resume supersede clears it, leaving the most common inert carrier undischargeable). The r4 panel, whose workers verify claims against source, returned four blocking findings that were pure fold defects plus a stale accounting surface, tripling the open-blocking count and forcing a reconciliation with an operator gate one round before the cap.
+
+**See also:** #421 (a fold that moves a contract re-derives the far side: this lesson owns the fold's input side, that one the output side), #26 (re-sweep every scope-declaring surface), #418 (check a proposed record shape against its validator before offering it).
+
+## 424. A Paused Run's Report Enumerates Its Standing Resources by Path
+
+**Trigger:** an authoring or execution run pauses (quota wall, operator gate, deferral) or ends with the loop not closed, and the report's cleanup line covers only what was removed.
+
+**Rule:** the final report carries two separate lines: cleanup status (what this session removed, receipts included) and standing state (every resource still held by path: the worktree root, the branch and its tip, the claim file, any held lock or armed carrier, the pause record's path). A generic "cleanup clean" line is not standing state; a reader cannot tell from it whether teardown is complete or deliberately deferred, and will ask.
+
+**Why:** witnessed 2026-11-07 (playbook repo, an authoring run paused at an operator gate): the run report's cleanup line said only that the session's own surfaces were untouched; the operator then had to ask whether the ad-hoc worktree and branch had been removed, when the correct answer was "no, deliberately: the paused run's untracked review records live only inside that worktree, and teardown would destroy them."
+
+**See also:** #422 (sanctioned partial state past one bounded wait: the bound re-entry one-liner is the standing-state line's durable twin), #85 (release-summary claims derive from evidence, not memory).

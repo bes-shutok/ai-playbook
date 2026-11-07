@@ -1,9 +1,10 @@
 # Backlog: dispatch admission candidate-side conservatism
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md)
 Priority: low
 Cluster: parallel-execution-landing-serialization-blockers
 Cluster: docs/history/backlog/2026-11-05-dispatch-admission-outstanding-manifest-recovery.md
+Cluster: docs/history/backlog/2026-11-07-admission-conservative-block-stalls-nonstop-loop.md
 Driving force: correctness
 
 Origin: Task 1 intermediate review (Step 1.2b, testing lens), off-plan observation on `scripts/dispatch_admission.py`.

@@ -7,6 +7,7 @@ EXEC-PROMPTS-PRUNE: staging-preflight-shared-span-row-closeout -> docs/history/p
 EXEC-PROMPTS-PRUNE: closeout-migrate-baseline-tracked-clobber -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py's baseline-relative migrate gained the two witnessed-clobber guards - the pre-flight refusal that keeps a whole-file carry from overwriting a destination-tracked path whose committed HEAD bytes differ (named paths plus the re-capture-the-baseline remediation, exit 2 before the merge-lock span and before any copy) and the post-run staged-set ownership check that restores a carried path's between-snapshot staged rewind from HEAD as a prevented clobber while foreign staged work stays untouched report-only (both guards inert on non-git targets); both arms pinned in the focused migrate suite (359 passed + 25 subtests incl. the ten BaselineClobberGuardTest pins); full five-worker r1 panel over the branch delta: the one blocking High (the guard's owned set compared absolute manifest destinations against repo-relative staged names, so the owned-restore arm never fired end to end) folded with twelve non-blocking findings in-change (staged-deletion classification by ownership, compare-then-act restore, pre-flight skip-rule mirror via the shared baseline predicate, bytes-safe -z decode, in-process GIT_* env strip, remedy reword, docstring citations, three extra pins, and the merge-lock ordering assertion), four consequence-bearing residuals deferred to backlog rows, r2 confirm; em-dash added-lines gate and public hygiene scan and pins suite pass; origin row deleted per the covered-row rule with the three sibling Cluster pointers tidied and this entry section removed in the same change)
 
 EXEC-PROMPTS-PRUNE: stranded-doc-pointer-edit-orphan -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py gained the warning-only check-stranded-pointers subcommand - a landing touching a markdown file under projects/.ai-playbook/ while docs/AGENTS.md holds uncommitted edits reports would-strand rows at file granularity (pairing by bare file name in the index text), plus the reverse arm for index rows landed while index edits remain uncommitted; exits 0 on every audited outcome, never blocks a closeout gate, never commits (machinery admission: warning-only first, witness landing 44f9499a5); twelve pins in the focused migrate suite (371 passed + 26 subtests) plus the closeout runbook invocation line carrying the landing-parent base token and the recorded-disposition clause; focused three-worker r1 panel (16 raw, zero blocking): eight findings folded in-change (file-granularity WARN wording, class prose broadened to the predicate, landing-parent runbook token, would-strand disposition clause, scoped exit contract, six pins including the two discriminating kills), two residuals deferred to rows, r2 confirm over the fold; focused r2 panel over the folded bytes: seven non-blocking findings routed to three closeout rows, verdict yes; origin row deleted per the covered-row rule with the sibling Cluster pointer tidied and this entry section removed in the same change)
+EXEC-PROMPTS-PRUNE: archive-ceremony-exec-record-reconstruction -> docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md (collateral served entry pruned at the covering authoring landing; its single origin row is covered-pending-execution by the covering plan and its reconstruction arm was delivered by the origin row's recorded recovery)
 ## migrate-skeleton-test-stderr-assertion
 
 Added: 2026-11-05, learn+investigate over the memory-index-load-budget-consolidation execution's learn Step 1.9 row
@@ -30,6 +31,32 @@ Urgency: high - every full-suite run at HEAD is red (witnessed 2026-11-05: 1 fai
 Scope arms: (1) change the assertion to read the producer's stderr (or the suite's established combined-output accessor) and re-run the single test plus the full suite to green; (2) while in the file, grep for sibling `proc.stdout` assertions and adjudicate each hit against the eval-safe contract.
 
 Orientation: scripts/test_worktree_closeout_migrate.py (the failing test), the eval-safe contract paragraph in agents/skills/done/SKILL.md Step 0, the split landing (witness `9c5b34551`).
+
+## plan-prompts-orphaned-landed-entry-body
+
+Added: 2026-11-07, learn+investigate over the closeout-migrate-stale-landing-sha-comment authoring session's learn Step 1.9 row
+
+`docs/history/backlog/PLAN-PROMPTS.md` carries the headless body of the already-landed `operative-file-read-budget-gate` entry (plan landed `347f835a2`; the bare index commit `96b615c65` recommitted the entry and dropped its receipt; the `1f5123f6a` prune consumed its heading line as the range tail). Since `dc812e6b9` the orphan reads as the tail of `## rolling-log-write-residue-recovery-recipe` (a second `Added:`, `Origins:`, and `Prompt:` set), and HEAD has no `PLAN-PROMPTS-PRUNE: operative-file-read-budget-gate` receipt.
+
+Rejected alternatives:
+- Edit the orphan out now, inside the claimed section: rejected, the log's `Freeze rule` holds a section under a live authoring claim and a live claim targets `rolling-log-write-residue-recovery-recipe` (docs/history/backlog/PLAN-PROMPTS.md, Standing rules)
+- Leave the orphan for that entry's own landing prune and do nothing else: rejected, the prune removes the span but the lost receipt stays missing from the receipt ledger the prune audit parses (scripts/check_prompt_log_origins.py)
+- Add a prune-audit refusal for a range that deletes a following heading line: rejected for now; this second tail witness costs one targeted edit and the origin row records it for a later admission case, while the completed end-anchor row already priced a checker stop against the procedural fix and kept the procedural arm (docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the body-named-single-surface-fix-with-no-open-design-choice clause admits it - one tracked docs surface, the removal span and the receipt text are named byte-exactly in the origin row, no guard, state-schema, or dependency change.
+
+Origins:
+- docs/history/backlog/2026-11-07-plan-prompts-orphaned-landed-entry-body.md
+
+Cluster: docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md (same foreign-staged-sweep family; its fix is learn's commit wording, independent of this cleanup)
+
+Urgency: high - the orphan already misdirected one authoring walk to a landed plan on 2026-11-07, and it sits inside the top entry of the authoring log, where a live authoring session reads its scope.
+
+Scope arms: (1) once the live authoring claim on `rolling-log-write-residue-recovery-recipe` clears (its landing prune removes the orphan under the `Coverage and removal rule`, the orphan's origin being plan-covered), verify the span is gone, else remove it from the second `Added: 2026-11-07, investigate over the 2026-11-07 24h harvest's skills-corpus row` line through its `Prompt: Author a plan that lands the read-budget discipline` line; (2) restore the receipt line verbatim from `git show 347f835a2:docs/history/backlog/PLAN-PROMPTS.md` into the receipt region; both under the log's `Write boundary rule`, one targeted commit.
+
+Orientation: docs/history/backlog/2026-11-07-plan-prompts-orphaned-landed-entry-body.md (the origin row with the per-commit trace), the `Prune rule`, `Coverage and removal rule`, and `Freeze rule` in docs/history/backlog/PLAN-PROMPTS.md Standing rules.
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony; the checker arm is rejected above.
 
 ## doing-code-review-worker-return-persistence
 
@@ -208,6 +235,32 @@ Scope arms: (1) add the one-sentence entry-order pointer where the maintenance c
 Orientation: docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md (the origin row), agents/skills/execute-plan/SKILL.md Phase 0 prose, the maintenance auth/exec chained-entry flows (next-pick selection and continuation entry), the two witnessed session records cited in the row.
 
 Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add the single entry-order pointer sentence at the chained-entry path named by the origin row, verify the Phase 0 contract text needs no edit, add no gate or validator, run the hygiene scan, fold any review findings, and commit only the touched skill files.
+
+## standing-ask-short-form
+
+Added: 2026-11-07, investigate over the 2026-11-07 24h harvest's skills-corpus row
+
+Rejected alternatives:
+- Land the short-form duties as new template text: rejected, the templates already own the duties; the gap is the ask surface, and template-side additions would duplicate what the receiving session loads anyway (evidence basis: agents/skills/maintenance/template-authoring.md pre-work gate paragraph; agents/skills/maintenance/template-execution.md)
+- Mechanically migrate the already-armed scheduled carriers to the short form: rejected, armed carriers are operator-owned records; the overlay can only sanction the form the operator's future asks use (evidence basis: the origin row's operator-correction evidence and the ten windowed payloads recorded at docs/history/backlog/2026-11-07-standing-mandate-payloads-bake-skill-owned-duties.md)
+- Add a validator that refuses long-form asks: rejected machinery arm, no witnessed incident beyond wording drift, and the ask surface is operator input no repository gate should police (evidence basis: the origin row's Ship when section)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the carrying-a-body-named-single-surface-fix-with-no-open-design-choice clause admits it; the fix is one pointer-class sentence in one named overlay paragraph (the user-directed payload duties paragraph in agents/skills/maintenance/zcode.md), the duties' owning templates already landed, and the sentence changes no gate-bearing path.
+
+Origins:
+- docs/history/backlog/2026-11-07-standing-mandate-payloads-bake-skill-owned-duties.md
+
+Cluster: docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md and docs/history/backlog/2026-11-06-backlog-batch-lands-without-survey-selector.md (the dispatch-surface contract family; those rows own the logs' shared contract block and the backlog rows' selector shape, this entry owns the ask payloads' duplication of skill-owned duties)
+
+Urgency: medium - every future schedule ask re-bakes the roughly 450-word algorithm until the short form is sanctioned, and each baked copy drifts from templates that keep evolving (the raced-pick continuation arm landed template-side after most standing payloads were written); the cost is per-ask noise plus drift, not breakage.
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony (one pointer-class sentence); the validator arm is rejected above with the missing-incident absence named.
+
+Scope arms: (1) add the short-ask-form sentence to agents/skills/maintenance/zcode.md's user-directed payload duties paragraph, naming mode-and-cap-only as the sanctioned form and the template payloads as the duties' resolution path; (2) change no template text; (3) run the hygiene scan and `bash scripts/check_maintenance_pins.sh` over the touched file before the commit.
+
+Orientation: docs/history/backlog/2026-11-07-standing-mandate-payloads-bake-skill-owned-duties.md (the origin row), agents/skills/maintenance/zcode.md (the user-directed payload duties paragraph and the Directive-lift precedent), agents/skills/maintenance/template-authoring.md and agents/skills/maintenance/template-execution.md (the duty owners).
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): add one sentence to the user-directed payload duties paragraph in agents/skills/maintenance/zcode.md naming the short ask form (mode and cap only) and stating that the receiving session resolves the walk, availability, report, and cleanup duties from the template payloads; run the hygiene scan and the maintenance pins check; commit only the touched skill file.
 
 ## unit-test-runner-private-image-auth-explanation
 
@@ -2024,6 +2077,36 @@ Rejected alternatives:
 Machinery admission: the census pass is read-only probing plus text and pinning arms; the gate arm is rejected above with the missing-incident absence named.
 
 
+## docs-branch-intermediate-symlink-fixture
+
+Added: 2026-11-07, learn Step 1.9 investigate over test-suite runtime reduction Task 1 baseline row
+
+The baseline skipped `DocsBranchSyncTests.test_intermediate_symlink_then_parent_traversal_refuses_without_ref_change` because its fixture tried to create `docs/escape` before creating `docs/`. The fixture's second link starts with `../../escape/../history/reviews/branch.md`, which leaves the `.ai-playbook/reviews` archive root at its first `..` step before the link could encounter an intermediate symlink. It also does not name the created `docs/escape` link. The production path check's refusal is correct for that target; the test fixture does not prove the intermediate-symlink path in its name.
+
+Rejected alternatives:
+- Delete the test or accept the skip as platform availability: rejected, because the baseline shows the local cause is a missing fixture parent and the intended containment regression remains unexercised; evidence basis: docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md and scripts/test_docs_branch_sync.py
+- Change `symlink_target_is_under`: rejected, because its current walk refuses as soon as a parent step leaves the supplied archive root; the candidate target does that before any intermediate link can be inspected, so the observed failure is in test setup, not production behavior; evidence basis: scripts/docs_branch_sync.sh
+- Add a suite-wide gate against skipped tests: rejected on the machinery-admission axis; no witnessed incident shows such a gate would catch this local fixture mistake, and a blocker would charge every skip (`scripts/test_docs_branch_sync.py`; repository guidelines, Machinery admission protocol).
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the row names a body-level fix to one test file with no open design choice, dependency, guard, or state-schema change.
+
+Origins:
+- docs/history/backlog/2026-11-07-docs-branch-intermediate-symlink-fixture.md
+
+Stage 1 roster: docs/history/backlog/2026-11-07-docs-branch-intermediate-symlink-fixture.md (single origin; the open backlog search found no other row about this fixture or test path)
+
+Urgency: low - one baseline security-coverage test is skipped, while the focused correction is bounded to its fixture; no production failure or blocked lane was observed.
+
+Scope arms: place the intermediate link beneath the actual allowed archive root and construct the traversal link so it encounters that link before applying a parent step; preserve the refusal, unchanged docs ref, and no-snapshot/no-prune/no-ref-update assertions; run the single focused test and confirm it no longer skips. Keep production bytes out of scope unless the corrected end-to-end fixture demonstrates a separate behavior defect.
+
+Orientation: `scripts/test_docs_branch_sync.py`, `DocsBranchSyncTests.test_intermediate_symlink_then_parent_traversal_refuses_without_ref_change`; `scripts/docs_branch_sync.sh`, `symlink_target_is_under` and `collect_local_files`; the baseline inventory in `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md`.
+
+Prompt: in one ad-hoc run, repair only the named test fixture so a symlink inside the `.ai-playbook/reviews` allowed root is reached before parent traversal; retain the test's refusal, unchanged ref, and forbidden-trace assertions. Run `python3 -m pytest scripts/test_docs_branch_sync.py::DocsBranchSyncTests::test_intermediate_symlink_then_parent_traversal_refuses_without_ref_change -q` and establish that it executes rather than skips. Delete this entry with an `EXEC-PROMPTS-PRUNE` receipt in the same landing.
+
+Machinery admission: no machinery is recommended; the suite-wide skip gate is rejected above because there is no witnessed incident to justify a new blocker.
+
+Disk re-derivation at entry write: source test, production checker, baseline report, and origin row each exist in both the working tree and `HEAD`; the exact entry slug was absent from both working-tree and `HEAD` EXEC-PROMPTS searches before insertion.
+
 ## 2026-11-06 exec closeout: closeout-migrate-supplemental execution landed cd385e428
 
 Urgency: low - record entry; the work is landed and the residuals are filed.
@@ -2033,3 +2116,40 @@ Rejected alternatives:
 - Treat the skipped done-run completion marking as work owed on this entry: rejected, the marking's refusal warnings are on record, the locks released free, and the landing evidence lives in the landing commit and the plans archive for any future re-derivation (evidence basis: cd385e428, the record entry's own residual note)
 
 Entry: the one-shot exec carrier (automation-7da743f2, armed 2026-11-05 for 23:00 WET, fired late by the operator's restart) executed docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md end to end: four TDD tasks with per-task light boundaries, anchor design review 0 blocking (3 advisory folded as guard-rails), intermediate reviews clean/backlogged-candidates, Phase 3 fresh adversarial panel (correctness + fidelity lenses) 0 blocking; squash-landed cd385e428 on main after a mid-closeout rebase over the peer's harvest landing (lessons renumbered additively 409-412 over the peer's 407-408; the renumbering is the citation-consistency witness for the corpus-append-at-tail discipline); plan archived to completed with the 8 origin rows' execution flips and disposition fold; 7 durable residual backlog rows filed 2026-11-06; migrate suite 438 passed + the peer-adjudicated baseline red; pins/hygiene exit 0; staging pairs validated (design-review canonical pair + the exec-r1 completion record backfilling the plan-egress evidence leg). Closeout residual: the done-run manifest's completion marking was skipped (finalize ran from the primary after the worktree removal had taken the owner checkout's done-session scratch; the unbound-resolution refusal warnings are on record; locks released free) - the landing evidence lives in cd385e428 and the plans archive; a future run re-derives from those, and the ordering lesson (finalize before worktree removal) is folded into lesson 405's witness family.
+
+## 2026-11-07 exec closeout: producer-code-family-record-arm execution
+
+Urgency: low - record entry; the work is landed and the residuals are filed.
+
+Rejected alternatives:
+- Fix the pre-existing cross-suite telemetry order-flake in this run: rejected, it reproduces at the base commit without the seam changes, so it is not plan-caused; filed as docs/history/backlog/2026-11-07-producer-telemetry-test-order-flake.md instead (evidence basis: the combined-suite failure reproduced at main@46fe276b5 during the Phase 2 probe)
+- Re-certify the drifted plan bytes through a fresh plan-review round at execution start: rejected, the only delta from the r3-certified digest was the Primary-class-anchors canonical-shape fix, the readiness pre-round gate (the designed pre-step re-certification) passed green, and the drift reason is recorded in the run manifest (evidence basis: docs/history/plans/completed/2026-11-07-producer-code-family-record-arm.md Disposition)
+
+Entry: the one-shot exec carrier (automation-74207943, armed 2026-11-06 for 03:00 WET 2026-11-07, max 1 stop after 1st) executed docs/history/plans/2026-11-07-producer-code-family-record-arm.md end to end worktree-first: Task 1 fb5e2141a (validator seam promotion + canaries + parity witness), Task 2 e99c381bc (producer rewired onto the seam, byte-identical outputs), Phase 3 full fresh-adversarial panel 0 blocking with focused fix fc8b7b291 (label-aware corpus prior paths so the seam's pre-fence arm is genuinely exercised) and one focused re-review clean; plan archived with disposition fold, Executed flip at pre-squash tip 0fa4f2cad, origin row fold-deleted; same-slug session-dir collision with the 2026-11-04 sibling handled by backup-then-mirror (lesson 417); closeout residual: an archive commit was mis-landed on main by the shell cwd reset (the primary checkout) and reverted in the same session by mixed reset before any downstream read - the second witness for lesson 43's re-enter-the-worktree discipline.
+
+## machinery-inventory-unregistered-fire-outcomes-script
+
+Added: 2026-11-07, learn+investigate over the operative-file-read-budget-gate authoring session's learn Step 1.9 row (the finding stood report-only across the 2026-11-06 and 2026-11-07 scheduler turns before filing)
+
+`python3 scripts/machinery_inventory.py --check` reports one regrowth failure: `scripts/maintenance_fire_outcomes.py` (operative since 833e4c7d3, the warning-only post-fire verification arm) has no `scripts/machinery_registry.json` entry. The scheduler's machinery-inventory consult is fail-open, so the red never blocks a lane; the cost is a standing red baseline that can mask genuine regrowth behind a known failure.
+
+Rejected alternatives:
+- Remove the script: rejected, it is operative (the post-fire outcome flow consumes it) and two open residual rows assume it stays (evidence basis: scripts/maintenance_fire_outcomes.py's consumers in scripts/check_maintenance_pins.sh's post-fire family; docs/history/backlog/2026-11-06-fire-outcomes-robustness-residuals.md and docs/history/backlog/2026-11-06-fire-outcomes-pin-and-guard-accuracy.md)
+- Exclude the path from the inventory check: rejected, that edits a gate against its own finding and masks future regrowth on the same baseline (evidence basis: docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md, the same-class row whose remedy was registration, not exclusion)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the carrying-a-body-named-single-surface-fix-with-no-open-design-choice clause admits the arm; the fix is one declarative registry entry whose acceptance test is the existing check going green, with no design choice open.
+
+Origins:
+- docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md
+
+Stage 1 roster: docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (single origin; its Cluster lines bind it to the same script's two residual rows, which own recorded findings, not the registry admission, and to the 2026-10-31 same-class regrowth row, whose scripts are covered)
+
+Urgency: low - the check is fail-open and report-only; no lane blocked, the only cost is the standing red baseline.
+
+Machinery admission: no gate, validator, lock, ledger, or required ceremony is added; the inventory check exists and already fails, and this arm closes the unregistered-script instance by adding the missing declarative registry row (incident link and expected-catch basis: the origin row; review: green baseline restored, or 2026-12-07).
+
+Scope arms: (1) register `scripts/maintenance_fire_outcomes.py` in `scripts/machinery_registry.json` with its class and witness pointer at 833e4c7d3, restoring the green baseline (the same change folds the two sibling residual rows only if their full recorded scope is taken, otherwise they stand); (2) run `python3 scripts/machinery_inventory.py --check` and confirm zero failures with the check source unchanged; (3) change no gate or validator source.
+
+Orientation: docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (the origin row), scripts/machinery_registry.json (the admission surface), scripts/machinery_inventory.py (the check), docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md (the same-class remedy precedent).
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): register the script per the origin row's smallest arm, confirm the inventory check returns zero failures with the check source unchanged, and commit the registry row.

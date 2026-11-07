@@ -2,6 +2,7 @@
 
 - **Status:** open
 - **Priority:** low
+- **Cluster:** docs/history/backlog/2026-11-06-raced-pick-ordering-precedence-tension.md (same authoring-continuation review family)
 - **Class:** skill-text
 - **Driving force:** code-quality
 - **Origin:** Phase 3 review candidates, plan authoring-payload-raced-pick-continuation (landed branch 2026-11-06-raced-pick-continuation)

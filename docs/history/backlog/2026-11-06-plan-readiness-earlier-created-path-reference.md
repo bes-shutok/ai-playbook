@@ -1,6 +1,6 @@
 # Backlog: readiness rejects a later edit of an earlier task-created file
 
-Status: covered-pending-execution (docs/history/plans/2026-11-06-plan-readiness-planned-path-lifecycle.md)
+Status: covered (docs/history/plans/2026-11-06-plan-readiness-planned-path-lifecycle.md)
 Workflow: backlog
 Priority: high
 Origin class: self-serving

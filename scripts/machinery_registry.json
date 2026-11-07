@@ -2132,6 +2132,22 @@
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-11-02-review-freshness-and-code-coverage-gaps.md"
       }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:maintenance_fire_outcomes.py",
+      "kind": "script",
+      "note": "operative warning-only fire-outcomes verifier introduced in commit 833e4c7d33c563b0c9682f25f268cbb202291ca3 (execute-plan: land one-shot fire outcome verification); registry admission recorded by docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md",
+      "paths": [
+        "scripts/maintenance_fire_outcomes.py"
+      ],
+      "tests": [
+        "scripts/test_maintenance_fire_outcomes.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-05-automation-fire-time-failure-verification.md"
+      }
     }
   ],
   "removals": [

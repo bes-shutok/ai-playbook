@@ -4,6 +4,7 @@ Class: fix-class
 Origin class: witnessed defect (operator-directed recovery session over the 2026-11-04 primary checkout)
 Dedup probe: searched open backlog filenames and bodies for `land-worktree`, `staged state`, `primary checkout`, and `desync`; the landing-serialization plan owns dispatch serialization and the ref-lock span around this same compare-and-swap but never the primary index state; the lock-acquire-export rows own merge-lock env capture across tool-call shells; the landing-identity tree-oid row owns the landing record's evidence shape; the closeout-clobber-guard family owns post-hoc clobber guards. None covers the omitted primary staged-state pre-refusal.
 Cluster: docs/history/plans/2026-11-04-parallel-execution-landing-serialization-blockers.md (owns the landing serialization and the CAS critical section this desync rides)
+Cluster: docs/history/backlog/2026-11-07-rolling-log-freeze-foreign-bytes-setaside-recipe.md (same residue class; that row owns the consumer-side freeze-write recovery recipe, this row owns the producer-side landing guard)
 
 # land-worktree moves main across a staged primary checkout with no staged-state guard
 

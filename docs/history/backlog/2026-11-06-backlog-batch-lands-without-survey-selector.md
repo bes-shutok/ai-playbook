@@ -2,7 +2,7 @@ Status: open
 Priority: high
 Class: fix-class
 Origin class: skills-corpus defect (2026-11-06 cross-session learn+investigate harvest over the prior 24h)
-Cluster: docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md (same dispatch-surface contract family; that row owns the rolling logs' lost shared contract, this row owns the backlog rows' survey-selector shape)
+Cluster: docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md (same dispatch-surface contract family; that row owns the rolling logs' lost shared contract, this row owns the backlog rows' survey-selector shape); docs/history/backlog/2026-11-07-standing-mandate-payloads-bake-skill-owned-duties.md (same family; that row owns ask payloads baking duties the templates already own)
 Capture hygiene: scan-public-hygiene pass (2026-11-06)
 
 # A review-residual backlog batch lands without the survey selector fields and is invisible to the open-row survey

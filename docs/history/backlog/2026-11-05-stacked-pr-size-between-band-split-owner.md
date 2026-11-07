@@ -4,6 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** medium
+- **Cluster:** docs/history/backlog/2026-11-05-stacked-pr-size-integration-points-both-directions.md; docs/history/backlog/2026-11-05-stacked-pr-size-rehearsal-log-surface-naming.md; docs/history/backlog/2026-11-05-stacked-pr-size-rehearsal-stop-witness-wording.md; docs/history/backlog/2026-11-05-stacked-pr-size-validation-preamble-root-wording.md; docs/history/backlog/2026-11-05-stacked-pr-size-pay-for-growth-premise-correction.md (same plan's certification-residual family)
 - **Origin class:** plan-review certification residual (this plan's r2)
 - **Class:** fix-class
 - **Skill/step:** plan Terms ("Split-or-rationale disposition"); Outcome bullet 3; plan Task 3 first and second checkboxes

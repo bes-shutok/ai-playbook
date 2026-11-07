@@ -1,6 +1,6 @@
 # Backlog: GC the budget-resume launchd carriers the pause protocol leaves armed
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-budget-resume-carrier-gc.md)
 Priority: medium
 Origin class: witnessed (pet)
 Class: fix-class

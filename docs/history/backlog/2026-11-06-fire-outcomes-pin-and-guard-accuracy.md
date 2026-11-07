@@ -1,13 +1,16 @@
 # Backlog: fire-outcomes pin literal and live-guard accuracy residuals
 
+Status: open
+
 Driving force: reliability (residual review findings from the 2026-11-06 automation-fire-time-failure-verification Task 1 intermediate review; all low, non-blocking).
 
-Cluster: closeout-recovery
+Cluster: closeout-recovery, docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (same script, sibling defect class: this row owns its recorded findings, that row owns the registry admission)
 
 Findings captured:
 
 1. Weak pin literal: the `mode=ro` pin in `scripts/check_maintenance_pins.sh` (post-fire family) matches two occurrences in `scripts/maintenance_fire_outcomes.py` (docstring + operative URI), so dropping the operative occurrence while the docstring survives keeps the pin green. Tighten to a single-occurrence-anchored literal or pin the operative line's context.
 2. Vacuous live-guard legs: the memory-index hermeticity guard legs in `scripts/test_maintenance_fire_outcomes.py` watch `~/.claude|~/.codex|~/.agents|~/.cursor/MEMORY.md` paths that do not exist on this host, so those assertions are None==None here; the real live index home differs and hardcoding it would violate the no-personal-paths rule. Consider a configured-path injection or dropping the vacuous legs.
 3. Live-digest guard race: the watched live scheduler-state file is actively written by running maintenance automations; a write landing inside the suite's short window false-fails the byte-unchanged assertion. Accepted risk today; document or narrow the window if a false red appears.
+4. Full-suite live-surface read: `scripts/test_maintenance_fire_outcomes.py:1082-1114` reads the primary checkout's live scheduler-state bytes and four home memory files at module import and compares them again at suite end. During execute-plan Phase 2 on 2026-11-07, the required full-suite run failed because an independent scheduler updated the primary scheduler-state snapshot during the run; the isolated rerun passed after excluding that snapshot. Reading home memory files into the pytest process also crosses the suite's fixture boundary even when the assertions pass. Fix by injecting explicit temporary paths and ensuring the suite never reads live scheduler or home memory contents. Source: `.ai-playbook/reviews/2026-11-07-doc-registry-row-edit-validator-timing-code-review-r1.md`, F1 (High, valid, deferred outside this plan's unchanged-test scope). Why not fixed now: Phase 3 scope covers the plan's changed registry and test paths; this suite-level test is unchanged and fixing it would broaden the plan. Capture hygiene: `scan-public-hygiene --files` pass. Driving force: testability (secondary: reliability). Class: fence-class. Origin class: self-serving. Dedup probe: searched open backlog filenames and problem text for scheduler-state, home memory, live-state, fire-outcomes suite, and hermeticity; this is the same live-suite snapshot/race root cause already recorded in items 2-3, so it is appended here rather than filed as a separate micro-item.
 
-Accept when: the pin grammar anchors the operative occurrence, and the guard legs are either genuinely live or explicitly documented as structural-only.
+Accept when: the pin grammar anchors the operative occurrence, the guard legs are either genuinely live or explicitly documented as structural-only, and the suite snapshot uses injected temporary paths without reading live scheduler or home-memory files.

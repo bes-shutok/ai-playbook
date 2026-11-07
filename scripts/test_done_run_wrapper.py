@@ -175,9 +175,15 @@ class FixtureMixin:
     def runner_env(self) -> dict:
         env = dict(self.base_env)
         env["PATH"] = VENV_BIN + os.pathsep + env.get("PATH", "")
+        env["HOME"] = str(self.tmp / "home")
+        env["XDG_CONFIG_HOME"] = str(self.tmp / "home")
+        Path(env["HOME"]).mkdir(exist_ok=True)
         env["DONE_LOCK_ROOT"] = str(self.tmp / "locks" / "done")
         env["MERGE_LOCK_ROOT"] = str(self.tmp / "locks" / "merge")
         env["MERGE_LOCK_POLL_SECS"] = "1"
+        env["DONE_LOCK_POLL_SECS"] = "1"
+        env["DONE_LOCK_AGENT_MAX_WAIT_SECS"] = "1"
+        env["DONE_LOCK_DEAD_HOLDER_GRACE_SECS"] = "0"
         env["DONE_LOCK_SCRIPT"] = str(LOCK_SCRIPT)
         env["DONE_SWEEP_REPO_ROOT"] = str(self.fixture)
         env["DONE_SWEEP_RUNTIME_HOME"] = str(self.tmp / "runtime-home")

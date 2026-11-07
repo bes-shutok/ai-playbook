@@ -2,6 +2,7 @@
 
 - **Status:** open
 - **Priority:** medium
+- **Cluster:** docs/history/backlog/2026-11-06-raced-pick-pin-hardening-residuals.md (same authoring-continuation review family)
 - **Class:** skill-text
 - **Driving force:** correctness
 - **Origin:** Phase 3 review candidates, plan authoring-payload-raced-pick-continuation (landed branch 2026-11-06-raced-pick-continuation)

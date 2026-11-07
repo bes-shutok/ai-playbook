@@ -2,8 +2,8 @@
 
 Backlog origin: docs/history/backlog/2026-11-06-test-suite-runtime-reduction.md
 Driving force: efficiency
-Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-test-suite-runtime-reduction*-r*.md (highest round for this source-plan path is authoritative).
-Executed: no
+Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-test-suite-runtime-reduction[-p<identity-token>]-r*.md (highest round for this source-plan path is authoritative).
+Executed: yes (3896d7f97db714007bef58276dcdce753d997a0c)
 Authoring claim: 2026-11-06-test-suite-runtime-reduction.md (session 01a1b0ab-498e-7751-b65e-03a067c4a9bf)
 
 Language guidance: [Python guidelines](../../../projects/.ai-playbook/python_guidelines.md).
@@ -77,7 +77,7 @@ Decision points requiring a grill: user authorized bounded full-suite baseline/f
 **Done when:**
 - The linked benchmark reports contain the reproducible baseline, dominant-cost profile, all option dispositions, implemented changes and final comparable result.
 - Modified suites and causally affected regressions pass, and the final complete benchmark has no new failures, skips or unexplained lost signals relative to the baseline.
-- Full-suite wall time falls by at least 50%, or the report states the measured best improvement and concrete evidence explaining why further in-scope reduction would unacceptably harm coverage or reliability. A missing experiment or mere lack of time is not that evidence.
+- Full-suite wall time falls by at least 50%, or the report states the measured best improvement and concrete evidence explaining why further in-scope reduction would unacceptably harm coverage or reliability. A missing experiment or mere lack of time is not that evidence. For this execution, completion of the Task 3 operator-accepted interim-disposition criteria permits plan closure.
 
 **Ship when:**
 - None: the repository work and benchmark evidence establish local completion; no deployment or external-owner condition applies.
@@ -95,6 +95,9 @@ Decision points requiring a grill: user authorized bounded full-suite baseline/f
 **Documentation:**
 - `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md` (Task 1) *(new)*
 - `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction.md` (Task 3) *(new)*
+- `docs/history/backlog/2026-11-07-test-suite-runtime-reduction-follow-up.md` (Task 3) *(new)*
+- `docs/history/backlog/2026-11-04-execute-plan-project-test-policy-scope.md` (Task 3)
+- `docs/history/backlog/PLAN-PROMPTS.md` (Task 3)
 
 **Plan-related extension:** implementation and review may change unlisted test helpers or test modules when evidence ties the change directly to measured runtime or a regression introduced by this plan. Execution records those expanded paths before work. Findings that complete a task, preserve changed wiring or close required documentation are in scope; weak or speculative links are rejected with a one-line reason.
 
@@ -126,12 +129,12 @@ Context surface: the plan's Terms, this task, and `## Standing constraints`.
 Files:
 - `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md` *(new)*
 
-- [ ] Given the unmodified execution tree, expects the complete discovered suite benchmark to record source revision, command sequence, environment, inventory, end-to-end wall time, suite/test contributors, resource use, failures and skips. [class: REPOSITORY_TEST]
-- [ ] Given expensive suites, expects attributed setup, process-start, Git/filesystem, test-body, waiting and contention costs; separate instrumented profiling overhead from the comparable baseline. [class: REPOSITORY_TEST]
-- [ ] Write the baseline and option comparison in `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md`: given each listed approach, expects measured evidence or an explicit unmeasured disposition, coverage impact, flake risk, portability and maintenance cost. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the profile, expects selected existing-harness changes to target demonstrated costs; reject selection-only speedups and document why ports or a replacement runner remain follow-up work. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given baseline failures, skips or interruption, expects accurate separate outcomes and no false passing baseline; retain evidence and continue only with comparisons whose uncertainty is explicitly reported. [class: REPOSITORY_TEST]
-- [ ] Commit: `tests: record full-suite runtime baseline and optimization choices` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the unmodified execution tree, expects the complete discovered suite benchmark to record source revision, command sequence, environment, inventory, end-to-end wall time, suite/test contributors, resource use, failures and skips. [class: REPOSITORY_TEST]
+- [x] Given expensive suites, expects attributed setup, process-start, Git/filesystem, test-body, waiting and contention costs; separate instrumented profiling overhead from the comparable baseline. [class: REPOSITORY_TEST]
+- [x] Write the baseline and option comparison in `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction-baseline.md`: given each listed approach, expects measured evidence or an explicit unmeasured disposition, coverage impact, flake risk, portability and maintenance cost. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the profile, expects selected existing-harness changes to target demonstrated costs; reject selection-only speedups and document why ports or a replacement runner remain follow-up work. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given baseline failures, skips or interruption, expects accurate separate outcomes and no false passing baseline; retain evidence and continue only with comparisons whose uncertainty is explicitly reported. [class: REPOSITORY_TEST]
+- [x] Commit: `tests: record full-suite runtime baseline and optimization choices` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Remove measured costs from the existing harness
 
@@ -145,13 +148,13 @@ Primary class anchors:
 - `FixtureMixin` in `scripts/test_done_run_wrapper.py`, shared wrapper setup and invocation.
 - `LandSquashHelperTest` in `scripts/test_land_squash.py`, landing test setup and behavior checks.
 
-- [ ] Run → expect GREEN characterization before refactoring: given each selected hotspot and its protected behavior, expects the existing assertions to distinguish the correct result from the relevant incorrect outcome. [class: REPOSITORY_TEST]
-- [ ] Given a measured repeated setup or subprocess cost, expects the optimized existing harness to do less work while retaining real boundary coverage, isolated mutable state and equivalent failure assertions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a removed or merged case, expects a recorded mapping to a retained discriminating witness, or evidence the old behavior is obsolete; elapsed time alone never licenses removal. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given selected caching or setup reuse, expects changed inputs to invalidate reused data and one case's mutation not to alter another case's result; keep the original isolation path if reuse cannot meet this witness. [class: REPOSITORY_TEST]
-- [ ] Given selected parallel paths, expects bounded workers and at least three focused repeated runs with identical outcomes, isolated state and complete failure propagation; retain serial behavior when the measured reliability or contention cost outweighs savings. [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN after refactoring: given the modified suites and causally affected tests, expects retained behavior assertions and cleanup checks to pass; measure focused speedups without another complete-suite run. [class: REPOSITORY_TEST]
-- [ ] Commit: `tests: reduce measured harness overhead without losing regression signals` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN characterization before refactoring: given each selected hotspot and its protected behavior, expects the existing assertions to distinguish the correct result from the relevant incorrect outcome. [class: REPOSITORY_TEST]
+- [x] Given a measured repeated setup or subprocess cost, expects the optimized existing harness to do less work while retaining real boundary coverage, isolated mutable state and equivalent failure assertions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given a removed or merged case, expects a recorded mapping to a retained discriminating witness, or evidence the old behavior is obsolete; elapsed time alone never licenses removal. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given selected caching or setup reuse, expects changed inputs to invalidate reused data and one case's mutation not to alter another case's result; keep the original isolation path if reuse cannot meet this witness. [class: REPOSITORY_TEST]
+- [x] Given selected parallel paths, expects bounded workers and at least three focused repeated runs with identical outcomes, isolated state and complete failure propagation; retain serial behavior when the measured reliability or contention cost outweighs savings. [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN after refactoring: given the modified suites and causally affected tests, expects retained behavior assertions and cleanup checks to pass; measure focused speedups without another complete-suite run. [class: REPOSITORY_TEST]
+- [x] Commit: `tests: reduce measured harness overhead without losing regression signals` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Verify complete-suite improvement and publish the result
 
@@ -159,10 +162,22 @@ Context surface: the plan's Terms, this task, and `## Standing constraints`.
 
 Files:
 - `docs/history/feature-notes/2026-11-06-test-suite-runtime-reduction.md` *(new)*
+- `docs/history/backlog/2026-11-07-test-suite-runtime-reduction-follow-up.md` (Task 3) *(new)*
+- `docs/history/backlog/2026-11-04-execute-plan-project-test-policy-scope.md` (Task 3)
+- `docs/history/backlog/PLAN-PROMPTS.md` (Task 3)
 
-- [ ] Given the optimized tree, expects one final complete-suite benchmark using comparable baseline settings and inventory accounting; retain outcomes and resource measurements, separate setup effects and instrumentation overhead. [class: REPOSITORY_TEST]
-- [ ] Given the baseline and final measurements, expects the benchmark report to state the wall-time reduction and uncertainty, changed coverage dispositions, failures/skips, repeat-run evidence for parallel paths and final option decisions. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given at least 50% reduction, expects the claim to retain full behavior coverage; given less improvement, expects measured best results and concrete coverage/reliability limits, never substitution of narrower selection or unperformed experiments. [class: REPOSITORY_TEST]
-- [ ] Given new failures, added skips, unexplained inventory loss or incompatible environments, expects an inconclusive comparison with named evidence, never a successful speedup claim or premature completion. [class: REPOSITORY_TEST]
-- [ ] Run the Validation Commands and any focused checks selected for expanded task scope; given changed helper/doc surfaces, expects no stale references, leaked fixture state or new hygiene violations. [class: REPOSITORY_TEST]
-- [ ] Commit: `tests: document verified full-suite runtime improvement` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the optimized tree, expects one final complete-suite benchmark using comparable baseline settings and inventory accounting; retain outcomes and resource measurements, separate setup effects and instrumentation overhead. [class: REPOSITORY_TEST]
+- [x] Given the baseline and final measurements, expects the benchmark report to state the wall-time reduction and uncertainty, changed coverage dispositions, failures/skips, repeat-run evidence for parallel paths and final option decisions. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the final measurement, expects the report to state whether reduction reached 50% and to account for behavior coverage in the measured result. [class: REPOSITORY_TEST]
+- [x] Given less than 50% reduction without explicit one-run operator acceptance, expects measured best results and concrete coverage or reliability limits; [class: IMPLEMENTATION_REQUIRED]
+- [x] Given one-run operator acceptance, expects a receipt quoting and binding the confirmation to this plan's final result and run; report and archive keep both original conditions unmet and link the validated follow-up and investigation with why executable now. [class: REPOSITORY_TEST]
+- [x] Given the operator-directed interim disposition, expects the remaining process-parallelism, Go/Rust runner, and fixture/startup options to be preserved in an open follow-up backlog item with detailed measured versus unmeasured findings and a validated investigation entry. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given new failures, added skips, unexplained inventory loss or incompatible environments, expects an inconclusive comparison with named evidence, never a successful speedup claim or premature completion. [class: REPOSITORY_TEST]
+- [x] Run the Validation Commands and any focused checks selected for expanded task scope; given changed helper/doc surfaces, expects no stale references, leaked fixture state or new hygiene violations. [class: REPOSITORY_TEST]
+- [x] Commit: `tests: document verified full-suite runtime improvement` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- The origin `docs/history/backlog/2026-11-06-test-suite-runtime-reduction.md` was covered by this execution. Its status was flipped to `covered` against the pre-squash branch tip and the origin is deleted in this archive commit. The distinct test-policy item remains open.
+- The final benchmark measured a 44.102% reduction, below the 50% target. The alternative coverage or reliability limit was not established. The operator said, “Accept 44.10% for now,” for this execution only. Both original success conditions remain unmet.
+- Follow-up work remains open at `docs/history/backlog/2026-11-07-test-suite-runtime-reduction-follow-up.md`, with investigation recorded in `docs/history/backlog/PLAN-PROMPTS.md`. It is actionable now because the completed profiles identify the remaining measurement work, with process parallelism first and Go/Rust prototypes conditional on profiling evidence.

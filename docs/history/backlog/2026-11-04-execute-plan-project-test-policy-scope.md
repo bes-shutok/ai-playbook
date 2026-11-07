@@ -1,13 +1,13 @@
 # Backlog: execute-plan conflates project test policy with plan validation scope
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-execute-plan-project-test-policy-scope.md)
 Workflow: backlog
 Priority: high
 Origin class: self-serving
 Consumer urgency: Company-scoped projects that consume execute-plan require the complete repository suite before final completion; do not defer this shared-skill correction as skills-repository formal-hardening.
 Class: fix-class
 Driving force: efficiency + consistency
-Cluster: docs/history/backlog/2026-10-24-liveness-pin-plans-archive-twin-span-missing.md (prior full-suite catch that motivated the shared execution policy; retain its focused regression coverage)
+Cluster: docs/history/backlog/2026-10-24-liveness-pin-plans-archive-twin-span-missing.md (prior full-suite catch that motivated the shared execution policy; retain its focused regression coverage); docs/history/backlog/2026-11-07-test-suite-runtime-reduction-follow-up.md (same full-suite runtime family, distinct cause: this row sets whether and when the suite runs; the sibling measures how to reduce the cost of a required full suite)
 
 ## Problem
 

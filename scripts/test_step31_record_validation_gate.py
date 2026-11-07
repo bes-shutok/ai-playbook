@@ -21,6 +21,18 @@ The fixtures reuse the validator's own current-format builders
 post-window freshness payload, so the shapes track the validator's own
 grammar instead of hand-built Markdown.
 
+The seam canaries (``SeamDerivationCanaryTest``) pin the validator's
+public self-heal chain-grammar derivation seam (``well_formed_self_heal_state``,
+``valid_prior_chain_state``, ``self_heal_chain_state``,
+``calendar_valid_record_date``, ``AmbiguousChainPredecessor``) with literal
+golden values derived from the producer's behavior at promotion time. The
+seam and the enforcement carry-forward block in
+``validate_self_heal_attempt_state``/``_validate_self_heal_record`` are
+intentional twins with a change-both duty; the parity witness holds them
+in agreement on the documented prior-evidence corpus. This suite never
+imports ``produce_exec_review_record`` (no differential-oracle import
+whose oracle the producer rewiring deletes).
+
 Run from the repository root:
 
     PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m unittest discover -s scripts -p 'test_step31_record_validation_gate.py'
@@ -496,6 +508,369 @@ class Step31RecordValidationGateTest(unittest.TestCase):
         self.assertGreaterEqual(
             len(metrics_log.read_text(encoding="utf-8").splitlines()), 1
         )
+
+
+class SeamDerivationCanaryTest(unittest.TestCase):
+    """Canaries over the validator's public self-heal chain-grammar seam.
+
+    Every expected value below is a literal pinned from the producer's
+    behavior at promotion time (2026-11-07, plan
+    docs/history/plans/2026-11-07-producer-code-family-record-arm.md
+    Task 1); the suite never imports ``produce_exec_review_record``, so
+    the pins survive the producer's Task 2 rewiring onto the seam. The
+    seam derivation and the enforcement carry-forward block inside
+    ``_validate_self_heal_record`` are intentional twins with a
+    change-both duty; the parity witness at the bottom of this class
+    holds the twins in agreement on the documented prior-evidence corpus.
+    """
+
+    # Literal golden ids/digests (never generated, so a grammar change
+    # that flips acceptance flips a visible constant, not a computed one).
+    RUN_ID_A = "a" * 32
+    RUN_ID_B = "b" * 32
+    RUN_ID_C = "c" * 32
+    DIGEST_D = "d" * 64
+    DIGEST_E = "e" * 64
+
+    DATE = "2026-10-10"
+    CURRENT_DATE = "2026-10-11"
+    CHAIN_STEM = "branch-review-step31-seam"
+
+    # The producer's exact ambiguous-predecessor refusal text at
+    # promotion time, carried verbatim by the seam's
+    # AmbiguousChainPredecessor.
+    AMBIGUOUS_MESSAGE = (
+        "ambiguous prior-round records for chain "
+        "'branch-review-ambiguity' round r1: "
+        "['2026-10-10-branch-review-ambiguity-r1.md', "
+        "'2026-10-11-branch-review-ambiguity-r1.md']; the shared "
+        "self-heal gate refuses an ambiguous predecessor, "
+        "disambiguate the directory first"
+    )
+
+    # The enforcement arm's acceptance text for an unknown state bound to
+    # the current run id when a valid prior exists; its presence in the
+    # current record's errors is the enforcement-side witness that the
+    # carry-forward block classified the prior as valid.
+    ENFORCEMENT_VALID_PRIOR_MESSAGE = (
+        "unknown state is allowed only when prior round evidence is unavailable"
+    )
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="step31-seam-canary-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    # -- fixture helpers ---------------------------------------------------
+
+    def _minted_markdown(self, run_id):
+        """Post-window clear Markdown carrying the mint pair for run_id."""
+        return vrs._post_window_fixture_markdown("plan").replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n- review-run-id: " + run_id
+            + "\n- review-started-at-ms: 123",
+            1,
+        )
+
+    def _bare_markdown(self):
+        """Post-window clear Markdown with no mint pair and no fallback
+        marker (the mint-gate-error shape)."""
+        return vrs._post_window_fixture_markdown("plan")
+
+    def _prior_payload(self, run_id=RUN_ID_A, digest=DIGEST_D, round_value=1,
+                       date=DATE, status="unused", record_kind="canonical"):
+        """Post-window canonical sidecar for a prior record with the given
+        self-heal chain state (consumed states carry their bindings)."""
+        payload = vrs._post_window_fixture_payload("plan")
+        payload.update({"date": date, "round": round_value, "source_digest": digest})
+        if record_kind is not None:
+            payload["record_kind"] = record_kind
+        state = {"status": status, "run_id": run_id}
+        if status == "consumed":
+            state.update({"round": "r1", "source_digest": digest})
+        payload["extensions"] = {"convergence": {"self_heal_attempt": state}}
+        return payload
+
+    def _write_pair(self, directory, name, markdown, payload):
+        """Write a record plus its .stats.json sidecar under directory;
+        a string payload is written verbatim (malformed-JSON shapes)."""
+        path = directory / name
+        path.write_text(markdown)
+        if payload is not None:
+            path.with_suffix(".stats.json").write_text(
+                payload if isinstance(payload, str) else json.dumps(payload)
+            )
+        return path
+
+    def _prior_name(self, stem=CHAIN_STEM, date=DATE):
+        return f"{date}-{stem}-r1.md"
+
+    # -- well_formed_self_heal_state canaries ------------------------------
+
+    def test_well_formed_self_heal_state_golden_booleans(self):
+        """The state grammar's golden booleans pinned from the producer's
+        behavior: the three status shapes accept with their exact key
+        sets; wrong key sets, malformed bindings, and non-dict payloads
+        all refuse."""
+        cases = [
+            ({"status": "unused", "run_id": self.RUN_ID_A}, True),
+            ({"status": "consumed", "run_id": self.RUN_ID_B,
+              "round": "r1", "source_digest": self.DIGEST_D}, True),
+            ({"status": "unknown", "run_id": self.RUN_ID_C}, True),
+            ({"status": "unused", "run_id": self.RUN_ID_A, "extra": 1}, False),
+            ({"status": "unused", "run_id": "xyz"}, False),
+            ({"status": "consumed", "run_id": self.RUN_ID_B,
+              "round": "1", "source_digest": self.DIGEST_D}, False),
+            ({"status": "consumed", "run_id": self.RUN_ID_B,
+              "round": "r1", "source_digest": "zz"}, False),
+            ({"status": "done", "run_id": self.RUN_ID_A}, False),
+            ("unused", False),
+            ({"status": "unused"}, False),
+        ]
+        for state, expected in cases:
+            with self.subTest(state=state):
+                self.assertIs(vrs.well_formed_self_heal_state(state), expected)
+
+    # -- calendar_valid_record_date public surface -------------------------
+
+    def test_calendar_valid_record_date_public_surface_goldens(self):
+        """The public calendar surface returns the pinned results of the
+        private date validator it aliases: calendar-valid dates accept;
+        impossible calendar dates, shape-valid-but-non-calendar strings,
+        non-strings, and non-values refuse."""
+        cases = [
+            ("2026-10-10", True),
+            ("2026-02-30", False),
+            ("2026-13-01", False),
+            ("not-a-date", False),
+            (None, False),
+            (20261010, False),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=repr(value)):
+                self.assertIs(vrs.calendar_valid_record_date(value), expected)
+                self.assertIs(
+                    vrs.calendar_valid_record_date(value),
+                    vrs._calendar_valid_record_date(value),
+                )
+
+    # -- valid_prior_chain_state corpus ------------------------------------
+
+    def _corpus_builders(self):
+        """The documented prior-evidence fixture corpus, one builder per
+        documented shape; each builder writes into a fresh directory."""
+        stem, date, markdown = self.CHAIN_STEM, self.DATE, self._minted_markdown(self.RUN_ID_A)
+
+        def _build(directory, name, md, payload):
+            return self._write_pair(directory, name, md, payload)
+
+        return {
+            "valid": lambda d: _build(d, self._prior_name(stem, date), markdown,
+                                      self._prior_payload()),
+            "missing_file": lambda d: None,
+            "missing_sidecar": lambda d: (d / self._prior_name(stem, date)).write_text(markdown),
+            "malformed_json": lambda d: _build(d, self._prior_name(stem, date), markdown,
+                                               '{"schema_version": 1,'),
+            "pre_fence": lambda d: _build(d, self._prior_name(stem, "2026-10-08"),
+                                          markdown, self._prior_payload(date="2026-10-08")),
+            "non_canonical": lambda d: _build(d, self._prior_name(stem, date), markdown,
+                                              self._prior_payload(record_kind="review_notes")),
+            "bad_digest": lambda d: _build(d, self._prior_name(stem, date), markdown,
+                                           self._prior_payload(digest="deadbeef")),
+            "state_not_well_formed": lambda d: _build(d, self._prior_name(stem, date), markdown,
+                                                      self._prior_payload(status="bogus")),
+            "gate_errors": lambda d: _build(d, self._prior_name(stem, date),
+                                            self._bare_markdown(), self._prior_payload()),
+            # The non-dict JSON payload: the shape class the enforcement
+            # arm's AttributeError tolerance exists for.
+            "nondict_json": lambda d: _build(d, self._prior_name(stem, date), markdown, "[]"),
+        }
+
+    def _corpus_prior_name(self, label):
+        """The prior record name the builder for ``label`` actually
+        wrote; label-aware so cases like ``pre_fence`` (written at the
+        2026-10-08 pre-fence date) exercise the fence arm, not the
+        missing-file arm."""
+        date = "2026-10-08" if label == "pre_fence" else self.DATE
+        return self._prior_name(self.CHAIN_STEM, date)
+
+    def test_valid_prior_chain_state_corpus_goldens(self):
+        """The prior-evidence corpus pinned from the producer's behavior:
+        only the fully valid post-fence canonical pair yields its chain
+        state; every other documented shape yields None."""
+        for label, builder in self._corpus_builders().items():
+            with self.subTest(case=label):
+                directory = self.root / f"corpus-{label}"
+                directory.mkdir()
+                builder(directory)
+                prior_path = directory / self._corpus_prior_name(label)
+                result = vrs.valid_prior_chain_state(prior_path)
+                if label == "valid":
+                    self.assertEqual(
+                        result,
+                        {"status": "unused", "run_id": self.RUN_ID_A},
+                    )
+                else:
+                    self.assertIsNone(result)
+
+    # -- self_heal_chain_state arms -----------------------------------------
+
+    def test_self_heal_chain_state_round_selection_starts_unused(self):
+        """Round 1 and unnumbered records start unused bound to the
+        record's own run id, with no directory walk."""
+        for name in (f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r1.md",
+                     f"{self.CURRENT_DATE}-{self.CHAIN_STEM}.md"):
+            with self.subTest(name=name):
+                record_path = self.root / name  # the record need not exist
+                self.assertEqual(
+                    vrs.self_heal_chain_state(record_path, self.RUN_ID_C),
+                    {"status": "unused", "run_id": self.RUN_ID_C},
+                )
+
+    def test_self_heal_chain_state_carries_valid_consumed_prior(self):
+        """A higher round with one valid prior carries the prior's state
+        verbatim: the returned run_id is the prior's own id (distinct
+        from the record-under-construction's run id) and the status is
+        consumed with its bindings, a shape reachable only by carrying,
+        never by re-minting."""
+        directory = self.root / "carry"
+        directory.mkdir()
+        self._write_pair(
+            directory, self._prior_name(), self._minted_markdown(self.RUN_ID_B),
+            self._prior_payload(run_id=self.RUN_ID_B, status="consumed"),
+        )
+        record_path = directory / f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r2.md"
+        self.assertEqual(
+            vrs.self_heal_chain_state(record_path, self.RUN_ID_A),
+            {"status": "consumed", "run_id": self.RUN_ID_B,
+             "round": "r1", "source_digest": self.DIGEST_D},
+        )
+
+    def test_self_heal_chain_state_unknown_when_no_valid_prior(self):
+        """A higher round with no valid prior reports unknown bound to the
+        record's own run id: over an empty directory and when only a
+        wrong-round same-stem record is present (the round filter
+        honored)."""
+        empty = self.root / "unknown-empty"
+        empty.mkdir()
+        self.assertEqual(
+            vrs.self_heal_chain_state(
+                empty / f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r3.md", self.RUN_ID_C
+            ),
+            {"status": "unknown", "run_id": self.RUN_ID_C},
+        )
+        wrong_round = self.root / "unknown-wrong-round"
+        wrong_round.mkdir()
+        self._write_pair(wrong_round, self._prior_name(),  # an r1 present
+                         self._minted_markdown(self.RUN_ID_A), self._prior_payload())
+        self.assertEqual(
+            vrs.self_heal_chain_state(
+                wrong_round / f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r3.md",
+                self.RUN_ID_C,
+            ),
+            {"status": "unknown", "run_id": self.RUN_ID_C},
+        )
+
+    def test_self_heal_chain_state_treats_unnumbered_record_as_prior_candidate(self):
+        """A higher round with an unnumbered same-stem record selects it
+        as the prior candidate: its state is carried verbatim."""
+        directory = self.root / "unnumbered-candidate"
+        directory.mkdir()
+        self._write_pair(
+            directory, f"{self.DATE}-{self.CHAIN_STEM}.md",
+            self._minted_markdown(self.RUN_ID_A), self._prior_payload(),
+        )
+        record_path = directory / f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r2.md"
+        self.assertEqual(
+            vrs.self_heal_chain_state(record_path, self.RUN_ID_C),
+            {"status": "unused", "run_id": self.RUN_ID_A},
+        )
+
+    def test_self_heal_chain_state_refuses_ambiguous_predecessor(self):
+        """Two dated records resolving to the same chain stem and prior
+        round raise the seam's own AmbiguousChainPredecessor (a
+        ValueError subclass) carrying the producer's exact refusal text,
+        before anything is written."""
+        directory = self.root / "ambiguous"
+        directory.mkdir()
+        ambiguity_stem = "branch-review-ambiguity"
+        self._write_pair(
+            directory, self._prior_name(ambiguity_stem, "2026-10-10"),
+            self._minted_markdown(self.RUN_ID_A), self._prior_payload(),
+        )
+        self._write_pair(
+            directory, self._prior_name(ambiguity_stem, "2026-10-11"),
+            self._minted_markdown(self.RUN_ID_B),
+            self._prior_payload(run_id=self.RUN_ID_B),
+        )
+        record_path = directory / (
+            "2026-10-12-branch-review-ambiguity-r2.md"
+        )
+        with self.assertRaises(vrs.AmbiguousChainPredecessor) as caught:
+            vrs.self_heal_chain_state(record_path, self.RUN_ID_C)
+        self.assertIsInstance(caught.exception, ValueError)
+        self.assertEqual(str(caught.exception), self.AMBIGUOUS_MESSAGE)
+
+    # -- parity witness (seam vs enforcement twin) --------------------------
+
+    def _parity_case(self, label, builder):
+        """Run one corpus case through both derivations: the seam's
+        ``valid_prior_chain_state`` and the enforcement carry-forward
+        block (via ``validate_self_heal_attempt_state`` over a
+        well-formed unknown-state r2 whose run id binds to the prior's
+        state when the seam accepted it). Returns
+        (seam_state, enforcement_saw_valid_prior, errors)."""
+        directory = self.root / f"parity-{label}"
+        directory.mkdir()
+        builder(directory)
+        prior_path = directory / self._corpus_prior_name(label)
+        seam_state = vrs.valid_prior_chain_state(prior_path)
+        prior_run_id = seam_state["run_id"] if seam_state else self.RUN_ID_B
+        current_path = directory / f"{self.CURRENT_DATE}-{self.CHAIN_STEM}-r2.md"
+        current_md = self._minted_markdown(prior_run_id)
+        current_payload = self._prior_payload(
+            run_id=prior_run_id, digest=self.DIGEST_E, round_value=2,
+            date=self.CURRENT_DATE,
+        )
+        current_payload["extensions"] = {
+            "convergence": {
+                "self_heal_attempt": {"status": "unknown", "run_id": prior_run_id}
+            }
+        }
+        current_path.write_text(current_md)
+        current_path.with_suffix(".stats.json").write_text(json.dumps(current_payload))
+        result = vrs.ValidationResult(current_path)
+        vrs.validate_self_heal_attempt_state(
+            current_path, current_md, result, sidecar_payload=current_payload
+        )
+        enforcement_saw_valid_prior = any(
+            self.ENFORCEMENT_VALID_PRIOR_MESSAGE in error for error in result.errors
+        )
+        return seam_state, enforcement_saw_valid_prior, result.errors
+
+    def test_parity_witness_seam_and_enforcement_twins_agree(self):
+        """Parity witness over the shared prior-evidence corpus: the seam
+        (``valid_prior_chain_state``) and the enforcement carry-forward
+        block agree on every documented case: the block classifies a
+        prior valid exactly when the seam returns its state. The two
+        derivations are intentional twins: a grammar change lands in
+        both together (see the twin-duty comments in
+        scripts/validate_review_staging.py)."""
+        for label, builder in self._corpus_builders().items():
+            with self.subTest(case=label):
+                seam_state, enforcement_saw_valid_prior, errors = self._parity_case(label, builder)
+                self.assertEqual(
+                    enforcement_saw_valid_prior,
+                    seam_state is not None,
+                    f"twin disagreement on {label}: seam={seam_state!r} errors={errors}",
+                )
+                if label == "valid":
+                    self.assertEqual(
+                        seam_state, {"status": "unused", "run_id": self.RUN_ID_A}
+                    )
+                    self.assertEqual(len(errors), 1, errors)
+                else:
+                    self.assertEqual(errors, [], errors)
 
 
 if __name__ == "__main__":

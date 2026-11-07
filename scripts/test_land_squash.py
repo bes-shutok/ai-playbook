@@ -424,7 +424,9 @@ def primary_state(root):
     )
 
 
-class LandSquashHelperTest(unittest.TestCase):
+class _LandSquashFixtureMixin:
+    """Shared isolated fixture setup and constructors for landing tests."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -444,6 +446,75 @@ class LandSquashHelperTest(unittest.TestCase):
         git(repo, "checkout", "-q", "main")
         tip = commit_file(repo, "shared.txt", "base main\n", "main edit")
         return tip
+
+    def staged_setup(self, name):
+        repo, lock = self.locked_repo(name)
+        tip = rev(repo, "refs/heads/main")
+        git(repo, "checkout", "-q", "-b", "feature")
+        commit_file(repo, "feat.txt", "feat\n", "feature work")
+        git(repo, "checkout", "-q", "main")
+        (repo / "f01.txt").write_text("f01 staged locally\n")
+        git(repo, "add", "f01.txt")
+        return repo, lock, tip
+
+    def worktree_repo(self, name="wt-repo"):
+        """Create a primary repo and linked feature worktree."""
+        repo = make_repo(self.tmp / name)
+        commit_file(repo, "main-base.txt", "main base\n", "main base work")
+        wt = self.tmp / (name + "-source-wt")
+        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+        return repo, wt
+
+    def worktree_repo_with_logs(self, name, plan_entries, exec_entries,
+                                plan_text=None, exec_text=None):
+        """Create a worktree fixture with both tracked prompt logs."""
+        extra = {
+            PROMPT_LOG_PLAN_REL: (
+                plan_text if plan_text is not None
+                else prompt_log_text([prompt_log_entry(s) for s in plan_entries])
+            ),
+            PROMPT_LOG_EXEC_REL: (
+                exec_text if exec_text is not None
+                else prompt_log_text([prompt_log_entry(s) for s in exec_entries])
+            ),
+        }
+        repo = make_repo(self.tmp / name, extra_files=extra)
+        commit_file(repo, "main-base.txt", "main base\n", "main base work")
+        wt = self.tmp / (name + "-source-wt")
+        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+        return repo, wt
+
+    def commit_log_change(self, wt, message):
+        """Commit the source worktree's pending prompt-log edit."""
+        git(wt, "add", "-A", "--", "docs/history/backlog")
+        git(wt, "commit", "-q", "-m", message)
+
+    def archive_fixture(self, name, plan_rel, plan_body):
+        """Create a source worktree that archives a plans-root file."""
+        repo = make_repo(self.tmp / name)
+        commit_file(repo, "main-base.txt", "main base\n", "main base work")
+        commit_file(repo, plan_rel, plan_body, "add plan")
+        wt = self.tmp / (name + "-source-wt")
+        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+        completed_rel = "docs/history/plans/completed/" + plan_rel.rsplit("/", 1)[-1]
+        completed_path = wt / completed_rel
+        completed_path.parent.mkdir(parents=True, exist_ok=True)
+        git(wt, "mv", plan_rel, completed_rel)
+        git(wt, "commit", "-q", "-m", "archive the plan")
+        return repo, wt, rev(wt, "HEAD"), completed_rel
+
+    def assert_merge_lock_free(self, repo):
+        env = base_env()
+        env["MERGE_LOCK_ROOT"] = str(suite_lock_root())
+        status = subprocess.run(
+            ["bash", str(DONE_LOCK), "merge-status"], cwd=str(repo), env=env,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertIn("free", status.stdout)
+
+
+class LandSquashHelperTest(_LandSquashFixtureMixin, unittest.TestCase):
 
     # ---- probe modes -------------------------------------------------
 
@@ -1075,16 +1146,6 @@ class LandSquashHelperTest(unittest.TestCase):
     # ---- the arm-1 staged-orphan bounded exit (plan
     # 2026-10-10-coordination-single-writer-ttl, Task 1) ----------------------
 
-    def staged_setup(self, name):
-        repo, lock = self.locked_repo(name)
-        tip = rev(repo, "refs/heads/main")
-        git(repo, "checkout", "-q", "-b", "feature")
-        commit_file(repo, "feat.txt", "feat\n", "feature work")
-        git(repo, "checkout", "-q", "main")
-        (repo / "f01.txt").write_text("f01 staged locally\n")
-        git(repo, "add", "f01.txt")
-        return repo, lock, tip
-
     def test_land_staged_bounded_wait_attributed(self):
         repo, lock, tip = self.staged_setup("staged-wait-attributed")
         claims = repo / "docs" / "tmp" / "execution-claims"
@@ -1275,64 +1336,6 @@ class LandSquashHelperTest(unittest.TestCase):
 
     # ==== land-worktree mode: the worktree-complete landing ================
 
-    def worktree_repo(self, name="wt-repo"):
-        """A primary repo whose main carries one advance past the init commit
-        (so the verified base tip's parent exists for the fault seams) and a
-        linked source worktree checked out on branch `feature`. No merge lock
-        is pre-acquired: the land-worktree mode acquires its own
-        swap-critical-section lock internally, so a fixture-held lock would
-        contend with every invocation."""
-        repo = make_repo(self.tmp / name)
-        commit_file(repo, "main-base.txt", "main base\n", "main base work")
-        wt = self.tmp / (name + "-source-wt")
-        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
-        return repo, wt
-
-    def worktree_repo_with_logs(self, name, plan_entries, exec_entries,
-                                plan_text=None, exec_text=None):
-        """worktree_repo with both rolling prompt logs tracked on main, so a
-        branch range's log edit is the checker's removal class; each log
-        carries the fenced fixture shape with the given entry slugs unless
-        an explicit full text is passed."""
-        extra = {
-            PROMPT_LOG_PLAN_REL: (
-                plan_text if plan_text is not None
-                else prompt_log_text([prompt_log_entry(s) for s in plan_entries])
-            ),
-            PROMPT_LOG_EXEC_REL: (
-                exec_text if exec_text is not None
-                else prompt_log_text([prompt_log_entry(s) for s in exec_entries])
-            ),
-        }
-        repo = make_repo(self.tmp / name, extra_files=extra)
-        commit_file(repo, "main-base.txt", "main base\n", "main base work")
-        wt = self.tmp / (name + "-source-wt")
-        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
-        return repo, wt
-
-    def commit_log_change(self, wt, message):
-        """Commit the source worktree's pending prompt-log edit; the
-        directory pathspec matches a whole-file log deletion too."""
-        git(wt, "add", "-A", "--", "docs/history/backlog")
-        git(wt, "commit", "-q", "-m", message)
-
-    def archive_fixture(self, name, plan_rel, plan_body):
-        """A primary repo plus a source worktree whose branch renames a
-        plans-root file into docs/history/plans/completed/ (the archive
-        ceremony's egress shape). Returns (repo, wt, source_tip,
-        completed_rel)."""
-        repo = make_repo(self.tmp / name)
-        commit_file(repo, "main-base.txt", "main base\n", "main base work")
-        commit_file(repo, plan_rel, plan_body, "add plan")
-        wt = self.tmp / (name + "-source-wt")
-        git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
-        completed_rel = "docs/history/plans/completed/" + plan_rel.rsplit("/", 1)[-1]
-        completed_path = wt / completed_rel
-        completed_path.parent.mkdir(parents=True, exist_ok=True)
-        git(wt, "mv", plan_rel, completed_rel)
-        git(wt, "commit", "-q", "-m", "archive the plan")
-        return repo, wt, rev(wt, "HEAD"), completed_rel
-
     def test_land_worktree_green_path(self):
         # the worktree-complete landing: a verified merge lock, the source
         # worktree on the branch at the expected tip, a clean tree; the base
@@ -1419,17 +1422,6 @@ class LandSquashHelperTest(unittest.TestCase):
         self.assertEqual(rev(repo, "HEAD"), landing)
         self.assertEqual(git(repo, "status", "--porcelain=v1").stdout, "")
         self.assert_merge_lock_free(repo)
-
-    def assert_merge_lock_free(self, repo):
-        """merge-status over the suite lock root reports the repo free: the
-        helper released its swap-critical-section lock on the path taken."""
-        env = base_env()
-        env["MERGE_LOCK_ROOT"] = suite_lock_root()
-        status = subprocess.run(
-            ["bash", str(DONE_LOCK), "merge-status"], capture_output=True,
-            text=True, check=False, cwd=str(repo), env=env)
-        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
-        self.assertIn("free", status.stdout)
 
     def test_land_worktree_swap_lock_contention_refused(self):
         # a merge lock already held when the helper reaches its swap
@@ -2200,7 +2192,7 @@ class LandSquashHelperTest(unittest.TestCase):
             self.assertIn(token, proc.stdout)
 
 
-class ReconcileTailGateTest(LandSquashHelperTest):
+class ReconcileTailGateTest(_LandSquashFixtureMixin, unittest.TestCase):
     """The landing-tail reconcile receipt gate: both helper modes run the
     post-landing reconciliation under the lock, write the receipt, and route
     the completion verdict on it."""
@@ -2310,7 +2302,7 @@ class ReconcileTailGateTest(LandSquashHelperTest):
         self.assertIn("exit code: 2", receipt)
 
 
-class LandLockOwnershipTest(LandSquashHelperTest):
+class LandLockOwnershipTest(_LandSquashFixtureMixin, unittest.TestCase):
     """The landing lock-mode matrix and the primary land / rolling-log write
     lock orders (plan 2026-10-25-primary-log-branch-drift-at-commit.md
     Task 2): Primary `land` verifies both lock owners before its snapshot;

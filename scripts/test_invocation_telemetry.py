@@ -689,12 +689,15 @@ DONE_RUN_LIB_COPY_FILES = (
     "review_staging_calibration.py",
     "runtime_capabilities.py",
     "validate_review_staging.py",
+    "worktree_closeout_migrate.py",
 )
 LANDING_COSTS_NAME = "landing-costs.jsonl"
 
 # Pinned pre-integration contract literals for the probed closeout arms,
-# captured at base d88657273 (before the Task 3 integration) with
-# normalize_done_output applied. The release ceremony's stdout prologue, the
+# originally captured at base d88657273 (before the Task 3 integration) with
+# normalize_done_output applied; the finalization-line pins were re-captured
+# after landing 998d1dade, which added that emitted line. The release
+# ceremony's stdout prologue, the
 # landing-summary variants, and the checkpoint create-then-refresh fallback
 # stderr line are shared; each arm's literal is the captured composition.
 _FINALIZE_RELEASE_STDOUT = (
@@ -703,6 +706,7 @@ _FINALIZE_RELEASE_STDOUT = (
     "removed: checkpoint-manifest run <RUN_ID>"
     " (<TMP>/done-fixture-repo/docs/tmp/done-session/"
     "run-checkpoint-<RUN_ID>.json)\n"
+    "done_run finalize: finalization: run_id=<RUN_ID> marking=applied\n"
     "done-lock: removed released lock at <TMP>/locks/done/<HEX>\n"
     "done-lock: released lock for <TMP>/done-fixture-repo\n"
     "OUTCOME: pass\n"
@@ -764,6 +768,7 @@ PINNED_LANDING_STDERR = (
 PINNED_NO_MANIFEST_STDOUT = (
     "done_run finalize: no run manifest from setup; nothing to finalize or"
     " checkpoint; the release still runs\n"
+    "done_run finalize: finalization: run_id=none marking=not-bound\n"
     "done_run finalize: releasing the done lock via the from-holder arm (the"
     " hold's own acquire-time records gate it)\n"
     "done-lock: lock already released (<TMP>/locks/done/<HEX>)\n"
@@ -829,7 +834,7 @@ DONE_RUNNER_SCRUB_VARS = (
     "CHECK_PLAN_ORIGINS_CLOSED_SCRIPT",
     "DONE_RUN_TRACE_FILE", "DONE_RUN_LINTER",
     "DONE_RUN_ID", "DONE_RUN_MANIFEST", "DONE_RUN_MARKER",
-    "PYTHONPATH",
+    "PYTHONPATH", "BASH_ENV",
 )
 
 
@@ -865,6 +870,14 @@ def run_done_run(
         timeout=300,
         check=False,
     )
+
+
+def test_done_runner_env_scrubs_bash_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("BASH_ENV", str(tmp_path / "startup.sh"))
+
+    env = done_runner_env(tmp_path, tmp_path)
+
+    assert "BASH_ENV" not in env
 
 
 def eval_done_exports(output: str) -> dict:

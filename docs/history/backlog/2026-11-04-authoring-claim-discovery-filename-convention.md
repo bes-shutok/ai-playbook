@@ -1,6 +1,6 @@
 # Backlog: authoring-claim discovery misses convention-divergent claim filenames
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-authoring-claim-discovery-filename-convention.md)
 Workflow: backlog
 Priority: medium
 Origin class: self-serving
@@ -8,7 +8,7 @@ Quarantine: 2026-11-04
 Class: fix-class
 Driving force: consistency
 
-Cluster: docs/history/backlog/2026-11-04-authoring-continuation-owner-attribution.md (same authoring-claim lifecycle, but this row owns peer-claim discovery before parallel authoring begins)
+Cluster: docs/history/plans/completed/2026-11-06-authoring-continuation-owner-attribution.md (covered) (same authoring-claim lifecycle, but this row owns peer-claim discovery before parallel authoring begins)
 
 ## Problem
 

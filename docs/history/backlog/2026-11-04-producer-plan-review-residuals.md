@@ -15,3 +15,6 @@ Residuals carried (each with its r3 pattern id and anchor):
 - quality#ownership-receipt-overcoverage: the Task 2 clean-round ownership receipt attributes the whole no-last-fix clean-round subset to the validator's clean-verdict contradiction, but the targeted-mode slice triggers neither named guard and is legal today (validator lines 1813-1851); inherited from the r2 fold instruction's own phrasing. Fix: scope the second clause to the verification-only slice plus the mode-independent filter-yes rule.
 
 Driving force: code-quality (plan-document precision); none of the five blocks execution, and the covering plan is certified ready=yes zero blocking.
+
+Added: 2026-11-07, execution Phase 3 focused re-review of docs/history/plans/2026-11-07-producer-code-family-record-arm.md (fix commit fc8b7b291). Residual carried:
+- testing#corpus-date-literal-duplication: the step31 seam corpus helper `_corpus_prior_name` duplicates the pre-fence date literal already in the `pre_fence` builder (scripts/test_step31_record_validation_gate.py ~674/~694); if the builder's date changes without the helper, both corpus and parity cases silently regress to the vacuous missing-file arm. Fix: derive the helper's date from a shared constant or add a pair-written guard.

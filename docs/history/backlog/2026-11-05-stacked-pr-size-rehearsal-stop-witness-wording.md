@@ -4,6 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
+- **Cluster:** docs/history/backlog/2026-11-05-stacked-pr-size-integration-points-both-directions.md; docs/history/backlog/2026-11-05-stacked-pr-size-between-band-split-owner.md; docs/history/backlog/2026-11-05-stacked-pr-size-rehearsal-log-surface-naming.md; docs/history/backlog/2026-11-05-stacked-pr-size-validation-preamble-root-wording.md; docs/history/backlog/2026-11-05-stacked-pr-size-pay-for-growth-premise-correction.md (same plan's certification-residual family)
 - **Origin class:** plan-review certification residual (this plan's r2)
 - **Class:** fix-class
 - **Skill/step:** plan Task 3 rehearsal walkthrough checkbox; landed rehearsal record in the execute-plan-stack run log

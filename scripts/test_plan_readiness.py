@@ -6581,6 +6581,309 @@ class CertificationSealStagingCliTest(unittest.TestCase):
         self.assertIn("no first-parent ancestor", err)
 
 
+def _ownership_plan(tasks_body: str) -> str:
+    """Minimal single-file plan text whose task sections are tasks_body."""
+    return f"# P\n\n## Tasks\n\n{tasks_body}\n"
+
+
+class PlanOwnershipEarlierCreatorTest(unittest.TestCase):
+    """Files-existence check (clause (c) of plan_ownership_problem): an
+    unannotated Files listing of an absent path passes when its creation
+    record sits at an earlier or the same task section, ordered by heading
+    ordinal when every section carries one; a strictly-later owner and the
+    three ownership protections keep their refusals."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="ownership-earlier-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def test_earlier_creator_exempts_later_unannotated_listing(self):
+        plan = _ownership_plan(
+            "### Task 1: Create the report\n\n"
+            "Files:\n"
+            "- `src/report.md` *(new)*\n\n"
+            "- [ ] Write the report. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Unrelated\n\n"
+            "Files:\n"
+            "- `src/other.md` *(new)*\n\n"
+            "- [ ] Write other. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 3: Extend the report\n\n"
+            "Files:\n"
+            "- `src/report.md`\n\n"
+            "- [ ] Extend it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/report.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(plan, self.root))
+
+    def test_same_section_owner_exempts_unannotated_relisting(self):
+        plan = _ownership_plan(
+            "### Task 1: Create and relist\n\n"
+            "Files:\n"
+            "- `src/same.md` *(new)*\n"
+            "- `src/same.md`\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/same.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(plan, self.root))
+
+    def test_directory_form_orders_by_heading_ordinal(self):
+        import plan_shape
+
+        tasks: dict[str, str] = {}
+        for ordinal in range(1, 11):
+            if ordinal == 2:
+                files = "Files:\n- `src/dir_created.md` *(new)*\n\n"
+            elif ordinal == 10:
+                files = "Files:\n- `src/dir_created.md`\n\n"
+            else:
+                files = ""
+            tasks[f"task-{ordinal}.md"] = (
+                f"### Task {ordinal}: step {ordinal}\n\n"
+                f"{files}"
+                f"- [ ] Do step {ordinal}. [class: IMPLEMENTATION_REQUIRED]\n"
+            )
+        plans_dir = self.root / "plans"
+        plans_dir.mkdir()
+        plan_dir = _directory_plan_fixture(
+            plans_dir,
+            slug="2026-11-06-ordinal-order",
+            charter_text="# Plan: ordinal order\n\n## Tasks\n",
+            task_texts=tasks,
+        )
+        text = plan_shape.resolve_plan_operand(plan_dir).charter_plus_tasks_text()
+        # Precondition: unpadded filename assembly places Task 10 ahead of
+        # Task 2, so document position alone would invert the exemption.
+        self.assertLess(
+            text.index("### Task 10:"), text.index("### Task 2:")
+        )
+        self.assertFalse((self.root / "src/dir_created.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(text, self.root))
+
+    def test_strictly_later_owner_keeps_refusal_byte_identical(self):
+        plan = _ownership_plan(
+            "### Task 1: Edit before creation\n\n"
+            "Files:\n"
+            "- `src/later_owned.md`\n\n"
+            "- [ ] Edit the file. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create the file\n\n"
+            "Files:\n"
+            "- `src/later_owned.md` *(new)*\n\n"
+            "- [ ] Write the file. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertEqual(
+            plan_readiness.plan_ownership_problem(plan, self.root),
+            f"Files: path src/later_owned.md in Task 1 does not exist under "
+            f"{self.root} and carries no *(new)* annotation",
+        )
+
+    def test_absent_path_without_creation_record_still_refuses(self):
+        plan = _ownership_plan(
+            "### Task 1: Touch the ghost\n\n"
+            "Files:\n"
+            "- `src/ghost.md`\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("does not exist under", reason)
+        self.assertIn("carries no *(new)* annotation", reason)
+        self.assertIn("src/ghost.md", reason)
+
+    def test_two_creating_tasks_still_refuse(self):
+        plan = _ownership_plan(
+            "### Task 1: Create\n\n"
+            "Files:\n"
+            "- `src/dup.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create again\n\n"
+            "Files:\n"
+            "- `src/dup.md` *(new)*\n\n"
+            "- [ ] Write it again. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("duplicate creating task for src/dup.md", reason)
+
+    def test_consumer_before_owner_still_refuses(self):
+        plan = _ownership_plan(
+            "### Task 1: Consume\n\n"
+            "- [ ] Import `src/later_new.md` and call it. "
+            "[class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create\n\n"
+            "Files:\n"
+            "- `src/later_new.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("consumer-before-owner", reason)
+        self.assertIn("src/later_new.md", reason)
+
+
+class PlanFilesDeletionMarkerTest(unittest.TestCase):
+    """Planned-deletion marker (``*(deleted)*``) in the Files grammar:
+    ``_plan_files_items`` records the marker kind per annotation by its
+    leading keyword, and the Files-existence check (clause (c) of
+    plan_ownership_problem) exempts deleted-marked paths whether the
+    path exists under the repo root or not. The marker is never a
+    creation record (duplicate-creator and consumer-before-owner never
+    read it), imposes no ordering constraint against creation records
+    (delete-before-create passes by design), and an unrecognized
+    annotation stays unannotated."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="ownership-deleted-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def _existing_witness(self, rel: str) -> None:
+        path = self.root / rel
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# witness\n", encoding="utf-8")
+
+    def test_deletion_marker_recorded_token_still_collected(self):
+        items = plan_readiness._plan_files_items(
+            "Files:\n- `src/gone.md` *(deleted)*\n"
+        )
+        self.assertEqual(items, [("src/gone.md", False, True)])
+        self.assertEqual(
+            plan_readiness._review_scope_task_files(
+                "### Task 1: Delete\n\n"
+                "Files:\n"
+                "- `src/gone.md` *(deleted)*\n"
+            ),
+            ["src/gone.md"],
+        )
+
+    def test_marker_kind_follows_leading_keyword(self):
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/a.md` *(deleted; see Task 2)*\n"
+            ),
+            [("src/a.md", False, True)],
+        )
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/b.md` *(new; also-deleted)*\n"
+            ),
+            [("src/b.md", True, False)],
+        )
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/c.md` *(new)* *(deleted)*\n"
+            ),
+            [("src/c.md", True, True)],
+        )
+
+    def test_unrecognized_annotation_stays_unannotated(self):
+        items = plan_readiness._plan_files_items(
+            "Files:\n- `src/d.md` *(removed)*\n"
+        )
+        self.assertEqual([token for token, *_ in items], ["src/d.md"])
+        self.assertTrue(
+            all(not flag for _token, *flags in items for flag in flags)
+        )
+        plan = _ownership_plan(
+            "### Task 1: Touch the mystery\n\n"
+            "Files:\n"
+            "- `src/mystery.md` *(removed)*\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/mystery.md").exists())
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("does not exist under", reason)
+        self.assertIn("carries no *(new)* annotation", reason)
+        self.assertIn("src/mystery.md", reason)
+
+    def test_deleted_path_exemption_absent_and_existing(self):
+        absent_plan = _ownership_plan(
+            "### Task 1: Delete the report\n\n"
+            "Files:\n"
+            "- `src/deleted_absent.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/deleted_absent.md").exists())
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(absent_plan, self.root)
+        )
+        self._existing_witness("src/deleted_exists.md")
+        existing_plan = _ownership_plan(
+            "### Task 1: Delete the module\n\n"
+            "Files:\n"
+            "- `src/deleted_exists.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(existing_plan, self.root)
+        )
+
+    def test_delete_before_create_passes_by_design(self):
+        plan = _ownership_plan(
+            "### Task 1: Delete ahead of creation\n\n"
+            "Files:\n"
+            "- `src/order_free.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create the file\n\n"
+            "Files:\n"
+            "- `src/order_free.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/order_free.md").exists())
+        # The accepted narrowing, pinned deliberately: the planned-deletion
+        # marker imposes no ordering constraint against creation records,
+        # so a delete-listing ahead of the creating task refuses nothing.
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_double_deleted_marker_is_not_a_creation_record(self):
+        self._existing_witness("src/twice_deleted.md")
+        plan = _ownership_plan(
+            "### Task 1: Delete it\n\n"
+            "Files:\n"
+            "- `src/twice_deleted.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Delete it again\n\n"
+            "Files:\n"
+            "- `src/twice_deleted.md` *(deleted)*\n\n"
+            "- [ ] Delete it again. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_deleted_beside_unannotated_existing_listing_no_refusal(self):
+        self._existing_witness("src/mixed_listed.md")
+        plan = _ownership_plan(
+            "### Task 1: Delete it\n\n"
+            "Files:\n"
+            "- `src/mixed_listed.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Touch it too\n\n"
+            "Files:\n"
+            "- `src/mixed_listed.md`\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_consumer_half_marker_claims_no_creation(self):
+        self._existing_witness("src/consumed.md")
+        plan = _ownership_plan(
+            "### Task 1: Consume\n\n"
+            "- [ ] Import `src/consumed.md` and call it. "
+            "[class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Delete it later\n\n"
+            "Files:\n"
+            "- `src/consumed.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+
 if __name__ == "__main__":
 
     unittest.main()

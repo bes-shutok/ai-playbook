@@ -28,10 +28,17 @@ pair (clean over the full five-worker lens set), the usage mint pair
 ``extensions.convergence.self_heal_attempt`` chain state (unused for
 round 1; a valid prior round's state carried verbatim for higher rounds;
 unknown when no valid prior round evidence exists in the output
-directory). Range-mode records carry the same post-window contract with
-two family-specific sidecar surfaces: the sidecar declares
-``source_kind: "code"`` and ``extensions.certified_range`` recording the
-resolved ``{base, head}`` range.
+directory). That chain state's derivation lives in
+``scripts/validate_review_staging.py``'s public surface
+(``validate_review_staging.self_heal_chain_state``, with the date
+pre-flight reading ``validate_review_staging.calendar_valid_record_date``);
+this module re-encodes no chain grammar of its own, and the seam's
+ambiguous-predecessor raise maps here to the producer refusal carrying
+the message text verbatim. Range-mode records carry the same
+post-window contract with two family-specific sidecar surfaces: the
+sidecar declares ``source_kind: "code"`` and
+``extensions.certified_range`` recording the resolved
+``{base, head}`` range.
 
 Success contract (criterion: the validator's final outcome, not the exit
 code, is the gate): the producer reports success only when its validation
@@ -187,7 +194,6 @@ RANGE_SEPARATOR = "..."
 # the validator's identity gates when the record is later validated with
 # --source-plan. Refuse it up front (named tool error).
 _IDENTITY_QUALIFIED_TAIL_RE = re.compile(r"-p[0-9a-f]{8}\Z", re.IGNORECASE)
-_ROUND_TAIL_RE = re.compile(r"-r([1-9][0-9]*)\.md\Z")
 _NULL_LAST_FIX_TOKENS = {"none", "null", "n/a"}
 
 
@@ -714,112 +720,6 @@ def build_payload(ctx: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Self-heal chain state (the shared gate's chain rule, producer side)
-# ---------------------------------------------------------------------------
-
-
-def _well_formed_self_heal_state(state: object) -> bool:
-    """The state grammar of the shared self-heal gate (status enum, exact
-    key set, 32-hex run id, consumed bindings)."""
-    if not isinstance(state, dict):
-        return False
-    status = state.get("status")
-    run_id = state.get("run_id")
-    if status not in ("unused", "consumed", "unknown"):
-        return False
-    if not isinstance(run_id, str) or not vrs.USAGE_MINT_RUN_ID_RE.fullmatch(run_id):
-        return False
-    allowed = {"status", "run_id"}
-    if status == "consumed":
-        allowed |= {"round", "source_digest"}
-        if not re.fullmatch(r"r([1-9][0-9]*)", str(state.get("round", ""))):
-            return False
-        if not re.fullmatch(r"[0-9a-f]{64}", str(state.get("source_digest", ""))):
-            return False
-    return set(state) == allowed
-
-
-def _valid_prior_chain_state(prior_path: Path) -> dict | None:
-    """The prior round's chain state when it is a valid post-fence
-    canonical record; ``None`` for every other prior evidence shape."""
-    prior_sidecar = vrs.stats_sidecar_path(prior_path)
-    if not prior_path.is_file() or not prior_sidecar.is_file():
-        return None
-    try:
-        prior_md = prior_path.read_text(encoding="utf-8")
-        prior_payload = json.loads(prior_sidecar.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(prior_payload, dict):
-        return None
-    if prior_payload.get("record_kind") != "canonical":
-        return None
-    fence = vrs._date_fence(
-        prior_path.name, prior_payload.get("date"), vrs.SELF_HEAL_STATE_MIN_DATE
-    )
-    if fence["name_class"] != "post-fence" or fence["sidecar_class"] != "post-fence":
-        return None
-    if not vrs._calendar_valid_record_date(fence["name_date"]) or not (
-        vrs._calendar_valid_record_date(prior_payload.get("date"))
-    ):
-        return None
-    digest = prior_payload.get("source_digest")
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        return None
-    extensions = prior_payload.get("extensions")
-    convergence = extensions.get("convergence") if isinstance(extensions, dict) else None
-    state = convergence.get("self_heal_attempt") if isinstance(convergence, dict) else None
-    if not _well_formed_self_heal_state(state):
-        return None
-    prior_result = vrs.ValidationResult(prior_path)
-    vrs.validate_usage_mint_gate(
-        prior_path.name, prior_md, prior_result, sidecar_payload=prior_payload
-    )
-    if prior_result.errors:
-        return None
-    return state
-
-
-def self_heal_chain_state(record_path: Path, run_id: str) -> dict:
-    """The self-heal member for the record under construction: round 1 (or
-    unnumbered) starts unused bound to the record's own run id; a higher
-    round carries a valid prior round's state verbatim and reports unknown
-    bound to its own run id when no valid prior evidence exists. The
-    prior lookup keys on the round chain stem across every dated record in
-    the output directory (the shared gate's predecessor-index shape); an
-    ambiguous prior (two dated records for the same chain round) refuses
-    before anything is written."""
-    match = _ROUND_TAIL_RE.search(record_path.name)
-    number = int(match.group(1)) if match else 1
-    if number == 1:
-        return {"status": "unused", "run_id": run_id}
-    stem = re.sub(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-", "", record_path.name)
-    chain_stem = re.sub(r"-r[1-9][0-9]*\.md\Z", "", stem)
-    name_re = re.compile(
-        r"[0-9]{4}-[0-9]{2}-[0-9]{2}-(.+?)(?:-r([1-9][0-9]*))?\.md\Z"
-    )
-    candidates = []
-    if record_path.parent.is_dir():
-        for candidate in record_path.parent.iterdir():
-            name_match = name_re.fullmatch(candidate.name)
-            if name_match and name_match.group(1) == chain_stem and (
-                int(name_match.group(2) or 1) == number - 1
-            ):
-                candidates.append(candidate)
-    if len(candidates) > 1:
-        raise ProducerRefusal(
-            f"ambiguous prior-round records for chain {chain_stem!r} "
-            f"round r{number - 1}: {sorted(c.name for c in candidates)}; "
-            "the shared self-heal gate refuses an ambiguous predecessor, "
-            "disambiguate the directory first"
-        )
-    state = _valid_prior_chain_state(candidates[0]) if candidates else None
-    if state is not None:
-        return dict(state)
-    return {"status": "unknown", "run_id": run_id}
-
-
-# ---------------------------------------------------------------------------
 # Pair writing and validation
 # ---------------------------------------------------------------------------
 
@@ -970,7 +870,7 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         date_value = args.date
     else:
         date_value = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    if not vrs._calendar_valid_record_date(date_value):
+    if not vrs.calendar_valid_record_date(date_value):
         raise ProducerToolError(
             f"date {date_value!r} must be a calendar-valid YYYY-MM-DD date"
         )
@@ -1077,7 +977,14 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         "findings": findings,
         "record_path": record_path,
     }
-    ctx["self_heal_state"] = self_heal_chain_state(record_path, run_id)
+    # The chain grammar reads the validator's public seam (the derivation's
+    # single home); the try wraps exactly the seam call expression, and the
+    # seam's validator-owned ambiguous-predecessor raise maps to this
+    # producer's modeled refusal carrying the message text verbatim.
+    try:
+        ctx["self_heal_state"] = vrs.self_heal_chain_state(record_path, run_id)
+    except vrs.AmbiguousChainPredecessor as exc:
+        raise ProducerRefusal(str(exc))
     return ctx
 
 

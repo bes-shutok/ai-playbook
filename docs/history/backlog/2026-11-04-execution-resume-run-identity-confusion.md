@@ -1,6 +1,6 @@
 # Backlog: resume binds execution work to an unrelated authoring claim
 
-- **Status:** open
+- **Status:** covered-pending-execution (docs/history/plans/2026-11-06-execution-resume-authoring-claim-identity-confusion.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Consumer projects using plan execution need resume identity bound to the requested plan and its execution manifest; the skills-repo personal priority profile must not park or defer this as formal-hardening for the skills repo alone.
@@ -12,7 +12,7 @@
 - **False-positive cost:** a required identity match may retain a run for recovery when its manifest is genuinely missing; selecting by a same-session claim can instead create or mutate work under the wrong item.
 - **Review date:** 2026-12-04
 - **Dedup probe:** searched open backlog filenames and bodies for resume identity, authoring claims, worktree selection, and plan-lifecycle confusion. `docs/history/backlog/2026-11-04-execution-lane-authored-plans-misread-as-landed.md` concerns queue classification from landing evidence, not choosing an execution worktree from an authoring claim. The covered `docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md` and its active plan cover complete resource disposition and reporting, not the selector that chose the wrong claim.
-- **Cluster:** `docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md` (shared resume and ownership surface; this row owns selection of the immutable execution identity, that row owns the terminal disposition of inventoried resources); `docs/history/backlog/2026-11-04-execution-lane-authored-plans-misread-as-landed.md` (related authoring-versus-execution classification, but a different selection mechanism); `docs/history/backlog/2026-11-04-authoring-continuation-owner-attribution.md` (same claim/session identity surface; this row owns execute-plan worktree selection, that row owns authoring-run continuation)
+- **Cluster:** `docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md` (shared resume and ownership surface; this row owns selection of the immutable execution identity, that row owns the terminal disposition of inventoried resources); `docs/history/backlog/2026-11-04-execution-lane-authored-plans-misread-as-landed.md` (related authoring-versus-execution classification, but a different selection mechanism); `docs/history/plans/completed/2026-11-06-authoring-continuation-owner-attribution.md (covered)` (same claim/session identity surface; this row owns execute-plan worktree selection, that row owns authoring-run continuation)
 
 ## Problem
 

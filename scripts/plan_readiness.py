@@ -841,7 +841,7 @@ def _review_scope_task_files(stripped: str) -> list[str]:
     return [
         token
         for _, body in _plan_task_sections(stripped)
-        for token, _ in _plan_files_items(body)
+        for token, _, _ in _plan_files_items(body)
     ]
 
 
@@ -984,6 +984,16 @@ def review_scope_problem(plan_text: str) -> str | None:
 # without it is a shared or sequential edit and never claims creation.
 _PLAN_NEW_FILE_ANNOTATION_RE = re.compile(r"\*\(\s*new\b[^()]*\)\*")
 
+# ``*(deleted)*`` is the planned-deletion marker: an annotation (optionally
+# with elaboration, e.g. ``*(deleted; see Task 2)*``) on a task ``Files:``
+# item declares the task DELETES the path at execution. It is never a
+# creation record (the duplicate-creator and consumer-before-owner checks
+# never read it) and imposes no ordering constraint against creation
+# records; the Files-existence check exempts the marked path whether the
+# path exists on disk or not. Marker kind is decided per annotation by its
+# leading keyword, in the same grammar family as the planned-new marker.
+_PLAN_DELETED_FILE_ANNOTATION_RE = re.compile(r"\*\(\s*deleted\b[^()]*\)\*")
+
 
 def _plan_path_shaped(token: str) -> bool:
     """Path-shaped token, same rule as the task Files collector: a
@@ -1023,9 +1033,10 @@ def _plan_task_label(title: str) -> str:
     return f"Task {ordinal}" if ordinal is not None else f"task section {title!r}"
 
 
-def _plan_files_items(body: str) -> list[tuple[str, bool]]:
-    """``(path token, carries the planned-new marker)`` for a task
-    section's ``Files:`` block, the one owner of the collection rules
+def _plan_files_items(body: str) -> list[tuple[str, bool, bool]]:
+    """``(path token, carries the planned-new marker, carries the
+    planned-deletion marker)`` for a task section's ``Files:`` block, the
+    one owner of the collection rules
     (``_review_scope_task_files`` is a wrapper over this parser plus
     ``_plan_task_sections``) aligned to the one documented declaration
     grammar:
@@ -1034,8 +1045,15 @@ def _plan_files_items(body: str) -> list[tuple[str, bool]]:
     empty-payload ``Files:`` line (re)opens collection, a payload-bearing
     line closes it, the first checkbox item closes it, an indented item is
     an entry like any other (the former nested-annotation skip is
-    stopped), and only path-shaped tokens are collected."""
-    items: list[tuple[str, bool]] = []
+    stopped), and only path-shaped tokens are collected. Marker kind is
+    decided per annotation by its leading keyword: a leading ``deleted``
+    keyword records the planned-deletion marker (``*(deleted; see Task
+    2)*`` is deletion-kind), a leading ``new`` keyword records the
+    planned-new marker (``*(new; also-deleted)*`` is a creation record,
+    not a deletion marker), one item carrying both annotations sets both
+    flags independently (no kind crossing), and any other annotation
+    stays unannotated."""
+    items: list[tuple[str, bool, bool]] = []
     collecting = False
     for line in body.splitlines():
         opener = re.match(r"Files:(.*)$", line)
@@ -1058,6 +1076,11 @@ def _plan_files_items(body: str) -> list[tuple[str, bool]]:
                         token,
                         bool(
                             _PLAN_NEW_FILE_ANNOTATION_RE.search(stripped_line)
+                        ),
+                        bool(
+                            _PLAN_DELETED_FILE_ANNOTATION_RE.search(
+                                stripped_line
+                            )
                         ),
                     )
                 )
@@ -1294,7 +1317,7 @@ def plan_files_coverage_warnings(plan_text: str) -> list[str]:
     per_task: list[tuple[str, set[str]]] = [
         (
             _plan_task_label(title),
-            {token for token, _ in _plan_files_items(body)},
+            {token for token, _, _ in _plan_files_items(body)},
         )
         for title, body in sections
     ]
@@ -1428,7 +1451,17 @@ def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
         classification duty, not a static one;
     (c) a ``Files:`` path that does not exist under ``repo_root`` and
         carries no planned-new marker; the reason names the task and the
-        path. Checklist-only references to nonexistent paths stay an
+        path. An earlier owner (the path's creation record sits in an
+        earlier task section) and the same owner (the record sits in the
+        listing's own section) exempt the listing; sections order by
+        heading ordinal when every section carries one, else by document
+        position, so a strictly-later owner still refuses here. A
+        planned-deletion marker (``*(deleted)*``, optionally with
+        elaboration, kind decided per annotation by its leading keyword)
+        exempts the listing whether the path exists or not; the marker is
+        never a creation record and imposes no ordering constraint
+        against creation records.
+        Checklist-only references to nonexistent paths stay an
         authoring and review duty and are not checked here;
     (d) more than one section heading denoting a transition table
         (``state transition`` or ``transition table`` in the heading);
@@ -1455,7 +1488,7 @@ def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
     # distinct sections sharing an ordinal stay distinct owners.
     owners: dict[str, tuple[int, str]] = {}
     for index, (label, body) in enumerate(sections):
-        for token, is_new in _plan_files_items(body):
+        for token, is_new, _is_deleted in _plan_files_items(body):
             if not is_new:
                 continue
             previous = owners.get(token)
@@ -1486,10 +1519,25 @@ def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
 
     # (c) a Files: path must exist under the repo root unless it carries
     # the planned-new marker (a creation record for a file this plan
-    # creates).
-    for label, body in sections:
-        for token, is_new in _plan_files_items(body):
-            if is_new or (repo_root / token).exists():
+    # creates) or its creation record sits at an earlier or the same
+    # section. Sections order by heading ordinal when every section
+    # carries one (directory plans assemble task files in filename
+    # order, so unpadded names would invert document position), with
+    # document position as the tiebreak; otherwise by document position.
+    ordinals = [
+        _plan_task_ordinal(title) for title, _body in _plan_task_sections(stripped)
+    ]
+    order_keys: list[tuple[int, ...]] = (
+        [(ordinal, index) for index, ordinal in enumerate(ordinals)]
+        if all(ordinal is not None for ordinal in ordinals)
+        else [(index,) for index in range(len(sections))]
+    )
+    for index, (label, body) in enumerate(sections):
+        for token, is_new, is_deleted in _plan_files_items(body):
+            if is_new or is_deleted or (repo_root / token).exists():
+                continue
+            owner = owners.get(token)
+            if owner is not None and order_keys[owner[0]] <= order_keys[index]:
                 continue
             return (
                 f"Files: path {token} in {label} does not exist under "

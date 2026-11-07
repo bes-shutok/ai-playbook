@@ -2,7 +2,7 @@
 
 Added: 2026-11-05, self-heal after a maintenance dispatch admission refusal
 
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md)
 Priority: medium
 Class: fix-class
 Origin class: consumer-pet
