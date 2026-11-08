@@ -4490,20 +4490,21 @@ When the identical command behaves differently in the agent shell versus the use
 
 ## 212. Route Data-Decidable Choices to the Evidence, Not the User
 
-**Principle:** Family H (verify the real thing, not the abstraction). The real thing is the data evidence within reach; "needs the user's choice" is a process abstraction that can mask a question the evidence already settles.
+**Principle:** Family H (verify the real thing, not the abstraction). Data that decides a choice is stronger than a process label such as "user-owned" or "needs approval."
 
-**Trigger:** A workflow reaches a choice point (add a hardcoded constant, populate a registry, pick a data source, disposition a discrepancy cluster) and the agent prepares to ask the user which option to take, or a plan labels the step "user-owned"/"awaiting user approval".
+**Trigger:** A workflow reaches a choice point and the agent is about to ask the user to choose, defer the work, or wait for more evidence.
 
 **Rule:**
-1. Before asking the user to choose, check whether data in reach decides it: local artifacts, public endpoints, cross-source amount comparisons, contract-declared values. If it does, act on the evidence, record the evidence next to the decision, and report.
-2. Escalate only what evidence cannot settle: preference, genuine ambiguity, legal or tax judgment, or a standing invariant the user owns (a frozen design table, a flip gate). Arrive with a recommendation even then.
-3. When a standing rule (for example "flag hardcoded values before adding them") forces a formal ask for something the data already proved, record the relaxation at that rule's home so the formality is not repeated every time.
+1. Check whether available sources settle the choice. If they do, act on the evidence, record it, and report.
+2. Escalate only preferences, genuine ambiguity, legal judgment, or an invariant the user owns; bring a recommendation.
+3. If a standing rule forces an ask after evidence has settled the choice, record the needed relaxation at that rule's home.
+4. When a proposed threshold relies on an incident, compare the incident with that threshold. If it meets the evidence bar, treat it as sufficient and present a concrete repair with its costs; do not ask for another catch or default to warning-only.
 
-**Why:** Across one session the user three times rejected deferral of derivable work: a registry population framed as a user-owned manual action (all sources were public and agent-reachable), a ticker-identity alias submitted for approval when per-transaction amounts on both sides already proved the tokens identical, and disposition-by-disposition asks for clusters whose amounts agreed. Formal asks for decidable questions waste the owner's time and stall pipelines; the owner's words: show me only what genuinely needs additional input.
+**Why:** Repeated asks and deferrals waste time when evidence already decides the choice. A later plan discussion proposed waiting for another catch even though its source described an actual failure; the user pointed to that witness, and the plan moved to a concrete repair.
 
 **Shape:** An "awaiting user approval" item whose deciding evidence is one query away.
 
-**Example:** A validation harness needed a ticker alias (a token contract declaring a Unicode-glyph symbol while the baseline source and exchanges use the ASCII spelling; equal per-transaction amounts under both spellings). Framed as needing explicit approval under a no-hardcoded-values rule; the owner pointed out the data proved identity, delegated evidence-decisive decisions generally, and the alias landed with the evidence recorded and a delegation note at the rule's home.
+**Example:** A validation harness proposed a ticker alias for approval even though contract data and equal transaction amounts proved the two spellings referred to the same asset. The alias landed with its evidence recorded.
 
 **See also:** coding_guidelines.md #25 (Family H parent); skill-mandated confirmation gates remain binding (those are the owner's hard stops, not data questions); the project's decision-authority delegation record in its validation-harness maintenance doc.
 
