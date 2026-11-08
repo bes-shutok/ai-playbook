@@ -433,16 +433,95 @@ class RealTreeCheck(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
 
 
+class RegistryContentWitness(unittest.TestCase):
+    """Content witness for the archive-rider report arm's admission row
+    (plan 2026-11-07-archive-rider-sweep-ordering, Task 3): the real
+    registry's row carries the named admission fields in its note, so the
+    battery distinguishes the prescribed row from a structural-only row.
+    Expected GREEN at landing; reds when the row is dropped or thinned."""
+
+    ROW_ID = "duty:archive-ceremony-post-landing-report"
+    # The citation rule's covering-plan form: the living covering plan at
+    # this landing, its docs/history/plans/completed/ twin after the note's
+    # documented re-point (no docs/history/backlog/completed/ twin exists
+    # for the origin row, so the covering-plan form applies).
+    ALLOWED_WITNESS_REFS = {
+        "docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md",
+        "docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md",
+    }
+
+    def setUp(self):
+        root = Path(__file__).parent.parent
+        if not (root / ".git").exists():
+            self.skipTest("not run from a repository checkout")
+        self.registry = json.loads(
+            (root / "scripts" / "machinery_registry.json").read_text(
+                encoding="utf-8"))
+
+    def admission_row(self):
+        rows = [e for e in self.registry.get("entries", [])
+                if e.get("id") == self.ROW_ID]
+        self.assertEqual(
+            len(rows), 1,
+            "the archive-rider report arm's admission row is missing")
+        return rows[0]
+
+    def test_row_structure_matches_the_prescribed_shape(self):
+        row = self.admission_row()
+        self.assertEqual(row["disposition"], "keep")
+        self.assertEqual(row["kind"], "protocol")
+        # claim-if-concurrent: both arm files are owned by existing rows
+        # (script:done_sweep_gates_lib.py, protocol:primary-log-ref-precondition).
+        self.assertEqual(row["paths"], [])
+        self.assertEqual(row["witness"]["class"], "incident")
+        self.assertIn(row["witness"]["ref"], self.ALLOWED_WITNESS_REFS)
+
+    def test_note_carries_the_named_admission_fields(self):
+        note = self.admission_row().get("note") or ""
+        needles = (
+            # warning-only posture
+            "warning-only",
+            # concrete incident link: the two catches on 2026-11-07, the
+            # origin row, and the covering-plan citation form with re-point
+            "concrete incident",
+            "2026-11-07",
+            "docs/history/backlog/2026-11-07-archive-ceremony-exec-review-record-gap.md",
+            "fef5ebd2a",
+            "8cdc8ef65",
+            "docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md",
+            # expected catch frequency
+            "expected catch frequency",
+            # false-positive cost
+            "false-positive cost",
+            # promotion criteria with demotion pairing and operator approval
+            "promotion criteria",
+            "demotion",
+            "operator approval",
+            # false-catch ledger duty
+            "false-catch ledger",
+            # review date
+            "review date: 2026-12-07",
+            # the arm's paths
+            "scripts/done_sweep_gates_lib.py",
+            "scripts/done_run.sh",
+            "archive_ceremony_post_landing_report",
+        )
+        for needle in needles:
+            self.assertIn(needle, note, "missing admission field: " + needle)
+
+
 def load_tests(loader, tests, pattern):
     """Pattern-aware selection pin (plan 2026-10-02-machinery-realtree-arm-run-mode,
-    Task 1): under unittest DISCOVERY (pattern set) both arms load, preserving
-    discovery's today-semantics; under the documented default invocation
-    (pattern unset) only the fixture arm runs, pinning it to exactly today's
-    24 tests."""
+    Task 1): under unittest DISCOVERY (pattern set) all three arms load,
+    preserving discovery's today-semantics; under the documented default
+    invocation (pattern unset) only the fixture arm runs, pinning it to
+    exactly today's 24 tests (the real-tree and content-witness arms are the
+    discovery and pytest extras)."""
     fixture = loader.loadTestsFromTestCase(MachineryInventoryTest)
     realtree = loader.loadTestsFromTestCase(RealTreeCheck)
+    content = loader.loadTestsFromTestCase(RegistryContentWitness)
     if pattern:
-        return unittest.TestSuite([fixture, realtree])
+        return unittest.TestSuite([fixture, realtree, content])
     return fixture
 
 

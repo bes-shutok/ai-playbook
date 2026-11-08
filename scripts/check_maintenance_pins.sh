@@ -1610,6 +1610,44 @@ EOF
 heredoc_settle "${PIPESTATUS[0]}"
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
 
+# --- authoring-claim three-key match rule pins (plan
+# docs/history/plans/2026-11-06-authoring-claim-discovery-filename-convention.md,
+# Task 1) ---
+# RED-before-Task-2 pins over the rule's one home (the AUTHORING CLAIM gate in
+# template-authoring.md): each presence cell below pins one rule element of the
+# drafted amended gate paragraph (a contiguous span of that draft, per the
+# plan's Task 1 drafting-first rule), so the pre-amendment bytes fail every
+# cell and one RED run names every missing span; Task 2's amendment turns them
+# green. The two consult cells pin by-reference citation anchors only (the
+# citation span plus the home-path literal; never restated constants), and the
+# plans-skill cell pins the amended sentence's three-key-reality fragment, so
+# the amendment's presence and any later revert both fail the suite. The
+# expect_absent_flat cells at the end are the restatement guards on both
+# consults against the home's distinctive rule literals: they hold on the
+# pre-amendment bytes and must keep holding after Task 2 (a consult that cites
+# the gate and restates the constants fails the suite), so they are validated
+# by absence now, not by the RED run. Blocking family throughout (the plain
+# pin and expect_absent_flat helpers; no warning-only placement family).
+# Placement: ahead of the first [ "$fail" -eq 1 ] checkpoint that fires under
+# the standing pre-existing reds, so these cells always execute.
+pin "authoring gate three-key unfiltered claims-directory listing" grep -qF "list the duty's claims directory <primary-root>/docs/tmp/authoring-claims/ unfiltered" "$TA"
+pin "authoring gate three-key origin row basename key" grep -qF "its filename stem (the claim file's basename with .md stripped) equals the target backlog item's file basename (the origin row basename key)" "$TA"
+pin "authoring gate three-key entry slug key" grep -qF "or its filename stem equals the target's entry slug (the slug key, read per the entry-slug resolution rule" "$TA"
+pin "authoring gate three-key slug-key vacuous clause" grep -qF "the slug key is vacuous when the target has no dispatch entry, the match then reducing to the other two keys" "$TA"
+pin "authoring gate three-key entry-slug resolution rule" grep -qF "whose Origins list names the target row, falling back to the row basename with its leading date prefix stripped when no entry names it" "$TA"
+pin "authoring gate three-key item-line key" grep -qF "or its item: line equals the target backlog row path" "$TA"
+pin "authoring gate three-key item-line comparison form" grep -qF "both sides resolved to the facts-resolved repo-relative row path; a claim file whose item: line is absent or is not a backlog row path in that form matches nothing through this key" "$TA"
+pin "authoring gate collision disposition before authoring" grep -qF "Collision disposition before authoring: a fresh matching foreign claim takes the fresh-foreign-claim refusal, a stale matching foreign claim takes the stale-foreign-claim takeover, and a fresh-foreign-claim refusal at an already-picked target takes the raced-pick continuation" "$TA"
+pin "D2 consult cites the gate's three-key match rule by reference" grep -qF "matching the target under the three-key match rule stated in the AUTHORING CLAIM gate in \`agents/skills/maintenance/template-authoring.md\`" "$DE"
+pin "Authoring-claim consult cites the gate's three-key match rule by reference" grep -qF "matching the item under the three-key match rule stated in the AUTHORING CLAIM gate of \`agents/skills/maintenance/template-authoring.md\`" "$SA"
+pin "plans three-key-reality sentence for plan-slug claims" grep -qF "under the gate's three-key match a plan-slug claim can still match a backlog-item target through its other two keys" "$repo/agents/skills/plans/SKILL.md"
+expect_absent_flat "consult must not restate the home's unfiltered-listing literal (decisions D2 consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "unfiltered (every claim file in it, not only this session's own filename convention" "$DE"
+expect_absent_flat "consult must not restate the home's unfiltered-listing literal (survey-arms Authoring-claim consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "unfiltered (every claim file in it, not only this session's own filename convention" "$SA"
+expect_absent_flat "consult must not restate the home's slug-key vacuous-clause literal (decisions D2 consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "vacuous when the target has no dispatch entry" "$DE"
+expect_absent_flat "consult must not restate the home's slug-key vacuous-clause literal (survey-arms Authoring-claim consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "vacuous when the target has no dispatch entry" "$SA"
+expect_absent_flat "consult must not restate the home's item-line comparison-form literal (decisions D2 consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "both sides resolved to the facts-resolved repo-relative row path" "$DE"
+expect_absent_flat "consult must not restate the home's item-line comparison-form literal (survey-arms Authoring-claim consult; restatement guard, holds green on the pre-amendment bytes and after Task 2)" "both sides resolved to the facts-resolved repo-relative row path" "$SA"
+
 # --- rearm-on-touch surfaces (Task 4) ---
 pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: consult the scheduler state file first' "$S"
 expect_absent "superseded listing-first rearm-on-touch trigger must be absent from SKILL.md" 'when the automation listing shows no ENABLED parent' "$S"
@@ -3118,7 +3156,8 @@ pin "primary resolution resume branch-mismatch stand-down" test "$(grep -cF 'sta
 # sentence; count-gated exactly 1 each on the post-edit tree.
 # Re-aimed 2026-10-19 (plan docs/history/plans/2026-10-14-skill-monolith-module-extraction.md Task 2): the needle's span moved verbatim to agents/skills/execute-plan/worktree-first.md.
 # Re-aimed 2026-10-23 (plan docs/history/plans/2026-10-21-dead-run-resume-claim-conversion.md Task 3): the arm-3 matcher semantic is retired by the dead-run conversion arm; both resumed-lane needles route to the recovery procedure in agents/skills/maintenance/template-execution.md, the arm-4 compare-and-delete needle unchanged.
-pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "converts through the claim gateway's dead-run conversion arm per the recovery procedure in agents/skills/maintenance/template-execution.md (the sole recovery procedure; the gateway refuses unchanged when the evidence does not verify" "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
+# Re-aimed 2026-11-08 (dispatch-admission execution rider): the resume-identity landing rewrote the restored-worktree resume sentence in place (same routing semantics, reordered wording); the needle follows it.
+pin "execute-plan resumed-lane sentence names the arm-3 takeover" test "$(grep -cF "converts through the claim gateway's dead-run conversion arm per the sole recovery procedure (agents/skills/maintenance/template-execution.md; the gateway refuses unchanged when the evidence does not verify" "$repo/agents/skills/execute-plan/worktree-first.md" | tr -d ' ')" -eq 1
 pin "execute-plan claim-registration sentence names arms 3 and 4" test "$(grep -cF "the restored-worktree resume routes through the claim gateway's dead-run conversion arm per the recovery procedure in agents/skills/maintenance/template-execution.md, the sole recovery procedure, and the gateway's claim mutations are last-instant compare-and-delete serialized per its arm-4 with a lost race refusing naming the racing holder" "$E" | tr -d ' ')" -eq 1
 pin "execution-claim take-refusal clause named in the user-directed-override rule" grep -qF 'the execution-claim take refusal (the run-worktree creation gateway refusing over a fresh foreign claim; its refusal names this rule as the override route)' "$GU"
 expect_absent_flat "retired execution-claim hand-write noclobber clause must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-07 by the execution-claim gateway wiring)" 'the write is create-if-absent noclobber, the redirection failure being the refusal path' "$P"
@@ -4263,18 +4302,18 @@ prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'an EXEC-PROMPTS or
 prune_range_pin "$repo/docs/history/backlog/EXEC-PROMPTS.md" 'the `Coverage and removal rule`'\''s freeze-retention clause applies by label'
 # plans/SKILL.md: the landing closeout prune clause (by label) and the Phase 0 freeze write.
 prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'the landing pruning only its own dispatch entry plus discovery-listed collateral served entries under the log'\''s `Coverage and removal rule` label'
-prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'the prune evaluated per the log'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal are that rule'\''s, not restated here)'
-prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'The freeze write is a primary-checkout log write under the log'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md` (lock order, owned-path staging, and recovery live there), the primary done lock keyed from primary-checkout context per that rule'
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'the prune evaluated per the log preamble'\''s Standing rules block'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal are that rule'\''s, not restated here)'
+prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'The freeze write is a primary-checkout log write under the log preamble'\''s Standing rules block'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md` (lock order, owned-path staging, and recovery live there), the primary done lock keyed from primary-checkout context per that rule'
 prune_range_pin "$repo/agents/skills/plans/SKILL.md" 'on any lock refusal the session releases each acquired lock, removes only this session'\''s claim file through the AUTHORING CLAIM procedure'\''s ownership-checked delete, and stands down before any plan-file work'
 # template-authoring.md: the authoring landing closeout prune clause (by label) and its collateral delta.
 prune_range_pin "$repo/agents/skills/maintenance/template-authoring.md" 'the prune evaluated per the log'\''s `Coverage and removal rule` label, this run'\''s own entry being the one whose `Frozen:` witness names this plan'\''s authoring claim'
 prune_range_pin "$repo/agents/skills/maintenance/template-authoring.md" 'this closeout'\''s collateral delta being that a collateral entry retaining a served origin is a partial removal that keeps that origin'\''s scope arm and adds no receipt'
 # decisions.md: the monitor's rolling prompt log duties (by label) and the monitor's lock-refusal delta.
-prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each monitor prune is evaluated per the log'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage including the ordinary-monitor exact `Backlog origin:` match, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal live there)'
+prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each monitor prune is evaluated per the log preamble'\''s Standing rules block'\''s `Prune rule` and `Coverage and removal rule` labels (range inventory, per-origin coverage including the ordinary-monitor exact `Backlog origin:` match, partial narrowing with freeze retention, the single full-removal receipt, receipt preservation, and target refusal live there)'
 prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'the same `Coverage and removal rule` applying to EXEC-PROMPTS.md by label'
-prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each write that commits runs under the log'\''s `Write boundary rule` label, this monitor'\''s delta being that a lock refusal leaves both logs byte-identical with the write deferred and the reason recorded'
+prune_range_pin "$repo/agents/skills/maintenance/decisions.md" 'each write that commits runs under the log preamble'\''s Standing rules block'\''s `Write boundary rule` label, this monitor'\''s delta being that a lock refusal leaves both logs byte-identical with the write deferred and the reason recorded'
 # zcode.md: the monitor lock primitives, their primary-checkout keying, and the token-fenced release order.
-prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run under the log'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md`; the concrete primitives'
+prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run under the log preamble'\''s Standing rules block'\''s `Write boundary rule` label in `docs/history/backlog/PLAN-PROMPTS.md`; the concrete primitives'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'run from primary-checkout context so the done key resolves to the primary worktree'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'a worktree session addresses the primary checkout through an explicit-rooted form, never its own worktree'\''s key'
 prune_range_pin "$repo/agents/skills/maintenance/zcode.md" 'an acquisition refusal defers the write per the monitor duty (the monitor never rewrites a log to recover a refused write)'

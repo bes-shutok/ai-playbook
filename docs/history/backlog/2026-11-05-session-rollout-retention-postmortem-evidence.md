@@ -1,4 +1,4 @@
-Status: open
+Status: covered-pending-execution (docs/history/plans/2026-11-07-session-rollout-retention-postmortem-evidence.md)
 Priority: medium
 Class: fix-class
 Origin class: witnessed defect (2026-11-05 harvest pass itself is the witness)

@@ -2378,7 +2378,7 @@ class HandoffRunFixture:
             encoding="utf-8",
         )
         state = {
-            "plan_slug": "2026-10-01-handoff-fence-fixture",
+            "plan_slug": "handoff-fence-fixture",
             "plan_digest": digest,
             "generation": 3,
             "run_session_id": "fence-fixture-run",

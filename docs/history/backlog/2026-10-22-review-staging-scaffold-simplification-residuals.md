@@ -6,7 +6,7 @@
 - Source: execution review r1 of the plan `docs/history/plans/2026-10-19-review-staging-schema-scaffold-and-validation-reuse.md` (overflow findings 7, 9, 10 of `.ai-playbook/reviews/2026-10-22-review-staging-schema-scaffold-and-validation-reuse-code-review-r1.md`)
 - Files: `scripts/validate_review_staging.py`
 - Cluster: docs/history/backlog/2026-10-30-doing-code-review-staging-doc-scaffold-pointer.md
-- Cluster: docs/history/backlog/2026-10-31-review-staging-soften-table-header-convention-undocumented.md (same validator surface; that row owns the soften-watchlist header-row parsing convention, this row owns descriptor/scaffold shrink residuals)
+- Cluster: docs/history/plans/completed/2026-11-07-review-staging-soften-table-header-convention-undocumented.md (same validator surface; that covered plan owns the soften-watchlist header-row parsing convention, this row owns descriptor/scaffold shrink residuals)
 
 ## Observed
 

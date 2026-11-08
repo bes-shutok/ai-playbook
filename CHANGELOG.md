@@ -1,3 +1,30 @@
+## 2026-11-08
+
+This release lands one week of maintenance-loop work (2026-11-01 to 2026-11-08): dispatch and recovery paths gained capacity awareness and clearer ownership, closeout and landing mechanics gained more guards, and the test suite now runs far faster.
+
+### Planning and reviews
+- Plan authoring renames its landing verb to "plans: file", separates authoring confirmation from execution, and pins authoring-claim discovery across three filename keys.
+- Reviews now capture and verify base and head identity pairs and a reviewed-scope digest before posting, a coverage-evidence floor applies to code reviews, and certification gates report every violation instead of only the first.
+- Plan reviews gained a source-finding inventory step, a shared-seam adjudication check, a stacked-PR review size policy, a planned-path exemption in the files-existence check, and a clearer parity error for softened table-header conventions.
+
+### Execution, closeout, and dispatch
+- Dispatch admission now checks target disjointness instead of a zero-outstanding gate, skips claimed top targets, seeds recovery for outstanding admission manifests, and chains an occupied lane to a reset-anchored retry so a full lane no longer waits silently for the next slot.
+- Done finalize prints one finalization-state line on every exit path and preserves the finalized manifest's terminal state in a shadow record; done-run setup stdout is now eval-safe, with status and advisory lines relayed on stderr.
+- Closeout migrate guards tracked-file clobbers and their restore arms, an empty-diff authoring closeout routes to a fail-closed no-op arm, and the clobber guard's deletion arm consults the delivered map before deleting.
+- Maintenance now consults self-heal once per non-user-only blocker before stopping, and the done lock's blocked-acquire stop is scoped to its lock-bound write set.
+- The self-heal chain-grammar derivation moved behind a public validator seam, and a warning-only arm reports archive-ceremony residue after landings in sweep order.
+
+### Quota and scheduling
+- Maintenance quota handling gained runtime-native adapters and a narrower committed-rewrite doctrine, and one-shot automations verify their fire outcome after the fact.
+- The launchd clocked-order chain is now the bound-session re-arm and dispatch default, and the memory-index consolidation charter landed with its retirement-rule clause family and a whole-load-witness amendment.
+
+### Skills, docs, and hygiene
+- The operative-file read-budget gate is now blocking, with caps calibrated to the single-read budget and load-on-dispatch splits for ceiling-class files.
+- The full test suite's wall time dropped by about 44 percent through fixture home isolation and test-only lock timing pins; a measured follow-up tracks the remaining options.
+- Project-local private skills are now tracked in the Codex discovery path, foreign-staged rolling-log writes gained an operator-gated recovery recipe, and a warning-only check flags stranded document-pointer edits.
+- The hygiene scan now excludes the debugging-recall plan record and its test fixture, whose bytes quote the home-path deny pattern itself; the release privacy gate refused on them first.
+- Lessons 361 through 428 plus many witnesses and investigation entries were captured across the run corpus.
+
 ## 2026-11-01
 
 This release lands one week of maintenance-loop work (2026-10-26 to 2026-11-01): closeout and landing mechanics are harder to fool, release tooling reports its failures more clearly, and the record corpus grew by a large batch of lessons and investigation entries.

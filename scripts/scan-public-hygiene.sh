@@ -75,6 +75,12 @@ GLOB_BODIES=(
   'docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md'
   'docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md'
   'docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md'
+  # 2026-11-08: the debugging-lesson-recall plan record and its test fixture
+  # quote the home-path deny pattern itself (the portability guard's own
+  # assertion and its verification prose); rewording would destroy what
+  # they record.
+  'docs/history/plans/completed/2026-11-05-debugging-lesson-recall-not-wired.md'
+  'scripts/test_debugging_lesson_recall.py'
 )
 # Derived rg-argument view of GLOB_BODIES; the frozen rg invocations consume
 # this view unchanged.

@@ -4,7 +4,7 @@ Backlog origin: docs/history/backlog/2026-11-04-execution-resume-run-identity-co
 Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-execution-resume-authoring-claim-identity-confusion-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 Execution budget: 1h total, largest task 1h
-Executed: no
+Executed: yes (d9b9595e2)
 Authoring claim: execution-resume-authoring-claim-identity-confusion.md (session 01a1b1a0-11de-7783-a7ad-04da3f7bb607)
 
 ## Terms
@@ -122,12 +122,20 @@ Primary class anchors:
 - `run_worktree` in `agents/skills/execute-plan/SKILL.md`
 - `Provisioned-worktree adoption` in `agents/skills/execute-plan/worktree-first.md`
 
-- [ ] Given requested execution A and an unrelated same-session authoring claim B, expects selection from A's exact plan path and execution manifest, cross-checked with A's execution claim and registered placement; B never selects A's checkout. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given an existing execution manifest, expects its immutable origin to bind historical evidence while the active session and mutable current owner are reconciled through the existing recovery procedure before any saved-manifest refresh or worktree provisioning. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given same-owner resume or an authorized owner conversion, expects the existing valid path to remain eligible, the immutable origin unchanged, and the claim's current owner bound to the active session; never substitute the origin ID for the active identity. [class: REPOSITORY_TEST]
-- [ ] Given missing or conflicting evidence for a known interrupted execution, expects existing preservation and recovery routing, with the conflicting plan, owner, or placement named; no unrelated authoring claim, branch-name resemblance, or newest timestamp supplies the missing identity. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given genuinely fresh execution with no saved run, expects existing fresh setup; given the exact-plan stranded-input handoff, expects authoring closeout to supply only that plan's inputs, followed by execution setup or recovery under its own identity. [class: REPOSITORY_TEST]
-- [ ] Before rewriting prose, select supporting regression coverage from repository evidence, record its owned paths, and run the selection scenarios to expose today's instruction ambiguity or contradiction; retain ordinary valid-resume evidence as green compatibility coverage. [class: REPOSITORY_TEST]
-- [ ] Replace the State-shape phrase that makes the immutable origin the claim-holding session, home the selection and owner distinction in existing Run-level ownership and repository placement, and shorten setup/placement repetitions to consumer pointers without changing executable claim or recovery commands. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the selected regression scope after the correction, rehearse the A/B and missing-evidence cases against the edited instructions, and run the Validation Commands battery; every claimed outcome must have recorded evidence. [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: bind execution resume to its own identity` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given requested execution A and an unrelated same-session authoring claim B, expects selection from A's exact plan path and execution manifest, cross-checked with A's execution claim and registered placement; B never selects A's checkout. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given an existing execution manifest, expects its immutable origin to bind historical evidence while the active session and mutable current owner are reconciled through the existing recovery procedure before any saved-manifest refresh or worktree provisioning. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given same-owner resume or an authorized owner conversion, expects the existing valid path to remain eligible, the immutable origin unchanged, and the claim's current owner bound to the active session; never substitute the origin ID for the active identity. [class: REPOSITORY_TEST]
+- [x] Given missing or conflicting evidence for a known interrupted execution, expects existing preservation and recovery routing, with the conflicting plan, owner, or placement named; no unrelated authoring claim, branch-name resemblance, or newest timestamp supplies the missing identity. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given genuinely fresh execution with no saved run, expects existing fresh setup; given the exact-plan stranded-input handoff, expects authoring closeout to supply only that plan's inputs, followed by execution setup or recovery under its own identity. [class: REPOSITORY_TEST]
+- [x] Before rewriting prose, select supporting regression coverage from repository evidence, record its owned paths, and run the selection scenarios to expose today's instruction ambiguity or contradiction; retain ordinary valid-resume evidence as green compatibility coverage. [class: REPOSITORY_TEST]
+- [x] Replace the State-shape phrase that makes the immutable origin the claim-holding session, home the selection and owner distinction in existing Run-level ownership and repository placement, and shorten setup/placement repetitions to consumer pointers without changing executable claim or recovery commands. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the selected regression scope after the correction, rehearse the A/B and missing-evidence cases against the edited instructions, and run the Validation Commands battery; every claimed outcome must have recorded evidence. [class: REPOSITORY_TEST]
+- [x] Commit: `docs: bind execution resume to its own identity` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of executed work
+
+Executed 2026-11-08 by session sess_b4de94eb (worktree 2026-11-08-exec-resume-identity, branch 2026-11-08-exec-resume-identity, rebased over 402b9480). Landed to main in squash 3231d1c35d208b20f2dd3b90f693cba4c4636b34 with the recorded pre-squash tip d9b9595e2; landing reconcile receipt docs/tmp/landing-receipts/3231d1c35d208b20f2dd3b90f693cba4c4636b34.txt. Phase 3 review: focused code-review staging record .ai-playbook/reviews/2026-11-08-execution-resume-authoring-claim-identity-confusion-code-review-r1.md (verdict ready=yes; 1 High byte-payment, 1 Medium term drift, 1 Low fence gap folded and certification-verified; 1 Low residual on the soften watchlist). Plan-review certification r2 over the checkbox-flipped bytes: 2026-11-08-plan-review-execution-resume-authoring-claim-identity-confusion-p59691db0-r2.md (ready=yes). Origin row docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md flipped to covered-by-landing witness per the origins gate execution branch (check_plan_origins_closed exit 0).
+
+## Disposition of migrated backlog items
+
+Origin row docs/history/backlog/2026-11-04-execution-resume-run-identity-confusion.md deleted in this completion pass per the origins gate's fold-and-delete shape: its sole deliverable (the execution identity contract clarification) landed in squash 3231d1c35 and the covering plan (this file, completed twin) is its durable home.

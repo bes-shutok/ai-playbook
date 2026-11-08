@@ -505,12 +505,13 @@ class HandoffReconciler:
             raise
         scope = task_scope_digest(section)
         projection = checkbox_projection(section)
-        if state["plan_slug"] != self.plan_path.stem:
+        canonical_plan_slug = plan_readiness.feature_slug(self.plan_path)
+        if state["plan_slug"] != canonical_plan_slug:
             raise _Refusal(
                 "plan-identity-mismatch",
                 [
                     f"runtime state plan_slug {state['plan_slug']!r} does not match the plan "
-                    f"filename stem {self.plan_path.stem!r}",
+                    f"canonical filename slug {canonical_plan_slug!r}",
                 ],
                 generation=generation,
             )

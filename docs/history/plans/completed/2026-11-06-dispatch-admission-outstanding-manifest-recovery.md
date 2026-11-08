@@ -7,7 +7,7 @@ Backlog origins (scope of record):
 Driving force: efficiency
 Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-dispatch-admission-outstanding-manifest-recovery-p4ac74b93-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list; a series in which no round carries a source-plan identity resolves to its highest rN lexically)
 Execution budget: 3h total, largest task 1.25h
-Executed: no
+Executed: yes (16e87ffe89687624d00ff8e476fc64e71073aad8)
 
 Authoring claim: 2026-11-05-dispatch-admission-outstanding-manifest-recovery.md (session sess_aea7e776-fa40-4c32-82de-1b0addebe02b)
 
@@ -143,15 +143,15 @@ Primary class anchors:
 - `owned_paths_from_plan` in `scripts/dispatch_admission.py`, the derivation the seeder imports
 - `_merge_lock_acquire` in `scripts/worktree_closeout_migrate.py`, the existing merge-lock helper the merge arm reuses
 
-- [ ] Seeder delegation: given a plan fixture with `Files:` lists and one without, expects the lib seeder to return the list `owned_paths_from_plan` yields for the first by importing it, and an empty seed for the second where that function raises its no-paths tool error, plus a delegation seam assertion patching the imported symbol at the seeder's binding site to return a sentinel list and observing the seeder track the patch, so a copied implementation fails the pin [class: IMPLEMENTATION_REQUIRED]
-- [ ] Record shape: expects the writer to emit a JSON object with exactly `owned_paths`, `owned_plan_paths`, and `owned_review_paths` through atomic temp-plus-replace, and `owned_paths_from_manifest` to read a written record back to the same non-empty set [class: IMPLEMENTATION_REQUIRED]
-- [ ] Monotone merge: given an existing record and a done boundary's owned lists, expects the record to become their union (never shrink); given no record, expects the merge to write nothing [class: IMPLEMENTATION_REQUIRED]
-- [ ] Locked merge: given a done boundary, expects the merge arm to hold the repo merge lock (a verified inherited hold or a try-once acquire), re-check under it that the execution claim exists and its recorded branch names the boundary checkout's branch, and write nothing otherwise; a refused acquire, unverifiable inherited hold, failed resolution, or failed write warns on stderr naming the slug and the boundary still succeeds [class: IMPLEMENTATION_REQUIRED]
-- [ ] Primary resolution: given a done boundary run from a linked worktree, expects the merge arm to resolve the record under the primary checkout's execution-claims directory (the gateway's fixed relative path) through `_resolve_primary_checkout` and the slug through the same artifact-slug derivation the gateway uses, updating the primary checkout's record and writing nothing under the worktree [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect RED: hermetic lib pins for the empty-seed signal, record shape round-trip, monotone merge, merge-never-creates, the locked merge (verified hold, ownership re-check, warn-not-fail disposition, claim-gone and claim-foreign no-write arms), and primary resolution from a linked worktree, each failing against current code by design [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: add the admission-record seeder, writer, and merge arm` [class: IMPLEMENTATION_REQUIRED]
+- [x] Seeder delegation: given a plan fixture with `Files:` lists and one without, expects the lib seeder to return the list `owned_paths_from_plan` yields for the first by importing it, and an empty seed for the second where that function raises its no-paths tool error, plus a delegation seam assertion patching the imported symbol at the seeder's binding site to return a sentinel list and observing the seeder track the patch, so a copied implementation fails the pin [class: IMPLEMENTATION_REQUIRED]
+- [x] Record shape: expects the writer to emit a JSON object with exactly `owned_paths`, `owned_plan_paths`, and `owned_review_paths` through atomic temp-plus-replace, and `owned_paths_from_manifest` to read a written record back to the same non-empty set [class: IMPLEMENTATION_REQUIRED]
+- [x] Monotone merge: given an existing record and a done boundary's owned lists, expects the record to become their union (never shrink); given no record, expects the merge to write nothing [class: IMPLEMENTATION_REQUIRED]
+- [x] Locked merge: given a done boundary, expects the merge arm to hold the repo merge lock (a verified inherited hold or a try-once acquire), re-check under it that the execution claim exists and its recorded branch names the boundary checkout's branch, and write nothing otherwise; a refused acquire, unverifiable inherited hold, failed resolution, or failed write warns on stderr naming the slug and the boundary still succeeds [class: IMPLEMENTATION_REQUIRED]
+- [x] Primary resolution: given a done boundary run from a linked worktree, expects the merge arm to resolve the record under the primary checkout's execution-claims directory (the gateway's fixed relative path) through `_resolve_primary_checkout` and the slug through the same artifact-slug derivation the gateway uses, updating the primary checkout's record and writing nothing under the worktree [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect RED: hermetic lib pins for the empty-seed signal, record shape round-trip, monotone merge, merge-never-creates, the locked merge (verified hold, ownership re-check, warn-not-fail disposition, claim-gone and claim-foreign no-write arms), and primary resolution from a linked worktree, each failing against current code by design [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: add the admission-record seeder, writer, and merge arm` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Admission-record lifecycle in the claim gateway
 
@@ -166,17 +166,17 @@ Primary class anchors:
 - `acquire_claim` in `scripts/execution_claim.sh`, the create-or-refuse state machine every new-owner path passes
 - `cleanup_fresh_claim` in `scripts/execution_claim.sh`, the take-failure cleanup the clearing arm extends
 
-- [ ] New-owner seeding: given a fresh create, a stale-foreign-claim takeover, or a dead-run conversion, expects the record present at the claims home with the fresh seed once the invocation succeeds, any prior record for the slug replaced; one pin per path, asserting record state before and after [class: IMPLEMENTATION_REQUIRED]
-- [ ] Refresh recreate: given the same run recreating its unlinked claim, expects an existing record kept unchanged and a seed written only when no record exists [class: IMPLEMENTATION_REQUIRED]
-- [ ] Empty-seed warning: given a covering plan with an empty seed, expects the take to succeed with a stderr warning naming the plan and no record written; the existing pins, whose shared setUp plan has no `Files:` list, regreen unchanged [class: IMPLEMENTATION_REQUIRED]
-- [ ] Clearing: given each claim retirement (release, sweep, take-mode failure cleanup), expects the record absent after the invocation and intact while the claim stands, removed before the claim and only while the claim still names the retiring session; one pin per path [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness (done machinery untouched): given a foreign claim-live admission record, expects a peer done-session setup in the same scratch repo to proceed with no orphan verdict and no interrupted-run advisory naming the live run [class: REPOSITORY_TEST]
-- [ ] Safety witness (lagging record): given a seed-only record and a done-session manifest holding extra paths, passed as two `--outstanding-with-manifest` operands under the same label, expects a candidate intersecting only the manifest's extra paths refused naming them [class: REPOSITORY_TEST]
-- [ ] End-to-end retrieval: given a hermetic gateway take over a fixture plan with a `Files:` list, expects a consult passing the record via `--outstanding-with-manifest` to admit a disjoint candidate and refuse an intersecting one naming the paths [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: pins for the three new-owner paths, refresh recreate, the empty-seed warning, the three clearing paths, and end-to-end retrieval, each failing against current code by design; the two safety witnesses are green today and stay out of this list [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: keep a claim-keyed admission record live across the claim window` [class: IMPLEMENTATION_REQUIRED]
+- [x] New-owner seeding: given a fresh create, a stale-foreign-claim takeover, or a dead-run conversion, expects the record present at the claims home with the fresh seed once the invocation succeeds, any prior record for the slug replaced; one pin per path, asserting record state before and after [class: IMPLEMENTATION_REQUIRED]
+- [x] Refresh recreate: given the same run recreating its unlinked claim, expects an existing record kept unchanged and a seed written only when no record exists [class: IMPLEMENTATION_REQUIRED]
+- [x] Empty-seed warning: given a covering plan with an empty seed, expects the take to succeed with a stderr warning naming the plan and no record written; the existing pins, whose shared setUp plan has no `Files:` list, regreen unchanged [class: IMPLEMENTATION_REQUIRED]
+- [x] Clearing: given each claim retirement (release, sweep, take-mode failure cleanup), expects the record absent after the invocation and intact while the claim stands, removed before the claim and only while the claim still names the retiring session; one pin per path [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness (done machinery untouched): given a foreign claim-live admission record, expects a peer done-session setup in the same scratch repo to proceed with no orphan verdict and no interrupted-run advisory naming the live run [class: REPOSITORY_TEST]
+- [x] Safety witness (lagging record): given a seed-only record and a done-session manifest holding extra paths, passed as two `--outstanding-with-manifest` operands under the same label, expects a candidate intersecting only the manifest's extra paths refused naming them [class: REPOSITORY_TEST]
+- [x] End-to-end retrieval: given a hermetic gateway take over a fixture plan with a `Files:` list, expects a consult passing the record via `--outstanding-with-manifest` to admit a disjoint candidate and refuse an intersecting one naming the paths [class: REPOSITORY_TEST]
+- [x] Run → expect RED: pins for the three new-owner paths, refresh recreate, the empty-seed warning, the three clearing paths, and end-to-end retrieval, each failing against current code by design; the two safety witnesses are green today and stay out of this list [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: keep a claim-keyed admission record live across the claim window` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Evidence-strict admission reads
 
@@ -190,16 +190,16 @@ Primary class anchors:
 - `owned_paths_from_manifest` in `scripts/dispatch_admission.py`
 - `check_admission` in `scripts/dispatch_admission.py`
 
-- [ ] Empty-set refusal: given a `--candidate-manifest` whose owned-path fields all derive empty lists, expects exit 1 `OUTCOME: fail` naming the candidate's empty-set reason before any outstanding-run loop runs; with one `--outstanding-without-manifest` run present, the missing-source reason is absent [class: IMPLEMENTATION_REQUIRED]
-- [ ] Partial-parse refusal, candidate side: given a candidate manifest carrying a non-string list item or a non-list owned-path field beside valid entries, expects exit 1 `OUTCOME: fail` naming the dropped evidence, replacing the silent-subset pass [class: IMPLEMENTATION_REQUIRED]
-- [ ] Partial-parse refusal, outstanding side: given an outstanding manifest or admission record carrying a non-string list item or a non-list owned-path field, expects that run's conservative verdict (exit 1) naming the dropped evidence at its loop position, never a verdict on the dropped subset and never exit 3; a malformed run ahead of an intersecting one decides with no intersecting-paths line [class: IMPLEMENTATION_REQUIRED]
-- [ ] Tool-error boundary unchanged: given an unreadable, unparseable, or non-object input on either operand, expects exit 3 `OUTCOME: tool_error` as today, checked before the malformed-evidence and empty-set arms; a malformed or empty candidate beside an unreadable outstanding input decides as the tool error [class: REPOSITORY_TEST]
-- [ ] Safety witness (plan-arm fail-closed preserved): given a `--plan` derivation that finds no owned paths, expects the existing fail-closed tool error unchanged [class: REPOSITORY_TEST]
-- [ ] Safety witness (consult semantics unchanged): given an outstanding run passed as `--outstanding-without-manifest`, expects the conservative verdict with the reason named, byte-identical to today's missing-source arm [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: one pin per refusal family member (empty candidate set with zero and with one outstanding run; non-string item, candidate; non-list field, candidate; non-string item, outstanding; non-list field, outstanding; malformed outstanding run ahead of an intersecting one), each failing against current code by design [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: refuse admission on empty and malformed evidence on both operands` [class: IMPLEMENTATION_REQUIRED]
+- [x] Empty-set refusal: given a `--candidate-manifest` whose owned-path fields all derive empty lists, expects exit 1 `OUTCOME: fail` naming the candidate's empty-set reason before any outstanding-run loop runs; with one `--outstanding-without-manifest` run present, the missing-source reason is absent [class: IMPLEMENTATION_REQUIRED]
+- [x] Partial-parse refusal, candidate side: given a candidate manifest carrying a non-string list item or a non-list owned-path field beside valid entries, expects exit 1 `OUTCOME: fail` naming the dropped evidence, replacing the silent-subset pass [class: IMPLEMENTATION_REQUIRED]
+- [x] Partial-parse refusal, outstanding side: given an outstanding manifest or admission record carrying a non-string list item or a non-list owned-path field, expects that run's conservative verdict (exit 1) naming the dropped evidence at its loop position, never a verdict on the dropped subset and never exit 3; a malformed run ahead of an intersecting one decides with no intersecting-paths line [class: IMPLEMENTATION_REQUIRED]
+- [x] Tool-error boundary unchanged: given an unreadable, unparseable, or non-object input on either operand, expects exit 3 `OUTCOME: tool_error` as today, checked before the malformed-evidence and empty-set arms; a malformed or empty candidate beside an unreadable outstanding input decides as the tool error [class: REPOSITORY_TEST]
+- [x] Safety witness (plan-arm fail-closed preserved): given a `--plan` derivation that finds no owned paths, expects the existing fail-closed tool error unchanged [class: REPOSITORY_TEST]
+- [x] Safety witness (consult semantics unchanged): given an outstanding run passed as `--outstanding-without-manifest`, expects the conservative verdict with the reason named, byte-identical to today's missing-source arm [class: REPOSITORY_TEST]
+- [x] Run → expect RED: one pin per refusal family member (empty candidate set with zero and with one outstanding run; non-string item, candidate; non-list field, candidate; non-string item, outstanding; non-list field, outstanding; malformed outstanding run ahead of an intersecting one), each failing against current code by design [class: REPOSITORY_TEST]
+- [x] Write minimal implementation [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN [class: REPOSITORY_TEST]
+- [x] Commit: `feat: refuse admission on empty and malformed evidence on both operands` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 4: Consult wording, registry note, and pin rows
 
@@ -215,12 +215,12 @@ Files:
 Primary class anchors:
 - `check_admission` in `scripts/dispatch_admission.py`
 
-- [ ] Consult wording, decisions.md: given the D1 landing gate and D2 mirror paragraphs, expects both rewritten in place to the operand choice by claim state (claim resolves: record plus each covering-plan done-session manifest from the run's worktree and the primary, same label; proven retirement: the manifest alone; source-less residual: `--outstanding-without-manifest`, conservative wording kept) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Consult wording, SKILL.md and scheduling.md: given the SKILL.md fleet-cap bullet's consult operand enumeration (the pending_landing and surviving-note clause included) and the scheduling.md conservative-verdict clause, expects the superseded clauses rewritten in place to the same operand choice, net growth bounded to the record-operand sentence [class: IMPLEMENTATION_REQUIRED]
-- [ ] Consult tool-error treatment: given the consult wording across the three skill files, expects the exit-3 defer treatment stated (a consult tool error resolves the lane to the existing D3 defer) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Registry note: given the machinery registry's existing admission entry, expects its note updated in the same change to describe the lifecycle move, the missing-source reach reduction, and the new arms' admission fields (incident links, catch frequency, false-positive cost, review date 2026-12-06), adding or removing no row [class: IMPLEMENTATION_REQUIRED]
-- [ ] Pins suite: given the pinned maintenance files touched by this task, expects `bash scripts/check_maintenance_pins.sh` to exit 0, with companion pin rows edited in `scripts/check_maintenance_pins.sh` in the same change when the suite demands them [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: name the claim-live admission record in the consult wording` [class: IMPLEMENTATION_REQUIRED]
+- [x] Consult wording, decisions.md: given the D1 landing gate and D2 mirror paragraphs, expects both rewritten in place to the operand choice by claim state (claim resolves: record plus each covering-plan done-session manifest from the run's worktree and the primary, same label; proven retirement: the manifest alone; source-less residual: `--outstanding-without-manifest`, conservative wording kept) [class: IMPLEMENTATION_REQUIRED]
+- [x] Consult wording, SKILL.md and scheduling.md: given the SKILL.md fleet-cap bullet's consult operand enumeration (the pending_landing and surviving-note clause included) and the scheduling.md conservative-verdict clause, expects the superseded clauses rewritten in place to the same operand choice, net growth bounded to the record-operand sentence [class: IMPLEMENTATION_REQUIRED]
+- [x] Consult tool-error treatment: given the consult wording across the three skill files, expects the exit-3 defer treatment stated (a consult tool error resolves the lane to the existing D3 defer) [class: IMPLEMENTATION_REQUIRED]
+- [x] Registry note: given the machinery registry's existing admission entry, expects its note updated in the same change to describe the lifecycle move, the missing-source reach reduction, and the new arms' admission fields (incident links, catch frequency, false-positive cost, review date 2026-12-06), adding or removing no row [class: IMPLEMENTATION_REQUIRED]
+- [x] Pins suite: given the pinned maintenance files touched by this task, expects `bash scripts/check_maintenance_pins.sh` to exit 0, with companion pin rows edited in `scripts/check_maintenance_pins.sh` in the same change when the suite demands them [class: REPOSITORY_TEST]
+- [x] Commit: `docs: name the claim-live admission record in the consult wording` [class: IMPLEMENTATION_REQUIRED]
 
 ## Residual findings (cap closure)
 

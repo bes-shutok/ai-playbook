@@ -4,7 +4,7 @@ Backlog origin: docs/history/backlog/2026-10-31-review-staging-soften-table-head
 Driving force: efficiency
 Plan review record: the staging series .ai-playbook/reviews/2026-11-07-plan-review-review-staging-soften-table-header-convention-undocumented-r*.md (the highest rN for this source-plan path is authoritative)
 Execution budget: 0.5h total, largest task 0.5h
-Executed: no
+Executed: yes (9591376f817322f418696cbf4426d9d51bdde38d)
 
 Authoring claim: 2026-10-31-review-staging-soften-table-header-convention-undocumented.md (session sess_a4477963-524c-4ffd-a571-93a12913e6ee)
 
@@ -100,11 +100,14 @@ Files:
 Primary class anchors:
 - `validate_soften_watchlist_agreement` in `scripts/validate_review_staging.py`
 
-- [ ] `validate_soften_watchlist_agreement` delivers the convention-naming mismatch error: given a staging record whose `### Soften watchlist` table is headed `| Pattern | Status | Note |` with one data row beside a one-row sidecar `soften_watchlist`, expects a hard-mode failure whose error keeps the existing `soften disagreement`, both counts, and `source of truth` text and also states the counting rule, naming `Round` and the `None.` empty form. [class: IMPLEMENTATION_REQUIRED]
-- [ ] The rule statement is direction-neutral: given a `Round`-headed table with zero data rows beside a one-row array, expects a failure carrying the same rule statement with no advice that assumes too many rows. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Safety witness (drift detection unchanged): given a `Round`-headed table with two data rows beside a one-row array, expects the same failure as today; given a `Round`-headed one-row table beside a one-row array, or `None.` beside an empty array, expects no soften disagreement. [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: add the `Pattern`-headed selftest pin to the soften parity selftest block and run `python3 scripts/validate_review_staging.py --selftest`; the new pin fails because today's message names neither `Round` nor `None.`. [class: REPOSITORY_TEST]
-- [ ] Write minimal implementation: extend only the mismatch message string in `validate_soften_watchlist_agreement` with the counting rule as a direction-neutral statement (no imperative that assumes too many rows); leave the counting loop, the header skip, and the missing-section message unchanged. [class: IMPLEMENTATION_REQUIRED]
-- [ ] In `agents/skills/review-staging/SKILL.md`, edit the soften-watchlist bullet (item 12 of `## Orchestrator recording rules`): add one short clause that the table's header row leads with `Round` as in the record-shape example (any other header row counts as a data row), and pay for it in the same bullet by tightening existing wording so the bullet does not grow. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: `python3 scripts/validate_review_staging.py --selftest` passes with every existing soften parity pin unchanged. [class: REPOSITORY_TEST]
-- [ ] Commit: `review-staging: name the Round-first soften table header in the parity error and skill` [class: IMPLEMENTATION_REQUIRED]
+- [x] `validate_soften_watchlist_agreement` delivers the convention-naming mismatch error: given a staging record whose `### Soften watchlist` table is headed `| Pattern | Status | Note |` with one data row beside a one-row sidecar `soften_watchlist`, expects a hard-mode failure whose error keeps the existing `soften disagreement`, both counts, and `source of truth` text and also states the counting rule, naming `Round` and the `None.` empty form. [class: IMPLEMENTATION_REQUIRED]
+- [x] The rule statement is direction-neutral: given a `Round`-headed table with zero data rows beside a one-row array, expects a failure carrying the same rule statement with no advice that assumes too many rows. [class: IMPLEMENTATION_REQUIRED]
+- [x] Safety witness (drift detection unchanged): given a `Round`-headed table with two data rows beside a one-row array, expects the same failure as today; given a `Round`-headed one-row table beside a one-row array, or `None.` beside an empty array, expects no soften disagreement. [class: REPOSITORY_TEST]
+- [x] Run → expect RED: add the `Pattern`-headed selftest pin to the soften parity selftest block and run `python3 scripts/validate_review_staging.py --selftest`; the new pin fails because today's message names neither `Round` nor `None.`. [class: REPOSITORY_TEST]
+- [x] Write minimal implementation: extend only the mismatch message string in `validate_soften_watchlist_agreement` with the counting rule as a direction-neutral statement (no imperative that assumes too many rows); leave the counting loop, the header skip, and the missing-section message unchanged. [class: IMPLEMENTATION_REQUIRED]
+- [x] In `agents/skills/review-staging/SKILL.md`, edit the soften-watchlist bullet (item 12 of `## Orchestrator recording rules`): add one short clause that the table's header row leads with `Round` as in the record-shape example (any other header row counts as a data row), and pay for it in the same bullet by tightening existing wording so the bullet does not grow. [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: `python3 scripts/validate_review_staging.py --selftest` passes with every existing soften parity pin unchanged. [class: REPOSITORY_TEST]
+- [x] Commit: `review-staging: name the Round-first soften table header in the parity error and skill` [class: IMPLEMENTATION_REQUIRED]
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-10-31-review-staging-soften-table-header-convention-undocumented.md`: Task 1 landed the selected message-plus-docs arm - the soften-watchlist parity mismatch error now states the direction-neutral counting rule (a row counts as data unless it is the separator row, its first cell is empty, or its first cell is `Round`; the section reads `None.` when the sidecar array is empty), and the review-staging skill's soften-watchlist bullet names the `Round`-first header paid for inside the bullet; the counting loop is byte-unchanged, so drift detection is not weakened. The whole row is discharged by this plan; no residuals remain open.

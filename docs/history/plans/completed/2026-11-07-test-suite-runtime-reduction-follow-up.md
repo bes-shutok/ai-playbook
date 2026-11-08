@@ -6,7 +6,7 @@ Backlog origin: `docs/history/backlog/2026-11-07-test-suite-runtime-reduction-fo
 Driving force: efficiency
 Plan review record: `.ai-playbook/reviews/2026-11-07-plan-review-test-suite-runtime-reduction-follow-up-r*.md`
 Authoring claim: 2026-11-07-test-suite-runtime-reduction-follow-up.md (session 01a1b5e6-21f5-70b2-b228-3e9367e80bd1)
-Executed: no
+Executed: yes (f6c7363ab895f3c479468ff60a7d48c1f14ec52e)
 
 ## Terms
 
@@ -14,7 +14,7 @@ Executed: no
 - **Regression signal:** A distinct behavior assertion that detects an unwanted result, including subprocess, Git, filesystem, lock, and failure-path behavior.
 - **Fixture:** Test setup data and behavior that prepares a case, including its environment and temporary state.
 - **Process-level parallelism:** Running independent suites or cases in separate operating-system processes with a measured worker and resource limit.
-- **Language-specific overhead:** Time attributable to Python collection, interpreter work, or Python process startup that a different implementation could plausibly reduce.
+- **Language-specific overhead:** Python collection, interpreter, or process-startup time attributable to Python and plausibly reducible by another implementation. It is material only at 5% or more of comparable serial-suite time; costs inseparable from test work or measurement noise remain unproven.
 - **Instrumentation overhead:** Extra time or resource use introduced by profiling or measurement tools.
 - **Immutable input:** Reusable data that a test cannot change and that does not depend on repository, environment, manifest, or lock state.
 
@@ -30,7 +30,7 @@ TLDR: Measure and prototype safe runtime options, extending efficiency beyond th
 
 **After (this plan):** Given the same complete-suite trigger and a freshly re-derived inventory, the run records a comparable baseline, profiles residual costs, and measures bounded process workers and safe startup/reuse candidates. It tests an alternate-language prototype only when Python-specific work is a measured hotspot. If an experiment preserves regression signals and shows a worthwhile benefit, the final comparison quantifies it; otherwise the report identifies why the serial Python harness remains the measured best option.
 
-**Edge cases:** If host contention or profiling overhead dominates a sample, label it uncertain and do not project it as a suite speedup. If parallel runs vary, leak state, exceed their resource bound, or lose failure detail, reject that path. If Python-specific overhead is not material, do not build a Go/Rust prototype.
+**Edge cases:** If host contention or profiling overhead dominates a sample, label it uncertain and do not project it as a suite speedup. If parallel runs vary, leak state, exceed their resource bound, or lose failure detail, reject that path. If profiled Python-specific overhead is below 5% of comparable serial-suite time, or cannot be separated from test work or noise, do not build a Go/Rust prototype.
 
 ## Outcome
 
@@ -40,7 +40,7 @@ Produce a measured recommendation for reducing the time required to run the comp
 - Process parallelism, startup reuse, caching, and a conditional language prototype have explicit evidence-based dispositions.
 - A promising safe candidate has a comparable final measurement, or the report records a concrete stopping point.
 
-Gate delta: adds one dispatch-pausing external prerequisite: operator authorization for the bounded complete-suite baseline and conditional final comparison; no repository gate, validator, lock, ledger, required ceremony, or blocking review layer is added.
+Gate delta: only three complete-suite runs are authorized: one fresh baseline, exactly one required execute-plan Phase 2 validation (separately authorized 2026-11-08), and at most one final comparison if a candidate qualifies. Phase 2 does not qualify a candidate. No gate, validator, lock, ledger, ceremony, or blocking review layer is added.
 
 ## Assumptions
 
@@ -48,8 +48,7 @@ Gate delta: adds one dispatch-pausing external prerequisite: operator authorizat
 - assume execution re-derives the suite inventory, source revision, environment, and commands; basis: the baseline and final notes bind timings to exact inventory and host conditions.
 - assume process-level parallelism is the first experiment and an alternate-language prototype requires evidence of material Python-specific overhead; basis: the operator-confirmed scope and the origin backlog's conditional arms.
 - assume the plan delivers reversible experiments and a recommendation, not permanent harness or runner changes; basis: the user confirmed this scope on 2026-11-07, and the origin asks for a safe path recommendation before committing to a change.
-- assume at most one complete-suite baseline and one final candidate comparison are run; basis: the prior run's accepted boundary and this follow-up's bounded comparison scope.
-- assume no complete-suite benchmark in this follow-up is authorized by the earlier 44.10% acceptance; basis: the origin backlog requires authorization for this follow-up's baseline and final comparison.
+- assume Gate delta defines the complete-suite run budget and authorization receipts; accepting 44.10% alone authorizes no run.
 
 Decision points requiring a grill: none remain.
 
@@ -57,7 +56,7 @@ Decision points requiring a grill: none remain.
 
 - Keep the required complete-suite inventory and report all failures, errors, and skips; changed-suite selection is not a runtime improvement.
 - Keep every experiment reversible and outside permanent harness files. Do not alter production workflow behavior, test-selection policy, or distinct regression signals.
-- Run no more than one complete-suite baseline and one final candidate comparison. Use focused checks for other experiments.
+- Follow Gate delta’s run budget; Phase 2 is required validation, not candidate qualification. Use focused checks for other experiments.
 - Do not call an option effective or ineffective unless the experiment measures it; state uncertainty and profiling overhead explicitly.
 - Treat concurrency as process-based, resource-bounded work. Same-process threads are not a pilot candidate for tests that mutate ambient environment or exercise locks.
 
@@ -76,7 +75,7 @@ Decision points requiring a grill: none remain.
 - A final complete-suite comparison is recorded for a candidate selected by the profile, or the evidence explains why no candidate merits that run and identifies the stopping point.
 - The report recommends a safe implementation path toward the remaining 50% gap or explains why further in-scope reduction costs more in coverage, reliability, portability, or maintenance than its measured benefit.
 
-**Ship when:** [class: OPERATIONS_FOLLOW_UP] The operator owns providing explicit authorization for this plan's bounded protocol and its two complete-suite targets (one fresh baseline and, only if a candidate qualifies, one final comparison) before either invocation. Closure evidence is the exact authorization receipt recorded in the execution log. Acceptance of the earlier 44.10% result does not authorize these follow-up runs. Until that receipt exists, tasks requiring a complete-suite invocation are not executable.
+**Ship when:** [class: OPERATIONS_FOLLOW_UP] The execution manifest records the authorization receipts and results for the Gate delta run budget. Acceptance of 44.10% alone authorizes no run; no other complete-suite run is permitted.
 
 ## Review Scope
 
@@ -99,7 +98,7 @@ Decision points requiring a grill: none remain.
 
 ## Validation Commands
 
-Run from the repository root after the report is written. The bounded complete-suite baseline and final comparison are owned by Tasks 1 and 3; do not add full-suite invocations at other task or review boundaries.
+From the repository root, validate after writing the report. Task 1 owns the baseline; execute-plan owns one Phase 2 suite after all tasks pass; Task 3 owns a final comparison only for a qualifying candidate. No other full-suite invocation is allowed.
 Validation preamble: on 2026-11-07, plan readiness pre-round, the plan-file em-dash scan, and the repository public-hygiene scan all passed at authoring time. No test suite or benchmark was run while authoring this plan.
 
 ```bash
@@ -117,11 +116,11 @@ Context surface: the plan's Terms and this task.
 Files:
 - `docs/history/feature-notes/2026-11-07-test-suite-runtime-reduction-follow-up.md` *(new)*
 
-- [ ] Given the current execution tree, expects one complete-suite baseline over its re-derived inventory with revision, environment, command, elapsed time, and all outcomes recorded. [class: REPOSITORY_TEST]
-- [ ] Given residual hotspots, expects a profile to separate test work, Python collection/startup, subprocess, filesystem/Git setup, waits, host load, and instrumentation overhead. [class: REPOSITORY_TEST]
-- [ ] Given the prior comparison and fresh evidence, expects the report to explain what worked, what did not, and what remains unproven without overstating causality. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given the accepted result, expects the report to retain 44.10% as an interim result and state that both original completion conditions remain unmet unless new evidence changes them. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `tests: record residual suite profile and benchmark baseline` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the current execution tree, expects one complete-suite baseline over its re-derived inventory with revision, environment, command, elapsed time, and all outcomes recorded. [class: REPOSITORY_TEST]
+- [x] Given residual hotspots, expects a profile to separate test work, Python collection/startup, subprocess, filesystem/Git setup, waits, host load, and instrumentation overhead. [class: REPOSITORY_TEST]
+- [x] Given the prior comparison and fresh evidence, expects the report to explain what worked, what did not, and what remains unproven without overstating causality. [class: IMPLEMENTATION_REQUIRED]
+- [x] Given the accepted result, expects the report to retain 44.10% as an interim result and state that both original completion conditions remain unmet unless new evidence changes them. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `tests: record residual suite profile and benchmark baseline` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Measure process parallelism and safe startup reuse
 
@@ -130,12 +129,12 @@ Context surface: the plan's Terms and this task.
 Files:
 - `docs/history/feature-notes/2026-11-07-test-suite-runtime-reduction-follow-up.md`
 
-- [ ] Given profile-selected independent suites or cases, expects a reversible process-level pilot with a predeclared worker/resource bound, complete result collection, and deterministic outcome ordering. [class: REPOSITORY_TEST]
-- [ ] Given a parallel candidate, expects at least three focused repetitions with matching outcomes, bounded resources, no cross-case state leakage, and complete failure propagation before it can be recommended. [class: REPOSITORY_TEST]
-- [ ] Given each candidate and its serial control, expects three matched focused runs; select at most one only when median gain exceeds the larger observed run-to-run range and outcome, coverage, isolation, and resource checks pass. [class: REPOSITORY_TEST]
-- [ ] Given a startup-reuse or cache candidate, expects changed inputs to invalidate reuse and each case's mutable repository, environment, manifest, and lock state to stay isolated; reject it if these checks fail. [class: REPOSITORY_TEST]
-- [ ] Given serial execution, parallelism, and reuse measurements, expects the report to compare time, resource contention, failure behavior, portability, and maintenance cost without changing suite selection. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `tests: record bounded parallel and reuse experiments` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given profile-selected independent suites or cases, expects a reversible process-level pilot with a predeclared worker/resource bound, complete result collection, and deterministic outcome ordering. [class: REPOSITORY_TEST]
+- [x] Given a parallel candidate, expects at least three focused repetitions with matching outcomes, bounded resources, no cross-case state leakage, and complete failure propagation before it can be recommended. [class: REPOSITORY_TEST]
+- [x] Given each candidate and its serial control, expects three matched focused runs; select at most one only when median gain exceeds the larger observed run-to-run range and outcome, coverage, isolation, and resource checks pass. [class: REPOSITORY_TEST]
+- [x] Given a startup-reuse or cache candidate, expects changed inputs to invalidate reuse and each case's mutable repository, environment, manifest, and lock state to stay isolated; reject it if these checks fail. [class: REPOSITORY_TEST]
+- [x] Given serial execution, parallelism, and reuse measurements, expects the report to compare time, resource contention, failure behavior, portability, and maintenance cost without changing suite selection. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `tests: record bounded parallel and reuse experiments` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Test the conditional language option and recommend a path
 
@@ -144,8 +143,11 @@ Context surface: the plan's Terms and this task.
 Files:
 - `docs/history/feature-notes/2026-11-07-test-suite-runtime-reduction-follow-up.md`
 
-- [ ] Given material Python-specific collection, startup, or interpreter cost, expects a reversible prototype for one representative hotspot with semantic parity, boundary coverage, portability, build/setup effort, ownership, and maintenance cost measured. [class: REPOSITORY_TEST]
-- [ ] Given no material Python-specific cost, expects the report to decline a Go/Rust prototype with the profile evidence that makes it unjustified. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Given a candidate meeting the Evaluation Criteria selection rule, expects one final complete-suite comparison on the same inventory and comparable settings; if none qualifies, records why no candidate merits that run. [class: REPOSITORY_TEST]
-- [ ] Given all measured and unmeasured options, expects one recommendation toward the remaining 50% gap or an evidence-backed stopping point that preserves every distinct regression signal. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `tests: recommend measured suite runtime path` [class: IMPLEMENTATION_REQUIRED]
+- [x] Given Python-specific collection, interpreter, or startup cost at least 5% of comparable serial-suite time, expects a reversible representative prototype with parity, boundary, portability, setup, ownership, and maintenance costs measured; below 5%, or unseparated from test work/noise, expects no prototype and records why. [class: REPOSITORY_TEST]
+- [x] Given a candidate meeting the Evaluation Criteria selection rule, expects one final complete-suite comparison on the same inventory and comparable settings; if none qualifies, records why no candidate merits that run. [class: REPOSITORY_TEST]
+- [x] Given all measured and unmeasured options, expects one recommendation toward the remaining 50% gap or an evidence-backed stopping point that preserves every distinct regression signal. [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `tests: recommend measured suite runtime path` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+The promoted origin `docs/history/backlog/2026-11-07-test-suite-runtime-reduction-follow-up.md` is covered by this completed plan and is deleted in the same archive landing. Its request to preserve the accepted 44.10% interim result, explain what worked and what remained unproven, and investigate safe runtime options is carried into this plan. Execution recorded the 88-suite Phase 2 validation at 1,614.146 seconds with zero nonzero suites and a matching inventory. No measured candidate qualified for the final complete-suite comparison; process parallelism, safe reuse or caching, and a language prototype therefore remain unproven follow-up options for a separately authorized plan. The detailed evidence and optimization recommendations are in `docs/history/feature-notes/2026-11-07-test-suite-runtime-reduction-follow-up.md`.

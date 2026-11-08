@@ -25,3 +25,7 @@ The commit rule states the commit form mechanically: the learn-authored artifact
 ## Suggested fix
 
 Amend the Step 1.8 commit rule's first sentence to pin the pathspec-on-commit form and add the errored-check-is-a-stop clause, citing this commit as the incident witness.
+
+## Second witness (2026-11-08, 24h session-pattern harvest REM run)
+
+The same bare-index-commit sweep also resurrected two already-landed PLAN-PROMPTS entries: the learn session's own stale staged snapshot of the log (held since before landings 487a15fc9 and 347f835a2 pruned their entries) was committed wholesale, re-adding the `operative-file-read-budget-gate` and `doing-code-review-staging-doc-scaffold-pointer` entries after their `PLAN-PROMPTS-PRUNE:` receipts existed. Consequences witnessed the same afternoon: a ~15:40 WET authoring walk skipped the resurrected entry as a stale pick and a ~16:05 WET authoring run stood down 0/1 on the log's foreign staged delta (index blob 66d8ece7c resurrecting a landed entry over a stale Frozen line). The pathspec-on-commit commit form closes this vector too: a log path outside the declared owned pathspec cannot ride the commit. Priority stands high.

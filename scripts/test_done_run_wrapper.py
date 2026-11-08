@@ -9638,5 +9638,496 @@ class DoneRunManifestSelectionTest(FixtureMixin, unittest.TestCase):
         )
 
 
+class DoneRunArchiveCeremonyReportArmTest(FixtureMixin, unittest.TestCase):
+    """Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md
+    Task 1: RED characterization witnesses for the post-landing
+    archive-ceremony report arm at the owning closeout, written against this
+    suite's bash finalize harness (FixtureMixin.run_finalize) beside the
+    missing-review-record scan witnesses. No arm exists on the current
+    digest, so the gap-closed, pinned-context, span-anchored,
+    could-not-evaluate, and blocker-posture witnesses fail RED; the
+    clean-archive control is expected green from birth.
+
+    Line-shape contract the arm implements (plan Task 2):
+    - an always-present summary line carrying ``archive-ceremony
+      evaluation:``, ``findings=<N>``, ``evaluated_commit=<sha>``,
+      ``evaluated_at=<utc>``, and ``reviews_root=<resolved reviews home>``;
+    - one ``archive-ceremony finding:`` line per reported archive finding,
+      naming the archive path, the failing acceptance route, the
+      reconstruction producer ``scripts/produce_exec_review_record.py``, and
+      the evaluated commit and evaluation time;
+    - a distinct ``could-not-evaluate`` posture line (carrying
+      ``archive-ceremony`` and ``could-not-evaluate``) for an unresolvable
+      span boundary or a derivation blocker, never a pass-shaped clean line.
+    """
+
+    def run_finalize(
+        self, *args: str, env: dict | None = None, cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(RUNNER), "finalize", *args],
+            cwd=str(cwd or self.fixture),
+            env=env or self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    # ---- arm-output line extractors (the line-shape contract) ----------- #
+
+    def evaluation_summary_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony evaluation:" in line and "findings=" in line
+        ]
+
+    def finding_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony finding:" in line
+        ]
+
+    def could_not_evaluate_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony" in line and "could-not-evaluate" in line
+        ]
+
+    # ---- fixture builders ------------------------------------------------ #
+
+    def write_plan_file(self, stem: str) -> str:
+        """A box-complete executed plan committed at the plans root; the
+        archive rider (archive_rider) lands after the run's own sweep, the
+        witnessed incident shape (the rider is the last commit)."""
+        plan_rel = f"docs/history/plans/{stem}.md"
+        path = self.fixture / plan_rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Plan\n\n- [x] executed\n", encoding="utf-8")
+        self.git("add", plan_rel)
+        self.git("commit", "-qm", f"add the executed plan {stem}")
+        return plan_rel
+
+    def archive_rider(self, plan_rel: str) -> tuple[str, str]:
+        """The post-sweep archive rider: the committed rename into the
+        completed archive state; returns (archive rel, rider HEAD sha)."""
+        archive_rel = plan_rel.replace(
+            "docs/history/plans/", "docs/history/plans/completed/", 1
+        )
+        (self.fixture / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+        self.git("mv", plan_rel, archive_rel)
+        self.git("commit", "-qm", "archive the plan (the post-sweep rider)")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        return archive_rel, head
+
+    def add_worktree(self, branch: str) -> Path:
+        """A linked worktree becomes the fixture root (the arm's running
+        checkout), the missing-review-record scan witnesses' worktree
+        idiom; callers seed the primary before calling this."""
+        worktree = self.tmp / "worktree"
+        self.git("worktree", "add", "-qb", branch, str(worktree))
+        self.fixture = worktree
+        return worktree
+
+    def git_reported_primary(self) -> Path:
+        """The primary checkout exactly as the scan derives it: the first
+        worktree line of git worktree list --porcelain (git itself prints
+        the realpath)."""
+        return Path(
+            self.git("worktree", "list", "--porcelain").stdout.splitlines()[0]
+            [len("worktree "):]
+        )
+
+    def write_foreign_primary_boundary(
+        self, primary: Path, start_commit: str, run_id: str
+    ) -> str:
+        """A content-confirmed foreign run boundary in the PRIMARY session
+        dir: a run-start marker stamped one day past this fixture's own
+        markers plus a schema-valid run manifest bound to it and
+        start-anchored at start_commit (manifest schema_version 1, the
+        loader's current constant). The span-anchored witness plants it so
+        any evaluation that re-roots the span resolution at the primary
+        checkout selects a span base that hides the rider archive; the
+        owning checkout's own manifest must win instead."""
+        session = primary / "docs" / "tmp" / "done-session"
+        session.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            str(primary).rstrip("/").encode("utf-8")
+        ).hexdigest()
+        epoch = time.time() + 86400
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
+        marker = f"run-start-{stamp}"
+        (session / marker).write_text(
+            f"{epoch:.0f} {digest} 424242\n", encoding="utf-8"
+        )
+        payload = {
+            "schema": 1,
+            "run_id": run_id,
+            "marker": marker,
+            "created_epoch": epoch,
+            "repo_root": digest,
+            "pid": 424242,
+            "start_commit": start_commit,
+            "start_porcelain": [],
+            "owned_paths": [],
+            "owned_plan_paths": [],
+            "owned_review_paths": [],
+            "foreign_review_paths": [],
+            "adopted_from": None,
+            "complete": False,
+            "dispositioned": None,
+        }
+        (session / f"run-manifest-{run_id}.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return marker
+
+    # ---- witnesses ------------------------------------------------------- #
+
+    def test_finalize_reports_archived_plan_missing_exec_review_record_after_rider(self) -> None:
+        """[class: REPOSITORY_TEST] Gap closed: a completed run whose landing
+        span carries an archived plan whose only execution-round record is
+        code-review-kind (no ``-plan-review-`` infix, no binding sidecar) has
+        the owning closeout's post-landing archive-ceremony evaluation report
+        the finding in the completion output instead of silence, naming the
+        archive path, the failing acceptance route, the reconstruction
+        producer, and the evaluated commit and evaluation time, with the
+        finalize still exiting 0 (warning-only)."""
+        self.init_fixture_repo()
+        reviews = self.fixture / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        # The witnessed shape (the origin row's evidence): the only
+        # exec-round record is code-review-kind, so neither acceptance route
+        # matches it.
+        (reviews / "2026-11-07-code-review-gap-plan-exec-r1.md").write_text(
+            "# code review record\n", encoding="utf-8",
+        )
+        plan_rel = self.write_plan_file("2026-11-07-gap-plan")
+        setup_proc, exports = self.setup_session("--label", "archive-rider")
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        findings = self.finding_lines(proc.stdout)
+        self.assertTrue(findings, proc.stdout + proc.stderr)
+        finding = "\n".join(findings)
+        self.assertIn(archive_rel, finding)
+        self.assertIn("has no exec-review record", finding)
+        self.assertIn("scripts/produce_exec_review_record.py", finding)
+        self.assertIn(head, finding)
+        self.assertIn("evaluated_at=", finding)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=1", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+        self.assertIn("evaluated_at=", summary)
+        self.assertIn("reviews_root=", summary)
+        # The neighboring missing-review-record scan stays beside the arm.
+        self.assertIn(
+            "missing-review-record scan: 0 missing record(s)", proc.stdout
+        )
+
+    def test_finalize_archive_evaluation_resolves_reviews_corpus_at_primary(self) -> None:
+        """[class: REPOSITORY_TEST] Pinned context: the archive's accepting
+        record exists only in the primary reviews home (the worktree's
+        transfer-in copy carries only a code-review-kind record), so the
+        evaluation under the pinned hybrid context observes it and the
+        always-present summary line names the resolved reviews root (the
+        primary home) with a clean outcome; a worktree-rooted corpus
+        evaluation would report the finding instead and fails this check."""
+        primary = self.init_fixture_repo()
+        reviews = primary / ".ai-playbook" / "reviews"
+        reviews.mkdir()
+        (reviews / "2026-11-07-plan-review-pinned-plan-exec-r1.md").write_text(
+            "# exec review r1\n", encoding="utf-8",
+        )
+        plan_rel = self.write_plan_file("2026-11-07-pinned-plan")
+        self.add_worktree("feature/pinned-archive-corpus")
+        primary = self.git_reported_primary()
+        # The partial transfer-in copy: only a non-accepting record.
+        wt_reviews = self.fixture / ".ai-playbook" / "reviews"
+        wt_reviews.mkdir(parents=True)
+        (wt_reviews / "2026-11-07-code-review-pinned-plan-exec-r1.md").write_text(
+            "# worktree-side code review\n", encoding="utf-8",
+        )
+        setup_proc, exports = self.setup_session(
+            "--label", "pinned-arm", "--claim-none",
+        )
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=0", summary)
+        self.assertIn(f"reviews_root={primary}/.ai-playbook/reviews/", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+
+    def test_finalize_archive_span_stays_anchored_at_owning_manifest(self) -> None:
+        """[class: REPOSITORY_TEST] Span anchored at the owning checkout: the
+        owning run manifest exists only in the owning checkout's session dir
+        while the primary session dir holds a newer foreign manifest
+        start-anchored past the rider archive; the evaluation's run manifest
+        span still comes from the owning manifest (the finding reports) and
+        the foreign manifest never becomes the span base (a foreign base
+        would hide the archive and report clean)."""
+        primary = self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-span-plan")
+        self.add_worktree("feature/span-anchor")
+        primary = self.git_reported_primary()
+        setup_proc, exports = self.setup_session(
+            "--label", "span-arm", "--claim-none",
+        )
+        archive_rel, head = self.archive_rider(plan_rel)
+        self.write_foreign_primary_boundary(primary, head, "foreign-span-run")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        findings = self.finding_lines(proc.stdout)
+        self.assertTrue(findings, proc.stdout + proc.stderr)
+        finding = "\n".join(findings)
+        self.assertIn(archive_rel, finding)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=1", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+
+    def test_finalize_archive_evaluation_reports_could_not_evaluate_on_unresolvable_span_boundary(self) -> None:
+        """[class: REPOSITORY_TEST] Could-not-evaluate: neither the owning
+        run manifest's start commit nor ORIG_HEAD resolves as the span
+        boundary and a red committed archive is present, so the arm reports
+        a distinct could-not-evaluate line and never a pass-shaped clean
+        line or an archive finding."""
+        self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-boundary-plan")
+        setup_proc, exports = self.setup_session("--label", "boundary-arm")
+        archive_rel, head = self.archive_rider(plan_rel)
+        # Neither span boundary resolves: the owning manifest's start commit
+        # is rewritten to a SHA no object satisfies, and ORIG_HEAD is removed
+        # from the checkout's git dir.
+        self.rewrite_manifest(
+            Path(exports["DONE_RUN_MANIFEST"]), start_commit="0" * 40,
+        )
+        git_dir = self.git("rev-parse", "--absolute-git-dir").stdout.strip()
+        Path(git_dir, "ORIG_HEAD").unlink(missing_ok=True)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = self.could_not_evaluate_lines(proc.stdout + proc.stderr)
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+
+    def test_finalize_archive_derivation_blocker_reports_could_not_evaluate_not_finding(self) -> None:
+        """[class: REPOSITORY_TEST] Blocker-class posture: an unreadable
+        plan-deliverables file beside a red committed archive drives the
+        gate's derivation blocker, so the arm reports the could-not-evaluate
+        posture line and no archive-finding line naming the reconstruction
+        producer for it."""
+        self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-blocker-plan")
+        setup_proc, exports = self.setup_session("--label", "blocker-arm")
+        deliverables = self.done_session() / "plan-deliverables.txt"
+        deliverables.write_text(f"{plan_rel}\n", encoding="utf-8")
+        deliverables.chmod(0o000)
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = self.could_not_evaluate_lines(proc.stdout + proc.stderr)
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn(
+            "scripts/produce_exec_review_record.py", proc.stdout + proc.stderr
+        )
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+
+    def test_finalize_clean_archive_reports_no_finding(self) -> None:
+        """[class: REPOSITORY_TEST] Clean archive, the negative control
+        expected green from birth (it guards against false positives, not
+        against the gap): two box-complete archives whose execution evidence
+        satisfies the two acceptance routes (a filename-series
+        ``-plan-review-<slug>-exec-r<N>`` record, and a binding receipt whose
+        sidecar carries the plan identity, the reviewed-bytes digest, and a
+        yes verdict) report no finding at the finalize boundary."""
+        self.init_fixture_repo()
+        reviews = self.fixture / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        series_rel = self.write_plan_file("2026-11-07-clean-series-plan")
+        bound_rel = self.write_plan_file("2026-11-07-clean-bound-plan")
+        # Acceptance route 1: the filename-series exec-review record.
+        (reviews / "2026-11-07-plan-review-clean-series-plan-exec-r1.md").write_text(
+            "# exec review r1\n", encoding="utf-8",
+        )
+        # Acceptance route 2: the binding receipt; the rider is a committed
+        # rename, so the sidecar binds the pre-archive identity and the
+        # reviewed (parent-blob) bytes digest.
+        bound_bytes = (self.fixture / bound_rel).read_bytes()
+        sidecar = {
+            "schema_version": 1,
+            "record_kind": "canonical",
+            "source_kind": "plan",
+            "source_digest": hashlib.sha256(bound_bytes).hexdigest(),
+            "verdict": "yes",
+            "extensions": {"plan_identity": bound_rel},
+        }
+        (reviews / "2026-11-07-plan-review-clean-bound-plan-r1.md").write_text(
+            "# plan review r1\n", encoding="utf-8",
+        )
+        (reviews / "2026-11-07-plan-review-clean-bound-plan-r1.stats.json").write_text(
+            json.dumps(sidecar, indent=2) + "\n", encoding="utf-8",
+        )
+        # The reviews home carries plan-review staging candidates this run
+        # does not own, so setup rides --claim-none (the scan witnesses'
+        # idiom for a run that owns no staging doc).
+        setup_proc, exports = self.setup_session(
+            "--label", "clean-arm", "--claim-none",
+        )
+        series_archive, head = self.archive_rider(series_rel)
+        bound_archive, head = self.archive_rider(bound_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn("could-not-evaluate", proc.stdout + proc.stderr)
+        self.assertIn(
+            "missing-review-record scan: 0 missing record(s)", proc.stdout
+        )
+
+
+class DoneRunArchiveCeremonyArmSafetyTest(FixtureMixin, unittest.TestCase):
+    """Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md
+    Task 2: GREEN-side safety witnesses for the wired post-landing
+    archive-ceremony report arm at the bash finalize boundary. The Task 1
+    class above pins the finding, pinned-context, span, and posture shapes
+    end to end; this class pins the arm's own failure posture (the bash
+    fail-open guard), the no-archive findings=0 summary, and the unchanged
+    closeout boundary (warning-only, no exit-code mutation, no refusal
+    path). Class-local extractors, mirroring the Task 1 class."""
+
+    def run_finalize(
+        self, *args: str, env: dict | None = None, cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(RUNNER), "finalize", *args],
+            cwd=str(cwd or self.fixture),
+            env=env or self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    def evaluation_summary_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony evaluation:" in line and "findings=" in line
+        ]
+
+    def finding_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony finding:" in line
+        ]
+
+    def could_not_evaluate_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony" in line and "could-not-evaluate" in line
+        ]
+
+    def test_finalize_arm_failure_reports_could_not_evaluate_and_keeps_boundary(
+        self,
+    ) -> None:
+        """[class: REPOSITORY_TEST] Arm failure posture: the arm's own
+        python invocation fails, so the bash-side fail-open guard emits the
+        distinct could-not-evaluate warning on the failure channel (never a
+        pass-shaped or bare-clean line, no finding line), the finalize exit
+        code stays 0, and the boundary still completes (the marking applied
+        and both locks released)."""
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "arm-failure")
+        env = self.runner_env()
+        env.update(exports)
+        # A python3 shim that fails only the arm's invocation (the argv
+        # token the arm alone carries) and execs the real interpreter for
+        # every other finalize call, so the guard under test is the bash
+        # ``||`` posture and nothing else in the boundary changes.
+        shim_dir = self.tmp / "shim-bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "python3"
+        shim.write_text(
+            "#!/bin/sh\n"
+            "for arg in \"$@\"; do\n"
+            "  case \"$arg\" in\n"
+            "    archive-ceremony-report) exit 70 ;;\n"
+            "  esac\n"
+            "done\n"
+            f"exec \"{Path(sys.executable).resolve()}\" \"$@\"\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = "\n".join(self.could_not_evaluate_lines(proc.stderr))
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+        self.assertEqual(self.finding_lines(proc.stdout + proc.stderr), [])
+        # The boundary completed: the marking applied and both locks freed.
+        self.assertIn("marking=applied", proc.stdout)
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def lock_status(self, merge: bool = False) -> str:
+        return subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "merge-status" if merge else "status"],
+            cwd=str(self.fixture),
+            env=self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+
+    def test_finalize_without_archive_surfaces_reports_findings_zero_summary(
+        self,
+    ) -> None:
+        """[class: REPOSITORY_TEST] No archive surfaces changed in the run's
+        span: the gate does not re-run and the always-present summary line
+        still reports findings=0 with the evaluated commit, evaluation
+        time, and resolved reviews root; no finding line and no
+        could-not-evaluate posture anywhere (the no-false-report control
+        for a closeout with no archives at all)."""
+        self.init_fixture_repo()
+        setup_proc, exports = self.setup_session("--label", "no-archive")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=0", summary)
+        self.assertIn("evaluated_commit=", summary)
+        self.assertIn("evaluated_at=", summary)
+        self.assertIn("reviews_root=", summary)
+        self.assertEqual(self.finding_lines(proc.stdout + proc.stderr), [])
+        self.assertNotIn("could-not-evaluate", proc.stdout + proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

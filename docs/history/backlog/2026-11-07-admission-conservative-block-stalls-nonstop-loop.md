@@ -5,6 +5,7 @@
 - cluster: dispatch-admission
 - cluster: docs/history/backlog/2026-11-07-dispatch-admission-manifest-less-outstanding-conservative-global-block.md
 - cluster: docs/history/backlog/2026-11-04-dispatch-admission-candidate-side-conservatism.md
+- cluster: docs/history/backlog/2026-11-08-recurrence-during-pending-execution-unrecorded.md (the recurrence-visibility gap this row's witnessed harm demonstrated: the refusals recurred while this row's covering plan sat unexecuted)
 - status: covered-pending-execution (docs/history/plans/2026-11-07-admission-conservative-block-stalls-nonstop-loop.md)
 
 ## Symptom (witnessed 2026-11-07 ~18:06Z, interactive dual scheduler turn)

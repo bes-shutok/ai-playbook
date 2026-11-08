@@ -5314,7 +5314,12 @@ def validate_soften_watchlist_agreement(
             "soften disagreement: Soften watchlist rows "
             f"{data_rows!r} != sidecar soften_watchlist {rows_count!r} "
             "(the soften record pair is the source of truth; render the "
-            "same rows)"
+            "same rows; a table row counts as data unless it is the "
+            "separator row, its first cell is empty, or its first cell "
+            "is `Round` in any letter case; render every sidecar row as "
+            "one data row under a header row that leads with `Round` as "
+            "in the skill's record-shape example, and render the section "
+            "as `None.` when the sidecar array is empty)"
         )
 
 
@@ -16950,6 +16955,59 @@ def _selftest_soften_parity(root: Path, check) -> None:
         and any(
             "soften disagreement" in e and "2" in e and "1" in e
             and "source of truth" in e
+            for e in res.errors
+        ),
+    )
+
+    # Undocumented-header shape: a Pattern-headed table's header row is
+    # counted as data (rounds-parity plan, Task 1 RED pin): the failure
+    # must name the counting rule, the Round-first header, and the None.
+    # empty form, so the producer fixes the shape without reading source.
+    pattern_rows = ["| Pattern | Status | Note |", "|---|---|---|", "| testing#weak-assertion | open | one-line note |"]
+    pattern_md = parity_md(None)
+    pattern_md = pattern_md.replace(
+        "### Soften watchlist\nNone.",
+        "### Soften watchlist\n" + "\n".join(pattern_rows),
+    )
+    pattern_head = stage(
+        "patternhead",
+        parity_payload([soften_row("weak-assertion")]),
+        pattern_md,
+    )
+    res = validate_staging_file(pattern_head, hard=True)
+    check(
+        "soften parity: a Pattern-headed header row counted as data fails naming Round and the None. empty form",
+        not res.ok
+        and any(
+            "soften disagreement" in e
+            and "Round" in e
+            and "None." in e
+            and "source of truth" in e
+            for e in res.errors
+        ),
+    )
+
+    # Direction-neutral rule statement: a Round-headed table with zero
+    # data rows beside a one-row array fails with the same rule statement
+    # and no too-many-rows-only advice.
+    zero_md = parity_md(None).replace(
+        "### Soften watchlist\nNone.",
+        "### Soften watchlist\n| Round | Pattern / finding | Anchor | Prior fix | Soften reason | Status |\n|-------|-------------------|--------|-----------|---------------|--------|",
+    )
+    zero_rows = stage(
+        "zerorows",
+        parity_payload([soften_row("weak-assertion")]),
+        zero_md,
+    )
+    res = validate_staging_file(zero_rows, hard=True)
+    check(
+        "soften parity: a Round-headed empty section beside a one-row array fails direction-neutrally (no too-many advice)",
+        not res.ok
+        and any(
+            "soften disagreement" in e
+            and "Round" in e
+            and "None." in e
+            and "too many" not in e.lower()
             for e in res.errors
         ),
     )

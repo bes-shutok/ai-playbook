@@ -59,9 +59,11 @@ Hermeticity knobs (used by the tests; harmless in production):
 Stdlib only plus the repo-local ``facts_paths``, ``plan_shape`` (the
 shared plan-shape resolver; the archive-ceremony twin's directory-grammar
 constants are imported, never re-derived), ``validate_review_staging``
-(the staging-path predicate is imported, never re-implemented), and
+(the staging-path predicate is imported, never re-implemented),
 ``review_record_selection`` (the preservation-backup grammar constant
-``BACKUP_INFIX`` is imported, never redefined).
+``BACKUP_INFIX`` is imported, never redefined), and
+``dispatch_admission`` (the admission record's seeder imports the
+consult's ``owned_paths_from_plan`` derivation, never a copied one).
 
 The ``write-manifest`` sub-command writes the done Step 0 run manifest record
 (``run-manifest-<run_id>.json`` next to the run-start marker); it owns no
@@ -135,10 +137,12 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import dispatch_admission
 import facts_paths
 import plan_shape
 import plan_readiness
 import validate_review_staging as vrs
+from dispatch_admission import owned_paths_from_plan
 from review_record_selection import BACKUP_INFIX, ORPHAN_INFIX
 
 GIT_TIMEOUT_S = 60
@@ -268,6 +272,11 @@ class GateContext:
     tmp_dir: Path
     runtime_home: Path
     user_facts: Path
+    # The archive-ceremony post-landing arm's pinned span boundary (the
+    # entry point's resolved base). Only that entry point sets it; every
+    # other consumer leaves the default None and the archive derivation
+    # re-reads the session dir exactly as before.
+    archive_ceremony_pinned_span_base: Optional[str] = None
 
     @classmethod
     def discover(cls, repo_root: Optional[Path] = None) -> "GateContext":
@@ -7183,12 +7192,15 @@ def _emit_head_archive_unit(
     archives: list,
     blockers: list,
     notes: list,
+    provenance: str,
 ) -> None:
     """Surface one mapped archive unit from its HEAD bytes.
 
     The regular-file probe and the bytes read each fail explicitly into
     ``blockers`` (a mapped unit is never silently dropped); charter units
-    carry the HEAD task span beside the charter text.
+    carry the HEAD task span beside the charter text. ``provenance`` is the
+    row's range-provenance class, decided by the caller against the span
+    base (a modified row can carry a unit a prior run landed).
     """
     mode_error = _head_regular_archive_file(ctx, unit_rel)
     if mode_error is not None:
@@ -7209,17 +7221,70 @@ def _emit_head_archive_unit(
         text = text + "".join(task_texts)
     if unit_rel not in seen:
         seen.add(unit_rel)
-        archives.append((unit_rel, text, archive_bytes, None, archive_bytes))
+        archives.append(
+            (unit_rel, text, archive_bytes, None, archive_bytes, provenance)
+        )
+
+# The Task 4 range-provenance classes (plan
+# docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md): whether a
+# surfaced archive lies inside this run's manifest span or was landed by a
+# prior run. The classes tag the derivation rows internally and surface only
+# in the finding message text; no acceptance route or verdict reads them.
+ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN = "this run's manifest span"
+ARCHIVE_CEREMONY_PROVENANCE_PRIOR_RUN = "a prior run"
+
+
+def _archive_provenance_at_span_base(
+    ctx: GateContext, base: str, archive_rel: str
+) -> str:
+    """The range-provenance class of a committed archive row: the prior-run
+    class only when the archive path is confirmed present at the span base
+    the derivation evaluated (the archived-plan surface predates the
+    evaluated range, so a prior run landed it); the this-run class otherwise,
+    including an unresolvable base or a presence-lookup error, where the
+    probe cannot decide and the finding addresses the running run (a wrong
+    prior-run class would teach the operator to dismiss an archive this run
+    did land, the silent-rider hazard the report arm exists to close)."""
+    verify = ctx.git("rev-parse", "-q", "--verify", f"{base}^{{commit}}")
+    if verify.returncode != 0:
+        return ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN
+    present, _blob, _mode, _error = _commit_path_state(ctx, base, archive_rel)
+    if present:
+        return ARCHIVE_CEREMONY_PROVENANCE_PRIOR_RUN
+    return ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN
+
 
 def _derive_archived_plans(
     ctx: GateContext,
-) -> tuple[list[tuple[str, str, bytes, Optional[str], Optional[bytes]]], list[str], list[str]]:
+) -> tuple[
+    list[tuple[str, str, bytes, Optional[str], Optional[bytes], str]],
+    list[str],
+    list[str],
+]:
     """Surface archive rows plus non-failing notes and blocking diagnostics.
 
     Each row is ``(archive path, decoded checkbox text, exact archive bytes,
-    recovered pre-archive path, preferred reviewed raw bytes)``. Unreadable
+    recovered pre-archive path, preferred reviewed raw bytes,
+    range-provenance class)``. Unreadable
     evidence and failed source queries are never silently treated as an empty
     archive set.
+
+    The range-provenance class (plan
+    docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 4)
+    states whether the surfaced archive lies inside this run's manifest span
+    or was landed by a prior run. Shape (a) rows are this run's own pending
+    landing and shape (b) rename/addition rows are new inside the evaluated
+    ``base..HEAD`` range by construction, so both carry the this-run class;
+    the feature-only rebase rows and the shape (c) stale-deliverables twins
+    decide through ``_archive_provenance_at_span_base`` (confirmed presence
+    at the evaluated span base names a prior run). The tag is internal: it
+    surfaces only in the finding message text, and no acceptance route or
+    verdict reads it.
+
+    When the context carries ``archive_ceremony_pinned_span_base`` (set only
+    by the archive-ceremony arm's entry point), that pinned boundary replaces
+    the session-dir newest-marker re-derivation, so a peer marker that
+    flipped post-release cannot move the evaluation span.
 
     Three shapes, each with its own byte source:
 
@@ -7256,8 +7321,11 @@ def _derive_archived_plans(
     # Each row is (archive path, decoded checkbox text, exact archive bytes,
     # recovered pre-archive path, preferred raw digest bytes). The last field
     # is the source blob for renames, the archive blob for additions, and None
-    # for stale deliverables twins that use the archive form.
-    archives: list[tuple[str, str, bytes, Optional[str], Optional[bytes]]] = []
+    # for stale deliverables twins that use the archive form. The final list
+    # field is the range-provenance class (this run's manifest span vs a
+    # prior run; shape (a) and the committed rename/addition rows are
+    # this-run by construction, the rest decide per row).
+    archives: list[tuple[str, str, bytes, Optional[str], Optional[bytes], str]] = []
     notes: list[str] = []
     blockers: list[str] = []
     seen: set[str] = set()
@@ -7329,7 +7397,10 @@ def _derive_archived_plans(
                     if error is not None:
                         blockers.append(error)
                 archives.append(
-                    (charter, text, archive_bytes, old_rel, reviewed)
+                    (
+                        charter, text, archive_bytes, old_rel, reviewed,
+                        ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN,
+                    )
                 )
             continue
         if not is_untracked:
@@ -7360,13 +7431,30 @@ def _derive_archived_plans(
             text = text + "".join(task_texts)
         if new not in seen:
             seen.add(new)
-            archives.append((new, text, archive_bytes, old_rel, reviewed))
+            archives.append(
+                (
+                    new, text, archive_bytes, old_rel, reviewed,
+                    ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN,
+                )
+            )
 
     # Shape (b): committed renames into the completed archive since the run
     # manifest boundary (ORIG_HEAD fallback; neither resolves: skip, noted).
-    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
-    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
-    base = manifest.start_commit if manifest is not None else "ORIG_HEAD"
+    pinned_base = ctx.archive_ceremony_pinned_span_base
+    manifest: Optional[RunManifest] = None
+    manifest_pinned = False
+    if pinned_base is not None:
+        # The archive-ceremony arm's pinned boundary (the entry point
+        # resolved it from the owning bound manifest and verified it): the
+        # session-dir newest-marker re-read below is skipped, so a peer
+        # setup that flipped the newest marker post-release cannot move
+        # this evaluation's span.
+        manifest_pinned = True
+        base = pinned_base
+    else:
+        window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+        manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+        base = manifest.start_commit if manifest is not None else "ORIG_HEAD"
     # A worktree can be rebased onto a newer configured base branch after its
     # done marker was written. In that case the manifest boundary predates
     # upstream archive commits and would misclassify them as this run's work.
@@ -7380,7 +7468,7 @@ def _derive_archived_plans(
     # path, and any ancestry command error retains candidates with no
     # snapshot exclusions.
     feature_only_snapshot: Optional[str] = None
-    if manifest is not None:
+    if manifest is not None or manifest_pinned:
         configured_base = facts_paths.resolve_toml_key_raw(
             ctx.repo_root, "base_branch"
         )
@@ -7503,7 +7591,8 @@ def _derive_archived_plans(
                         # its source unit absent.
                         continue
                 _emit_head_archive_unit(
-                    ctx, unit, is_charter, seen, archives, blockers, notes
+                    ctx, unit, is_charter, seen, archives, blockers, notes,
+                    _archive_provenance_at_span_base(ctx, base, unit),
                 )
         elif state_prefixes:
             for line in diff.stdout.splitlines():
@@ -7561,7 +7650,8 @@ def _derive_archived_plans(
                             if error is not None:
                                 blockers.append(error)
                             archives.append((new, text, member.stdout, old,
-                                             reviewed))
+                                             reviewed,
+                                             ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN))
                         elif member.returncode != 0 and new not in seen:
                             seen.add(new)
                             text = "\n- [ ] unreadable archive member evidence\n"
@@ -7574,7 +7664,8 @@ def _derive_archived_plans(
                                 blockers.append(error)
                             archives.append(
                                 (new, text, text.encode("utf-8"), old,
-                                 reviewed)
+                                 reviewed,
+                                 ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN)
                             )
                         continue
                     task_texts, task_notes, task_errors = _directory_task_texts_at_head(
@@ -7594,7 +7685,8 @@ def _derive_archived_plans(
                         if error is not None:
                             blockers.append(error)
                         archives.append((charter, text, archive_bytes, old,
-                                         reviewed))
+                                         reviewed,
+                                         ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN))
                     continue
                 mode_error = _head_regular_archive_file(ctx, new)
                 if mode_error is not None:
@@ -7626,7 +7718,8 @@ def _derive_archived_plans(
                 if error is not None:
                     blockers.append(error)
                 archives.append((new, text, archive_bytes, old,
-                                 reviewed))
+                                 reviewed,
+                                 ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN))
 
     # Shape (c): stale plan-deliverables lines whose recorded plan path no
     # longer exists because it now sits archived (twin bytes from HEAD).
@@ -7681,7 +7774,12 @@ def _derive_archived_plans(
                 text = text + "".join(task_texts)
             if twin_rel not in seen:
                 seen.add(twin_rel)
-                archives.append((twin_rel, text, archive_bytes, rel, None))
+                archives.append(
+                    (
+                        twin_rel, text, archive_bytes, rel, None,
+                        _archive_provenance_at_span_base(ctx, base, twin_rel),
+                    )
+                )
 
     return archives, notes, blockers
 
@@ -7808,7 +7906,10 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
     from both demands: its unchecked boxes and absent execution evidence are
     the disposition, not defects, and the exemption lives in this executable
     owner so a rejected plan is never certified as executed by the ceremony
-    that refuses it."""
+    that refuses it. Each finding also states the surfaced archive's range
+    provenance (the derivation row's internal tag, message-visible only):
+    whether the archive lies inside this run's manifest span or was landed
+    by a prior run; the classes feed no acceptance route and no verdict."""
     gate = "archive-ceremony"
     archives, notes, blockers = _derive_archived_plans(ctx)
     if blockers:
@@ -7826,7 +7927,14 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
     findings: list[str] = []
     exempted: list[str] = []
     accepted_receipts: list[tuple[str, Path, str, str, str | None]] = []
-    for archive_rel, text, archive_bytes, pre_archive_rel, reviewed_bytes in archives:
+    for (
+        archive_rel,
+        text,
+        archive_bytes,
+        pre_archive_rel,
+        reviewed_bytes,
+        provenance,
+    ) in archives:
         if _archive_state_of(ctx, archive_rel) == "rejected":
             exempted.append(archive_rel)
             continue
@@ -7834,7 +7942,8 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
         if unchecked:
             findings.append(
                 f"archived plan {archive_rel} carries {unchecked} unchecked "
-                "task box(es); sanctioned exits: check the boxes after the "
+                f"task box(es); range provenance: {provenance}; "
+                "sanctioned exits: check the boxes after the "
                 "work is verified, or land a marked backfill completion "
                 "record per the plans skill's archive-correction exception "
                 "(per-checkbox (backfilled ...) markings on an explicitly "
@@ -7869,7 +7978,8 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
         findings.append(
             f"archived plan {archive_rel} has no exec-review record "
             f"(no *-plan-review-{slug}-exec-r<N> file under the reviews "
-            "home names the missing series); remedy: produce the "
+            "home names the missing series); "
+            f"range provenance: {provenance}; remedy: produce the "
             "exec-review record for the plan's final bytes, use the "
             "bound-receipt acceptance with a live identity-, raw-byte-"
             "digest-, and verdict-bound plan-review record, or land a "
@@ -7918,6 +8028,334 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
         warnings.append(warning)
     message = "archive-ceremony gate passed: " + "; ".join(message_parts)
     return GateResult(gate, 0, message, warnings=warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Post-landing archive-ceremony report arm (plan
+# docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 2).
+# Warning-only and fail-open: the owning closeout re-runs the EXISTING
+# gate_archive_ceremony over its landed state and reports the finding
+# instead of staying silent. The entry point below is the only new code and
+# carries no acceptance logic: the gate's verdict is consumed as returned;
+# what the entry point owns is context work - the span-boundary resolution
+# (the finalize's pre-release bound manifest as the primary route, the
+# checkout-local newest-marker re-derivation fallback-only), the boundary
+# and derivation-blocker classification into the distinct could-not-evaluate
+# posture, and the pinned hybrid context (ONLY the reviews corpus re-roots
+# at the primary reviews home; repo_root, every git surface, and the span
+# evidence stay anchored at the running checkout). No bash code classifies
+# the boundary or string-matches the gate's note text.
+# --------------------------------------------------------------------------- #
+ARCHIVE_CEREMONY_REPORT_SUMMARY_PREFIX = "archive-ceremony evaluation:"
+ARCHIVE_CEREMONY_REPORT_FINDING_PREFIX = "archive-ceremony finding:"
+ARCHIVE_CEREMONY_REPORT_POSTURE_TOKEN = "could-not-evaluate"
+# The reconstruction producer the finding lines name (the plan's repair
+# pointer; the producer surface itself is outside this plan's scope).
+ARCHIVE_CEREMONY_REPORT_PRODUCER = "scripts/produce_exec_review_record.py"
+
+
+def _primary_checkout_for_reviews(repo_root: Path) -> Path:
+    """The primary checkout as the missing-review-record scan derives it:
+    the first ``worktree `` line of ``git worktree list --porcelain`` (git
+    itself prints the realpath), falling back to the running checkout when
+    the listing fails or names none. Byte-frozen twin of the scan's inline
+    primary selection; this entry point is the owning home of the
+    pinned-context resolution, so a future scan edit re-derives the parity
+    here instead of drifting it."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return repo_root
+    return next(
+        (
+            Path(line[len("worktree "):])
+            for line in proc.stdout.splitlines()
+            if line.startswith("worktree ")
+        ),
+        repo_root,
+    )
+
+
+def _primary_reviews_home(repo_root: Path, primary: Path) -> tuple[str, Path]:
+    """The primary reviews home in its two forms: the report string (the
+    literal facts value joined, trailing form preserved for the summary
+    line) and the context path. A relative reviews corpus resolves from the
+    primary checkout: that shared gitignored reviews home is canonical
+    while a worktree transfer-in copy can be partial (development lesson
+    74); an absolute value keeps the configured path. Byte-frozen twin of
+    the scan's facts-rooted reviews re-root."""
+    try:
+        value = facts_paths.resolve_toml_key_raw(repo_root, "reviews_dir") or ""
+    except OSError:
+        value = ""
+    if not value:
+        joined = os.path.join(str(primary), ".ai-playbook/reviews")
+        return joined, Path(joined)
+    if os.path.isabs(value):
+        return value, Path(value)
+    joined = os.path.join(str(primary), value)
+    return joined, Path(joined)
+
+
+def _load_bound_span_manifest(
+    path: Path, repo_root: Path
+) -> tuple[Optional[RunManifest], str]:
+    """Parse the finalize's pre-release bound run manifest as the span
+    evidence primary route. Returns ``(manifest, "")`` on success, or
+    ``(None, detail)`` when the record is unreadable, schema-invalid, or
+    foreign to the running checkout (a manifest from another checkout of
+    the same repo is never this run's record; the loader's two-arm root
+    match decides)."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"unreadable ({exc})"
+    manifest = RunManifest.from_dict(payload) if isinstance(payload, dict) else None
+    if manifest is None:
+        return None, "schema or field validation failed"
+    if not _manifest_root_matches(manifest.repo_root, repo_root):
+        return None, "repo_root does not match the running checkout"
+    return manifest, ""
+
+
+def _archive_ceremony_span_base(
+    ctx: GateContext, bound_manifest_path: Optional[Path]
+) -> tuple[str, str]:
+    """Resolve the span boundary and classify it. Primary route: the owning
+    run's bound manifest passed in by the wrapper (the finalize's
+    pre-release resolution), never re-derived post-release. Fallback-only,
+    when no manifest was bound: the checkout-local newest-marker
+    re-derivation with the ORIG_HEAD fallback (the gate_doc_registry
+    precedent), which the root-match contract pins to this checkout's own
+    records. Returns ``(base, "")`` when the boundary resolves, or
+    ``("", detail)`` when it does not: the caller reports could-not-evaluate
+    from that detail instead of evaluating, never a pass-shaped line. The
+    caller pins the resolved base onto the gate context, so the derivation
+    and the gate re-run consume it and never re-read the session dir
+    post-release."""
+    base = "ORIG_HEAD"
+    if bound_manifest_path is not None:
+        manifest, error = _load_bound_span_manifest(
+            bound_manifest_path, ctx.repo_root
+        )
+        if error:
+            return "", (
+                "the finalize's bound run manifest is not usable as the "
+                f"span boundary: {bound_manifest_path} {error}"
+            )
+        base = manifest.start_commit
+    else:
+        window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+        manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+        if manifest is not None:
+            base = manifest.start_commit
+    verify = ctx.git("rev-parse", "-q", "--verify", f"{base}^{{commit}}")
+    if verify.returncode != 0 or not verify.stdout.strip():
+        return "", (
+            "span boundary does not resolve: neither the owning run "
+            f"manifest start_commit nor ORIG_HEAD resolves, tried {base}"
+        )
+    return base, ""
+
+
+def _segment_archive_findings(message: str) -> list[str]:
+    """Split the gate's failure message into per-archive finding texts.
+    The message is the gate's verdict output, not an acceptance input:
+    segments beginning with ``archived plan `` start a finding and every
+    following segment continues the preceding one (the route texts carry
+    their own semicolons). Empty when the failure names no surfaced archive
+    (a derivation blocker), which the caller classifies as
+    could-not-evaluate."""
+    prefix = "archive-ceremony gate failed: "
+    if not message.startswith(prefix):
+        return []
+    findings: list[str] = []
+    for segment in message[len(prefix):].split("; "):
+        if segment.startswith("archived plan "):
+            findings.append(segment)
+        elif findings:
+            findings[-1] += "; " + segment
+    return findings
+
+
+def _archive_ceremony_posture(detail: str) -> str:
+    """The distinct could-not-evaluate line: never pass-shaped, never a
+    findings=0 summary, carrying the posture token the report consumers
+    grep for."""
+    return (
+        f"{ARCHIVE_CEREMONY_REPORT_SUMMARY_PREFIX} "
+        f"{ARCHIVE_CEREMONY_REPORT_POSTURE_TOKEN}: {detail}"
+    )
+
+
+def _archive_ceremony_summary_line(
+    findings: int, evaluated_commit: str, evaluated_at: str, reviews_root: str
+) -> str:
+    """The always-present evaluation summary line (findings count, evaluated
+    commit, evaluation time, resolved reviews root)."""
+    return (
+        f"{ARCHIVE_CEREMONY_REPORT_SUMMARY_PREFIX} findings={findings} "
+        f"evaluated_commit={evaluated_commit} evaluated_at={evaluated_at} "
+        f"reviews_root={reviews_root}"
+    )
+
+
+def archive_ceremony_post_landing_report(
+    repo_root: Path,
+    bound_manifest_path: Optional[Path],
+) -> tuple[list[str], list[str]]:
+    """Evaluate the landed state through the existing archive-ceremony gate
+    and return the report lines as ``(stdout_lines, stderr_lines)``.
+
+    Classification ownership (plan
+    docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 2):
+
+    - an unresolvable span boundary (neither the owning run manifest
+      start_commit nor ORIG_HEAD resolves) is a distinct could-not-evaluate
+      result on stdout, reported like a finding, and the gate never runs;
+    - the resolved span boundary is pinned onto the gate context before the
+      derivation and the gate re-run run: neither re-reads the session dir's
+      newest marker post-release, so a peer setup that flipped the newest
+      marker cannot move the evaluated span (the plan's no-post-release
+      re-derivation assumption);
+    - a derivation blocker (a gate failure whose message carries no surfaced
+      archive) classifies into the same could-not-evaluate posture, never
+      into the archive-finding line;
+    - surfaced archives drive the one gate re-run: rc 0 (or no archive
+      surfaces changed in the span, where the gate does not re-run at all)
+      produces the findings=0 summary; rc 1 with surfaced findings produces
+      the summary plus one ``archive-ceremony finding:`` line per archive
+      naming the failing acceptance route, the reconstruction producer, and
+      the evaluated commit and evaluation time;
+    - any arm failure of its own (facts resolution, gate exception) returns
+      the could-not-evaluate posture on the failure channel instead, never
+      a pass-shaped or bare-clean line.
+
+    Reader divergence note: the reviews-home resolution here
+    (``_primary_reviews_home``, via ``facts_paths.resolve_toml_key_raw``) is
+    not byte-identical to the missing-review-record scan twin's inline regex
+    reader; on non-canonical facts lines the two twins can resolve different
+    corpora, while canonical facts lines resolve identically.
+
+    Always exit-0 semantics live with the caller: this function never
+    refuses and never carries an exit code."""
+    out: list[str] = []
+    err: list[str] = []
+    try:
+        ctx = GateContext.discover(repo_root)
+        primary = _primary_checkout_for_reviews(ctx.repo_root)
+        reviews_root_text, reviews_root_path = _primary_reviews_home(
+            ctx.repo_root, primary
+        )
+        # Pinned hybrid context: ONLY the reviews corpus re-roots at the
+        # primary reviews home; repo_root, every git surface (the
+        # derivation's porcelain and diff reads, the archive-state dirs),
+        # and the span evidence stay anchored at the running checkout.
+        ctx.reviews_dir = reviews_root_path
+        _base, boundary_detail = _archive_ceremony_span_base(
+            ctx, bound_manifest_path
+        )
+        if boundary_detail:
+            out.append(_archive_ceremony_posture(boundary_detail))
+            return out, err
+        # Pin the resolved boundary for both consumers below: the derivation
+        # and the gate re-run would otherwise re-read the session dir's
+        # newest marker post-release, the peer-flip race the plan's span
+        # assumption forbids (a newer same-checkout peer marker would
+        # silently move the evaluated span and hide this run's archives).
+        ctx.archive_ceremony_pinned_span_base = _base
+        evaluated_commit = ctx.git("rev-parse", "HEAD").stdout.strip()
+        if not evaluated_commit:
+            out.append(_archive_ceremony_posture(
+                "HEAD does not resolve at the running checkout"
+            ))
+            return out, err
+        evaluated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows, _notes, blockers = _derive_archived_plans(ctx)
+        if blockers:
+            out.append(_archive_ceremony_posture(
+                "gate derivation blocked: " + "; ".join(blockers)
+            ))
+            return out, err
+        if not rows:
+            # No archive surfaces changed in the run's span: the gate does
+            # not re-run; the always-present summary reports the clean span.
+            out.append(_archive_ceremony_summary_line(
+                0, evaluated_commit, evaluated_at, reviews_root_text
+            ))
+            return out, err
+        result = gate_archive_ceremony(ctx)
+        if result.rc == 0:
+            out.append(_archive_ceremony_summary_line(
+                0, evaluated_commit, evaluated_at, reviews_root_text
+            ))
+            return out, err
+        findings = _segment_archive_findings(result.message)
+        if not findings:
+            out.append(_archive_ceremony_posture(
+                "gate reported failure with no surfaced archive finding: "
+                + result.message
+            ))
+            return out, err
+        out.append(_archive_ceremony_summary_line(
+            len(findings), evaluated_commit, evaluated_at, reviews_root_text
+        ))
+        for route_text in findings:
+            out.append(
+                f"{ARCHIVE_CEREMONY_REPORT_FINDING_PREFIX} {route_text}; "
+                f"repair producer: {ARCHIVE_CEREMONY_REPORT_PRODUCER} "
+                f"(reconstruction path); evaluated_commit="
+                f"{evaluated_commit} evaluated_at={evaluated_at}"
+            )
+        return out, err
+    except Exception as exc:  # fail-open: any arm failure warns and continues
+        err.append(_archive_ceremony_posture(
+            f"arm failure: {type(exc).__name__}: {exc}"
+        ))
+        return out, err
+
+
+def _cmd_archive_ceremony_report(argv: list[str]) -> int:
+    """CLI entry for the post-landing archive-ceremony report arm: read-only
+    reporting only, exit 0 on every answered outcome (the warning-only
+    posture; the wrapper's ``||`` guard carries the catastrophic-only
+    could-not-evaluate warning)."""
+    parser = argparse.ArgumentParser(
+        prog="done_sweep_gates.py archive-ceremony-report",
+        description=(
+            "Post-landing archive-ceremony report arm (warning-only, "
+            "fail-open): re-runs the existing archive-ceremony gate over "
+            "the landed state under the pinned hybrid context and prints "
+            "the always-present evaluation summary line plus per-finding "
+            "lines. Read-only; never refuses; exit 0 on every answered "
+            "outcome."
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        default="",
+        help=(
+            "the finalize's pre-release bound run manifest (the span "
+            "evidence primary route); empty or omitted selects the "
+            "checkout-local newest-marker re-derivation fallback"
+        ),
+    )
+    args = parser.parse_args(argv)
+    root = os.environ.get("DONE_SWEEP_REPO_ROOT")
+    out_lines, err_lines = archive_ceremony_post_landing_report(
+        Path(root) if root else Path.cwd(),
+        Path(args.manifest) if args.manifest else None,
+    )
+    for line in out_lines:
+        print(line)
+    for line in err_lines:
+        print(line, file=sys.stderr)
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -8675,7 +9113,8 @@ def _usage() -> str:
         "usage: done_sweep_gates.sh "
         "<landing|list-gates|write-manifest|finalize-manifest|"
         "disposition-manifest|recover-manifest|checkpoint-manifest|"
-        "classify-run-boundary|list-interrupted-manifests>\n"
+        "classify-run-boundary|list-interrupted-manifests|"
+        "archive-ceremony-report>\n"
         "phases: landing (the closeout's one landing sweep run: the "
         "retained roster with instruction-size in warning posture and "
         "description-length blocking - a measured over-cap result refuses "
@@ -8759,6 +9198,17 @@ def _usage() -> str:
         "as shadow-of <run_id> naming its filename, never an independent "
         "boundary, and a record whose run closed through another file "
         "renders as closed-run history; read-only, never mutates\n"
+        "archive-ceremony-report prints the post-landing archive-ceremony "
+        "evaluation (warning-only, fail-open; plan "
+        "docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md): an "
+        "always-present summary line (findings count, evaluated commit, "
+        "evaluation time, resolved reviews root) plus one archive-ceremony "
+        "finding line per surfaced archive naming the failing acceptance "
+        "route and the reconstruction producer; an unresolvable span "
+        "boundary, a derivation blocker, or an arm failure of its own "
+        "prints the distinct could-not-evaluate posture instead, never a "
+        "pass-shaped clean line; read-only, never refuses, exit 0 on every "
+        "answered outcome\n"
         "phase runs report the outcome contract "
         "(scripts/OUTCOME_CONTRACT.md): exit 0 pass, 1 fail, 2 "
         "indeterminate, 3 tool error, ending stdout with exactly one final "
@@ -9517,6 +9967,14 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         return _cli_fail(f"write-manifest: cannot write the run manifest: {exc}")
     print(f"manifest: {path}")
     print(f"run_id: {manifest.run_id}")
+    # The done boundary's admission-record merge (warn-only: every failure
+    # reports on stderr and this boundary's own outcome stands).
+    merge_admission_records_at_done_boundary(
+        ctx,
+        manifest.owned_paths,
+        manifest.owned_plan_paths,
+        manifest.owned_review_paths,
+    )
     return 0
 
 
@@ -9749,6 +10207,397 @@ def _propagate_finalized_shadow(ctx: GateContext, manifest: RunManifest) -> None
         )
 
 
+# --------------------------------------------------------------------------- #
+# The admission record (plan
+# docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-
+# recovery, Task 1): the claim-keyed JSON object beside the execution claim
+# in the PRIMARY checkout at the gateway's fixed relative path, carrying
+# exactly the three owned-list fields so the consult's existing manifest
+# reader reads it unchanged. It is never a ``run-manifest-*.json`` file and
+# never lives under a done-session directory, so the done-session
+# classification surface never sees it. The seeder imports the consult's
+# plan derivation; the writer reuses the run manifest's atomic
+# temp-plus-replace shape; every record mutation holds the existing repo
+# merge lock (a verified inherited hold, else one try-once acquire through
+# the closeout migrate's helper) and the merge arm updates an EXISTING
+# record only, warn-only at the done boundary.
+# --------------------------------------------------------------------------- #
+
+# The execution-claim gateway's fixed relative claims home
+# (scripts/execution_claim.sh CLAIMS_REL); the admission record lives
+# beside the claim there, never a facts-resolved temp directory.
+EXECUTION_CLAIMS_REL = Path("docs") / "tmp" / "execution-claims"
+
+_ADMISSION_RECORD_SUFFIX = "-admission.json"
+_ADMISSION_RECORD_FIELDS = (
+    "owned_paths",
+    "owned_plan_paths",
+    "owned_review_paths",
+)
+_ADMISSION_MERGE_LABEL = "done-sweep-admission-record"
+
+
+def _admission_warn(message: str) -> None:
+    """One admission-record report line on the failure channel. Every
+    message names the slug (or, before a slug resolves, the plan path), and
+    a report never changes the done boundary's own exit."""
+    print(f"admission-record: {message}", file=sys.stderr)
+
+
+def admission_record_path(primary_root: Path, slug: str) -> Path:
+    """The gateway's fixed relative record path for one plan slug: the
+    primary checkout's execution-claims directory, the slug plus the
+    ``-admission.json`` suffix (the consult reader's manifest shape reads it
+    unchanged; the name never matches a ``run-manifest-*.json`` glob)."""
+    return Path(primary_root) / EXECUTION_CLAIMS_REL / (
+        f"{slug}{_ADMISSION_RECORD_SUFFIX}"
+    )
+
+
+def seed_admission_owned_paths(plan_path) -> list[str]:
+    """The admission seed for one covering plan: the owned-path list the
+    consult's ``owned_paths_from_plan`` derivation yields for the plan's
+    ``Files:`` lists, imported at this module's top (never copied). The
+    derivation's no-paths tool error reads as an empty seed: the gateway
+    warns and writes no record instead, and the run stays on the consult's
+    existing missing-source conservative verdict."""
+    try:
+        return list(owned_paths_from_plan(str(plan_path)))
+    except dispatch_admission.ToolError:
+        return []
+
+
+def admission_record_payload(
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> dict:
+    """The record's exact shape: a JSON object carrying exactly the three
+    owned-list fields, nothing else."""
+    return {
+        "owned_paths": list(owned_paths),
+        "owned_plan_paths": list(owned_plan_paths),
+        "owned_review_paths": list(owned_review_paths),
+    }
+
+
+def write_admission_record(
+    path: Path,
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> Path:
+    """Atomically replace the record at ``path`` (temp file plus
+    same-directory ``os.replace``, the ``write_run_manifest`` shape): a
+    reader observes either the absent or the complete record, never a
+    partial one."""
+    payload = (
+        json.dumps(
+            admission_record_payload(
+                owned_paths, owned_plan_paths, owned_review_paths
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".tmp")
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def read_admission_record(path: Path) -> Optional[dict]:
+    """Tolerant read: an unreadable, unparseable, or non-object record
+    returns None (the caller decides its own conservative arm), never an
+    exception."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _admission_str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def merge_admission_record_payload(
+    existing: dict,
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> dict:
+    """The monotone merge: the boundary's owned lists unioned per field with
+    what the existing record already holds, deduplicated preserving order
+    (existing items first), so a record update only ever adds paths."""
+    return admission_record_payload(
+        _dedup_preserving_order(
+            _admission_str_list(existing.get("owned_paths")) + list(owned_paths)
+        ),
+        _dedup_preserving_order(
+            _admission_str_list(existing.get("owned_plan_paths"))
+            + list(owned_plan_paths)
+        ),
+        _dedup_preserving_order(
+            _admission_str_list(existing.get("owned_review_paths"))
+            + list(owned_review_paths)
+        ),
+    )
+
+
+def _verify_inherited_merge_lock() -> tuple[bool, str]:
+    """The gateway's verification shape (scripts/execution_claim.sh
+    ``merge_lock_hold_or_reuse``) over an exported hold: the lock's meta
+    record must be readable, its ``lock_token`` must equal the exported
+    ``MERGE_LOCK_TOKEN``, and the recorded holder must be verifiably this
+    boundary's - the recorded ``holder_pid`` is this process itself, or a
+    live process whose ``holder_identity`` record matches the process
+    table, and an exported ``MERGE_LOCK_HOLDER_PID`` (the gateway's holder
+    pin) must equal the recorded ``holder_pid``. Any other state is an
+    unverifiable hold, never guessed. Returns (verified, reason)."""
+    lock_dir = os.environ.get("MERGE_LOCK_DIR", "")
+    token = os.environ.get("MERGE_LOCK_TOKEN", "")
+    if not lock_dir or not token:
+        return False, "no MERGE_LOCK_DIR/MERGE_LOCK_TOKEN pair exported"
+    meta = Path(lock_dir) / "meta.env"
+    try:
+        meta_text = meta.read_text(encoding="utf-8")
+    except OSError as exc:
+        return False, f"the lock's meta record {meta} is unreadable ({exc})"
+    fields: dict[str, str] = {}
+    for line in meta_text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key and key not in fields:
+            fields[key] = value
+    if fields.get("lock_token") != token:
+        return False, "the recorded lock_token does not match the exported token"
+    holder_pid = fields.get("holder_pid", "")
+    if not re.fullmatch(r"[1-9][0-9]*", holder_pid):
+        return False, "the recorded holder_pid is not a positive pid"
+    exported_holder = os.environ.get("MERGE_LOCK_HOLDER_PID", "")
+    if exported_holder and exported_holder != holder_pid:
+        return False, (
+            f"the exported MERGE_LOCK_HOLDER_PID {exported_holder} does not "
+            f"match the recorded holder_pid {holder_pid}"
+        )
+    if int(holder_pid) != os.getpid():
+        try:
+            proc = subprocess.run(
+                ["ps", "-p", holder_pid, "-o", "lstart="],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, (
+                f"the recorded holder_pid {holder_pid} cannot be probed "
+                f"({exc})"
+            )
+        identity = proc.stdout.strip()
+        recorded_identity = fields.get("holder_identity", "")
+        if not identity or not recorded_identity or identity != recorded_identity:
+            return False, (
+                f"the recorded holder_pid {holder_pid} does not verify "
+                "alive with the recorded holder_identity"
+            )
+    return True, ""
+
+
+def _merge_admission_record_locked(
+    ctx: GateContext,
+    claims_dir: Path,
+    slug: str,
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> None:
+    """The under-lock record mutation: re-check the ownership evidence, then
+    union the boundary's owned lists into the EXISTING record. Every
+    refusal warns naming the slug and writes nothing; the done boundary
+    keeps its own outcome."""
+    claim_path = claims_dir / f"{slug}.md"
+    if not claim_path.is_file():
+        _admission_warn(
+            f"slug {slug}: no execution claim at {claim_path}; the "
+            "admission record is not updated"
+        )
+        return
+    try:
+        claim_text = claim_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _admission_warn(
+            f"slug {slug}: the execution claim {claim_path} is unreadable "
+            f"({exc}); the admission record is not updated"
+        )
+        return
+    claim_branch = ""
+    for line in claim_text.splitlines():
+        if line.startswith("branch:"):
+            claim_branch = line[len("branch:"):].strip()
+            break
+    current = ""
+    proc = ctx.git("branch", "--show-current")
+    if proc.returncode == 0:
+        current = proc.stdout.strip()
+    if not claim_branch or claim_branch != current:
+        _admission_warn(
+            f"slug {slug}: the execution claim records branch "
+            f"{claim_branch or '<none>'} while this boundary checkout is on "
+            f"{current or '<none>'}; the admission record is not updated"
+        )
+        return
+    record_path = claims_dir / f"{slug}{_ADMISSION_RECORD_SUFFIX}"
+    if not record_path.is_file():
+        # The merge never creates: a boundary over a claim whose seed the
+        # gateway never wrote (or retired) records nothing.
+        return
+    existing = read_admission_record(record_path)
+    if existing is None:
+        _admission_warn(
+            f"slug {slug}: the existing admission record "
+            f"{record_path.name} is unreadable or not a JSON object; the "
+            "record is left unchanged"
+        )
+        return
+    unexpected = sorted(set(existing) - set(_ADMISSION_RECORD_FIELDS))
+    if unexpected:
+        _admission_warn(
+            f"slug {slug}: the existing admission record carries unexpected "
+            f"field(s) {', '.join(unexpected)}; the record is left unchanged"
+        )
+        return
+    merged = merge_admission_record_payload(
+        existing, owned_paths, owned_plan_paths, owned_review_paths
+    )
+    if merged == existing:
+        return
+    try:
+        write_admission_record(
+            record_path,
+            merged["owned_paths"],
+            merged["owned_plan_paths"],
+            merged["owned_review_paths"],
+        )
+    except OSError as exc:
+        _admission_warn(
+            f"slug {slug}: cannot write the admission record ({exc}); the "
+            "boundary continues"
+        )
+
+
+def _merge_admission_record_for_slug(
+    ctx: GateContext,
+    slug: str,
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> None:
+    """One slug's locked merge span: resolve the primary checkout, secure
+    the repo merge lock (a verified inherited hold, else one try-once
+    acquire through the closeout migrate's helper), merge under it, and
+    release only a hold this span acquired itself. Every failure warns
+    naming the slug and never fails the done boundary."""
+    primary, primary_err = _resolve_primary_checkout(ctx)
+    if primary is None:
+        _admission_warn(
+            f"slug {slug}: primary checkout unresolved "
+            f"({(primary_err or '').strip()[:200]}); the admission record "
+            "is not updated"
+        )
+        return
+    claims_dir = primary / EXECUTION_CLAIMS_REL
+    release = None
+    inherited_dir = os.environ.get("MERGE_LOCK_DIR", "")
+    inherited_token = os.environ.get("MERGE_LOCK_TOKEN", "")
+    hold_verified = False
+    if inherited_dir and inherited_token:
+        hold_verified, reason = _verify_inherited_merge_lock()
+        if not hold_verified:
+            _admission_warn(
+                f"slug {slug}: the exported merge-lock hold does not verify "
+                f"as this boundary's ({reason}); falling back to a try-once "
+                "acquire"
+            )
+    if not hold_verified:
+        try:
+            from worktree_closeout_migrate import (  # stale deployed siblings degrade the arm to a report, never to a guess
+                _merge_lock_acquire,
+                _merge_lock_release,
+            )
+        except Exception as exc:
+            _admission_warn(
+                f"slug {slug}: merge-lock helpers unavailable ({exc}); the "
+                "admission record is not updated"
+            )
+            return
+        exports, refused = _merge_lock_acquire(
+            ctx.repo_root, _ADMISSION_MERGE_LABEL
+        )
+        if exports is None:
+            detail = "; ".join(
+                part.strip() for part in refused[:2] if part.strip()
+            )
+            _admission_warn(
+                f"slug {slug}: merge-lock acquire refused "
+                f"({detail[:200] or 'no refusal evidence'}); the admission "
+                "record is not updated"
+            )
+            return
+
+        def release():
+            _merge_lock_release(ctx.repo_root, exports)
+
+    try:
+        _merge_admission_record_locked(
+            ctx,
+            claims_dir,
+            slug,
+            owned_paths,
+            owned_plan_paths,
+            owned_review_paths,
+        )
+    finally:
+        if release is not None:
+            release()
+
+
+def merge_admission_records_at_done_boundary(
+    ctx: GateContext,
+    owned_paths: list[str],
+    owned_plan_paths: list[str],
+    owned_review_paths: list[str],
+) -> None:
+    """The done-boundary merge arm: for each owned plan path of the run's
+    boundary, derive the artifact slug through the same derivation the
+    execution-claim gateway uses (``plan_readiness.artifact_slug``) and
+    merge the boundary's owned lists into that slug's admission record under
+    the primary checkout's claims home. Warn-only: every failure reports on
+    stderr and the boundary's own outcome is unchanged."""
+    for plan_rel in _dedup_preserving_order(list(owned_plan_paths)):
+        try:
+            slug = plan_readiness.artifact_slug(Path(plan_rel))
+        except ValueError as exc:
+            _admission_warn(
+                f"plan {plan_rel}: the artifact slug derivation failed "
+                f"({exc}); the admission record is not updated"
+            )
+            continue
+        _merge_admission_record_for_slug(
+            ctx, slug, owned_paths, owned_plan_paths, owned_review_paths
+        )
+
+
 def _cmd_finalize_manifest(argv: list[str]) -> int:
     """Set the run manifest's ``complete`` flag to true in place (done Step 6,
     immediately before the done-lock release): the run reached the end, so it
@@ -9832,6 +10681,14 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
         # Idempotent propagation: a re-run after an earlier skipped or
         # refused propagation still lands the same finalized bytes.
         _propagate_finalized_shadow(ctx, manifest)
+        # The finalize boundary's admission-record merge (warn-only; the
+        # monotone union makes the re-run idempotent like the shadow above).
+        merge_admission_records_at_done_boundary(
+            ctx,
+            manifest.owned_paths,
+            manifest.owned_plan_paths,
+            manifest.owned_review_paths,
+        )
         return 0
     manifest.complete = True
     try:
@@ -9840,6 +10697,14 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
         return _cli_fail(f"finalize-manifest: cannot rewrite the run manifest: {exc}")
     print(f"finalize-manifest: run {manifest.run_id} marked complete in {path}")
     _propagate_finalized_shadow(ctx, manifest)
+    # The finalize boundary's admission-record merge (warn-only: every
+    # failure reports on stderr and this boundary's own outcome stands).
+    merge_admission_records_at_done_boundary(
+        ctx,
+        manifest.owned_paths,
+        manifest.owned_plan_paths,
+        manifest.owned_review_paths,
+    )
     return 0
 
 
@@ -11297,6 +12162,8 @@ def _dispatch(args: list[str]) -> int:
         return _cmd_classify_run_boundary(args[1:])
     if command == "list-interrupted-manifests":
         return _cmd_list_interrupted_manifests(args[1:])
+    if command == "archive-ceremony-report":
+        return _cmd_archive_ceremony_report(args[1:])
     if command in PHASES:
         boundary_class = "final-closeout"
         trailing = args[1:]

@@ -1,7 +1,7 @@
 # Backlog: archive rider lands after the closeout sweep, red-ing every later landing's archive-ceremony gate
 
 - **Filed:** 2026-11-07, authoring lane blocked at its Phase 0 freeze write
-- **Status:** covered-pending-execution (docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md)
+- **Status:** covered (docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving

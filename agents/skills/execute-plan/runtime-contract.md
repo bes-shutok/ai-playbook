@@ -123,7 +123,7 @@ State-shape precondition: the reconciler reads the run's
 initialize `generation` to a positive integer when the run's state file is
 created, and advance it by one on every later parent-owned state rewrite
 (the reconciled projection itself advances it by one per the atomic
-replacement above); `run_session_id` carries the claim-holding session id.
+replacement above); `run_session_id` is the run's immutable origin identity, retained across an authorized owner conversion; the claim's `session` field carries the current owner through the claim gateway.
 A record written without them refuses `state-shape-unusable` before any
 read of the task's handoff state.
 
@@ -141,6 +141,8 @@ accepted `done-pending` handoffs and never touches a task that has not reached
 ## Run-level ownership and repository placement
 
 Every execution-claim `take`, `claim`, and `refresh` passes `--runtime` with the invoking runtime's canonical ID from `projects/.ai-playbook/execute-plan-runtime-inventory.toml` (for example, `codex` or `zcode`); absent or invalid IDs use `unknown` (never infer). The claim persists `runtime_id`, and refresh preserves it; unknown and legacy claims remain shared.
+
+Resume selection binds to the requested plan's own execution identity: start from the plan's exact repository-relative path and saved execution manifest, cross-checked against the plan's execution claim and registered placement, before any saved-manifest refresh or worktree provisioning. An authoring claim, even a same-session one for another item, never selects an execution checkout; missing or conflicting identity evidence preserves the existing work and reports the conflicting plan, owner, or placement, never supplied by an unrelated authoring claim, branch-name resemblance, or newest timestamp.
 
 Dead-run conversion contract (recovery routing lives in the sole recovery
 procedure, agents/skills/maintenance/template-execution.md): the Phase 0

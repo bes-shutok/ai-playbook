@@ -7,6 +7,7 @@ Driving force: maintainability
 Added: 2026-11-05, memory-index-load-budget-consolidation execution run (review r3 certifying-round residue, recorded not fixed so the landing stayed the certified bytes)
 Capture hygiene: `scan-public-hygiene.sh` pass.
 Cluster: docs/history/plans/completed/2026-11-02-memory-index-load-budget-consolidation.md (the execution whose certifying round staged these; the review record series lives session-local under `.ai-playbook/reviews/2026-11-05-memory-index-load-budget-consolidation-code-review-r3.md`)
+Cluster: docs/history/backlog/2026-11-08-memory-index-retirement-pass-unguarded.md (same surface family; that row owns the index content lifecycle, retirement and fired-record refresh; this row owns the charter file's paperkeeping residue list)
 Origin class: self-serving
 
 ## Problem

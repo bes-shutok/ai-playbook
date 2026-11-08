@@ -5,7 +5,7 @@ Secondary origin: docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-
 Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-plan-prompts-shared-rules-pruned-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list; a series in which no round carries a source-plan identity resolves to its highest rN lexically)
 Execution budget: 2.5h total, largest task 1h
-Executed: no
+Executed: yes (2026-11-08, execution landing of branch exec-plan-prompts-shared-rules; pre-squash branch tip ff800c026)
 
 ## Terms
 
@@ -180,3 +180,8 @@ Files:
 - [ ] Pins suite green: `bash scripts/check_maintenance_pins.sh` exits 0 over the tree with the consumer repoints and pin-span updates landed [class: REPOSITORY_TEST]
 - [ ] Post-landing placement re-verification (closeout step outside this task's commit): after the run's landing and its own-entry prune, the Task 1 placement regression is re-run against the landed, post-prune committed bytes and passes, so the landing's prune demonstrably preserved the preamble block [class: REPOSITORY_TEST]
 - [ ] Commit (only when the sweep required incidental fixes; otherwise record the green sweep in the run log): `test: validation sweep green for prompt-log preamble relocation` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md` (primary origin): covered by this plan's execution landing; flipped `Status: covered` in the same closeout pass.
+- `docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-skill-text-polish.md` (secondary origin, item 2 only): item 2 resolved by Task 3's dated note citing this plan; items 1 and 3 through 6 remain open on the row, whose Status stays open.

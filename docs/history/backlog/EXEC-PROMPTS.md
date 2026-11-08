@@ -8,6 +8,33 @@ EXEC-PROMPTS-PRUNE: closeout-migrate-baseline-tracked-clobber -> landing in this
 
 EXEC-PROMPTS-PRUNE: stranded-doc-pointer-edit-orphan -> landing in this commit (ad-hoc landing: scripts/worktree_closeout_migrate.py gained the warning-only check-stranded-pointers subcommand - a landing touching a markdown file under projects/.ai-playbook/ while docs/AGENTS.md holds uncommitted edits reports would-strand rows at file granularity (pairing by bare file name in the index text), plus the reverse arm for index rows landed while index edits remain uncommitted; exits 0 on every audited outcome, never blocks a closeout gate, never commits (machinery admission: warning-only first, witness landing 44f9499a5); twelve pins in the focused migrate suite (371 passed + 26 subtests) plus the closeout runbook invocation line carrying the landing-parent base token and the recorded-disposition clause; focused three-worker r1 panel (16 raw, zero blocking): eight findings folded in-change (file-granularity WARN wording, class prose broadened to the predicate, landing-parent runbook token, would-strand disposition clause, scoped exit contract, six pins including the two discriminating kills), two residuals deferred to rows, r2 confirm over the fold; focused r2 panel over the folded bytes: seven non-blocking findings routed to three closeout rows, verdict yes; origin row deleted per the covered-row rule with the sibling Cluster pointer tidied and this entry section removed in the same change)
 EXEC-PROMPTS-PRUNE: archive-ceremony-exec-record-reconstruction -> docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md (collateral served entry pruned at the covering authoring landing; its single origin row is covered-pending-execution by the covering plan and its reconstruction arm was delivered by the origin row's recorded recovery)
+
+## learn-commit-pathspec-on-commit
+
+Added: 2026-11-08, investigate over the learn Step 1.8 row (24h session-pattern harvest REM run; second witness appended to the origin row the same run)
+
+Rejected alternatives:
+- Keep the wording fix advisory (a note beside the rule): rejected, the witnessed sweep landed a peer's staged rolling-log entry and resurrected two pruned entries under one commit; the commit form is mechanical and enforceable at zero judgment cost (evidence basis: docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md)
+- Rely on the own-edit word-diff pre-check alone: rejected, the check inspects the session's declared staged paths, not the rest of the index, and its witnessed invocation errored non-zero and passed through (evidence basis: docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md)
+- Teach the rolling-log runner to detect resurrected pruned entries: rejected, semantic eligibility is the writer's decision before staging, not a byte-level guard, and the resurrection vector closes at the commit form (evidence basis: scripts/done_run.sh rolling-log pre-stage guards)
+
+Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the fix passes the body-named single-surface-fix clause - one sentence amendment pinning the pathspec-on-commit form plus the errored-check-is-a-stop clause in learn Step 1.8's commit rule, tracked skill text only, no gate-bearing path, no state-schema change.
+
+Origins:
+- docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md
+
+Stage 1 roster: docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md (single eligible origin; the orphaned-body and freeze-set-aside siblings own the downstream residue and the recovery recipe respectively, both clustered on the row)
+
+Urgency: high - every learn commit in a shared checkout runs this rule; the witnessed sweep landed peer bytes and resurrected landed entries, and the same afternoon's walks then skipped or stood down on the residue.
+
+Machinery admission: the recommendation adds no gate, validator, lock, ledger, or required ceremony - commit-form wording plus a stop-and-report clause on an existing check; the runner-side and validator arms are rejected above with the missing-incident absence named.
+
+Scope arms: (1) amend learn Step 1.8's commit rule first sentence to pin the pathspec-on-commit form (the explicit pathspec rides the commit command, never a bare index commit); (2) add the errored-own-edit-check-is-a-stop-and-report clause; (3) run the corpus gates over the edited module.
+
+Orientation: docs/history/backlog/2026-11-07-learn-commit-pathspec-ambiguity.md (the origin row with its second witness), agents/skills/learn/step-1-extract.md (Step 1.8 commit rule), the maintenance-side memory-write convention in the repository AGENTS.md (the sanctioned targeted-edit vocabulary for the wording amendment).
+
+Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): amend learn Step 1.8's commit rule to pin the pathspec-on-commit commit form and make an errored own-edit pre-check a stop-and-report, per the origin row's Expected section; run the corpus gates over the edited module; commit only the touched skill file.
+
 ## migrate-skeleton-test-stderr-assertion
 
 Added: 2026-11-05, learn+investigate over the memory-index-load-budget-consolidation execution's learn Step 1.9 row
@@ -1423,6 +1450,7 @@ EXEC-PROMPTS-PRUNE: claim-sweep-landing-subject-grammar-mismatch -> landing in t
 EXEC-PROMPTS-PRUNE: prune-audit-first-token-slug-match -> landing in this commit (ad-hoc landing: the prune-audit receipt compare sites in scripts/check_prompt_log_origins.py match the receipt slug against the removed heading slug's first whitespace-delimited token (receipt_compare_slug at the commit-message, in-commit, and log-ledger receipt classes), removing the structural false negative that owed the named-state ceremony on every landing whose prune-audit window spans a legacy-form origins-suffixed heading removal; the fail-closed REMOVED-WITHOUT-WITNESS arm unchanged; two fixture pins plus the r1 fold's suffixed-form pins for the in-commit and ledger classes, focused checker suite 87 passed; em-dash added-lines gate and public hygiene scan pass; focused code+testing panel correctness-completeness + testing, r1 ready=yes final 0 blocking, one Medium folded (suffixed-form pins for the two remaining receipt classes), two Lows on the record watchlist; origin row deleted per the covered-row rule and the sibling row's Cluster pointer retargeted to this receipt in the same change; Ad-hoc-panel-pass: .ai-playbook/reviews/2026-10-27-prune-audit-first-token-slug-match-adhoc-code-review-r1.md 9ad383e79806142ac7c267ff971da8171fc3d6df9a9c81747f0a89eb2bd8ef07)
 
 EXEC-PROMPTS-PRUNE: worktree-metrics-home-seeded-history -> landing in this commit (ad-hoc landing: the seeder arm re-derived with evidence - the docs-branch sync's branch-only restore leg (restore_files) materializes docs-tracked ledgers (landing-costs.jsonl rides the docs retention commits) into the resolving checkout, and done_run.sh step 13 runs the sync inside the ad-hoc run worktree, seeding the primary's ledger history into a fresh worktree's metrics home before the landing-cost append and the closeout migration carry it back; the migration and transfer-in candidates exonerated by code reading and the entry's other two named candidates exonerated live; remedy arm: scripts/docs_branch_sync.sh gains is_linked_worktree and skips the restore leg in a linked worktree with one named line, so run homes hold only their own lines (the entry's correct-the-seeding-path arm; the exact-duplicate filter alternative not needed), docs-branch SKILL.md names the worktree exception, lesson 262's why-line records the identified seeder; two suite pins plus the r1 folds' exact-line and worktree-own-archive pins, focused docs-branch suite 49 passed 1 skipped (pre-existing platform guard) 26 subtests; em-dash added-lines gate and public hygiene scan pass; focused code+testing panel correctness-completeness + testing, r1 ready=yes final 0 blocking, four Lows all folded; origin row deleted per the covered-row rule, no sibling Cluster pointers owed, this entry section removed in the same change; Ad-hoc-panel-pass: .ai-playbook/reviews/2026-10-27-worktree-metrics-seeded-history-adhoc-code-review-r1.md 9634a4bf691edde60ad86d37e35dc10c4e8860064d750e6c65692f7d603543ca)
+EXEC-PROMPTS-PRUNE: machinery-inventory-unregistered-fire-outcomes-script -> 8da174b26
 
 ## missing-plan-review-series-pd5c64f3c-witness
 
@@ -2126,30 +2154,3 @@ Rejected alternatives:
 - Re-certify the drifted plan bytes through a fresh plan-review round at execution start: rejected, the only delta from the r3-certified digest was the Primary-class-anchors canonical-shape fix, the readiness pre-round gate (the designed pre-step re-certification) passed green, and the drift reason is recorded in the run manifest (evidence basis: docs/history/plans/completed/2026-11-07-producer-code-family-record-arm.md Disposition)
 
 Entry: the one-shot exec carrier (automation-74207943, armed 2026-11-06 for 03:00 WET 2026-11-07, max 1 stop after 1st) executed docs/history/plans/2026-11-07-producer-code-family-record-arm.md end to end worktree-first: Task 1 fb5e2141a (validator seam promotion + canaries + parity witness), Task 2 e99c381bc (producer rewired onto the seam, byte-identical outputs), Phase 3 full fresh-adversarial panel 0 blocking with focused fix fc8b7b291 (label-aware corpus prior paths so the seam's pre-fence arm is genuinely exercised) and one focused re-review clean; plan archived with disposition fold, Executed flip at pre-squash tip 0fa4f2cad, origin row fold-deleted; same-slug session-dir collision with the 2026-11-04 sibling handled by backup-then-mirror (lesson 417); closeout residual: an archive commit was mis-landed on main by the shell cwd reset (the primary checkout) and reverted in the same session by mixed reset before any downstream read - the second witness for lesson 43's re-enter-the-worktree discipline.
-
-## machinery-inventory-unregistered-fire-outcomes-script
-
-Added: 2026-11-07, learn+investigate over the operative-file-read-budget-gate authoring session's learn Step 1.9 row (the finding stood report-only across the 2026-11-06 and 2026-11-07 scheduler turns before filing)
-
-`python3 scripts/machinery_inventory.py --check` reports one regrowth failure: `scripts/maintenance_fire_outcomes.py` (operative since 833e4c7d3, the warning-only post-fire verification arm) has no `scripts/machinery_registry.json` entry. The scheduler's machinery-inventory consult is fail-open, so the red never blocks a lane; the cost is a standing red baseline that can mask genuine regrowth behind a known failure.
-
-Rejected alternatives:
-- Remove the script: rejected, it is operative (the post-fire outcome flow consumes it) and two open residual rows assume it stays (evidence basis: scripts/maintenance_fire_outcomes.py's consumers in scripts/check_maintenance_pins.sh's post-fire family; docs/history/backlog/2026-11-06-fire-outcomes-robustness-residuals.md and docs/history/backlog/2026-11-06-fire-outcomes-pin-and-guard-accuracy.md)
-- Exclude the path from the inventory check: rejected, that edits a gate against its own finding and masks future regrowth on the same baseline (evidence basis: docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md, the same-class row whose remedy was registration, not exclusion)
-
-Work-type verdict: ad-hoc-able under the Ad-hoc backlog arm eligibility test (`agents/skills/maintenance/decisions.md`): the carrying-a-body-named-single-surface-fix-with-no-open-design-choice clause admits the arm; the fix is one declarative registry entry whose acceptance test is the existing check going green, with no design choice open.
-
-Origins:
-- docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md
-
-Stage 1 roster: docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (single origin; its Cluster lines bind it to the same script's two residual rows, which own recorded findings, not the registry admission, and to the 2026-10-31 same-class regrowth row, whose scripts are covered)
-
-Urgency: low - the check is fail-open and report-only; no lane blocked, the only cost is the standing red baseline.
-
-Machinery admission: no gate, validator, lock, ledger, or required ceremony is added; the inventory check exists and already fails, and this arm closes the unregistered-script instance by adding the missing declarative registry row (incident link and expected-catch basis: the origin row; review: green baseline restored, or 2026-12-07).
-
-Scope arms: (1) register `scripts/maintenance_fire_outcomes.py` in `scripts/machinery_registry.json` with its class and witness pointer at 833e4c7d3, restoring the green baseline (the same change folds the two sibling residual rows only if their full recorded scope is taken, otherwise they stand); (2) run `python3 scripts/machinery_inventory.py --check` and confirm zero failures with the check source unchanged; (3) change no gate or validator source.
-
-Orientation: docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (the origin row), scripts/machinery_registry.json (the admission surface), scripts/machinery_inventory.py (the check), docs/history/backlog/2026-10-31-machinery-inventory-regrowth-red-two-release-scripts.md (the same-class remedy precedent).
-
-Prompt: Ad-hoc run per the Ad-hoc backlog arm (`agents/skills/maintenance/decisions.md`): register the script per the origin row's smallest arm, confirm the inventory check returns zero failures with the check source unchanged, and commit the registry row.

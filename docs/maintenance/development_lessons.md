@@ -5430,6 +5430,8 @@ and validation set. See also #341 (verify the diff surface after delegated revie
 
 **Rule:** capture an acquire command's stdout into a variable first, verify the lock directory and token fields are non-empty in that captured string, and only then evaluate it into the environment; never write a conditional that wraps `eval "$(cmd)"`, because an empty substitution is a silent pass, not a proof the hold was taken. The same discipline applies to any wrapper whose contract is "print export lines": emptiness of the captured output is the refusal signal, checked explicitly before the dependent steps run.
 
+**Third witness (2026-11-08, authoring certification checkpoint):** a `eval "$(done-lock.sh acquire ...)" && ...` chain ran while a live peer held the primary done lock; the refused acquire printed its holder verdict, the chain continued, and the next step copied the certified plan into the primary checkout unlocked before the runner's own refusal stopped the commit. The untracked copy was deleted the same turn (primary byte-identical to HEAD); the rule above, applied, would have stopped at the empty capture.
+
 ## 354. A Whole-File Baseline Migrate Can Clobber the Destination's Newer Tracked Files
 
 **Principle:** Family H (verify the real thing: a baseline-relative carry moves whole-file bytes, not deltas, so it can silently revert destination-side content that is newer than the baseline).
@@ -6284,3 +6286,45 @@ The execute-plan session directory (`{tmp_dir}/execute-plan/<PLAN_SLUG>/`) keys 
 **Why:** witnessed 2026-11-07 (playbook repo, an authoring run paused at an operator gate): the run report's cleanup line said only that the session's own surfaces were untouched; the operator then had to ask whether the ad-hoc worktree and branch had been removed, when the correct answer was "no, deliberately: the paused run's untracked review records live only inside that worktree, and teardown would destroy them."
 
 **See also:** #422 (sanctioned partial state past one bounded wait: the bound re-entry one-liner is the standing-state line's durable twin), #85 (release-summary claims derive from evidence, not memory).
+
+## 425. Probe for a Live Foreign Worker Before Committing After a Stale-Claim Takeover
+
+**Trigger:** an execution takeover adopts a stale foreign claim and its registered worktree, and the worktree carries uncommitted in-progress work.
+
+**Rule:** between the takeover and the first commit, probe the worktree for live foreign activity (running test/fixture processes owned by other sessions, freshly written fixture or log files, new commits appearing on the registered branch); a live worker observed there is the interrupted-replacement shape: delete the session's own claim, stand down, and leave the worktree and its uncommitted diff untouched. The takeover contract's freshness decay decides who may adopt, never whether the prior owner died; "stale" is a timeout, not a liveness verdict.
+
+**Why:** witnessed 2026-11-08 (playbook repo, the archive-rider-sweep-ordering resume run): the session took over a claim stale past the two-hour cadence and adopted a worktree holding a ~747-line uncommitted Task 2 diff; foreign pytest runs and fixture processes from other sessions kept appearing in the same worktree over the next hour, proving the prior run was alive and iterating. Racing it would have double-committed Task 2 and contested the landing; the stand-down (claim released, zero commits, worktree intact) preserved both runs.
+
+**How to apply:** after adopting, run one process listing and one `git log` freshness check on the registered branch before any mutation; on any foreign write signal, follow the stand-down arm instead of the commit lane, and record the liveness evidence in the stand-down report.
+
+## 426. A Worktree-Hosted Readiness Gate Can False-Fail Stale on Base Churn
+
+**Trigger:** a plan-readiness or digest gate fails stale inside a run worktree while the same plan path passes in the primary checkout.
+
+**Rule:** before treating a stale-digest refusal as a re-cert trigger, run the same gate once in the primary checkout and compare the plan bytes' digest against the sidecar; a worktree-only failure with byte-identical plan and sidecar is base churn (the worktree's older validator copy), and the remedy is the bounded mechanical rebase onto the moved default tip, never a review round.
+
+**Why:** witnessed 2026-11-08 (playbook repo, the archive-rider-sweep-ordering resume run): `plan_readiness.py` failed with "sidecar source_digest is stale" in the run worktree while exiting pass in the primary checkout; plan sha256 and the r5 sidecar digest were identical in both checkouts (81e4aad7); the worktree's older gate copy was the only difference. Reading the refusal as plan drift would have spent a fresh review-plan re-cert round on unchanged bytes.
+
+**How to apply:** the cross-check is two commands: `shasum -a 256` the plan in both checkouts and run the gate in the primary; only a mismatch there is a genuine re-cert input.
+
+## 427. A Coverage-Gate Conflict Names a Citer: Read the Citer Before Calling the Refusal Operator-Gated
+
+**Trigger:** the duplicate-origin coverage gate refuses an authoring landing ("first-landed wins") naming another plan as the covering citer, and the remedies it prints (supersede the later plan, or an explicit revival) do not fit the run.
+
+**Rule:** before reporting the refusal as operator-gated, open the named citer and read its own dispositions for the shared row. When the citer records the row as deliberately left open (an out-of-scope bullet, a "stays open" disposition), the conflict is a scope-block mis-declaration in the citer, not competing coverage: the row belongs on the citer's `Cluster:` line, the shape already used for related rows a plan does not consume. Correct the citer's header there, file a backlog row for the gate's false-conflict class, and re-run the unchanged gate; never edit the gate. Run the self-heal recovery check once before any stop report; a refusal message alone is not evidence that the stop is unrecoverable.
+
+**Why:** witnessed 2026-11-08 (playbook repo, a one-shot author run): a four-round certified plan's landing was refused because a completed sibling plan listed the origin row in its scope-of-record block while its out-of-scope bullet and Origins dispositions kept the row open for a separate plan. The run deleted its claim and reported a park for the operator without invoking self-heal; the operator then ordered the self-heal, which re-homed the row to a `Cluster:` line (de1f7ae54), re-ran the gate to pass, and landed 4909ab7e7. Running the gate at pick time would have surfaced the citer before any review round was spent.
+
+**How to apply:** on a coverage refusal, `grep` the citer for the row basename and read every hit; a keep-open disposition routes to the Cluster re-home; a real competing coverage keeps the gate's remedies.
+
+**See also:** #393 (collision disposition before authoring, the gate as the landing backstop), #154 (a remedy points at the surface the defect lives on).
+
+## 428. A Fold That Reframes a Predicate Re-Derives Its Polarity, and a New Pin Checks Byte-Identical Fixtures
+
+**Trigger:** a review fold rewrites a behavior sentence into its dual framing (a prune-set statement into a retained-set contribution, an allow-list into a deny-list), or adds a new keep or refuse pin beside existing characterization pins.
+
+**Rule:** after the rewrite, re-derive the sentence's direction against the code that consumes it (which set means kept), and check its conclusion, the Outcome, and the pinned tests all state the same direction. For a new pin, ask which existing fixtures are byte-identical to the new one as the reader sees them; when two pins demand opposite outcomes for inputs the reader cannot tell apart, the fold must record the discriminator design, not leave it to the executor.
+
+**Why:** witnessed 2026-11-08 (playbook repo, an authoring run's r1 fold): rewriting a retention bullet from the prune side to the referenced-set side inverted it (in the consumer, referenced means retained), and a new keep pin collided with two existing post-removal pins over byte-identical manifests. Both were r2 blocking findings that the fold itself introduced; r3 and r4 then converged clean after the section-presence discriminator was recorded.
+
+**See also:** #423 (verify each imported finding premise at fold time; this is the same duty over the fold's own rewrite), #206 (the delta round's blind probe catches fold-introduced coverage claims).

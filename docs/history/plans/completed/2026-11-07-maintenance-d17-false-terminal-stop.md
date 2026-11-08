@@ -5,7 +5,7 @@ Authoring claim: 2026-10-31-maintenance-cycle-gate-scenario-test.md (session ses
 Driving force: automation
 Plan review record: the staging series .ai-playbook/reviews/2026-11-07-plan-review-maintenance-d17-false-terminal-stop-p1bd66ad3-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 Execution budget: 2h total, largest task 1h
-Executed: no
+Executed: yes (9cb29ff6d7d9d4699c6e6b778b97defe0f6d7b7d)
 
 ## Terms
 
@@ -115,18 +115,18 @@ Files:
 Primary class anchors:
 - `MaintenanceD17ScenarioAgreementTest` in `scripts/test_maintenance_d17_continuation_scenarios.py`
 
-- [ ] Scenario table, blocker leg: a routine blocker or no-op disposition with another eligible pick present is pinned to its mandated outcome, one self-heal consultation then the normal guarded lane decision, never a terminal stop [class: REPOSITORY_TEST]
-- [ ] Scenario table, context-gate leg: an autopilot run finding the gate armed only for context management is pinned to clear with the existing dated trace, record the D-17 disposition, resume the normal lane decision without a prompt [class: REPOSITORY_TEST]
-- [ ] Scenario table, user-paced leg: an explicit user-paced directive gate is pinned to readiness report and stop until a real user directive clears it [class: REPOSITORY_TEST]
-- [ ] Scenario table, terminals leg: the four preserved terminals (explicit stop request, empty eligible queue, primary quota pause, user-only blocker) are each pinned to stop or hold with their owning clause [class: REPOSITORY_TEST]
-- [ ] Pins are region-scoped with a span mechanism prescribed per surface shape: bullet-line spans use the precedent's line-prefix helper (scripts/test_claimed_target_skip_and_continue.py); heading-scoped clauses (decisions.md paragraphs, SKILL.md sections, operator-directives.md directive blocks) use an explicit heading-to-heading or paragraph-index extraction [class: REPOSITORY_TEST]
-- [ ] A pin asserts against the extracted span, never the whole-file text, and list-bullet clauses use the bullet-prefix span helper keyed on the clause's leading token, so a hit outside the owning span cannot satisfy a pin [class: REPOSITORY_TEST]
-- [ ] The agreement matrix is scenario-to-sites keyed: the blocker leg pins at decisions.md Blocker recovery and the SKILL.md Integration Points self-heal entry; the context-gate, user-paced, and empty-queue legs pin at decisions.md continue-loop condition, SKILL.md Cycle gate, operator-directives.md D-17, and template-authoring.md FINAL STEP; the quota terminal pins at the D-17 preserve clause and the D-6 active quota clause [class: REPOSITORY_TEST]
-- [ ] The terminals matrix completes the keyed agreement: the explicit-stop-request terminal pins at SKILL.md Cycle gate and the D-17 preserve clause; the user-only-blocker terminal pins at decisions.md Blocker recovery; the quota and empty-queue terminals are keyed in the row above [class: REPOSITORY_TEST]
-- [ ] Each scenario is asserted only over the sites that own it, and a site that stops mapping its listed scenario fails the suite [class: REPOSITORY_TEST]
-- [ ] Hygiene self-check: before pinning, the pinned spans and fixture strings are checked against the deny patterns and the hygiene-scan report output must list zero hits for the new file; a reported hit is treated as a failure even though the scan's exit code stays 0 for tracked files outside agents/skills [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: the operative clauses exist today; the suite is a regression witness, so the first run passes and its value is detection of future clause edits (tests, fixtures, and commands are selected at execution from repository evidence) [class: REPOSITORY_TEST]
-- [ ] Commit: `test: pin D-17 continuation scenario agreement across decision surfaces` [class: REPOSITORY_TEST]
+- [x] Scenario table, blocker leg: a routine blocker or no-op disposition with another eligible pick present is pinned to its mandated outcome, one self-heal consultation then the normal guarded lane decision, never a terminal stop [class: REPOSITORY_TEST]
+- [x] Scenario table, context-gate leg: an autopilot run finding the gate armed only for context management is pinned to clear with the existing dated trace, record the D-17 disposition, resume the normal lane decision without a prompt [class: REPOSITORY_TEST]
+- [x] Scenario table, user-paced leg: an explicit user-paced directive gate is pinned to readiness report and stop until a real user directive clears it [class: REPOSITORY_TEST]
+- [x] Scenario table, terminals leg: the four preserved terminals (explicit stop request, empty eligible queue, primary quota pause, user-only blocker) are each pinned to stop or hold with their owning clause [class: REPOSITORY_TEST]
+- [x] Pins are region-scoped with a span mechanism prescribed per surface shape: bullet-line spans use the precedent's line-prefix helper (scripts/test_claimed_target_skip_and_continue.py); heading-scoped clauses (decisions.md paragraphs, SKILL.md sections, operator-directives.md directive blocks) use an explicit heading-to-heading or paragraph-index extraction [class: REPOSITORY_TEST]
+- [x] A pin asserts against the extracted span, never the whole-file text, and list-bullet clauses use the bullet-prefix span helper keyed on the clause's leading token, so a hit outside the owning span cannot satisfy a pin [class: REPOSITORY_TEST]
+- [x] The agreement matrix is scenario-to-sites keyed: the blocker leg pins at decisions.md Blocker recovery and the SKILL.md Integration Points self-heal entry; the context-gate, user-paced, and empty-queue legs pin at decisions.md continue-loop condition, SKILL.md Cycle gate, operator-directives.md D-17, and template-authoring.md FINAL STEP; the quota terminal pins at the D-17 preserve clause and the D-6 active quota clause [class: REPOSITORY_TEST]
+- [x] The terminals matrix completes the keyed agreement: the explicit-stop-request terminal pins at SKILL.md Cycle gate and the D-17 preserve clause; the user-only-blocker terminal pins at decisions.md Blocker recovery; the quota and empty-queue terminals are keyed in the row above [class: REPOSITORY_TEST]
+- [x] Each scenario is asserted only over the sites that own it, and a site that stops mapping its listed scenario fails the suite [class: REPOSITORY_TEST]
+- [x] Hygiene self-check: before pinning, the pinned spans and fixture strings are checked against the deny patterns and the hygiene-scan report output must list zero hits for the new file; a reported hit is treated as a failure even though the scan's exit code stays 0 for tracked files outside agents/skills [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: the operative clauses exist today; the suite is a regression witness, so the first run passes and its value is detection of future clause edits (tests, fixtures, and commands are selected at execution from repository evidence) [class: REPOSITORY_TEST]
+- [x] Commit: `test: pin D-17 continuation scenario agreement across decision surfaces` [class: REPOSITORY_TEST]
 
 ### Task 2: Executable guard composition with fixtures
 
@@ -138,12 +138,16 @@ Files:
 Primary class anchors:
 - `MaintenanceD17GuardCompositionTest` in `scripts/test_maintenance_d17_continuation_scenarios.py`
 
-- [ ] Quota leg fixture: the pure `evaluate_pause` core of scripts/quota_window_probe.py is driven in-process the way scripts/test_quota_window_probe.py drives it, returning the continue input under a fixture with quota headroom and the pause verdict under a fixture at the quota wall [class: REPOSITORY_TEST]
-- [ ] Quota leg isolation: the host-touching surfaces (run_probe, probe_zcode, write_flag_if_paused defaults, any ~/.zcode config read, the budget-guard flag or lock write, any network transport) are forbidden, with fixture data injected and any transport faked, mirroring the existing suite's credential-read guard [class: REPOSITORY_TEST]
-- [ ] Admission leg fixture: the dispatch admission consult (scripts/dispatch_admission.py `check_admission`, driven the way scripts/test_dispatch_admission.py drives it) returns a pass for the scenario's disjoint eligible pick and the conservative verdict for an intersecting outstanding run, grounding the deferral input the loop records [class: REPOSITORY_TEST]
-- [ ] Rearm leg fixture: the rearm classification in scripts/rearm_on_touch.py is driven the way scripts/test_rearm_on_touch.py actually drives it (in-process module import for classification seams, subprocess or main() with a tmp_path root for the CLI shape; call signatures taken from the source), returning the armed-parent verdict for a fixture state file plus listing whose recorded parent is present and enabled, the loop-liveness input the continue-loop condition presumes [class: REPOSITORY_TEST]
-- [ ] No consulted script is modified: the task's diff touches only the suite file, and each fixture verdict asserts the scripts' real outputs [class: REPOSITORY_TEST]
-- [ ] Hermeticity constraints: every fixture state file, manifest, listing, and root lives under pytest tmp_path; no leg reads or writes repo-relative defaults (the rearm state path, live authoring claims, the live scheduler state) or inherits ambient environment; a subprocess leg copies the precedent's env hygiene explicitly [class: REPOSITORY_TEST]
-- [ ] Cross-layer binding: each fixture leg asserts its derived verdict is the input the pinned prose clause names for that scenario leg (quota pause vs continue, admission pass vs conservative deferral, armed-parent liveness), so the composition layer tests the scenario's composition and not the consulted scripts' already-covered behavior [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN (tests, fixtures, and commands are selected at execution from repository evidence) [class: REPOSITORY_TEST]
-- [ ] Commit: `test: compose D-17 scenario guard inputs from executable decision surfaces` [class: REPOSITORY_TEST]
+- [x] Quota leg fixture: the pure `evaluate_pause` core of scripts/quota_window_probe.py is driven in-process the way scripts/test_quota_window_probe.py drives it, returning the continue input under a fixture with quota headroom and the pause verdict under a fixture at the quota wall [class: REPOSITORY_TEST]
+- [x] Quota leg isolation: the host-touching surfaces (run_probe, probe_zcode, write_flag_if_paused defaults, any ~/.zcode config read, the budget-guard flag or lock write, any network transport) are forbidden, with fixture data injected and any transport faked, mirroring the existing suite's credential-read guard [class: REPOSITORY_TEST]
+- [x] Admission leg fixture: the dispatch admission consult (scripts/dispatch_admission.py `check_admission`, driven the way scripts/test_dispatch_admission.py drives it) returns a pass for the scenario's disjoint eligible pick and the conservative verdict for an intersecting outstanding run, grounding the deferral input the loop records [class: REPOSITORY_TEST]
+- [x] Rearm leg fixture: the rearm classification in scripts/rearm_on_touch.py is driven the way scripts/test_rearm_on_touch.py actually drives it (in-process module import for classification seams, subprocess or main() with a tmp_path root for the CLI shape; call signatures taken from the source), returning the armed-parent verdict for a fixture state file plus listing whose recorded parent is present and enabled, the loop-liveness input the continue-loop condition presumes [class: REPOSITORY_TEST]
+- [x] No consulted script is modified: the task's diff touches only the suite file, and each fixture verdict asserts the scripts' real outputs [class: REPOSITORY_TEST]
+- [x] Hermeticity constraints: every fixture state file, manifest, listing, and root lives under pytest tmp_path; no leg reads or writes repo-relative defaults (the rearm state path, live authoring claims, the live scheduler state) or inherits ambient environment; a subprocess leg copies the precedent's env hygiene explicitly [class: REPOSITORY_TEST]
+- [x] Cross-layer binding: each fixture leg asserts its derived verdict is the input the pinned prose clause names for that scenario leg (quota pause vs continue, admission pass vs conservative deferral, armed-parent liveness), so the composition layer tests the scenario's composition and not the consulted scripts' already-covered behavior [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN (tests, fixtures, and commands are selected at execution from repository evidence) [class: REPOSITORY_TEST]
+- [x] Commit: `test: compose D-17 scenario guard inputs from executable decision surfaces` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/2026-10-31-maintenance-cycle-gate-scenario-test.md: covered by this plan and completed in the D-17 scenario suite; the false-terminal-stop scenario and executable guard-composition fixtures are implemented and validated, with the plan archived on 2026-11-08.

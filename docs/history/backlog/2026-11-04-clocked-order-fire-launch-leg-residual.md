@@ -2,7 +2,7 @@
 
 Status: open
 Workflow: backlog
-Priority: low
+Priority: high (adoption trigger fired 2026-11-08, witnessed chain misfire, see the witness line below)
 Origin class: self-serving
 Quarantine: 2026-11-04
 Class: fix-class
@@ -22,3 +22,5 @@ A fired order discharges only after a launch receipt, and a launch-failed order 
 Reorder the fire path to launch-before-discharge with the receipt as the discharge precondition; on launch failure record a failure event and let the due detector mark the order, per the conceded duplicate plan's launch-leg task (branch tip 87b79bd95, discarded 2026-11-04 after insight extraction; its own review series staged the leg through r4).
 
 Adoption trigger: the activation plan's re-open trigger (a witnessed chain misfire re-opens the default via a new plan) or a recorded verify-successor catch; until then the detector family covers the gap by design.
+
+Witness 2026-11-08 (adoption trigger FIRED - witnessed chain misfire): the 2026-11-07 23:00 WET exec carrier admitted the clocked-order dispatch of `docs/history/plans/2026-11-05-claimed-top-target-skip-and-continue.md`, recorded the order state-first (`.ai-playbook/scheduler-state.json` children entry created 2026-11-07T23:06Z, fire_at and requested_at 2026-11-07T23:12Z, quota ok, admission ADMITTED, payload copy `docs/tmp/future-plan-prompts-2026-11-07-dispatch-2026-11-05-claimed-top-target-skip-and-continue.md` written 23:03), armed the chain, and was cut mid-write before binding the launch receipt; the order still read outcome `pending` with no launch, no outcome update, and no dispatch at 2026-11-08 02:15 WET (fire window passed by roughly three hours). Secondary observation recorded for the carrier family: the cut-off session's automation-run outcome reads `succeeded`. This witness re-opens the default per this row's trigger.

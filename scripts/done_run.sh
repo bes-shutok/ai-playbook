@@ -2954,7 +2954,7 @@ cmd_finalize() {
   #    Task 2).
   local ledger landing_commit
   if [ "$finalize_unbound_refused" -eq 1 ]; then
-    echo "done_run finalize: WARNING: the landing summary and the missing-review-record scan are skipped (the unbound-resolution refusal above left the marking undone); re-report them on a bound finalize re-run" >&2
+    echo "done_run finalize: WARNING: the landing summary and the missing-review-record scan are skipped (the unbound-resolution refusal above left the marking undone); the post-landing archive-ceremony report arm skips with them; re-report them on a bound finalize re-run" >&2
   else
   ledger=""
   if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ]; then
@@ -3052,6 +3052,23 @@ for citing, record in missing:
     print(f"missing-review-record: {record} cited by {citing} (reconstruction duty: report with a witness note; never fabricate, never block, never delete)")
 print(f"missing-review-record scan: {len(missing)} missing record(s) corpus_root={reviews_dir}")
 PYEOF
+  trace_stage archive-ceremony-report
+  # Post-landing archive-ceremony report arm (plan
+  # docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 2):
+  # warning-only, fail-open re-evaluation of the EXISTING archive-ceremony
+  # gate over the landed state, beside the missing-review-record scan and
+  # after the done-lock and merge-lock releases. The lib entry point owns
+  # the span-boundary resolution (this finalize's pre-release bound
+  # manifest resolution passed as the primary route), the boundary and
+  # derivation-blocker classification into the distinct could-not-evaluate
+  # posture, and the pinned hybrid context (only the reviews corpus
+  # re-roots at the primary reviews home); no bash code classifies the
+  # boundary or string-matches the gate's note text. The arm is never
+  # captured into the finalize exit code: a catastrophic arm failure emits
+  # the could-not-evaluate warning below on the failure channel and the
+  # closeout continues.
+  python3 "$LIB" archive-ceremony-report --manifest "$RUN_MANIFEST" \
+    || echo "done_run finalize: WARNING: archive-ceremony evaluation: could-not-evaluate: the post-landing report arm could not run (report-only; the closeout continues)" >&2
   fi
 
   # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:

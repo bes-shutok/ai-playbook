@@ -1,7 +1,7 @@
 # Backlog: distinguish successful branch-only closeout from unknown-ref recovery
 
 - Filed: 2026-10-29
-- Status: open
+- Status: covered-pending-execution (docs/history/plans/2026-11-08-branch-only-closeout-gate-report-retention.md)
 Cluster: docs/history/backlog/2026-10-31-plan-empty-diff-closeout-route.md (shared `gate-removal` closeout surface; the empty-diff no-op route remains distinct); docs/history/backlog/2026-10-31-gate-removal-inherited-manifest-rows.md (same gate-removal surface; that row owns manifest-row scoping across runs, this row owns the branch-only terminal state); docs/history/backlog/2026-11-01-adhoc-planless-worktree-closeout-arm.md (same gate-removal surface; that row owns the plan-less ad-hoc invocation gap, this row owns the branch-only terminal state)
 - Priority: high
 - Consumer urgency: Consumer repositories that use branch-only closeout need retained gate reports through `unknown-ref` recovery and a reliable completion signal before pruning; the skills-repository personal priority profile must not park this shared workflow defect as formal-hardening.

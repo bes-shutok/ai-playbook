@@ -15,6 +15,8 @@ The plans skill's certification-time checkpoint duty (`agents/skills/plans/SKILL
 - The certified plan's bytes first reached the primary checkout's plans root at the authoring landing adb12d26223186ec33c56f321295222da803647b (2026-11-03), not at the round-close turn; `git log --all -S` over the plan slug shows no checkpoint commit on main before that landing.
 - The sibling duty binding in the same paragraph (deciding-turn step order, checkpoint preceding removal) landed as the ad-hoc entry deciding-turn-inherits-step-order; the total-skip class sits adjacent and uncovered.
 
+- Second witness 2026-11-08 (the session-rollout-retention-postmortem-evidence authoring run, r5 certification): the checkpoint was attempted and skipped, recorded in the run report: a live peer held the primary done lock, and `scripts/done_run.sh commit` without a run manifest runs in rolling-log mode, which refuses any path outside the two rolling prompt logs, so a plans-root checkpoint commit has no manifest-free primitive; the plan bytes reached the primary checkout at the authoring landing.
+
 ## Suspected root area
 
 The checkpoint paragraph binds a duty to one turn (round-close) with no recovery or observation arm for the case where that turn ends without the commit; every downstream surface assumes the checkpoint ran.

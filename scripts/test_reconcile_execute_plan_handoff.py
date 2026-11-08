@@ -36,7 +36,7 @@ RECONCILE_SCRIPT = os.path.join(SCRIPTS_DIR, "reconcile_execute_plan_handoff.py"
 SESSION = "fixture-session-0f3e"
 RUN_SESSION_ID = "run-fixture-0f3e"
 PLAN_REL = "docs/history/plans/2026-10-01-recon-fixture-story.md"
-PLAN_SLUG = "2026-10-01-recon-fixture-story"
+PLAN_SLUG = "recon-fixture-story"
 ARTIFACT_SLUG = "recon-fixture-story"
 STATE_REL = "docs/tmp/execute-plan/2026-10-01-recon-fixture-story/runtime_state.json"
 REVIEW_BASE = ".ai-playbook/reviews/2026-10-01-plan-review-recon-fixture-story"
@@ -340,7 +340,7 @@ class ReconciledReceiptTest(ReconciliationFixtureTest):
         before = self.fx.capture()
         pre_run_plan_digest = self.fx.read_state()["plan_digest"]
         process = self.fx.run_cli()
-        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         self.assertEqual(self.fx.final_outcome(process), "OUTCOME: pass")
         result = self.fx.parse_result(process)
         self.assertEqual(result["status"], "success")
@@ -394,6 +394,13 @@ class ReconciledReceiptTest(ReconciliationFixtureTest):
         # The result's next action names the ordinary gates.
         self.assertIn("preflight", result["next_action"])
         self.assertIn("done commit gate", result["next_action"])
+
+    def test_different_runtime_slug_refuses_without_mutation(self) -> None:
+        self.fx.mutate_state(lambda state: state.__setitem__("plan_slug", "some-other-plan"))
+        before = self.fx.capture()
+        result = self.assert_refusal(self.fx.run_cli(), "plan-identity-mismatch")
+        self.assertIn("some-other-plan", result["evidence"][0])
+        self.assert_capture_unchanged(before)
 
 
 class ClaimAdmissionMatrixTest(ReconciliationFixtureTest):

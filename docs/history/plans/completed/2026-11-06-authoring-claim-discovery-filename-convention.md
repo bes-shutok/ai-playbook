@@ -4,7 +4,7 @@ Backlog origin: docs/history/backlog/2026-11-04-authoring-claim-discovery-filena
 Driving force: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-11-06-plan-review-authoring-claim-discovery-filename-convention-p274940d2-r*.md (the highest rN for this source-plan path is authoritative, including any deferred-residual list)
 Execution budget: 2h total, largest task 1h
-Executed: no
+Executed: yes (c26a2b7b2, final pre-squash tip after two mid-landing rebases; the originally recorded bf39b860 was the pre-rebase tip of the same run)
 Authoring claim: 2026-11-04-authoring-claim-discovery-filename-convention.md (session sess_47f41ee9-0c03-416b-9227-174a626f326f)
 
 ## Terms
@@ -75,14 +75,14 @@ Evidence:
 - Suite run before Task 2 reports the new cells as failing pins (RED), naming each missing span; the RED run's per-cell `PIN FAIL` lines are recorded verbatim, and every new cell must appear among them: a new cell absent from the RED list is a non-discriminating pin whose literal is re-derived before Task 2 starts.
 
 Checklist:
-- [ ] Draft the amended gate paragraph first in this task and derive each pin literal as a contiguous span of that draft; use one bash `pin` cell per rule element (listing key, basename key, slug key, vacuous clause, resolution rule, `item:` key, comparison form, collision disposition) so one RED run names every missing span, and keep the new cells out of warning-only families. [class: REPOSITORY_TEST]
-- [ ] Pin the rule's one home (`template-authoring.md`) on the literals that carry the rule: the unfiltered claims-directory listing, the origin row basename key, the entry slug key with its vacuous clause and resolution rule, the `item:` line key with its comparison form, and the collision-disposition-before-authoring wording. [class: REPOSITORY_TEST]
-- [ ] Pin the two consult surfaces (`decisions.md`, `survey-arms.md`) on their by-reference citation anchors only (the citation span plus the home-path literal); presence cells pin citation anchors only, never restated constants. [class: REPOSITORY_TEST]
-- [ ] Pin the rule's one home and the two by-reference citations together against restatement: presence cells as above plus `expect_absent_flat` cells on both consults for the home's distinctive rule literals (the unfiltered-listing, vacuous-clause, and comparison-form fragments), so a consult that cites the gate and also restates the constants fails the suite. [class: REPOSITORY_TEST]
-- [ ] Pin the amended plans-skill sentence's three-key-reality fragment in `agents/skills/plans/SKILL.md`, so the amendment's presence and any later revert both fail the suite. [class: REPOSITORY_TEST]
-- [ ] Enumerate the pre-existing pins whose regions or fragments intersect the spans Task 2 amends: sweep the suite for every pin whose fragment or region intersects the four target files (the fragment pins on the authoring-template, decisions, and survey-arms variables, the region blocks over them, and the plans-skill variable), and list each hit. [class: REPOSITORY_TEST]
-- [ ] Record the reconciliation per enumerated hit: preserve the pinned fragment verbatim in the amended text or consciously update that pin in the same change. [class: REPOSITORY_TEST]
-- [ ] Run the pins suite and record the expected RED cell output before Task 2. [class: REPOSITORY_TEST]
+- [x] Draft the amended gate paragraph first in this task and derive each pin literal as a contiguous span of that draft; use one bash `pin` cell per rule element (listing key, basename key, slug key, vacuous clause, resolution rule, `item:` key, comparison form, collision disposition) so one RED run names every missing span, and keep the new cells out of warning-only families. [class: REPOSITORY_TEST]
+- [x] Pin the rule's one home (`template-authoring.md`) on the literals that carry the rule: the unfiltered claims-directory listing, the origin row basename key, the entry slug key with its vacuous clause and resolution rule, the `item:` line key with its comparison form, and the collision-disposition-before-authoring wording. [class: REPOSITORY_TEST]
+- [x] Pin the two consult surfaces (`decisions.md`, `survey-arms.md`) on their by-reference citation anchors only (the citation span plus the home-path literal); presence cells pin citation anchors only, never restated constants. [class: REPOSITORY_TEST]
+- [x] Pin the rule's one home and the two by-reference citations together against restatement: presence cells as above plus `expect_absent_flat` cells on both consults for the home's distinctive rule literals (the unfiltered-listing, vacuous-clause, and comparison-form fragments), so a consult that cites the gate and also restates the constants fails the suite. [class: REPOSITORY_TEST]
+- [x] Pin the amended plans-skill sentence's three-key-reality fragment in `agents/skills/plans/SKILL.md`, so the amendment's presence and any later revert both fail the suite. [class: REPOSITORY_TEST]
+- [x] Enumerate the pre-existing pins whose regions or fragments intersect the spans Task 2 amends: sweep the suite for every pin whose fragment or region intersects the four target files (the fragment pins on the authoring-template, decisions, and survey-arms variables, the region blocks over them, and the plans-skill variable), and list each hit. [class: REPOSITORY_TEST]
+- [x] Record the reconciliation per enumerated hit: preserve the pinned fragment verbatim in the amended text or consciously update that pin in the same change. [class: REPOSITORY_TEST]
+- [x] Run the pins suite and record the expected RED cell output before Task 2. [class: REPOSITORY_TEST]
 
 ### Task 2: Amend the discovery surfaces with the three-key match rule
 
@@ -99,14 +99,14 @@ Evidence:
 - The three amended spans read as one rule: unfiltered listing, three match keys, fresh-foreign refusal unchanged.
 
 Checklist:
-- [ ] AUTHORING CLAIM gate: replace the single-filename existence check with the unfiltered three-key scan; a fresh matching foreign claim (or a matching claim with no parseable session line) refuses exactly as today, and a stale one follows the existing stale-foreign-claim takeover path. [class: IMPLEMENTATION_REQUIRED]
-- [ ] State the entry-slug key's vacuous clause (a target with no dispatch entry leaves the key unsatisfied and the match reduces to the other two keys) and its resolution rule (the entry whose Origins list names the row, date-stripped basename fallback) in the gate wording. [class: IMPLEMENTATION_REQUIRED]
-- [ ] State the `item:` line's comparison form (both sides resolved to the facts-resolved repo-relative row path; a nonconforming line matches nothing) in the gate wording. [class: IMPLEMENTATION_REQUIRED]
-- [ ] D2 consult in `decisions.md`: cite the gate's match rule by reference for what counts as a claim "sitting there"; no constants restated. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Survey arm in `survey-arms.md`: same by-reference citation; the facts `tmp_dir` override caveat remains. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Amend the plans-skill sentence that promises plan-slug claims never match backlog-item targets so it states the three-key matching reality for a slug-coinciding claim, in the same change. [class: IMPLEMENTATION_REQUIRED]
-- [ ] No bytes change in the duplicate-origin coverage gate, the first-landed-wins resolution, the noclobber create recipe, or the takeover and raced-pick continuation arms. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Closeout verification, recorded in the closeout note: the `G1a` arm explains its own pending child's claim under both filename conventions and under a missing `item:` line (fixing or recording a stem-keyed limitation if it does not); the Top-level presence probe's "naming the entry" matching is verified convention-independent or amended to cite the gate's match rule; the liveness checker verified convention-independent. [class: IMPLEMENTATION_REQUIRED]
+- [x] AUTHORING CLAIM gate: replace the single-filename existence check with the unfiltered three-key scan; a fresh matching foreign claim (or a matching claim with no parseable session line) refuses exactly as today, and a stale one follows the existing stale-foreign-claim takeover path. [class: IMPLEMENTATION_REQUIRED]
+- [x] State the entry-slug key's vacuous clause (a target with no dispatch entry leaves the key unsatisfied and the match reduces to the other two keys) and its resolution rule (the entry whose Origins list names the row, date-stripped basename fallback) in the gate wording. [class: IMPLEMENTATION_REQUIRED]
+- [x] State the `item:` line's comparison form (both sides resolved to the facts-resolved repo-relative row path; a nonconforming line matches nothing) in the gate wording. [class: IMPLEMENTATION_REQUIRED]
+- [x] D2 consult in `decisions.md`: cite the gate's match rule by reference for what counts as a claim "sitting there"; no constants restated. [class: IMPLEMENTATION_REQUIRED]
+- [x] Survey arm in `survey-arms.md`: same by-reference citation; the facts `tmp_dir` override caveat remains. [class: IMPLEMENTATION_REQUIRED]
+- [x] Amend the plans-skill sentence that promises plan-slug claims never match backlog-item targets so it states the three-key matching reality for a slug-coinciding claim, in the same change. [class: IMPLEMENTATION_REQUIRED]
+- [x] No bytes change in the duplicate-origin coverage gate, the first-landed-wins resolution, the noclobber create recipe, or the takeover and raced-pick continuation arms. [class: IMPLEMENTATION_REQUIRED]
+- [x] Closeout verification, recorded in the closeout note: the `G1a` arm explains its own pending child's claim under both filename conventions and under a missing `item:` line (fixing or recording a stem-keyed limitation if it does not); the Top-level presence probe's "naming the entry" matching is verified convention-independent or amended to cite the gate's match rule; the liveness checker verified convention-independent. [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Regression and integration validation
 
@@ -116,10 +116,10 @@ Evidence:
 - All named suites exit 0 against the amended worktree.
 
 Checklist:
-- [ ] `bash scripts/check_maintenance_pins.sh` exits 0 with `OUTCOME: pass`. [class: REPOSITORY_TEST]
-- [ ] `python3 scripts/check_authoring_plans_liveness.py --repo .` exits 0 with `OUTCOME: pass` on a clean checkout. [class: REPOSITORY_TEST]
-- [ ] The public hygiene scan exits 0 over the changed files. [class: REPOSITORY_TEST]
-- [ ] The implementation delta over the branch is exactly the three maintenance skill files plus `scripts/check_maintenance_pins.sh` plus the plans-skill amendment, checked by a path-scoped diff; the expected non-implementation riders (the plan file itself; at landing, the origin-row covered flip and the PLAN-PROMPTS prune receipt) are named expected changes, never violations. [class: REPOSITORY_TEST]
+- [x] `bash scripts/check_maintenance_pins.sh` exits 0 with `OUTCOME: pass`. [class: REPOSITORY_TEST]
+- [x] `python3 scripts/check_authoring_plans_liveness.py --repo .` exits 0 with `OUTCOME: pass` on a clean checkout. [class: REPOSITORY_TEST]
+- [x] The public hygiene scan exits 0 over the changed files. [class: REPOSITORY_TEST]
+- [x] The implementation delta over the branch is exactly the three maintenance skill files plus `scripts/check_maintenance_pins.sh` plus the plans-skill amendment, checked by a path-scoped diff; the expected non-implementation riders (the plan file itself; at landing, the origin-row covered flip and the PLAN-PROMPTS prune receipt) are named expected changes, never violations. [class: REPOSITORY_TEST]
 
 ## Evaluation Criteria
 

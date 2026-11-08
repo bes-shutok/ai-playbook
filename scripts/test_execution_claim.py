@@ -43,10 +43,12 @@ Run from the repository root:
     python3 scripts/test_execution_claim.py
 """
 
+import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -85,16 +87,22 @@ class TestExecutionClaim(unittest.TestCase):
         self.plan.write_text("# Fixture plan\n", encoding="utf-8")
         self.claims_dir = self.repo / "docs" / "tmp" / "execution-claims"
         self.claim = self.claims_dir / f"{SLUG}.md"
+        # The admission record beside the claim (the gateway's fixed
+        # relative path, plan
+        # docs/history/plans/2026-11-06-dispatch-admission-outstanding-
+        # manifest-recovery, Task 2).
+        self.admission_record = self.claims_dir / f"{SLUG}-admission.json"
         self.wt_parent = self.scratch / "wt"
         self.branch = "fixture/feature-branch"
         # Hermetic by construction (the review r1 B1 fold): the trusted
         # lock-root seam points every test's gateway invocations at a
         # scratch lock home, and the scratch primary carries the facts
         # document the preservation scan and provider resolution read.
-        lock_home = self.scratch / "lock-home"
-        lock_home.mkdir()
-        os.environ["EXECUTION_CLAIM_LOCK_HOME"] = str(lock_home)
-        self.addCleanup(os.environ.pop, "EXECUTION_CLAIM_LOCK_HOME", None)
+        # The seam travels through _run's copied child environment, never
+        # the interpreter's os.environ, so a caller-supplied value survives
+        # the fixture untouched (backlog: execution-claim-fixture-caller-environment).
+        self.lock_home = self.scratch / "lock-home"
+        self.lock_home.mkdir()
         facts_dir = self.repo / ".ai-playbook"
         facts_dir.mkdir(exist_ok=True)
         (facts_dir / "facts.md").write_text(
@@ -149,6 +157,7 @@ class TestExecutionClaim(unittest.TestCase):
     def _run(self, *args, cwd=None, path_prepend=None, extra_env=None):
         env = self._fixture_env()
         env["EXECUTE_PLAN_RUNTIME_INVENTORY"] = str(self.runtime_inventory)
+        env["EXECUTION_CLAIM_LOCK_HOME"] = str(self.lock_home)
         if path_prepend is not None:
             env["PATH"] = str(path_prepend) + os.pathsep + env["PATH"]
         if extra_env:
@@ -486,7 +495,103 @@ class TestExecutionClaim(unittest.TestCase):
         import hashlib
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+    # -- admission-record lifecycle helpers (plan
+    #    docs/history/plans/2026-11-06-dispatch-admission-outstanding-
+    #    manifest-recovery, Task 2) --------------------------------------- #
+
+    def _write_plan_with_files(self):
+        """Rewrite the shared fixture plan with a `Files:` list. The artifact
+        slug derives from the file name, so every existing claim path keeps
+        addressing the same claim while the covering-plan derivation now
+        yields a non-empty seed. Returns the expected seed."""
+        self.plan.write_text(
+            "# Fixture plan\n\n"
+            "Files:\n"
+            "- `scripts/owned_one.py`\n"
+            "- `src/owned_two.py`\n",
+            encoding="utf-8",
+        )
+        return ["scripts/owned_one.py", "src/owned_two.py"]
+
+    def _plant_admission_record(self, owned_paths):
+        """A prior admission record for the fixture slug in the writer's
+        exact three-field shape, so a lifecycle pin asserts replacement or
+        keeping against known bytes."""
+        self.admission_record.parent.mkdir(parents=True, exist_ok=True)
+        self.admission_record.write_text(
+            json.dumps(
+                {
+                    "owned_paths": list(owned_paths),
+                    "owned_plan_paths": [],
+                    "owned_review_paths": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def _read_admission_payload(self):
+        return json.loads(self.admission_record.read_text(encoding="utf-8"))
+
+    def _peer_done_setup(self):
+        """A peer done-session setup (scripts/done_run.sh setup) in this
+        scratch repository, ported from the test_done_run_wrapper.py fixture
+        pattern: every lock home, runtime home, and facts input pinned into
+        the scratch tree, so the witness never touches the real checkout."""
+        repo_scripts = SCRIPT.parent
+        env = self._fixture_env()
+        env["PATH"] = (
+            str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
+        )
+        for var in (
+            "DONE_LOCK_DIR", "DONE_LOCK_TOKEN", "DONE_LOCK_HOLDER_PID",
+            "DONE_LOCK_HOLD_PIN", "MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN",
+            "MERGE_LOCK_HOLDER_PID", "MERGE_LOCK_HOLD_PIN",
+            "DONE_LOCK_ROOT", "MERGE_LOCK_ROOT", "DONE_SWEEP_REPO_ROOT",
+            "DONE_SWEEP_RUNTIME_HOME", "DONE_SWEEP_USER_FACTS",
+            "DONE_LOCK_SCRIPT", "DONE_RUN_ID", "DONE_RUN_MANIFEST",
+            "DONE_RUN_MARKER",
+        ):
+            env.pop(var, None)
+        env["DONE_LOCK_ROOT"] = str(self.scratch / "locks" / "done")
+        env["MERGE_LOCK_ROOT"] = str(self.scratch / "locks" / "merge")
+        env["MERGE_LOCK_POLL_SECS"] = "1"
+        env["DONE_LOCK_SCRIPT"] = str(repo_scripts / "done-lock.sh")
+        env["DONE_SWEEP_REPO_ROOT"] = str(self.repo)
+        env["DONE_SWEEP_RUNTIME_HOME"] = str(self.scratch / "runtime-home")
+        env["DONE_SWEEP_USER_FACTS"] = str(self.scratch / "user-facts.md")
+        return subprocess.run(
+            [
+                "bash", str(repo_scripts / "done_run.sh"), "setup",
+                "--label", "peer-done-setup",
+            ],
+            cwd=str(self.repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
     # -- take ----------------------------------------------------------- #
+
+    def test_fixture_leaves_caller_lock_home_and_pins_child(self):
+        # The fixture must not mutate the interpreter's os.environ (backlog:
+        # execution-claim-fixture-caller-environment): a caller-supplied
+        # value survives setup, teardown, and gateway invocations untouched,
+        # while the gateway child still receives the fixture's scratch lock
+        # home through _run's copied environment.
+        os.environ["EXECUTION_CLAIM_LOCK_HOME"] = "caller-sentinel"
+        self.addCleanup(os.environ.pop, "EXECUTION_CLAIM_LOCK_HOME", None)
+        probe = self.scratch / "probe.sh"
+        probe.write_text('printf "%s" "$EXECUTION_CLAIM_LOCK_HOME"\n')
+        with patch(f"{__name__}.SCRIPT", probe):
+            proc = self._run("take", str(self.plan))
+        self.assertEqual(proc.stdout, str(self.lock_home))
+        self.assertEqual(
+            os.environ["EXECUTION_CLAIM_LOCK_HOME"], "caller-sentinel"
+        )
 
     def test_take_cold_start_creates_both(self):
         proc = self._take("session-a")
@@ -2675,6 +2780,329 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertIn("Usage: execution_claim.sh", proc.stdout)
         self.assertNotIn("OUTCOME:", proc.stdout)
         self.assertNotIn("OUTCOME:", proc.stderr)
+
+    # -- admission-record lifecycle (plan
+    #    docs/history/plans/2026-11-06-dispatch-admission-outstanding-
+    #    manifest-recovery, Task 2) --------------------------------------- #
+
+    def test_new_owner_fresh_create_seeds_admission_record(self):
+        # New-owner seeding, fresh create: the record is absent before the
+        # invocation and present at the claims home with the fresh seed once
+        # the take succeeds.
+        expected_seed = self._write_plan_with_files()
+        self.assertFalse(
+            self.admission_record.exists(),
+            "a cold start found a pre-existing admission record",
+        )
+        proc = self._take("session-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the fresh create wrote no admission record",
+        )
+        payload = self._read_admission_payload()
+        self.assertEqual(
+            set(payload),
+            {"owned_paths", "owned_plan_paths", "owned_review_paths"},
+        )
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertTrue(self.claim.is_file(), "the fresh claim did not survive")
+
+    def test_take_stale_takeover_replaces_prior_admission_record(self):
+        # New-owner seeding, stale-foreign-claim takeover: the prior record
+        # for the slug is replaced with the fresh seed.
+        self._plant_admission_record(["prior/only-path.md"])
+        expected_seed = self._write_plan_with_files()
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("takeover", proc.stdout)
+        payload = self._read_admission_payload()
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertNotIn("prior/only-path.md", payload["owned_paths"])
+
+    def test_dead_run_conversion_replaces_prior_admission_record(self):
+        # New-owner seeding, dead-run conversion: the converted claim's prior
+        # record is replaced with the fresh seed (the plan bytes are
+        # rewritten before the fixture so the boundary's plan_digest hashes
+        # the covering plan the seed derives from).
+        expected_seed = self._write_plan_with_files()
+        self._conversion_fixture()
+        self._plant_admission_record(["prior/only-path.md"])
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._conversion_take("session-b", runtime="codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
+        payload = self._read_admission_payload()
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertNotIn("prior/only-path.md", payload["owned_paths"])
+
+    def test_refresh_recreate_keeps_existing_record_and_seeds_when_absent(self):
+        # Refresh recreate: a restamp of an own claim never rewrites the
+        # record; the recreate arm keeps an existing record unchanged and
+        # writes a seed only when no record exists.
+        expected_seed = self._write_plan_with_files()
+        planted = ["kept/by-refresh.md"]
+        self._plant_admission_record(planted)
+        self._seed_claim("session-b", STALE_AGE)
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            planted,
+            "a restamp of an own claim rewrote the admission record",
+        )
+        # Recreate over an existing record: kept unchanged.
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            planted,
+            "the recreate dropped or rewrote the existing record",
+        )
+        # Recreate with no record: the seed is written.
+        self.admission_record.unlink()
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            expected_seed,
+            "the recreate wrote no seed for the record-less claim",
+        )
+
+    def test_take_empty_seed_warns_names_plan_and_writes_no_record(self):
+        # Empty seed: the shared setUp plan carries no `Files:` list, so the
+        # derivation reads as an empty seed; the take still succeeds, a
+        # stderr warning names the plan, and no record is written.
+        proc = self._take("session-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(
+            "admission-record", proc.stderr,
+            "no empty-seed warning on stderr",
+        )
+        self.assertIn(
+            str(self.plan), proc.stderr,
+            "the empty-seed warning does not name the plan",
+        )
+        self.assertFalse(
+            self.admission_record.exists(), "an empty seed wrote a record"
+        )
+        self.assertTrue(self.claim.is_file(), "the fresh claim did not survive")
+
+    def test_take_empty_seed_removes_prior_record_and_stays_conservative(self):
+        # The replace contract holds on the conservative arms too (Terms: a
+        # new-owner claim creation "writes a fresh seed and replaces any
+        # prior admission record for that slug"): a takeover whose covering
+        # plan has no `Files:` list removes the prior record for the slug
+        # instead of leaving it standing as the new owner's owned set; the
+        # take still succeeds and the warning names the plan.
+        self._plant_admission_record(["prior/only-path.md"])
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("takeover", proc.stdout)
+        self.assertIn(
+            "admission-record", proc.stderr,
+            "no empty-seed warning on stderr",
+        )
+        self.assertIn(
+            str(self.plan), proc.stderr,
+            "the empty-seed warning does not name the plan",
+        )
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the empty-seed takeover left the prior record standing",
+        )
+
+    def test_release_clears_admission_record_only_for_retiring_session(self):
+        # Clearing, release: the record stays intact while the claim stands
+        # (the foreign-session refusal touches neither), and the retiring
+        # session's release removes it with the claim.
+        self._plant_admission_record(["release/window.md"])
+        self._seed_claim("session-holder", FRESH_AGE)
+        proc = self._run("release", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertTrue(self.claim.is_file(), "the foreign refusal deleted the claim")
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the foreign refusal cleared the record while the claim stands",
+        )
+        proc = self._run("release", str(self.plan), "--session", "session-holder")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the release retired the claim but left the admission record",
+        )
+
+    def test_sweep_clears_admission_record_with_spent_claim_and_keeps_live(self):
+        # Clearing, sweep: the spent claim's record goes with it; a skipped
+        # live claim keeps its record (fail closed per claim).
+        completed = self.repo / "docs" / "history" / "plans" / "completed"
+        completed.mkdir(parents=True)
+        (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
+        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+        self._plant_admission_record(["spent/window.md"])
+        # The live neighbor: a claim the sweep must skip, with its own record.
+        self._seed_worktree("live/kept-branch", "kept-wt")
+        self.claims_dir.mkdir(parents=True, exist_ok=True)
+        kept_claim = self.claims_dir / "admission-sweep-kept.md"
+        kept_claim.write_text(
+            "session: session-live\n"
+            "plan: docs/history/plans/kept-plan.md\n"
+            "created: 2026-11-06T10:00:00Z\n"
+            "updated: 2026-11-06T10:00:00Z\n"
+            "branch: live/kept-branch\n",
+            encoding="utf-8",
+        )
+        kept_record = self.claims_dir / "admission-sweep-kept-admission.json"
+        kept_record.write_text(
+            "{\n"
+            '  "owned_paths": ["kept/window.md"],\n'
+            '  "owned_plan_paths": [],\n'
+            '  "owned_review_paths": []\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        proc = self._sweep()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the sweep retired the spent claim but left its admission record",
+        )
+        self.assertIn("sweep: skipped", proc.stdout)
+        self.assertTrue(kept_claim.is_file(), "the sweep deleted the live claim")
+        self.assertTrue(
+            kept_record.is_file(),
+            "the sweep cleared a record while the claim stands",
+        )
+
+    def test_take_failure_cleanup_clears_admission_record(self):
+        # Clearing, take-mode failure cleanup: while the in-flight take's
+        # fresh claim stands, the fresh seed stands beside it; the signal's
+        # exit-path cleanup (lockless, owner check gated) then removes the
+        # record before the claim, so neither survives the failed take.
+        self._write_plan_with_files()
+        unblock = self.scratch / "unblock-git-add"
+        registered = self.scratch / "git-add-registered"
+        proc = self._take_popen("session-b", unblock)
+        try:
+            deadline = time.monotonic() + 30
+            while not self.claim.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the claim never appeared; the script exited or "
+                        f"stalled before parking (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            while not registered.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the worktree add never went in flight over a "
+                        "registered worktree; the script exited or stalled "
+                        f"after the claim (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            # The claim stands: its fresh seed stands beside it. The seed's
+            # shell-out completes just after the claim's create (the parked
+            # add bought the time), so the same bounded poll pins it.
+            while not self.admission_record.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the admission record never appeared beside the "
+                        f"standing claim (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            self.assertTrue(
+                self.admission_record.is_file(),
+                "the fresh claim stood without its admission record",
+            )
+            os.killpg(proc.pid, signal.SIGINT)
+            unblock.write_text("go", encoding="utf-8")
+            proc.communicate(timeout=60)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+        self.assertEqual(proc.returncode, 130)
+        self.assertFalse(
+            self.claim.exists(), "the fresh claim survived the signal"
+        )
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the cleanup left the fresh claim's admission record",
+        )
+
+    def test_foreign_claim_live_record_keeps_peer_done_setup_clean(self):
+        # Safety witness (done machinery untouched): a foreign claim-live
+        # admission record beside the claim never appears on the done-session
+        # classification surface, so a peer done-session setup in the same
+        # scratch repository proceeds with no orphan verdict and no
+        # interrupted-run advisory naming the live run; the record survives
+        # untouched beside the still-standing claim. The GIVEN record is
+        # planted (the witness never depends on the gateway's seeding arm).
+        proc = self._take("session-live")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file())
+        self._plant_admission_record(["foreign/claim-live-window.md"])
+        self.assertTrue(self.admission_record.is_file())
+        # The facts input the done flow reads, in the repository's fenced
+        # shape (the test_done_run_wrapper.py fixture), committed with a
+        # docs/tmp gitignore so the scaffolding itself is not read as dirt.
+        facts_path = self.repo / ".ai-playbook" / "facts.md"
+        facts_path.write_text(
+            "# Scratch primary facts\n"
+            "\n"
+            "```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'backlog_dir = "docs/history/backlog/"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            'tmp_dir = "docs/tmp/"\n'
+            'metrics_dir = "docs/tmp/metrics/"\n'
+            'review_certs_dir = ".ai-playbook/review-certs/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".gitignore").write_text(
+            "docs/tmp/\n__pycache__/\n", encoding="utf-8"
+        )
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "scaffolding")
+        setup = self._peer_done_setup()
+        self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
+        combined = setup.stdout + setup.stderr
+        self.assertNotIn("orphan", combined.lower())
+        self.assertNotIn("interrupted", combined.lower())
+        self.assertNotIn(
+            "session-live", combined,
+            "the done setup's output names the live gateway session",
+        )
+        manifests = list(
+            (self.repo / "docs" / "tmp" / "done-session").glob(
+                "run-manifest-*.json"
+            )
+        )
+        self.assertEqual(len(manifests), 1, "the peer setup wrote no manifest")
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the done setup disturbed the claim-live admission record",
+        )
+        self.assertTrue(self.claim.is_file(), "the done setup disturbed the claim")
 
 
 if __name__ == "__main__":

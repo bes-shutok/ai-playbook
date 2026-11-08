@@ -31,6 +31,28 @@
 # --print-artifact-slug` next to this script); it is never reimplemented
 # here.
 #
+# Admission record (plan docs/history/plans/2026-11-06-dispatch-admission-
+# outstanding-manifest-recovery, Task 2): the claim-keyed JSON record beside
+# the execution claim (`docs/tmp/execution-claims/<artifact-slug>-admission.json`
+# in the primary checkout, never a facts-resolved temp directory), carrying
+# exactly the three owned-list fields the dispatch-admission consult's
+# manifest reader reads. Every new-owner claim creation (a fresh create, a
+# stale-foreign-claim takeover, a dead-run conversion) seeds the record from
+# the covering plan's `Files:` lists through the done-sweep lib's entry
+# points (shell-out, the derivation imported from scripts/dispatch_admission.py,
+# never copied) and replaces any prior record for the slug; the refresh arm's
+# recreate keeps an existing record and seeds only when none exists. An empty
+# seed (the covering plan derives no owned paths, or the derivation fails)
+# warns on stderr naming the plan and writes no record: the take succeeds and
+# the run stays on the consult's existing missing-source conservative verdict.
+# Every claim retirement (release, sweep, the take-mode failure cleanup)
+# removes the record with the claim, before the claim and only while the
+# claim still names the retiring session (the take-mode cleanup clears
+# locklessly in its exit trap under its existing order guarantee; release and
+# sweep clear inside their existing merge-lock hold). The record's name never
+# matches the done-session `run-manifest-*.json` glob, so the done-session
+# classification surface never sees it.
+#
 # Freshness: one cadence period, two hours (FRESHNESS_SECS, pinned). A
 # foreign claim whose updated line is fresher than two hours refuses the
 # take with the holder session, the claim age, the occupying worktree when
@@ -255,6 +277,10 @@ cleanup_fresh_claim() {
     if (( CREATED_HERE )) \
       && [[ -e "$CLAIM_PATH" ]] \
       && [[ "$(claim_field "$CLAIM_PATH" session)" == "$SESSION" ]]; then
+      # The admission record goes before the claim (the take-mode failure
+      # cleanup clears locklessly in this exit trap under its existing order
+      # guarantee; the owner check above gates the removal).
+      clear_admission_record_for_claim "$CLAIM_PATH" || true
       rm -f "$CLAIM_PATH"
       refuse "cleanup: removed this invocation's fresh claim $CLAIM_PATH"
     fi
@@ -502,6 +528,126 @@ restamp_claim() {
     refuse "  the stamped write lost its compare-and-delete; the claim is left untouched"
     die_fail
   fi
+}
+
+# --- Admission record (plan docs/history/plans/2026-11-06-dispatch- ------- #
+# --- admission-outstanding-manifest-recovery, Task 2) ---------------------- #
+
+admission_record_for_claim() {
+  # The admission record path beside a claim path: the claim's basename plus
+  # the fixed `-admission.json` suffix, in the same claims directory (the
+  # record lives beside the execution claim in the PRIMARY checkout, never a
+  # facts-resolved temp directory; the name never matches the done-session
+  # `run-manifest-*.json` glob, so the done-session classification surface
+  # never sees it).
+  local claim="$1"
+  printf '%s\n' "${claim%.md}-admission.json"
+}
+
+seed_admission_record() {
+  # The admission-record seeding shell-out to the done-sweep lib's entry
+  # points: the lib owns the seed derivation (the consult's
+  # `owned_paths_from_plan`, imported there, never copied; its no-paths tool
+  # error reads as an empty seed), the fixed record path beside the claim in
+  # the primary checkout, and the atomic temp-plus-replace write. $1 selects
+  # the policy:
+  # "replace" (new-owner claim creation - a fresh create, a stale takeover,
+  # or a dead-run conversion - writes the fresh seed and replaces any prior
+  # record for the slug) or "if-absent" (refresh recreate: an existing record
+  # is kept unchanged, a seed written only when none exists). The replace
+  # contract holds on the conservative arms too: under it, an empty seed or
+  # a failed derivation (the lib seeder lets non-ToolError derivation
+  # exceptions - a corrupted-encoding plan - escape, so this entry point
+  # guards them) first removes any prior record for the slug, so the stale
+  # record cannot stand in for the fresh seed this take failed to derive;
+  # a failed unlink degrades to the warning, never fails the take. The call
+  # runs inside the invoking command's existing merge-lock hold and never
+  # fails that command: every conservative arm warns on stderr naming the
+  # plan and the run stays on the consult's missing-source conservative
+  # verdict.
+  local policy="$1" rc=0
+  "$PYTHON" - "$SCRIPT_DIR" "$PLAN_ARG" "$PRIMARY" "$SLUG" "$policy" <<'PYSEEDADMISSION' || rc=$?
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import done_sweep_gates_lib as lib
+
+plan, primary_root, slug, policy = sys.argv[2:6]
+record = lib.admission_record_path(primary_root, slug)
+if policy == "if-absent" and record.is_file():
+    sys.exit(0)  # refresh recreate keeps the existing record unchanged
+
+
+def clear_prior_record():
+    # The replace policy genuinely replaces (the Terms: a new-owner claim
+    # creation "writes a fresh seed and replaces any prior admission record
+    # for that slug"): a prior record must not stand in for the seed this
+    # take failed to derive. Warn-not-fail: a failed unlink degrades to the
+    # returned note, never fails the take.
+    if not record.is_file():
+        return ""
+    try:
+        record.unlink(missing_ok=True)
+    except OSError:
+        return (
+            "the prior admission record %s could not be removed and still "
+            "stands; " % record
+        )
+    return "the prior admission record %s was removed; " % record
+
+
+try:
+    seed = lib.seed_admission_owned_paths(plan)
+except Exception as exc:  # a corrupted-encoding plan never crashes a take
+    note = clear_prior_record() if policy == "replace" else ""
+    print(
+        "admission-record: covering plan %s derivation failed (%s); "
+        "treated as an empty seed; %sno admission record written; the run "
+        "stays on the consult's conservative verdict" % (plan, exc, note),
+        file=sys.stderr,
+    )
+    sys.exit(0)
+if not seed:
+    note = clear_prior_record() if policy == "replace" else ""
+    print(
+        "admission-record: covering plan %s derives no owned paths (empty "
+        "seed); %sno admission record written; the run stays on the "
+        "consult's conservative verdict" % (plan, note),
+        file=sys.stderr,
+    )
+    sys.exit(0)
+try:
+    lib.write_admission_record(record, seed, [], [])
+except OSError as exc:
+    print(
+        "admission-record: record write failed at %s (%s); no admission "
+        "record written; the run stays on the consult's conservative "
+        "verdict" % (record, exc),
+        file=sys.stderr,
+    )
+    sys.exit(0)
+print(
+    "admission-record: seeded %s (%d owned paths) from covering plan %s"
+    % (record, len(seed), plan)
+)
+PYSEEDADMISSION
+  if (( rc != 0 )); then
+    refuse "admission-record: seeding shell-out failed (rc=$rc); continuing without an admission record; the run stays on the consult's conservative verdict"
+  fi
+  return 0
+}
+
+clear_admission_record_for_claim() {
+  # The claim-retirement clearing arm: remove the admission record beside
+  # the retiring claim BEFORE the claim itself. Every caller gates the call
+  # on its own owner check (the record goes only while the claim still names
+  # the retiring session) and holds the repo merge lock, except the take
+  # mode's exit-trap cleanup, which clears locklessly under its existing
+  # order guarantee. Returns nonzero when the unlink fails, so a caller can
+  # keep its own fail-closed posture.
+  local claim="$1" record
+  record="$(admission_record_for_claim "$claim")"
+  rm -f "$record" || return 1
 }
 
 refuse_fresh_foreign_claim() {
@@ -1494,6 +1640,10 @@ PYCANON
   fi
   evidence "conversion: claim $CLAIM_PATH transferred from prior owner $holder to $SESSION (identity form: $form)"
   evidence "conversion: manifest canonicalized: $manifest"
+  # The conversion is a new-owner claim creation: the fresh seed replaces any
+  # prior record for the slug, inside this merge-lock hold (the last record
+  # mutation before both gateway locks release).
+  seed_admission_record "replace"
   gateway_release_all || true
   CONVERSION_DONE=1
   TAKE_OK=1
@@ -1554,6 +1704,10 @@ acquire_claim() {
         gateway_release_all || true
         continue  # a concurrent writer won the create; re-evaluate its claim
       fi
+      # New-owner claim creation seeds the admission record (any prior record
+      # for the slug replaced) inside this merge-lock hold; an empty seed
+      # warns and writes nothing, the create stands either way.
+      seed_admission_record "replace"
       gateway_release_all || true
       rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
       return 0
@@ -1609,6 +1763,9 @@ acquire_claim() {
       gateway_release_all || true
       continue  # the claim changed under us; re-evaluate from the top
     fi
+    # The takeover is a new-owner claim creation: the fresh seed replaces any
+    # prior record for the slug, inside this merge-lock hold.
+    seed_admission_record "replace"
     gateway_release_all || true
     rm -rf "$GATEWAY_TMP"; GATEWAY_TMP=""
     return 0
@@ -1770,6 +1927,9 @@ cmd_take() {
     refuse "  remedies: adopt the existing worktree per the recognition arm, or remove it deliberately, then take again"
     refuse "  bounded removal remedy: git worktree remove --force <path>, git branch -D <branch>, then re-run take so the gateway creates claim and worktree atomically"
     if (( CREATED_HERE )); then
+      # The seeded record goes before the fresh claim (the owner check above
+      # gates the removal; this cleanup runs inside the merge-lock hold).
+      clear_admission_record_for_claim "$CLAIM_PATH" || true
       rm -f "$CLAIM_PATH"
       refuse "  cleanup: removed this invocation's fresh claim $CLAIM_PATH"
     fi
@@ -1809,6 +1969,9 @@ cmd_take() {
       fi
     fi
     if (( CREATED_HERE )); then
+      # The seeded record goes before the fresh claim (the owner check gates
+      # the removal; this cleanup runs inside the merge-lock hold).
+      clear_admission_record_for_claim "$CLAIM_PATH" || true
       rm -f "$CLAIM_PATH"
       refuse "cleanup: removed this invocation's fresh claim $CLAIM_PATH"
     fi
@@ -1876,10 +2039,13 @@ cmd_refresh() {
     fi
     # Recreate after a takeover unlinked the claim; the base line rides
     # along when --base was passed, the branch and start-commit lines ride
-    # the noclobber write itself.
+    # the noclobber write itself. The recreate seeds the admission record
+    # only when no record exists (an existing record is kept unchanged), so
+    # the run's recorded set never shrinks across an unlink window.
     if ! create_claim_noclobber "$CLAIM_PATH" "$SESSION" "$PLAN_ARG"; then
       continue
     fi
+    seed_admission_record "if-absent"
     if [[ -n "$BASE" ]]; then
       restamp_claim "$CLAIM_PATH" "$BASE" "$BRANCH" "$START_COMMIT"
     fi
@@ -1916,6 +2082,11 @@ cmd_release() {
     refuse "  a claim naming a foreign session is never deleted by this session; the claim is left untouched"
     die_fail
   fi
+  # The admission record is removed before the claim, only while the claim
+  # still names the retiring session (the owner check above; the merge-lock
+  # hold covers this record mutation).
+  clear_admission_record_for_claim "$CLAIM_PATH" \
+    || die_tool "release could not remove the admission record beside $CLAIM_PATH"
   # Arm-4 last-instant compare-and-delete: the session check is the
   # unlink's immediately-preceding operation; a lost race refuses naming the
   # racing holder.
@@ -2104,6 +2275,11 @@ cmd_sweep() {
       skipped=$((skipped + 1))
       continue
     fi
+    # The claim's admission record is removed before the claim (the sweep's
+    # merge-lock hold covers the record mutation; a record that cannot be
+    # removed keeps the claim, fail closed per claim).
+    clear_admission_record_for_claim "$claim_file" \
+      || die_tool "sweep could not remove the admission record beside $claim_file"
     rm -f "$claim_file" || die_tool "sweep could not delete $claim_file"
     evidence "sweep: deleted $claim_file (plan landed, branch $branch_val holds no worktree)"
     deleted=$((deleted + 1))
