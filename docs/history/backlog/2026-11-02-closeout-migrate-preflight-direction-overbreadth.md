@@ -2,7 +2,7 @@
 
 Added: 2026-11-02, doing-code-review r1 panel over the closeout-migrate-baseline-tracked-clobber ad-hoc landing (finding F2, implementation#preflight-refusal-overbreadth)
 
-Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family record: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-PROMPTS.md), docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md
+Cluster: scripts/worktree_closeout_migrate.py (baseline clobber guards; family record: the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-PROMPTS.md), (sibling arm-coverage row deleted covered at 9a6597934)
 
 Status: covered (docs/history/plans/2026-11-05-closeout-migrate-supplemental-inventory-and-guard-residuals.md)
 

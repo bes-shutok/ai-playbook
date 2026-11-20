@@ -1,4 +1,5 @@
 # Backlog: admission-conservative-block plan r3 certification residuals (non-blocking)
+- **Cluster:** docs/history/backlog/2026-11-07-dispatch-admission-manifest-less-outstanding-conservative-global-block.md
 
 - filed: 2026-11-07
 - driving force: correctness

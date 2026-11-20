@@ -20,6 +20,8 @@ Invoke this skill when any of these conditions holds:
 
 Do not invoke it for one ordinary finding, one failed worker, or a normal requested review. A worker timeout is handled by the caller's relaunch rule unless the timeout has left competing or incomplete review artifacts that affect the verdict.
 
+When auditing a measured churn-trigger firing, rounds that are not comparable under the definition in review-plan's Reconciliation gate are excluded from the comparison window that gate owns; a window with fewer than two comparable rounds is a baseline gap, not a firing.
+
 ## Inputs
 
 The caller supplies, or this skill discovers from the current workspace:
@@ -48,7 +50,7 @@ For every group, record:
 | Witness | What exact test, structural check, runtime path, or decision receipt proves closure? |
 | Failure mode | Incomplete fix, split source of truth, ambiguous contract, missing class coverage, stale review, wrong owner, or catalog gap? |
 
-Use the actual reviewed bytes and execution evidence where the finding depends on them. Treat statements such as "covered," "inherited," "validated," or "unchanged" as claims to re-probe, not closure evidence.
+Use the actual reviewed bytes and execution evidence where the finding depends on them. Treat statements such as "covered," "inherited," "validated," or "unchanged" as claims to re-probe, not closure evidence. A round-level claim about the series (which findings a round staged, which round comes next) re-derives from that round's staged canonical record before it is written; a round with no staged canonical pair is a missing round, and the selector allocates it the free slot rather than reconstructing its findings from memory or prose.
 
 ### 2. Separate the kinds of stuckness
 

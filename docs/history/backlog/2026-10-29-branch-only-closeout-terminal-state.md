@@ -1,8 +1,8 @@
 # Backlog: distinguish successful branch-only closeout from unknown-ref recovery
 
 - Filed: 2026-10-29
-- Status: open
-Cluster: docs/history/backlog/2026-10-31-plan-empty-diff-closeout-route.md (shared `gate-removal` closeout surface; the empty-diff no-op route remains distinct); docs/history/backlog/2026-10-31-gate-removal-inherited-manifest-rows.md (same gate-removal surface; that row owns manifest-row scoping across runs, this row owns the branch-only terminal state); docs/history/backlog/2026-11-01-adhoc-planless-worktree-closeout-arm.md (same gate-removal surface; that row owns the plan-less ad-hoc invocation gap, this row owns the branch-only terminal state)
+- Status: covered (docs/history/plans/2026-11-08-branch-only-closeout-gate-report-retention.md)
+Cluster: docs/history/backlog/2026-10-31-plan-empty-diff-closeout-route.md (shared `gate-removal` closeout surface; the empty-diff no-op route remains distinct); docs/history/backlog/2026-10-31-gate-removal-inherited-manifest-rows.md (same gate-removal surface; that row owns manifest-row scoping across runs, this row owns the branch-only terminal state); the plan-less ad-hoc invocation gap is covered by the 2026-11-16 exec session's receipt (EXEC-PROMPTS entry adhoc-planless-worktree-closeout-arm, landing 641edf93a; covered row deleted per the covered-row rule)
 - Priority: high
 - Consumer urgency: Consumer repositories that use branch-only closeout need retained gate reports through `unknown-ref` recovery and a reliable completion signal before pruning; the skills-repository personal priority profile must not park this shared workflow defect as formal-hardening.
 - Skill-step: `scripts/worktree_closeout_migrate.py` `cmd_gate_removal` and `scripts/done_sweep_gates_lib.py` `_run_gate_on_twin`

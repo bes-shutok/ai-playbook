@@ -1,6 +1,6 @@
 # Backlog: dispatch admission candidate-side conservatism
 
-Status: covered-pending-execution (docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md)
+Status: covered (docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md)
 Priority: low
 Cluster: parallel-execution-landing-serialization-blockers
 Cluster: docs/history/backlog/2026-11-05-dispatch-admission-outstanding-manifest-recovery.md

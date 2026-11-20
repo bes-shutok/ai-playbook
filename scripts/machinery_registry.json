@@ -4,7 +4,7 @@
       "disposition": "keep",
       "id": "claim-if-concurrent",
       "kind": "protocol",
-      "note": "origin Expected kept set; mandated by the tracked maintenance authoring blueprint (agents/skills/maintenance/prompt-templates.md); the gitignored claims directory docs/tmp/authoring-claims/ is named here only, never as a resolving path; ref re-pointed at fold from the deleted origin to the archived plan",
+      "note": "origin Expected kept set; mandated by the tracked maintenance authoring blueprint (agents/skills/maintenance/template-authoring.md); the gitignored claims directory docs/tmp/authoring-claims/ is named here only, never as a resolving path; ref re-pointed at fold from the deleted origin to the archived plan",
       "paths": [],
       "tests": [],
       "witness": {
@@ -532,7 +532,7 @@
       "disposition": "keep",
       "id": "script:dirt_regression_gate.py",
       "kind": "script",
-      "note": "red test in the suite fails when this script breaks; valid-correction incident: docs/history/backlog/2026-10-20-done-dirt-regression-correction-block.md (covered and archived; durable home: docs/history/backlog/completed/2026-10-20-done-dirt-regression-correction-block.md) (one confirmed valid correction, catch frequency still unknown; false-positive cost: a blocked closeout plus the recovery work to re-stage and relaunch it); review 2027-01-20; retirement scope: the invocation-bound dirt-correction authorization path only, retired if no further valid-correction refusal occurs, while the gate's independent accidental-reversion protection is retained",
+      "note": "red test in the suite fails when this script breaks; valid-correction incident: docs/history/backlog/2026-10-20-done-dirt-regression-correction-block.md (covered and archived; durable home: docs/history/plans/completed/2026-10-22-done-dirt-regression-valid-correction-path.md) (one confirmed valid correction, catch frequency still unknown; false-positive cost: a blocked closeout plus the recovery work to re-stage and relaunch it); review 2027-01-20; retirement scope: the invocation-bound dirt-correction authorization path only, retired if no further valid-correction refusal occurs, while the gate's independent accidental-reversion protection is retained",
       "paths": [
         "scripts/dirt_regression_gate.py"
       ],
@@ -548,7 +548,7 @@
       "disposition": "keep",
       "id": "script:dispatch_admission.py",
       "kind": "script",
-      "note": "red test in the suite fails when this script breaks; the target-disjointness dispatch admission check the maintenance deciding turn consults before creating a child or beginning an in-session run of either lane (delivered by plan docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (archived at its landing; durable home: docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md) Tasks 1 and 4). Machinery admission (the repository guidelines' Machinery admission protocol): concrete incident = the witnessed serialization stand-downs, session records 2026-11-04 (0/1) and 2026-11-01 (0/2, fleet cap + unlanded peer runs), recorded in docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (the origin row covered, folded, and deleted by this plan's archive commit per the AGENTS.md fold-then-delete rule; this archived plan is the row's durable home); expected catch frequency = every dispatch decision whose candidate owned-path set intersects an outstanding run's recorded set, plus the disjoint candidates the retired gate wrongly refused (the capacity the zero-outstanding gate idled behind one live peer strand); false-positive cost = one deferred dispatch: a conservative verdict (an outstanding run with an empty recorded owned-path set or no done-setup manifest) or an exit-3 tool_error resolution parks the candidate behind the pending_dispatch record for one turn and re-consults, never a silent pass; promotion is immediate: the check is blocking at landing because it replaces an existing blocker in the same change, its paying sibling the retired zero-outstanding dispatch gate (removals row protocol:zero-outstanding-dispatch-gate), per the protocol's replace-an-existing-blocker arm; review date: 2027-02-02 (90 days from landing); removal criteria pre-registered for that review: demote or remove only with a complete firing census of admission refusals, and only in a change that keeps an equivalent dispatch admission standing",
+      "note": "red test in the suite fails when this script breaks; the target-disjointness dispatch admission check the maintenance deciding turn consults before creating a child or beginning an in-session run of either lane (delivered by plan docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (archived at its landing; durable home: docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md) Tasks 1 and 4). Machinery admission (the repository guidelines' Machinery admission protocol): concrete incident = the witnessed serialization stand-downs, session records 2026-11-04 (0/1) and 2026-11-01 (0/2, fleet cap + unlanded peer runs), recorded in docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md (the origin row covered, folded, and deleted by this plan's archive commit per the AGENTS.md fold-then-delete rule; this archived plan is the row's durable home); expected catch frequency = every dispatch decision whose candidate owned-path set intersects an outstanding run's recorded set, plus the disjoint candidates the retired gate wrongly refused (the capacity the zero-outstanding gate idled behind one live peer strand); false-positive cost = one deferred dispatch: a conservative verdict (an outstanding run with an empty recorded owned-path set or no done-setup manifest) or an exit-3 tool_error resolution parks the candidate behind the pending_dispatch record for one turn and re-consults, never a silent pass; promotion is immediate: the check is blocking at landing because it replaces an existing blocker in the same change, its paying sibling the retired zero-outstanding dispatch gate (removals row protocol:zero-outstanding-dispatch-gate), per the protocol's replace-an-existing-blocker arm; review date: 2027-02-02 (90 days from landing); removal criteria pre-registered for that review: demote or remove only with a complete firing census of admission refusals, and only in a change that keeps an equivalent dispatch admission standing. Outstanding-manifest recovery delta (plan docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md): the outstanding operand's owned-path evidence moves from done-setup-manifest-only to the claim-keyed admission record (`docs/tmp/execution-claims/<plan-slug>-admission.json` in the primary checkout, seeded at new-owner claim creation from the covering plan's Files: lists, merged monotone at each done boundary, cleared at claim retirement), so the missing-source conservative verdict's reach shrinks from every claim-live run to the source-less residual (pre-landing claims, empty-seed covering plans, unresolvable slugs, authoring-lane runs; that arm's code and regression pin unchanged), and the conservative refusal surface grows a candidate empty-set arm plus malformed-evidence arms on both operands, inside the existing refusal and outcome classes; machinery admission for the new arms (the repository guidelines' Machinery admission protocol): incident = the 2026-11-04 candidate-side observations (the empty-set vacuous pass and the silent-subset second witness; origin row docs/history/backlog/2026-11-04-dispatch-admission-candidate-side-conservatism.md) and the 2026-11-05 zero-pick harvest windows (origin row docs/history/backlog/2026-11-05-dispatch-admission-outstanding-manifest-recovery.md); expected catch frequency = every consult over an operand presenting empty or malformed evidence; false-positive cost = a legitimately-empty candidate refused naming the evidence, the lane taking the existing D3 defer; review date: 2026-12-06 for this delta's arms (the 2027-02-02 review above stays for the original admission); removal criteria pre-registered for that review: demote the new arms only with a firing census showing they add nothing over the conservative verdict, and only in a change that keeps an equivalent dispatch admission standing. Audit-dispatch write-set delta (plan docs/history/plans/2026-11-07-admission-conservative-block-stalls-nonstop-loop.md): the candidate side gains the recurring audit-kind derivation arm - the deciding turn derives the selected task's complete write set (state record path plus the task body's report, row-move, and filing write targets; read-only inputs excluded) and passes each through the existing repeatable --owned-path operand, re-derived fresh at the Step 5 final slot; an incomplete or empty set keeps the existing refusal and pending-dispatch behavior; the consult stays read-only (the children[] registration write is the visibility point, the residual interleaving window recovered by the listing-based lane arms and the same-task in-flight guard); no new gate, refusal class, or schema field - this plan supplies complete inputs to the existing consult; machinery admission for this arm: no new machinery, the admission is this existing entry's own. Delta note (plan docs/history/plans/2026-11-10-admission-staleness-and-continuation-pick.md, Task 1, landed 2026-11-10): the claim-staleness horizon (--stale-after-hours, default binding 8h the deciding turn passes with its derived claim pairs) is a demotion of this blocker's reach, not a new gate: an outstanding run whose claim-live claim has not re-stamped within the horizon (abandoned-run shape: carrier failed or session died) is stale-parked, non-blocking, named in the consult output and recorded as admission-stale-parked:<run>; fresh claims keep the blocking semantics; incident = the abandoned-run starvation shape (an outstanding run whose resume carrier failed and whose claim never re-stamps blocks the lane unboundedly; the completed plan names it), the witnessed 2026-11-10 healthy-pause stand-down being the adjacent case the horizon deliberately leaves to the resume path (the residual row docs/history/backlog/2026-11-10-paused-run-resume-first-duty.md); expected catch = abandoned-run starvation, rare; false-positive cost = a run revived by operator action during its stale window can intersect a candidate admitted meanwhile, policed by the claim protocol's branch-occupant gate and the serialized landing squash (the accepted residual, bounded by revival requiring operator action); review date 2026-12-10; removal criteria = no true catch by the review date removes the horizon flags. Delta note (plan docs/history/plans/2026-11-12-maintenance-indefinite-operation-stop-gaps.md Task 1): the source-less residual narrows again - a claim-live authoring-lane run whose derivation resolves passes its derived admission record (the claim's item row plus the frozen PLAN-PROMPTS entry's Origins rows) with the claim-staleness pair read from the same resolved claim file; the conservative verdict keeps the underivable residual (unresolvable or multi-match claim, unreadable frozen entry); admission record: incident the 2026-11-12 live repro refusing a disjoint 3-path candidate, expected catch every fresh foreign authoring claim blocking disjoint dispatches, false-positive cost unchanged (the conservative verdict stays for genuinely underivable sets), no code change to this script.",
       "paths": [
         "scripts/dispatch_admission.py"
       ],
@@ -1518,7 +1518,7 @@
       "disposition": "keep",
       "id": "script:skill_text_budget.py",
       "kind": "script",
-      "note": "plan docs/history/plans/2026-10-10-maintenance-skill-size-refactor.md (archived at its landing; durable home: docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor.md) Task 2 (machinery audit Part 5 item 2): fleet-wide WARNING-ONLY byte-budget gate over every agents/skills skill file, wired advisory into the pins suite (a breach line never moves the exit code at this landing). Admission test: the 35-commit/one-shrink ratchet and the ~89K-token per-turn doctrine load (the measured analysis docs/maintenance/maintenance-skill-refactor-analysis-2026-10-09.md). Consumer (corrected by the maintenance-doc-hygiene-review plan; the doc-hygiene row's pending rider wiring resolved here): the weekly-skill-review lane (docs/maintenance/recurring-tasks/weekly-skill-review.md) records the --check report in every weekly audit run. Expected catch frequency: one breach line on any landing that grows a file past its cap, plus one recorded report per weekly-skill-review window. False-positive cost: zero blocking (fail-open, bounded by the seeded margin), findings stay review suggestions. Sunset (two-phase, now armed): the growth-telemetry consumer is live, so the removal this entry's removals row names arms when the expanded weekly audit first records the report; six consecutive weekly-skill-review windows with zero reported breaches AND non-increasing fleet byte totals then arm that removal",
+      "note": "plan docs/history/plans/2026-10-10-maintenance-skill-size-refactor.md (archived at its landing; durable home: docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor.md) Task 2 (machinery audit Part 5 item 2): fleet-wide byte-budget gate over every agents/skills skill file, landed warning-only and wired into the pins suite. Promotion (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 1, promoted to blocking 2026-11-10 in the same change that calibrated the caps table): the gate's own reserved criteria fired - the first true catch is the fourteen-refusal single-read inventory in docs/history/backlog/2026-11-07-operative-files-exceed-read-tool-single-read-cap.md (fourteen refused whole-file reads across two days, every one with a window supplied, on exactly the files an unattended session must load) - so the gate is blocking on the single-read ceiling class (a skill file over the calibrated 100000-byte ceiling exits 1 with OUTCOME: fail standalone; the caps table's metadata carries the derivation: the binding witnessed pairing 111845 bytes refused at 27432 tokens, 4.08 bytes per token, inside the 25000-token budget by about 490 tokens at the worst pairing, safety riding the breach row naming any file the tool still refuses), while sub-ceiling ratchet-cap breaches stay advisory growth-watch rows exactly as printed warning-only, the two rolling prompt logs report as informational rows against the Read tool's 262144-byte hard cap (the logs' size governance stays with their existing prune and freeze duties), and the pins-suite arm calls the suite surface (--check --suite: both classes' rows visible, exit 0; a non-zero suite-surface exit stays a wiring failure, never advisory). The blocking breach report is the split set of record (load-on-dispatch, the learn router precedent). Witness ref re-pointed 2026-11-12 (plan docs/history/plans/2026-11-12-maintenance-indefinite-operation-stop-gaps.md Task 4 registry repair) from the deleted origin row to this completed twin. Review date: 2027-02-07 (89 days from promotion). Admission test: the 35-commit/one-shrink ratchet and the ~89K-token per-turn doctrine load (the measured analysis docs/maintenance/maintenance-skill-refactor-analysis-2026-10-09.md). Consumer (corrected by the maintenance-doc-hygiene-review plan; the doc-hygiene row's pending rider wiring resolved here): the weekly-skill-review lane (docs/maintenance/recurring-tasks/weekly-skill-review.md) records the --check report in every weekly audit run. Expected catch frequency: one ceiling-class exit while any over-ceiling skill file exists, one advisory breach line on any landing that grows a file past its cap, plus one recorded report per weekly-skill-review window. False-positive cost: the ceiling class blocks only on measured bytes over the calibrated single-read budget (cleared by the owning split), the advisory and informational classes stay fail-open (bounded by the seeded margin), findings stay review suggestions. Sunset (two-phase, now armed): the growth-telemetry consumer is live, so the removal this entry's removals row names arms when the expanded weekly audit first records the report; six consecutive weekly-skill-review windows with zero reported breaches AND non-increasing fleet byte totals then arm that removal",
       "paths": [
         "scripts/skill_text_budget.py",
         "scripts/skill_text_budget_caps.json"
@@ -1527,8 +1527,8 @@
         "scripts/test_skill_text_budget.py"
       ],
       "witness": {
-        "class": "user-decision",
-        "ref": "docs/history/plans/completed/2026-10-10-maintenance-skill-size-refactor.md"
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-07-operative-file-read-budget-gate.md"
       }
     },
     {
@@ -1669,12 +1669,12 @@
       "disposition": "keep",
       "id": "duty:clocked-order-verify-successor",
       "kind": "protocol",
-      "note": "plan 2026-10-18-clocked-order-successor-verification Task 4: the warning-shaped read-only discharged-without-successor consult leg (the clocked-order-verify-successor operation in scripts/execute_plan_resume_watcher.py; the survey consult arm in agents/skills/maintenance/survey-arms.md citing the overlay stall classification in agents/skills/maintenance/zcode.md Re-arm hygiene). Admission record: concrete incident = docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md with its covered first witness docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the completed-integrity-failure witness for this detection class); expected catch = every launchd-carried turn whose payload session does not record itself, one consult pass per survey turn; false-positive cost = bounded by the successor-clearing predicate (an order stops flagging once both successor pointers move off it or an attributable children[] entry records itself), the flag never blocks a lane; residual masking cost = a recovery that re-points the successor pointers without recording an attributable entry suppresses that order's flag, and the re-point is itself the repair; landing posture = warning-only, promotion rides the launchd promotion review named by docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md, in any case by 2027-01-18, with the removals row's criteria applied at that review.",
+      "note": "plan 2026-10-18-clocked-order-successor-verification Task 4: the warning-shaped read-only discharged-without-successor consult leg (the clocked-order-verify-successor operation in scripts/execute_plan_resume_watcher.py; the survey consult arm in agents/skills/maintenance/survey-arms.md citing the overlay stall classification in agents/skills/maintenance/zcode.md Re-arm hygiene). Admission record: concrete incident = docs/history/plans/completed/2026-10-18-clocked-order-successor-verification.md with its covered first witness docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the completed-integrity-failure witness for this detection class); expected catch = every launchd-carried turn whose payload session does not record itself, one consult pass per survey turn; false-positive cost = bounded by the successor-clearing predicate (an order stops flagging once both successor pointers move off it or an attributable children[] entry records itself), the flag never blocks a lane; residual masking cost = a recovery that re-points the successor pointers without recording an attributable entry suppresses that order's flag, and the re-point is itself the repair; landing posture = warning-only, promotion rides the launchd promotion review named by docs/history/plans/completed/2026-10-17-rearm-dispatch-ladder-incident-guards.md, in any case by 2027-01-18, with the removals row's criteria applied at that review.",
       "paths": [],
       "tests": [],
       "witness": {
         "class": "incident",
-        "ref": "docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md"
+        "ref": "docs/history/plans/completed/2026-10-18-clocked-order-successor-verification.md"
       }
     },
     {
@@ -1807,7 +1807,7 @@
       "disposition": "keep",
       "id": "script:execution_claim.sh",
       "kind": "script",
-      "note": "red test in the suite fails when this script breaks; the write-enforcement claim gateway including the dead-run conversion arm",
+      "note": "red test in the suite fails when this script breaks; the write-enforcement claim gateway including the dead-run conversion arm; dispatch-time claim re-check arm (added 2026-11-12, plan docs/history/plans/2026-11-10-exec-dispatch-claim-recheck.md): admission incident the witnessed 2026-11-09 overlap (evidence re-pointed to the covering plan's docs/history/plans/completed/ twin this plan's completion pass creates); expected catch every dispatch racing a peer carrier for the same task or worktree, reachable as the pick-to-create drift on list surfaces and the launch-boundary verification in adoption and skip geometries; false-positive cost one claim-presence probe per dispatch, a refusal re-routing through the existing candidate walk on list surfaces or stopping single-plan runs under the recorded operator direction; review date 2027-02-10, removal criteria demote the arm to warning-only at review if true catches are zero and false positives dominate",
       "paths": [
         "scripts/execution_claim.sh"
       ],
@@ -2148,7 +2148,251 @@
         "class": "incident",
         "ref": "docs/history/plans/completed/2026-11-05-automation-fire-time-failure-verification.md"
       }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:archive-ceremony-post-landing-report",
+      "kind": "protocol",
+      "note": "Warning-only post-landing archive-ceremony report arm at the owning closeout: the archive-ceremony-report CLI of the lib-level entry point archive_ceremony_post_landing_report in scripts/done_sweep_gates_lib.py, wired at the cmd_finalize tail of scripts/done_run.sh beside the missing-review-record scan, after the done-lock and merge-lock releases, fail-open (a distinct could-not-evaluate line on arm failure, never a pass-shaped line, no exit-code mutation), reporting findings and never refusing (warning-only at this landing). Both files stay owned by their existing rows (script:done_sweep_gates_lib.py, protocol:primary-log-ref-precondition), hence paths empty per the claim-if-concurrent precedent. Machinery admission record (plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md Task 3): concrete incident = the two catches on 2026-11-07 recorded by the origin row docs/history/backlog/2026-11-07-archive-ceremony-exec-review-record-gap.md (two authoring sessions' Phase 0 freeze writes blocked within minutes by the checkout-wide archive-ceremony red left by archive riders fef5ebd2a and 8cdc8ef65, each landed after its own run's closeout sweep had passed); incident link form = no docs/history/backlog/completed/ twin exists for the origin row, so the citation rule's covering-plan form applies: the witness ref cites this covering plan (living and tracked at this landing) and re-points at this plan's archive to docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md (the claim-if-concurrent re-point convention); expected catch frequency = every archive surface the owning run's manifest span carries that fails either gate acceptance route and lands after its closeout sweep (witnessed twice on 2026-11-07, roughly eight hours apart); false-positive cost = one spurious report line at the owning closeout (report-only: no refusal, no exit-code change, adjudicated by the owning run's operator); promotion criteria = a true catch produced by the arm's own re-sweep output with the repair witnessing it, promoted in a separate reviewed change that pairs a demotion (an existing blocker demoted or retired in the same change) and carries explicit operator approval of net growth per the Machinery admission protocol; false-catch ledger duty = each reported finding the primary writer's sweep would not have produced is recorded with its witness as one line appended to this note, this row being the ledger's recording home; review date: 2026-12-07.",
+      "paths": [],
+      "tests": [
+        "scripts/test_done_run_wrapper.py (DoneRunArchiveCeremonyReportArmTest finalize-harness witnesses)",
+        "scripts/test_done_sweep_gates_lib.py (lib-level archive_ceremony_post_landing_report witnesses)",
+        "scripts/test_machinery_inventory.py (RegistryContentWitness admission-content witness)"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:origins-completed-dir-posture",
+      "kind": "script",
+      "note": "warning-only posture branch in check_plan_origins_closed.py plan mode: a row parked under the backlog completed/ directory emits 'archived against the fold-then-delete rule' in strict mode and still exits 0 (corpus warn mode unchanged); concrete incident: 52 parked rows regrew under the charter-empty completed/ directory through gate-accepted landings, documented by the witness plan; expected catch frequency: every parking attempt (the origin row's regrowth commits are the rate evidence); false-positive cost: same-run adjacency (Task 1 lands, Task 2 sweeps immediately after); legacy twins are corpus-mode-only and stay silent; review date: 2027-02-09 (one quarter after the Task 1 landing commit 2026-11-09); promotion: first true catch of a post-alignment parking attempt; no-catch sunset: at the 2027-02-09 review, if no true catch, remove the posture branch and move the row to the removals record",
+      "paths": [],
+      "tests": [
+        "scripts/test_check_plan_origins_closed.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-08-backlog-completed-dir-regrowth.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:codex-quota-wake-lock-fence",
+      "kind": "protocol",
+      "note": "Scoped per-thread then per-wake serialization for quota-wake fire, delivery reconciliation, repair, scheduling, and terminal pruning; prevents the inconsistent fire-versus-repair order identified by plan review r15 F1 (.ai-playbook/reviews/2026-11-09-plan-review-codex-maintenance-quota-reset-wake-p6c46a289-r15.md). Real use case: the primary five-hour Codex quota pause that stopped this maintenance run (plan docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md). Explicit operator-approved scoped blocking exception dated 2026-11-09; no prior runtime lock-race catch is claimed. Expected catch frequency: a same-thread wake operation overlapping fire, reconciliation, repair, schedule, or prune, rare with one maintenance runner and possible during reset recovery. False-positive cost: the contending wake action reports already-claimed and may miss this timed wake; the durable target and payload remain for ordinary maintenance recovery. Review 2026-12-08. Remove only if an equivalent atomic transition eliminates the r15 lock-order race and preserves the one-transition and no-duplicate-queue guarantees. Any later blocker expansion or promotion requires a true observed lock-race catch and separate operator approval.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:codex-quota-wake-target-reservation",
+      "kind": "protocol",
+      "note": "Repository/target/dispatch-kind reservation for quota-wake scheduling, final fire/queue admission, and repair re-arm; prevents the cross-thread duplicate wake described by docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md. Explicit operator-approved scoped blocking exception dated 2026-11-09. Expected catch frequency: uncommon overlap between Codex threads targeting the same pending dispatch during quota-reset recovery, including carrier repair. False-positive cost: one competing same-target schedule, fire, or repair reports already-claimed while the existing receipt resolves; its durable target remains recoverable, and different targets proceed concurrently. Consume-only repair uses thread then wake locks without taking this reservation. Lock order for arming transitions is thread \u2192 target \u2192 wake. Delivery remains bound to the original payload thread. Review 2026-12-09. Remove or narrow only if an equivalent atomic transition or firing/overlap census proves this reservation adds no protection beyond thread and wake locks; retain equivalent same-target reservation while the race remains possible.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:clocked-order-handoff-lease",
+      "kind": "protocol",
+      "note": "60-minute handoff lease over the clocked-order ledger for headless payload handoff: begin-fire in scripts/execute_plan_resume_watcher.py writes handoff_lease_until_epoch = now + 3600 under the existing ledger lock before the ZCode session starts, the due classification skips a live lease and marks the order missed once the lease expires, and the session's discharge refuses a missing or expired lease. Witnessed incident: docs/history/plans/completed/2026-11-08-clocked-order-payload-session-execution.md (ref re-pointed 2026-11-12, plan docs/history/plans/2026-11-12-maintenance-indefinite-operation-stop-gaps.md Task 4 registry repair, from the living plan path; the fire job flipped the ledger to discharged with no executor session, silently losing the mandated execution). Expected activation frequency: each fire whose session prelude overlaps a due scan - one launchd-fired session per order, so the overlap window is the lease minute range itself. False-positive cost: bounded delay - at most a 60-minute delay before missed-order recovery; the expired lease falls through to the existing missed-order reader. Current guard-liveness ratio: 30:48. Enforcement: immediate runtime enforcement at landing by operator direction (2026-11-11); the witnessed order is sufficient evidence, so there is no warning-only phase and no new-catch prerequisite. Review date 2026-12-08 (the separately pre-registered removals row carries the sunset criteria).",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-08-clocked-order-payload-session-execution.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:profile_skill_gate_consult.py",
+      "kind": "script",
+      "note": "consult-path profiling harness for the skill-gate (plan docs/history/plans/completed/2026-11-09-hook-timeout-recurrence-diagnostic.md Task 1): drives and times one gated consult in a populated sandbox, classifies degraded-path samples, and writes the analysis record; measurement tooling that changes no decision byte, refusal class, or pin of the guard; red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/profile_skill_gate_consult.py"
+      ],
+      "tests": [
+        "scripts/test_profile_skill_gate_consult.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_profile_skill_gate_consult.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:run_required_test_suite.py",
+      "kind": "script",
+      "note": "runs the repository's live required-test inventory with bounded children (the mise test:required runner): admits each source suite once, executes complete unittest classes or bounded pytest node groups, and owns the inventory and aggregate timers (plan docs/history/plans/completed/2026-11-08-test-suite-runtime-residual-optimization-path.md Task 4); red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/run_required_test_suite.py"
+      ],
+      "tests": [
+        "scripts/test_required_test_suite.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_required_test_suite.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:carrier-liveness-missed-fire",
+      "kind": "protocol",
+      "note": "plan 2026-11-12-maintenance-indefinite-operation-stop-gaps Task 4: the warning-only read-only missed-fire classifier (the carrier-liveness operation in scripts/execute_plan_runtime.py and its focused cells in scripts/test_execute_plan_resume_watcher.py; origin row docs/history/plans/completed/2026-11-12-maintenance-indefinite-operation-stop-gaps.md). Warning-only wiring: a missed-fire verdict is consumed by a survey turn recording it report-only in the survey turn's notes entry in the scheduler state file (no re-arm, no ledger write) until the promotion review; no liveness pass runs between survey turns yet (the launchd-carrier-side pass is this removals row's 2026-12-12 review's arming decision), so the survey notes entry is the trace of record, retention capped at the newest 30 liveness notes. Admission record: concrete incident = the 2026-11-12 silently skipped 11:00Z carrier fire; expected catch = any host-skipped slot with no live session, one operation pass per launchd-carried run; false-positive cost = a delayed fire misread as missed, bounded by the two-hour grace window and the warning-only period ending at the 2026-12-12 review; landing posture = warning-only, promotion rides the 2026-12-12 review named by this duty's pre-registered removals row. Witness ref re-pointed 2026-11-16 from the fold-deleted origin row (2026-11-12-missed-carrier-fire-liveness-watchdog; cited date-plus-slug, never the living-path literal per the sweep plan's own needle; the row has no completed/ twin, its covering plan's completion pass missed the re-point) to the covering plan's completed twin docs/history/plans/completed/2026-11-12-maintenance-indefinite-operation-stop-gaps.md, mirroring the executed re-point record in the script:skill_text_budget.py row; the removals twin's dead ref and note citation stay owned by the completed twin docs/history/plans/completed/2026-11-14-landing-origin-row-deletion-registry-witness-sweep.md Task 1 (this landing executed the entries-row leg only, the sweep plan now executed, the split recorded in the machinery-inventory-baseline-red-repair prune receipt).",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-12-maintenance-indefinite-operation-stop-gaps.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release_publish_scope_check.sh",
+      "kind": "script",
+      "note": "warning-only publish-scope check (release-rewrite.sh section 4b pipes the publish delta's file list through it before the backup ref): reports tracked-ignored and charter-empty dated-item delta paths under the stderr PUBLISH SCOPE banner, never aborts. Admission fields: incident = the 2026-11-08 published leak pair (tracked-ignored and charter-empty files in the published pile; dossier home docs/history/plans/completed/2026-11-08-release-publish-scope-hygiene-check.md (the completed twin)); expected catch frequency = every release whose pile carries a tracked-ignored or charter-empty file; false-positive cost = one report line per deliberately tracked path while warning-only (deletion events and the charter's own README never match). Review date 2026-12-08.",
+      "paths": [
+        "scripts/release_publish_scope_check.sh"
+      ],
+      "tests": [
+        "scripts/test_release_publish_scope_check.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-08-release-publish-scope-hygiene-check.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "duty:carrier-liveness-zero-turn",
+      "kind": "protocol",
+      "note": "plan 2026-11-13-errored-zero-turn-carrier-recovery Task 3: the warning-only fired-but-zero-turn census arm (the additive zero_turn_census member of the carrier-liveness operation in scripts/execute_plan_runtime.py and its focused cells in scripts/test_execute_plan_resume_watcher.py; origin row docs/history/backlog/2026-11-13-errored-zero-turn-carrier-recovery.md). Warning-only wiring: a survey turn records each returned zero-turn warning row report-only as one carrier-liveness|zero-turn|automation=<id>|session=<id> note in the scheduler state file's notes entry (no re-arm, no ledger write), per the survey-arms Carrier-liveness consult bullet; the zero-turn notes share the newest-30 retention cap with the liveness notes. Admission record: concrete incident = the 2026-11-12/13 errored zero-turn carrier pair (the 02:01 harvest carrier and the 01:51 exec twin stopped with runtime status error and zero content-bearing assistant records); expected catch = every failed automation run inside the 48-hour default lookback (payload key lookback_seconds) whose linked task row reads task_status error and whose session holds no content-bearing assistant record created after the run's created_at, one census pass per carrier-liveness consult; false-positive cost = a delayed-content session misread as zero-turn, bounded by the run-time-bounded witness and the warning-only period ending at the 2026-12-13 review; landing posture = warning-only, promotion rides the third true catch criterion named by this duty's pre-registered removals row (sunset 2026-12-13). Witness re-point duty: the witness ref to docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md re-points to docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md at this plan's completion fold (the duty:archive-ceremony-post-landing-report shape: the completion pass that archives the covering plan and deletes the origin row owns the re-point), mirroring the executed re-point record in the script:skill_text_budget.py row.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:sync-mcp-credentials.sh",
+      "kind": "script",
+      "note": "vendored 2026-11-16 as a repository twin by the deployed-home reconcile (the runtime-scripts-home-reconcile-follow-up landing): MCP OAuth credential sync between Cursor, the mcp-remote CLI, and the user's credentials home; secrets stay in the credentials home (mode 600/700), never in facts.md or committed repos; registered in the machinery-inventory-baseline-red-repair landing per the fresh-regrowth re-derivation arm; the script carries machine-specific personal fragments (username path segment, mcp-remote version filename) that predate registration and are brittle on machine change",
+      "paths": [
+        "scripts/sync-mcp-credentials.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/backlog/EXEC-PROMPTS.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:log-expected-staged-blob-advisory",
+      "kind": "protocol",
+      "note": "the writer-declared expected-bytes advisory in scripts/done_run.sh's commit transaction (plan docs/history/plans/2026-11-17-declared-log-path-foreign-unstaged-byte-carry.md Task 1): a pair-carrying rolling-log closeout whose writer declared each declared owned log path's expected post-edit blob id (--log-expected PATH=BLOB_ID, a full 40-hex sha1 computed over the authored bytes before the commit, never by hashing the file at commit time) gets a post-staging compare of the index's staged blob id against the declaration at the transaction's staged-blob binding point (the authorized-restoration idiom); a mismatch emits one single-line stderr advisory naming the path and both blob ids as a divergence signal (never an authorship finding) and the commit proceeds, a declared path staged as a deletion emits the deletion-shape advisory, and reconciliation runs from the two named ids with the carried foreign bytes' disposition operator-gated under the Write boundary rule's foreign-bytes posture (docs/history/backlog/PLAN-PROMPTS.md Standing rules); a writer declaring no expectation is uncovered by construction and an expectation outside the pair-carrying mode, a path outside the declared --stage set, a malformed blob id, and a duplicate path refuse with commit_die 3. Admission record: incident = commit 985d37130 (2026-11-17) carried a parallel emitter's unstaged investigate entry inside its declared EXEC-PROMPTS path, breaking the attribution chain silently; expected catch = every pair-carrying closeout whose writer declared expectations and whose window carries foreign bytes, zero catch reading as non-adoption, not safety; false-positive cost = one spurious advisory line that never blocks, plus the deterministic writer-error usage refusals at the adoption boundary; landing posture = warning-only, promotion only on a second true catch evidenced by a dated tracked-surface line naming the advisory's two blob ids and the landed commit (falsifiable against the commit's tree), review 2027-02-17; removal criteria pre-registered: the review pass deletes this row when no dated tracked-surface true-catch line exists (zero catch reads as non-adoption), and a second true catch promotes the check to a refusal gate through its own plan with this row's note recording the supersession at that landing. Witness re-point duty: this row's witness ref re-points from the origin backlog row to the covering plan's docs/history/plans/completed/ twin at the origin row's execution fold (the completion pass that folds the origin row owns the re-point), the script:skill_text_budget.py entries-row precedent.",
+      "paths": [],
+      "tests": [
+        "scripts/test_done_run_wrapper.py"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-17-declared-log-path-foreign-unstaged-byte-carry.md"
+      }
+    },
+    {
+      "id": "duty:producer-exec-record-grammar-warning",
+      "kind": "protocol",
+      "note": "Warning-only mint-time exec-record grammar arm at the producer (scripts/produce_exec_review_record.py): a range-mode (code-family) mint whose --artifact-slug exactly equals an executed or active plan's canonical slug under the plans roots prints one stderr warning naming the consuming archive-ceremony gate (scripts/done_sweep_gates_lib.py), the repair producer route, and the exec-series grammar -plan-review-<slug>-exec-r<N>; fail-open probe (an unresolvable plans root warns nothing and never fails the mint), success-path emission only, exit codes and the stdout outcome grammar unchanged, the archive-ceremony gate byte-unchanged. Machinery admission record (plan docs/history/plans/2026-11-13-producer-exec-record-grammar-arm-promotion.md Tasks 1-3): concrete incidents = the 2026-11-07 two-catch checkout-wide archive-ceremony red (two hand-installed marked reconstructions, recorded by the covered sibling row duty:archive-ceremony-post-landing-report) and the 2026-11-12/13 recurrence inside a foreign writer's transaction (recorded by the origin row docs/history/backlog/2026-11-13-producer-exec-record-grammar-arm-promotion.md); expected catch frequency = every executed plan whose exec rounds are code-review-kind mints (the mint class this warning names); false-positive cost = one warning line per matching mint, nothing blocks; promotion criteria = a third witnessed sweep-time discovery whose mint transcript shows this warning promotes the arm to a mint-time refusal for the pinned code-review-kind class; sunset review date 2026-12-13. Both surfaces stay owned by their existing rows (script:produce_exec_review_record.py, duty:archive-ceremony-post-landing-report), hence paths and tests empty per the claim-if-concurrent precedent. Witness re-point duty: the witness ref cites this covering plan's living plans-root path at execution and re-points to this plan's completed/ archive twin at this plan's own landing (the sibling row's re-point convention).",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-13-producer-exec-record-grammar-arm-promotion.md"
+      },
+      "disposition": "keep"
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:known-red-gates-baseline",
+      "kind": "protocol",
+      "note": "plan docs/history/plans/2026-11-13-known-red-gates-consumed-baseline.md Task 3: the consumed known-red gate baseline artifact (baseline-known-red-gates.json in the primary checkout's gitignored maintenance state home, rendered by the scripts/machinery_inventory.py --render-baseline mode from the three producer surfaces and consumed report-only at the triage surfaces: the review-agents worker-startup preamble, the plan-quality-gate pre-review text-policy sweep classification clause, the implementation-loop Step 1.4 and Phase 2 pointers, and the survey-arms regeneration duty; the touched surfaces stay owned by their standing rows per the claim-if-concurrent precedent, hence paths empty). Admission record: concrete incident = the origin row docs/history/backlog/2026-11-10-known-red-gates-retriage-tax.md's five 2026-11-09/10 re-triage instances (panels re-deriving the same pre-existing classification by hand with zero catches); expected catch frequency = every multi-worker round while pins red; false-positive cost = a re-render without review absorbs newly introduced reds as pre-existing until the next review (re-priced under the digest design; the origin's field prices stale-masking); landing posture = report-only consumption, fail-open on an absent, unreadable, unavailable, or stale baseline, no producer exit semantics changed; review date 2026-12-10 (the pre-registered removals row carries the sunset criteria). Witness re-point duty: the witness ref to this plan's living path re-points to the covering plan's completed/ twin docs/history/plans/completed/2026-11-13-known-red-gates-consumed-baseline.md at the plan-family completion fold (the completion pass that archives the covering plan and deletes the origin row owns the re-point), the duty:carrier-liveness-zero-turn precedent.",
+      "paths": [],
+      "tests": [
+        "scripts/test_machinery_inventory.py (RegistryContentWitnessKnownRedBaseline content witness)"
+      ],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-13-known-red-gates-consumed-baseline.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan-readiness-citation-series-arm",
+      "kind": "script",
+      "note": "Warning-only citation-series arm in scripts/plan_readiness.py (mirrors the warning-only entry shape of script:origins-coverage-undercount-audit; the readiness validator path stays owned by script:plan_readiness.py, hence paths empty; the closeout matcher module is frozen input imported read-only, not a path this row owns). The arm prints one stderr warning line per distinct -r*.md series token extracted from the plan's header citation label lines through the closeout matcher's own extraction helpers imported read-only that its series-members matcher expands to zero members under the reviews home, so a citation token the teardown gate cannot resolve is named at fold time instead of at teardown; a -r*.md token quoted in prose never warns (the scan surface equals the consumer's), the home absent or unresolvable stays silent, and the arm emits no series-identity diagnostics. Concrete incident: the 2026-11-14 teardown catch where an authoring fold widened a plan header citation into the literally-escaped wildcard form *plan-review-<slug>*-r*.md, every earlier gate passed it, and the zero-member report at teardown forced a full re-certification round on a one-line citation fix (docs/history/backlog/2026-11-14-fold-gates-citation-consumer-validation.md); expected catch frequency: every fold that reshapes a header citation token into a form the matcher escapes literally; false-positive cost: one warning line per header citation whose series is legitimately absent before the first round (prose tokens never warn); review date: 2027-05-14; promotion: promote to blocking only after a witnessed fold-time true catch, with a priced first-round false-positive-free shape, in a separate reviewed change, per the pre-registered removals row with the same id.",
+      "paths": [],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan-checkpoint-anchor-arm",
+      "kind": "script",
+      "note": "Warning-only checkpoint-anchor arm in scripts/plan_readiness.py (the plan_files_coverage_warnings pattern: the shared check surface both gate paths call; the readiness validator path stays owned by script:plan_readiness.py, hence paths empty), called by the pre-round gate after its probes pass and by the full gate's pass path before its summary and OUTCOME lines; it never changes an exit code and adds no schema field, and every failure path prints zero lines. Arm 1 prints one stderr warning line when git ls-files keyed to the plan operand's own repository root (never the process cwd) misses the plan path, naming the untracked state and the `wip:` checkpoint duty; arm 2 prints one stderr warning line when the tracked plan path has no `wip:`-prefixed touching commit through HEAD and its newest touching commit's subject does not start with `execute-plan: land ` (the missing round-start anchor; the squash absorbs the checkpoint history, so landed plans stay silent), skipped entirely when arm 1 fired; every git plumbing failure stays silent (an unresolved lookup is never a finding). Concrete incident: the witnessed authoring run recorded in docs/history/backlog/2026-11-15-plans-authoring-company-primary-branch-choice-and-checkpoint-gap.md's reproduction evidence (deleted at its covering landing; durable carrier: the covering plan docs/history/plans/2026-11-15-plans-authoring-primary-company-branch-and-checkpoint-enforcement.md and its docs/history/plans/completed/ twin) - the plan stayed untracked through two review rounds and certification while both readiness modes exited 0, the classifier had no start commit so every fold fell back to the unclassified fresh-review path (one extra review round, about 13 minutes), and the round-close seal had no commit to bind to. Expected catch frequency: every primary-placement authoring run that skips the checkpoint duty (witnessed once in this cluster, same duty class as the sibling certification-time checkpoint row). False-positive cost: low (warning-only, no refusal; conversational-draft plans that never reach the gate never trigger the probe; one adjudicated warning line at the readiness boundary). Review date: 2027-02-15. Promotion: promote to blocking only after a witnessed adjudicated-true warning, in a separate reviewed change. No-catch sunset: at the 2027-02-15 review, when the window holds no witnessed adjudicated-true warning, remove only the arm and this row; an adjudicated-true warning is recorded by one line the adjudicating run appends to this note field.",
+      "paths": [],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+{
+    "disposition": "keep",
+    "id": "duty:post-fire-verification-census",
+    "kind": "protocol",
+    "note": "plan 2026-11-14-post-fire-verification-arm-zero-executions.md Task 3: the warning-only post-fire verification census wiring (the census subcommand in scripts/maintenance_fire_outcomes.py and its focused cells in scripts/test_maintenance_fire_outcomes.py; origin row docs/history/backlog/2026-11-14-post-fire-verification-arm-zero-executions.md). Warning-only wiring: each survey turn runs the census (workspace key, then the state and index paths the survey already resolves) and processes every returned member through the arm's existing record-outcome and append-correction writes per the survey-arms Post-fire verification arm bullet; eligible terminal members with zero traces report the arm unwired, report-only in the survey's notes entry, never blocking or arming. Admission record: concrete incident = the origin row's zero-execution window (the arm landed 2026-11-06 and showed zero corpus traces while one 24-hour window carried ten terminal failed-outcome ledger rows, eight of them false failures over landed work); expected catch = every survey turn holding passed-fire one-shot members, one census pass per survey turn; false-positive cost = one unwired line misreporting a wiped corpus, bounded by the unknown degradation (an unsupplied, absent, or unreadable trace surface reports unknown, never a false unwired); landing posture = warning-only, review date 2026-12-05, promotion rides the criteria named by this duty's pre-registered removals row. Witness re-point duty: the witness ref to this plan's living path re-points to the covering plan's completed twin docs/history/plans/completed/2026-11-14-post-fire-verification-arm-zero-executions.md at the completion fold (the duty:archive-ceremony-post-landing-report shape: the completion pass that archives the covering plan and deletes the origin row owns the re-point), mirroring the executed re-point record in the script:skill_text_budget.py row.",
+    "paths": [],
+    "tests": [
+      "scripts/test_maintenance_fire_outcomes.py"
+    ],
+    "witness": {
+      "class": "incident",
+      "ref": "docs/history/plans/completed/2026-11-14-post-fire-verification-arm-zero-executions.md"
     }
+  }
   ],
   "removals": [
     {
@@ -2442,7 +2686,121 @@
         "class": "user-decision",
         "ref": "docs/history/plans/completed/2026-11-04-parallel-execution-landing-serialization-blockers.md"
       }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:origins-completed-dir-parking-channel",
+      "kind": "script",
+      "note": "retired behavior, not a file (the script persists; the retirement is the parking channel): landing covered origin rows under docs/history/backlog/completed/ as a gate-accepted terminal state; fold-then-delete (disposition fold onto the covering plan's completed twin, then row deletion) is the only terminal shape; the origins-gate posture row script:origins-completed-dir-posture guards the posture until its sunset; retired by the witness plan's Tasks 2 through 5 (the sweep emptied the corpus and the licensing texts aligned)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "docs/history/plans/completed/2026-11-08-backlog-completed-dir-regrowth.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:codex-quota-wake-lock-fence",
+      "kind": "protocol",
+      "note": "Pre-registered removal review for the scoped Codex quota-wake thread/wake lock fence: review on 2026-12-08. Remove only if an equivalent atomic transition eliminates plan review r15 F1 lock-order race while retaining one-transition and no-duplicate-queue guarantees. A later blocker expansion or promotion requires a true observed lock-race catch plus separate operator approval. Current quota-wake fence remains explicitly operator-approved until this review criterion is met.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:codex-quota-wake-target-reservation",
+      "kind": "protocol",
+      "note": "Pre-registered removal review for the repository/target/dispatch-kind quota-wake reservation covering scheduling, final fire/queue admission, and repair re-arm: review on 2026-12-09. Remove or narrow only if an equivalent atomic transition or firing/overlap census proves it adds no protection beyond thread and wake locks; preserve equivalent same-target reservation while cross-thread duplicate queueing or re-arm remains possible. Keep delivery bound to the original payload thread and independent targets concurrent.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-08-codex-maintenance-quota-reset-wake.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:clocked-order-handoff-lease",
+      "kind": "protocol",
+      "note": "Pre-registered removals row (plan docs/history/plans/completed/2026-11-08-clocked-order-payload-session-execution.md Task 1; witness re-pointed from the living path, which the plan family's archive moved to completed/): co-removal set is the begin-fire/clear-fire lease operations and the handoff_lease_until_epoch field handling in scripts/execute_plan_resume_watcher.py, the live-lease skip in the due classification, the lease refusal in the discharge-on-fire handler, the wrapper's begin/clear legs in the generated fire command, and both registry rows (this removals row and the admission entry). Sunset 2026-12-08. Removal criteria: remove only after a complete firing census shows no missed-session overlap and an equivalent atomic due transition remains.",
+      "paths": [],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/2026-11-08-clocked-order-payload-session-execution.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:carrier-liveness-missed-fire",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/completed/2026-11-12-maintenance-indefinite-operation-stop-gaps.md, the completed twin; fold-deleted origin row 2026-11-12-missed-carrier-fire-liveness-watchdog, cited date-plus-slug, never the living-path literal; re-pointed 2026-11-19, plan docs/history/plans/2026-11-14-landing-origin-row-deletion-registry-witness-sweep.md (durable home: docs/history/plans/completed/2026-11-14-landing-origin-row-deletion-registry-witness-sweep.md) Task 1) Task 4): co-removal set is the carrier-liveness operation and its dispatcher entry in scripts/execute_plan_runtime.py, its focused cells in scripts/test_execute_plan_resume_watcher.py, and both registry rows (this removals row and the admission entry); sunset = review date 2026-12-12 (the warning-only period ending at the review date): remove the duty at that review if it holds no true catch; promotion criteria = a first true catch (a witnessed host-skipped slot the operation classified and a survey turn recorded report-only) per the Machinery admission protocol, in the same reviewed change that retires this row. Witness re-point duty: this row's plan-path ref re-points to the covering plan's completed/ twin at the plan-family completion fold, the script:skill_text_budget.py entries-row precedent.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-12-maintenance-indefinite-operation-stop-gaps.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "duty:carrier-liveness-zero-turn",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md Task 3): co-removal set is the zero-turn census member of the carrier-liveness operation in scripts/execute_plan_runtime.py, its suite cells (the CarrierLiveness*Test zero_turn cells in scripts/test_execute_plan_resume_watcher.py), and both registry rows (this removals row and the admission entry); sunset 2026-12-13: remove the duty at that review if it holds no true catch; promotion criteria = a third true catch (a witnessed errored zero-turn carrier the census classified and a survey turn recorded report-only) per the Machinery admission protocol, in the same reviewed change that retires this row. Witness re-point duty: this row's plan-path ref re-points to the covering plan's completed/ twin (docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md) at the plan-family completion fold, the script:skill_text_budget.py entries-row precedent.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-13-errored-zero-turn-carrier-recovery.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "protocol:known-red-gates-baseline",
+      "kind": "protocol",
+      "note": "pre-registered removals row (plan docs/history/plans/2026-11-13-known-red-gates-consumed-baseline.md Task 3): co-removal set is the render mode in scripts/machinery_inventory.py, the known-red consumption clauses at the four triage surfaces (agents/skills/review-agents/SKILL.md, agents/skills/plans/plan-quality-gate.md, agents/skills/execute-plan/implementation-loop.md, agents/skills/maintenance/survey-arms.md), and both registry rows (this removals row and the admission entry); sunset 2026-12-10: remove the protocol at that review if the consumed baseline holds no true catch (no witnessed round where a baseline red's pre-existing classification replaced a hand re-triage); promotion criteria = a witnessed first true catch per the Machinery admission protocol, in the same reviewed change that retires this row. Witness re-point duty: this row's plan-path ref re-points to the covering plan's completed/ twin (docs/history/plans/completed/2026-11-13-known-red-gates-consumed-baseline.md) at the plan-family completion fold, the duty:carrier-liveness-zero-turn precedent.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/history/plans/completed/2026-11-13-known-red-gates-consumed-baseline.md"
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:plan-readiness-citation-series-arm",
+      "kind": "script",
+      "note": "Pre-registered removal record for script:plan-readiness-citation-series-arm: no-catch sunset at the 2027-05-14 review - if no true catch has been witnessed by then, remove the arm and its call sites (the pre-round gate print site and the full-gate pass-path print site in scripts/plan_readiness.py) and keep this row as the removal record; promotion criteria: blocking only after a witnessed fold-time true catch, with a priced first-round false-positive-free shape, in a separate reviewed change.",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+{
+    "disposition": "delete",
+    "id": "duty:post-fire-verification-census",
+    "kind": "protocol",
+    "note": "pre-registered removals row (plan docs/history/plans/2026-11-14-post-fire-verification-arm-zero-executions.md Task 3): co-removal set is the census subcommand in scripts/maintenance_fire_outcomes.py, its suite cells (the census-named cells in scripts/test_maintenance_fire_outcomes.py), and both registry rows (this removals row and the admission entry); sunset = review date 2026-12-05 (the warning-only period ending at the review date): remove the duty at that review if it holds no true catch, the review inputs being the exercised-catch record read from the census notes (the one-shot-fire-outcome| outcome notes) and the recorded correction decisions, or the removal takes the pre-registered row; promotion criteria = a first true catch (a passed-fire one-shot member the census enumerated and processed with its outcome note or keyed correction recorded report-only) per the Machinery admission protocol, in the same reviewed change that retires this row. Witness re-point duty: this row's plan-path ref re-points to the covering plan's completed twin (docs/history/plans/completed/2026-11-14-post-fire-verification-arm-zero-executions.md) at the plan-family completion fold, the duty:archive-ceremony-post-landing-report shape, the script:skill_text_budget.py entries-row precedent.",
+    "paths": [],
+    "tests": [],
+    "witness": {
+      "class": "user-decision",
+      "ref": "docs/history/plans/completed/2026-11-14-post-fire-verification-arm-zero-executions.md"
     }
+  }
   ],
   "schema_version": 1
 }

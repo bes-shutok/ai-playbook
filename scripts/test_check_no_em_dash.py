@@ -148,3 +148,54 @@ class UsageTextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageErrorExitTest(unittest.TestCase):
+    """Every usage error exits 2 with usage on stderr; only a real scan exits 0.
+
+    Regression class: a bare invocation or a missing-operand invocation used
+    to exit 0, so a mis-invocation read as a passed gate (witnessed 2026-11-19,
+    four sessions in one window; origin row
+    docs/history/backlog/2026-11-19-em-dash-gate-usage-error-exit-zero.md).
+    """
+
+    def run_gate(self, *args):
+        return subprocess.run(
+            ["bash", str(SCRIPT), *args],
+            cwd=tempfile.gettempdir(),
+            env=_HERMETIC_ENV,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_bare_invocation_exits_two_with_usage_on_stderr(self):
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing subcommand", result.stderr)
+        self.assertIn("Usage:", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_added_lines_without_operands_exits_two(self):
+        result = self.run_gate("added-lines")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires at least one path operand", result.stderr)
+        self.assertIn("Usage:", result.stderr)
+
+    def test_file_mode_unreadable_operand_exits_two(self):
+        result = self.run_gate("file", "definitely-missing-file.md")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not a readable file", result.stderr)
+
+    def test_help_still_exits_zero(self):
+        result = self.run_gate("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Usage:", result.stdout)
+
+    def test_real_scan_still_exits_zero(self):
+        # The silent-pass fix must not turn a scan that actually ran over a
+        # real tracked input into a failure: an em-dash-free file exits 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            clean = Path(tmp) / "clean.md"
+            clean.write_text("plain text, no wide dashes\n", encoding="utf-8")
+            result = self.run_gate("file", str(clean))
+            self.assertEqual(result.returncode, 0)

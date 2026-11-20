@@ -30,3 +30,8 @@ Throughput
 - Source: `~/.ai-playbook/review-telemetry/reports/review-metrics-20261106T212251.md`; 988 loops, 969 sidecars in the legacy bucket, 21 cap closures (0.02 share).
 - Ready rate per round: r1 0.20, r2 0.25, r3 0.23, r4 0.18, r5 0.14, decaying to 0.01 by r20. Findings fell from 5,205 at r1 to 27 at r20.
 - Complexity bands: small 46 loops (cap share 0.00, r1 ready 0.46); medium 227 (0.01, 0.26); large 371 (0.05, 0.14); unknown 344 (0.00, 0.18; includes legacy bucket).
+
+
+## Run 20261119T112325Z (rider 2026-11-19; project ai-playbook)
+
+Report: review-metrics-20261119T112325Z.md under the telemetry reports home. Loops 1127; legacy bucket 993; malformed-findings skips 25. Findings-per-round decay: r1 6016 findings (1859 blocking, ready rate 0.19) decaying to r6 537 (150 blocking, 0.08); ready-rate per round peaks r2 0.25; cap-exhaustion share carried in the report's per-band tables.

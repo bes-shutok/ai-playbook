@@ -190,3 +190,8 @@ Files:
 - testing#needle-unreachable-from-prescribed-text (F3, Low): the depth-2 exactness claim is scoped to the closure-gap class with the co-occurring probe failure named. disposition: folded
 - docs#receipt-interpreter-floor-remedy-landed-form (F6, Low): the receipt names the landed remedy (entry plus park-for-operator, interpreter recorded in the summary line) instead of the PATH-fix wording. disposition: folded
 - testing#ghost-arm-pin-wording (F7, Low): the re-pinned ghost-entry arm asserts the canonical-missing classification the probe cannot fire for a home-absent entry; the plan's RED bullet wording is superseded. disposition: folded
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-18-review-runtime-sibling-module-deployment.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

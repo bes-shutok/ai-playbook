@@ -120,3 +120,9 @@ Files:
 ## Residual findings (cap closure)
 
 - implementation#incomplete-state-transition: folded. The unsupported no-plan lifecycle is outside this plan's scope.
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-08-plan-simplicity-challenge.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-20-maintenance-plan-authoring-authorization-conflict.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

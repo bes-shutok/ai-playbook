@@ -1,5 +1,7 @@
 # Backlog: coverage gate directory operand inside the active surface still self-conflicts
 
+Cluster: docs/history/backlog/2026-11-03-lesson-372-primary-path-remedy-superseded.md; docs/history/backlog/2026-11-03-twin-plan-note-resolution-site-drift.md (same coverage-gate twin exemption change; these rows cover its active-directory resolution and post-landing documentation)
+
 Status: open
 Workflow: backlog
 Priority: low

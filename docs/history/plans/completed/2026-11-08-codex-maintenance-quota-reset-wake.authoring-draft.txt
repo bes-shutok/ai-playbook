@@ -1,0 +1,205 @@
+# Plan: resume Codex maintenance after its primary quota reset
+
+Backlog origin: docs/history/backlog/2026-11-01-codex-maintenance-quota-reset-wake.md
+Required agent type: codex
+Driving force: automation
+Plan review record: the staging series .ai-playbook/reviews/2026-11-08-plan-review-codex-maintenance-quota-reset-wake-r*.md (the highest rN for this source-plan path is authoritative, including deferred residuals)
+Execution budget: 3.5h total, largest task 1.0h
+Executed: no
+Authoring claim: 2026-11-01-codex-maintenance-quota-reset-wake.md (session 01a1ba9e-a35d-7ed3-959b-9a4dd7025147)
+
+## Terms
+
+- **Primary quota wall**: the Codex primary usage window's pause decision and reported `reset_at` timestamp.
+- **Reset wake**: a verified macOS `launchd` one-shot that queues a continuation message to the same Codex thread after the primary reset.
+- **Resume payload**: the durable target, phase, repository, thread identity, and reset timestamp needed to resume the interrupted maintenance work safely.
+- **Queue resume**: the installed Codex CLI operation `codex queue --thread <id> --message <text> --resume`.
+- **Scheduled minute**: the first whole-minute epoch at or after `reset_at + 600` seconds whose local month/day/hour/minute fields identify exactly one launchd occurrence at that epoch; when the minute is repeated during a daylight-saving fold, skip the repeated interval to the first unique minute after it.
+- **Armed**: the one-shot's plist is loaded successfully and its payload is readable from the recorded location.
+- **Runtime binding**: the absolute Codex entry point, any absolute interpreter required by its `/usr/bin/env` shebang, and `CODEX_HOME` captured from the scheduling maintenance process, validated at fire time, and used by the launchd child.
+- **Active fire lock**: an exclusive per-wake lock acquired atomically so one process at a time can queue or update the receipt; remove it only after persisting the outcome.
+- **Fire receipt**: a durable record keyed by payload digest and original scheduled epoch, containing attempt count, retry fire epoch, wake token, and terminal or unresolved disposition; preserve it after releasing the active lock. It owns wake identity across a retry.
+- **Carrier fired marker**: the launchd sentinel companion recording only that this carrier instance was consumed; it may contain a timestamp and does not own payload identity.
+- **Wake token**: the stable `<payload-sha256>:<scheduled-epoch>` identifier included in the queued continuation and fire receipt, used to prove that the resumed thread received this exact wake.
+- **Verified consume**: terminal carrier handling that atomically writes and reads back the fired marker before unlinking the sentinel and verifying its absence; any failed step is a refusal, never a consumed/scheduled success.
+- **Carrier consume failure**: durable receipt state preserving the prior queue outcome and pending target when marker write/read-back, sentinel unlink/read-back, or spent-pair restoration fails; repair it before any new dispatch or wake arm.
+
+## Why
+
+The shared maintenance policy preserves the selected target at a primary quota pause, but Codex currently forbids follow-up for quota pauses and has no verified timed wake in its runtime adapter. The installed Codex CLI provides a same-thread queue-and-resume operation, and the host's existing launchd scheduler can time that operation. Without connecting them, maintenance stops at the five-hour wall and waits for a later manual or daily invocation.
+
+## Gist & Examples
+
+**TLDR:** at a genuine Codex primary quota pause, preserve the exact maintenance target and phase and arm a verified launchd one-shot for the first minute at or after `reset_at + 10 minutes`; the one-shot queues a continuation to the same thread, which re-probes quota and resumes through the normal guards.
+
+**Before:** a Codex maintenance run reaches its five-hour pause, writes its pending target, and stops. The Codex adapter explicitly says not to queue a continuation for quota pauses, so the run waits for a user or the next daily maintenance carrier.
+
+**After:** the quota pause creates a payload bound to `CODEX_THREAD_ID`, repository root, target, phase, and primary reset epoch. The launchd calendar entry names the scheduled local date and minute, rounded up so it cannot fire before `reset_at + 10 minutes`, and its loaded label and plist fields are verified. On fire, it queues `codex queue --resume` to that same thread. The resumed session verifies the payload identity, reads the current scheduler and run state, probes quota again, and continues only when the normal guards pass.
+
+**Edge cases:** if launchd cannot arm or verify the job, retain the target and payload as a visible pending resume and report the exact failed step; do not claim continuation is scheduled. If the thread is already active, the queued message is handled after its current turn. If `codex queue --resume` exits zero but reports that resume failed, record that the message was queued while automatic resume remains unconfirmed, preserve the target, and do not enqueue a duplicate; the next capable turn reconciles the existing queued message. A fire before its recorded scheduled minute never queues work; it preserves the payload and arms the next eligible minute. If the quota reset moved or the probe still pauses, preserve the target and arm one replacement from the fresh primary reset. If launchd fires early, retain the payload and re-arm no earlier than its recorded target. If it fires late and `now_epoch <= scheduled_epoch + 86400`, re-read current state and quota: queue only when the same target remains pending and every normal guard admits it; if quota still pauses or the primary reset moved, preserve the target and arm exactly one replacement from the fresh reset. When `now_epoch > scheduled_epoch + 86400`, stand down without queueing and report the expired wake, leaving the target pending for ordinary maintenance selection. An exclusive active fire lock serializes queue attempts, while the durable receipt binds the payload digest and scheduled epoch and remains after the lock is released; concurrent launches that cannot acquire the lock stand down without queueing. The durable receipt allows the initial attempt plus exactly one later retry after a definitive refusal. A first definitive refusal increments its attempt count, persists `retry-available` and `retry_fire_epoch`, consumes the spent sentinel/fired-marker pair, and schedules one verified retry using the same immutable payload and receipt; the original wake token and scheduled epoch do not change. Set `retry_fire_epoch` to the first uniquely representable whole-minute epoch at or after `now_epoch + 60`; it must also be `<= original_scheduled_epoch + 86400`. If no such minute exists, record `retry-expired`, consume the carrier, preserve the target, and do not retry. Otherwise, if this re-arm fails, restore the spent pair, record `retry-arm-failed`, preserve the target, and report no retry was scheduled. At retry fire, recheck actual `now_epoch` against the immutable original deadline `original_scheduled_epoch + 86400`; the exact endpoint is admitted, while the first second after it records `retry-expired`, consumes the carrier, preserves the target, and does not queue. A second definitive refusal records `retry-exhausted` and writes the fired marker. A confirmed enqueue or failed-resume warning records `queued` or `queued-but-unconfirmed`, then consumes the sentinel and writes the carrier fired marker before releasing the active lock; retain the queued-but-unconfirmed receipt and pending target for same-thread reconciliation. Before queueing, persist `attempting` with the stable wake token. An interrupted or ambiguous attempt remains `unknown`; a later resumed session records `delivered` only when that exact token is present in its continuation. If no acceptance or definite refusal can be established, persist `operator-required`, keep the target pending, consume the sentinel and write the fired marker, and do not retry. Stop, empty queue, or changed target records `suppressed` and consumes the sentinel/writes the fired marker, so later fires stand down. A new quota-wake arm first boots out the old loaded job, then removes the spent sentinel and verifies absence while the fired marker still suppresses fire; it removes and verifies the marker only after the sentinel step succeeds, then loads and verifies the new job. Any failed cleanup, bootstrap, or read-back refuses the arm and restores the spent pair. If consume or restoration fails, persist `carrier-consume-failed` with the prior queue outcome and pending target; every fire and maintenance dispatch or new wake arm must stand down until a capable maintenance invocation repairs and verifies the pair. Preserve queue outcome, target, attempt count, retry epoch, payload digest, original epoch, and wake token through repair. A re-fire during unresolved `carrier-consume-failed` stands down. A `retry-available` receipt admits exactly one matching verified carrier fire at `retry_fire_epoch`; stale, early, or duplicate fires stand down without changing attempt count or receipt identity. If repair still fails, persist/report `operator-required`, preserve the target and prior queue outcome, and do not queue or arm. The durable receipt, not the timestamp/presence-only fired marker, binds the payload identity and original scheduled epoch. The marker and sentinel pair identify only the spent carrier instance; repeated same-day delivery or next-year calendar recurrence stands down while that marker exists. A missing, malformed, or mismatched payload refuses before queueing. Weekly secondary reset data never creates a wake. An explicit stop, empty queue, or safety hold suppresses the wake.
+
+## Outcome
+
+Codex maintenance resumes after a primary five-hour quota pause without requiring another user turn, while retaining the selected work and all ordinary guard checks.
+
+- The reset wake is armed only from the Codex primary binding's verified `reset_at` and pause decision, never from weekly secondary quota data.
+- The launchd payload is bound to one repository, Codex thread, target, phase, reset epoch, absolute Codex entry point and required interpreter, and `CODEX_HOME`; the child invokes the captured runtime directly in its minimal environment and queueing uses argv-safe arguments. An exclusive active lock serializes fire attempts; its durable receipt owns payload-digest/original-epoch identity and allows one retry after a definitive refusal by re-arming the same carrier for a verified `retry_fire_epoch`. It records `retry-exhausted` after a second refusal. The separate carrier fired marker records only consumption; the durable receipt owns payload identity. Marker persistence is verified before sentinel removal, and spent-pair cleanup is verified before bootstrap; filesystem failure persists `carrier-consume-failed` and refuses the transition until a later maintenance invocation repairs it. Confirmed, queued-unconfirmed, unknown, exhausted, and suppressed terminal outcomes consume the sentinel and write that marker; accepted messages reconcile using the stable wake token, and unresolved outcomes park as `operator-required`.
+- A retry fire rechecks the immutable original `scheduled_epoch + 86400` deadline at its actual fire time; the exact endpoint queues and the first second beyond it expires while retaining the target.
+- `carrier-consume-failed` preserves the prior queue outcome and target, blocks every fire, dispatch and new arm until repair, and suppresses duplicate queueing after confirmed enqueue; repeated repair failure records `operator-required` without queueing or arming.
+- The payload thread id must equal the valid `CODEX_THREAD_ID` captured from the Codex maintenance process; absent, malformed, or foreign ids refuse before any launchd write or queue invocation.
+- The launchd plist names the target local month, day, hour, and minute, rounded up from `reset_at + 600`; transition-aware conversion proves that the next launchd occurrence matches that epoch, skipping repeated daylight-saving minutes. Fire-time checks admit `now_epoch <= scheduled_epoch + 86400` and suppress later, duplicate, or next-year recurrence delivery using the durable fired marker.
+- The resume first re-reads disk state and runs a fresh primary quota probe; it continues only when the normal maintenance selection and guards still admit the target.
+- A queue command's zero exit plus a failed-resume warning is recorded as queued-but-unconfirmed; it preserves the pending target and never claims that the thread resumed or retries the enqueue blindly.
+- An explicit stop, empty eligible queue, active user-only safety hold, or changed target prevents queued work from executing; the wake is consumed with a reportable disposition.
+- An arm refusal or ambiguous result leaves the target and payload recoverable and reports that no wake was arranged.
+
+**Gate delta:** add one Codex reset-wake operation that reuses the existing user launchd one-shot carrier and the existing scheduler-state `pending_dispatch` / `children[]` surfaces. No daemon, host cron, new scheduler-state field, lane-blocking gate, validator, or repository-wide lock is added; one exclusive per-wake claim receipt under the existing runtime home serializes concurrent fire attempts. The carrier is armed only for the already-witnessed primary quota pause class (backlog origin above); expected frequency is at most once per primary five-hour wall interruption. The false-positive cost is a queued same-thread message after an explicit stop or target completion; the fire-time payload and state re-check suppress execution. Review on 2026-12-08; remove the carrier arm if Codex supplies an equivalent timed same-thread resume primitive or if a month of recorded primary pauses shows no successful wake. The existing “do not follow up for quota pauses” sentence is removed in the same change and replaced by this exact reset-wake contract.
+
+## Assumptions
+
+- assume the existing launchd one-shot and sentinel code in `scripts/execute_plan_resume_watcher.py` can be reused for the timer and identity fence; basis: its `LaunchdOneShotScheduler.schedule` and fired-marker contract.
+- assume the installed Codex CLI queue command can target this same thread and request a resume; basis: `codex queue --help` documents `--thread`, `--message`, and `--resume`, while the official scheduled-automation API is not exposed by the local app-server schema.
+- assume `CODEX_THREAD_ID` is the Codex runtime's current-thread identity at the pause boundary; basis: it is present in this runtime's process environment and matches the active Codex session id.
+
+Decision points requiring a grill: none remain; the operator explicitly requires a same-thread wake immediately after the five-hour reset, and the local CLI exposes a queue-and-resume operation.
+
+## Standing constraints
+
+- Never infer the reset from a quota label, a secondary window, conversation text, or another runtime's reading.
+- Never queue a different thread or reconstruct target/phase from a stale transcript when the payload is missing or mismatched.
+- Never report a wake as armed until launchd's loaded-job echo and the exact payload identity both verify.
+- Atomically acquire the per-wake active lock and persist the payload-digest/epoch receipt before queueing. A competing fire that cannot acquire the lock reports already-claimed and does not enqueue. Persist each result before releasing the lock; keep the receipt after release. A classified definitive refusal alone makes one retry available. Set the retry to the first uniquely representable local minute at or after `now_epoch + 60` and admit it only when it is no later than `original_scheduled_epoch + 86400`; otherwise record `retry-expired`, consume the carrier, and preserve the target. Choose `retry_fire_epoch` as the first uniquely representable whole-minute epoch at or after `now_epoch + 60` and require it to be `<= original_scheduled_epoch + 86400`; otherwise record `retry-expired` and consume the carrier. To re-arm, boot out the spent job, clear the sentinel then fired marker with read-back verification, and load the same immutable payload/receipt at the retry epoch. If any cleanup or load fails, restore the spent pair, record `retry-arm-failed`, preserve the target, and report no retry is scheduled. If consume or restoration fails, persist `carrier-consume-failed`; the next capable maintenance invocation repairs the pair before dispatch or re-arming, and parks as `operator-required` if repair still fails.
+- At fire time, re-derive every target, path, thread id, and reset timestamp from the durable payload and current disk state.
+- A definite queue refusal releases only its owned claim and keeps the pending work visible for the bounded retry path; an ambiguous outcome retains an unknown-outcome claim for reconciliation and never blindly re-enqueues. A late fire past the 24-hour delivery window records an expired-wake disposition and leaves the target for ordinary selection.
+- A queue success accompanied by the CLI's failed-resume warning keeps the target pending with a queued-but-unconfirmed disposition; later recovery reconciles the existing message before any retry can enqueue again.
+- Never target a thread id that differs from `CODEX_THREAD_ID` at schedule time.
+- Never arm a calendar entry without the exact target month, day, hour, and minute; refuse an intended minute already in the past and verify the actual launchd job is loaded under the expected label. Resolve an absolute executable with `shutil.which("codex")` and a valid `CODEX_HOME` at schedule time; if the executable has an `/usr/bin/env <interpreter>` shebang, resolve and capture the absolute interpreter and entry point and invoke the interpreter directly, never relying on launchd PATH lookup. Refuse before launchd writes if any required path is absent, non-absolute, unreadable, or unusable, and store them only in the identity-bound runtime payload.
+- At fire time, invoke the captured absolute interpreter with the captured CLI entry point (or invoke a directly executable binary) and `CODEX_HOME` in the launchd child's minimal environment; verify they still identify a runnable CLI and the same Codex store. Compare the current epoch with the recorded scheduled minute: an early fire preserves the payload and arms a later eligible minute; a late fire queues only when `now_epoch <= scheduled_epoch + 86400` and after fresh state, quota, and stop checks; the exact endpoint is admitted, while the first second beyond it and an already-consumed fire report and stand down without clearing the target.
+
+## Evaluation Criteria
+
+**Quality dimensions:**
+
+- **Correctness:** only a primary quota pause creates a wake, and the fire-time path binds to the same thread, target, phase, repository, and reset epoch.
+- **Completeness:** the Codex adapter's prohibition is replaced, quota-pause routing arms the carrier, and the resume path re-probes and returns to normal maintenance guards.
+- **Recovery:** launchd, payload-read, queue, thread, and quota failures retain enough durable state for a later capable session to continue.
+- **Economy:** reuse the existing launchd identity, one-shot, and sentinel conventions; remove the conflicting quota-follow-up prohibition; add no new state field or gate.
+
+**Done when:**
+
+- Focused tests prove the payload thread matches `CODEX_THREAD_ID`, a valid foreign thread id refuses before writes, and the same-thread command is safely constructed.
+- Focused tests prove launchd uses the first whole minute at or after reset plus ten minutes, verifies its loaded label and exact date/time plist fields, and refuses a missed schedule slot.
+- Focused tests run the actual Codex wrapper under a minimal launchd environment, prove the captured absolute interpreter and entry point invoke it against the captured `CODEX_HOME`, and refuse missing, invalid, or changed runtime bindings before queueing.
+- DST transition scenarios prove the next launchd occurrence maps to the scheduled epoch; repeated local minutes are skipped to the first unique minute after the fold, while spring-forward and timezone-change cases preserve the no-early-fire and 24-hour late-delivery rules.
+- Scenario tests prove an early fire re-arms, a late fire within 24 hours queues only after fresh guards pass, the exact `scheduled_epoch + 86400` endpoint is admitted, the first second beyond it expires while leaving the target pending, and duplicate or next-year recurrence cannot enqueue twice.
+- Scenario tests prove primary pause schedules at the rounded minute, secondary-only readings do not schedule, and a fire re-probes and respects explicit stop / empty target / changed target.
+- The Codex maintenance adapter and shared quota-pause routing document the new behavior without contradicting D-17 or the runtime inventory.
+- Existing watcher and maintenance continuation suites pass, along with the skill hygiene and maintenance pin checks required for touched files.
+
+**Ship when:** the operator keeps the Codex host logged in and available at the scheduled minute [class: OPERATIONS_FOLLOW_UP; owner: operator; closure evidence: the loaded-job verification and recorded fire disposition]. The repository implementation can be complete without the host being continuously online.
+
+## Review Scope
+
+**Production code:**
+
+- `scripts/execute_plan_resume_watcher.py`
+- `scripts/execute_plan_runtime.py`
+- `agents/skills/maintenance/codex.md`
+- `agents/skills/maintenance/quota-policy.md`
+- `agents/skills/maintenance/state-file.md`
+- `agents/skills/maintenance/scheduling.md`
+- `scripts/check_maintenance_pins.sh`
+
+**Tests:**
+
+- `scripts/test_execute_plan_resume_watcher.py`
+- `scripts/test_maintenance_codex_quota_wake.py` *(new)*
+
+**Explicit must-fix:**
+
+- A false positive wake for secondary quota, a stale reset, a foreign thread, or a completed target.
+- A success report without launchd loaded-job verification or without a readable payload.
+- A payload or command path that allows shell interpretation of target text.
+- Any changed path that clears or overwrites pending maintenance work after an arm or queue failure.
+- Any added blocker or state field not named and justified in the Gate delta.
+
+**Plan-related extension:** include a finding when it is required to implement a task, close its wiring, or preserve a contract changed by this plan; otherwise defer it.
+
+## Validation Commands
+
+```bash
+PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m pytest scripts/test_execute_plan_resume_watcher.py -q
+PATH="$HOME/.agents/venvs/ai-playbook-test/bin:$PATH" python3 -m pytest scripts/test_maintenance_codex_quota_wake.py -q
+bash scripts/check_maintenance_pins.sh
+bash scripts/scan-public-hygiene.sh
+```
+
+### Task 1: bind a date-specific launchd wake to the active Codex thread
+
+Files:
+- `scripts/execute_plan_resume_watcher.py`
+- `scripts/execute_plan_runtime.py`
+- `scripts/test_execute_plan_resume_watcher.py`
+
+- [ ] Add failing tests refusing missing or malformed thread id, repo root, target, phase, or primary reset epoch before launchd writes or bootstrap [class: REPOSITORY_TEST]
+- [ ] Add failing tests refusing a valid UUID that differs from `CODEX_THREAD_ID`, and proving the matching runtime thread id is accepted before any launchd write [class: REPOSITORY_TEST]
+- [ ] Add failing tests proving launchd bootstrap, loaded-label verification, exact month/day/hour/minute plist read-back, and a transition-aware next-occurrence epoch match are all required before reporting `armed` [class: REPOSITORY_TEST]
+- [ ] Add failing tests requiring an absolute runnable Codex executable, any absolute interpreter and entry point required by an env shebang, and valid `CODEX_HOME` in the captured payload; refuse missing or invalid bindings before launchd writes [class: REPOSITORY_TEST]
+- [ ] Add transition-aware calendar tests proving the next launchd occurrence equals the scheduled epoch, skipping repeated daylight-saving minutes to the first unique minute after the fold and refusing a slot whose occurrence cannot be proven [class: REPOSITORY_TEST]
+- [ ] Add a scheduler operation that selects the first launchd-representable whole minute at or after `reset_at + 600`, proves the local calendar fields uniquely map to that epoch, writes an identity-bound one-shot payload under the existing runtime state home, refuses an already-passed target minute, and verifies a loaded date-specific launchd job [class: IMPLEMENTATION_REQUIRED]
+- [ ] Run the focused arming tests red before implementation and green after implementation [class: REPOSITORY_TEST]
+
+### Task 2: queue and reconcile the same-thread wake at fire time
+
+Files:
+- `scripts/execute_plan_resume_watcher.py`
+- `scripts/execute_plan_runtime.py`
+- `scripts/test_execute_plan_resume_watcher.py`
+
+- [ ] Add tests proving an early fire preserves the payload and pending target and re-arms no earlier than its recorded target, a late fire within 24 hours uses fresh state/quota guards, and the exact `scheduled_epoch + 86400` endpoint is admitted, the first second beyond it and any next-year recurrence report stand-down while retaining the pending target [class: REPOSITORY_TEST]
+- [ ] Add synchronized concurrent fire tests proving the atomic per-wake lock allows at most one queue call and a second fire reports already-claimed [class: REPOSITORY_TEST]
+- [ ] Fresh process reloads repaired receipt; preserves attempt_count, retry_fire_epoch, payload digest, original epoch, wake token; only attempt two queues, never three [class: REPOSITORY_TEST]
+- [ ] Add tests proving retry is the first uniquely representable minute at or after `now_epoch + 60`, the exact original deadline is admitted, retry after the deadline records retry-expired, and no retry minute within the window also records retry-expired [class: REPOSITORY_TEST]
+- [ ] Test retry fire at original deadline: equality queues; +1 second expires, target stays pending [class: REPOSITORY_TEST]
+- [ ] Test original/early/duplicate fires stand down without receipt changes; only verified `retry_fire_epoch` queues attempt two [class: REPOSITORY_TEST]
+- [ ] Test that carrier repair preserves the queue outcome and target, precedes dispatch and new arms, suppresses duplicate enqueue after confirmed queue, and parks operator-required after repeated failure [class: REPOSITORY_TEST]
+- [ ] Add tests proving queued and queued-but-unconfirmed outcomes consume the sentinel/write the fired marker, and a fresh process marks delivery only when the stable wake token is present in the resumed continuation; otherwise it records operator-required and never retries [class: REPOSITORY_TEST]
+- [ ] Add failure-injection tests proving marker-write and marker-read-back mismatch keep the sentinel and refuse consumption, sentinel-unlink failure retains a suppressing marker and refuses success, and spent-pair cleanup failure prevents launchd bootstrap or armed status [class: REPOSITORY_TEST]
+- [ ] Add tests proving explicit stop, empty queue, changed target, retry exhaustion, and operator-required outcomes persist their receipt and consume the sentinel/write the fired marker, so repeated fires do not queue [class: REPOSITORY_TEST]
+- [ ] Add a test proving the minimal launchd environment invokes the captured absolute interpreter and Codex entry point against the captured `CODEX_HOME` for the same thread store [class: REPOSITORY_TEST]
+- [ ] Add a test proving a changed primary reset produces one replacement wake and never queues the stale target [class: REPOSITORY_TEST]
+- [ ] Add a test proving exit zero with Codex's failed-resume warning records queued-but-unconfirmed, retains the target, and does not enqueue the same message a second time [class: REPOSITORY_TEST]
+- [ ] Include the stable payload-digest and scheduled-epoch wake token in the queued continuation and fire receipt [class: IMPLEMENTATION_REQUIRED]
+- [ ] Verify the recorded payload digest, captured executable, interpreter, entry point, `CODEX_HOME`, and payload thread id against the arm receipt before queueing [class: IMPLEMENTATION_REQUIRED]
+- [ ] Acquire the exclusive per-wake lock, persist `attempting`, and recheck primary quota, stop, queue, target, and the inclusive 24-hour window immediately before queueing [class: IMPLEMENTATION_REQUIRED]
+- [ ] Durably record confirmed, definitive-refusal, or unknown queue outcome in the receipt; confirmed/unknown/exhausted outcomes consume the sentinel/write the fired marker, while a first refusal schedules one verified replacement fire [class: IMPLEMENTATION_REQUIRED]
+- [ ] Preserve the pending target and payload on refusal; after queue success or a failed-resume warning, record queued/queued-but-unconfirmed and run verified consume before releasing the active lock; reconcile the existing message before any new quota wake [class: IMPLEMENTATION_REQUIRED]
+- [ ] Run the focused fire tests red before implementation and green after implementation [class: REPOSITORY_TEST]
+
+### Task 3: route the Codex primary quota pause through the verified wake
+
+Files:
+- `agents/skills/maintenance/codex.md`
+- `agents/skills/maintenance/quota-policy.md`
+- `agents/skills/maintenance/state-file.md`
+- `agents/skills/maintenance/scheduling.md`
+- `scripts/execute_plan_runtime.py`
+- `scripts/test_maintenance_codex_quota_wake.py` *(new)*
+- `scripts/check_maintenance_pins.sh`
+
+- [ ] Add a scenario test proving a Codex primary pause records the exact target and phase, schedules at the first minute at or after `reset_at + 600`, and verifies the launchd receipt before claiming continuation [class: REPOSITORY_TEST]
+- [ ] Add scenario tests proving secondary-only quota, explicit stop, empty target, and stale target do not queue work, and a changed reset retains the target and arms one replacement wake from the fresh primary reset [class: REPOSITORY_TEST]
+- [ ] Replace the Codex adapter's blanket quota-pause no-follow-up clause with the reset-wake protocol; retain its existing context-only continuation and three-cap behavior [class: IMPLEMENTATION_REQUIRED]
+- [ ] Route a genuine Codex primary pause to the new schedule operation, keeping the shared quota pause and `pending_dispatch` semantics intact and using only existing scheduler-state fields [class: IMPLEMENTATION_REQUIRED]
+- [ ] Add focused maintenance pins for the new Codex primary-pause route and the retained non-quota exclusions [class: REPOSITORY_TEST]
+- [ ] Run both focused suites and the maintenance pins [class: REPOSITORY_TEST]
+
+### Task 4: certify the timed-resume and failure behavior
+
+Files:
+- `scripts/test_execute_plan_resume_watcher.py`
+- touched maintenance modules and scripts
+
+- [ ] Run every Validation Command and record its exit status and collected test count [class: REPOSITORY_TEST]
+- [ ] Verify the payload's thread, target, repository, phase, reset epoch, executable, and `CODEX_HOME` are re-derived from disk immediately before each mutating operation [class: IMPLEMENTATION_REQUIRED]
+- [ ] Verify there is no new scheduler-state field, lane-blocking gate, daemon, or host cron; the fire claim is an identity-bound runtime receipt only and the quota-pause failure path preserves the pending target [class: IMPLEMENTATION_REQUIRED]

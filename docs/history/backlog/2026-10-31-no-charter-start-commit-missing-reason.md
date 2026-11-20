@@ -1,4 +1,5 @@
 # no-charter start-commit missing evidence refusal is misattributed
+Cluster: docs/history/backlog/2026-10-31-no-charter-frozen-line-substring-binding.md; docs/history/backlog/2026-10-31-no-charter-owned-set-entry-shape.md
 
 Driving force: output fidelity (specific refusal required by the plan's preservation criterion)
 

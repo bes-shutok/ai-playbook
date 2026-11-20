@@ -1,4 +1,5 @@
 # Backlog: Deterministic anchor for the archive-twin battery family under a repo-inside TMPDIR
+- **Cluster:** docs/history/backlog/2026-11-06-validator-twin-anchor-memoization.md
 
 Driving force: robustness
 

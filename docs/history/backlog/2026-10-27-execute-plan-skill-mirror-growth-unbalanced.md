@@ -12,3 +12,4 @@
 ## Problem
 
 The boundary-mirror delegation is new operative content with no in-section repetition left to delete; the pay-for-growth clause's equivalence could not be met. Recorded per the repository's price-unbalanced-growth rule for the next consolidation pass over Step 1.4 (candidates: legs 1-4 dedup, boundary-worker machinery remnants).
+Recurrence: 2026-11-18 .ai-playbook/reviews/2026-11-18-plan-fixer-launched-scope-recovery-code-review-code-review-r3.md#F1

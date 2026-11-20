@@ -178,3 +178,11 @@ expected = "UNSUPPORTED"
 runtime_id = "cursor"
 adapter = "~/.cursor/hooks/plan-readiness.sh"
 event = "stop"
+
+[[hook_profiles]]
+agent = "Claude"
+hook = "pr-skill-reminder"
+expected = "FULL"
+runtime_id = "claude"
+adapter = "~/.claude/scripts/pr-skill-reminder.sh"
+event = "UserPromptSubmit"

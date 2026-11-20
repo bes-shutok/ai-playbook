@@ -1,4 +1,5 @@
 # no-charter frozen-entry binding is substring containment
+Cluster: docs/history/backlog/2026-10-31-no-charter-owned-set-entry-shape.md; docs/history/backlog/2026-10-31-no-charter-start-commit-missing-reason.md
 
 Driving force: correctness (latent identity-binding nit)
 

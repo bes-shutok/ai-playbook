@@ -130,3 +130,8 @@ Evidence:
 - [x] Pin a fence-wrapped malformed or missing-key input to the existing fail-closed refusal, and assert the claim and manifest remain unchanged on refusal. [class: REPOSITORY_TEST]
 - [x] Run new conversion-path witnesses with `HOME` pinned to the scratch fixture home so provider behavior does not depend on the invoking user home. [class: REPOSITORY_TEST]
 - [x] Preserve all existing provider timeout, output-size, response-shape, and status checks; do not edit the conversion gateway or gate/validator behavior. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-30-session-status-facts-parse-shape-gap.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

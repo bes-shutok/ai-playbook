@@ -1,12 +1,12 @@
 # Backlog: quota-wall byte-level witness accepts any committed record rewrite permanently
 
 - **Filed:** 2026-10-30 during the phase2-baseline-repair Phase 3 review-fix round (r1)
-- **Status:** done (record-class body covered and landed by docs/history/plans/completed/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md; the preamble acceptance residual this row was re-scoped to at execution now lives in its own open row `2026-11-02-witness-preamble-committed-acceptance-residual.md`, because the origins-closure gate cannot pass an open origin - deviation recorded in the archived plan's Disposition section)
+- **Status:** done (record-class body covered and landed by docs/history/plans/completed/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md; the preamble acceptance residual this row was re-scoped to at execution is now served - EXEC-PROMPTS entry witness-preamble-committed-acceptance-residual, landing 35dbeea14, covered row deleted per the covered-row rule; the open-row deviation from the origins-closure gate is recorded in the archived plan's Disposition section)
 - **Workflow:** backlog
 - **Priority:** normal
 - **Skill-step:** `scripts/test_quota_wall_doctrine.py` `test_witness_every_record_is_textually_unchanged_against_baseline_or_anchor` (the directives-file byte-level witness, records D-1..D-17 at authoring time (the derived-from-headings universe) in `docs/maintenance/operator-directives.md`)
 - **Class:** fence-class
-- **Cluster:** docs/history/backlog/2026-10-30-inventory-count-reconciliation.md (concern 1 corrected this row's D-1..D-12 record-range mention to the derived-from-headings universe, D-1..D-17 at authoring time; shared operator-directives witness surface)
+- **Cluster:** EXEC-PROMPTS receipt inventory-count-reconciliation (concern 1 corrected this row's D-1..D-12 record-range mention to the derived-from-headings universe, D-1..D-17 at authoring time; shared operator-directives witness surface; origin row deleted covered by the verified no-op completion receipt)
 - **Origin class:** self-serving
 - **Driving force:** code-quality (primary), reliability (secondary: the pin exists so silent erosion of the operator directives is visible, and the committed class currently erodes invisibly)
 - **Severity:** low; a hypothetical future committed rewrite would silently become the permanent standard, with no red and no named id.

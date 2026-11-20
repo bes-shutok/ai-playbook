@@ -167,6 +167,18 @@ class DirtRegressionGateTest(unittest.TestCase):
 
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def test_no_path_operands_refusal_pinned(self):
+        # The witnessed no-paths invocation (--base with no path operands)
+        # keeps its argparse usage-error refusal naming paths: exit 3 with
+        # the final OUTCOME: tool_error line (already declared; pinned by
+        # plan 2026-11-13-machinery-cli-operand-self-description Task 4).
+        self._commit("app.txt", "seed\n", "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        code, stdout, stderr = self._run_gate("--base", base_sha)
+        self.assertEqual(code, 3)
+        self.assertEqual(stdout.splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("paths", stderr)
+
     def test_removal_only_cleanup_hunk_passes(self):
         base_text = "alpha\nbeta\ngamma\n"
         head_text = base_text + "gained-one\ngained-two\ngained-three\n"

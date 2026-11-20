@@ -146,6 +146,7 @@ expect_match "expect_no_match 'runtime-adapter:codex' projects/.ai-playbook/exec
 
 # Re-cert: fresh round bound to the final bytes.
 R9="$(ls docs/reviews/*plan-review-execute-plan-runtime-residuals-r9.md 2>/dev/null)"
+# Witness disposition (2026-11-15 reconstruction sweep): the r9 re-cert record cited below is lost before durability mirroring; verified absent from every checkout, worktree, and reachable history on 2026-11-15; the loss is witnessed and accepted, record content never fabricated.
 [ -n "$R9" ] || { echo "missing re-cert round artifact (-r9.md)" >&2; exit 1; }
 R9SIDECAR="$(ls docs/reviews/*plan-review-execute-plan-runtime-residuals-r9.stats.json 2>/dev/null)"
 [ -n "$R9SIDECAR" ] || { echo "missing re-cert round sidecar (-r9.stats.json)" >&2; exit 1; }

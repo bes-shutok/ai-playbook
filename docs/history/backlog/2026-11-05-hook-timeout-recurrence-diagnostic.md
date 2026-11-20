@@ -1,4 +1,4 @@
-Status: open
+Status: covered (docs/history/plans/2026-11-09-hook-timeout-recurrence-diagnostic.md)
 Priority: low
 Class: fix-class (bounded diagnostic; no behavior change)
 Origin class: witnessed defect (24h runtime telemetry, 2026-11-05 harvest pass)

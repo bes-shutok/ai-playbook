@@ -236,3 +236,8 @@ Prescribed insertion (append verbatim to the usage-wall doctrine sentence at the
 - [x] Change nothing else in the file: the doctrine's existing two-class text (the spans pinned in Validation section 4) stays byte-identical, the stale home-pointer clause earlier in the sentence is not rewritten, and the prescribed insertion adds no incident dates or witness narrative. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run the full Validation Commands block (no argument) and expect exit 0 with the final line `ALL VALIDATIONS PASS`. [class: REPOSITORY_TEST]
 - [x] Commit: `maintenance: governing probe lifts a usage-wall pause in-session before its carrier fires`. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-19-usage-wall-probe-before-timed-resume.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

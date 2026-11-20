@@ -125,3 +125,8 @@ Primary class anchors:
 - [x] [class: REPOSITORY_TEST] Attached and detached commits have sole parent at prior HEAD; detached CAS updates direct HEAD without a branch. Probes assert commit-hook arguments/environment/message and reference-transaction phases; post-commit gets no args and sees new HEAD. Ref veto blocks landing; refusals skip post-commit; trusted ref-hook side effects are out of scope.
 - [x] [class: REPOSITORY_TEST] Landing preserves message and configured identity/signing, records its OID once in the active ledger, and keeps declared deletions/entries scoped; the listed wrapper suite passes.
 - [x] [class: IMPLEMENTATION_REQUIRED] Commit: `feat: authorize one exact restoration per done commit`
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-19-done-cached-diff-authorized-reversal.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

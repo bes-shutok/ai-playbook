@@ -137,13 +137,15 @@ def write_state(root: Path, drop_keys: tuple[str, ...] = (), **overrides) -> Pat
 
 
 def run_check(repo_root: str, state_path: Path | None = None,
-              listing: Path | None = None) -> subprocess.CompletedProcess:
+              listing: Path | None = None,
+              cwd: Path | None = None) -> subprocess.CompletedProcess:
     args = [sys.executable, str(SCRIPT), "--repo-root", repo_root]
     if state_path is not None:
         args += ["--state-path", str(state_path)]
     if listing is not None:
         args += ["--listing-json", str(listing)]
-    return subprocess.run(args, capture_output=True, text=True, timeout=120)
+    return subprocess.run(args, capture_output=True, text=True, timeout=120,
+                          cwd=str(cwd) if cwd is not None else None)
 
 
 def parse_verdict(proc: subprocess.CompletedProcess) -> dict:
@@ -452,6 +454,106 @@ def test_malformed_listing_is_tool_error(tmp_path):
     assert proc.stdout.splitlines()[-1] == "OUTCOME: tool_error"
 
 
+def test_listing_json_accepts_inline_literal(tmp_path):
+    """[class: REPOSITORY_TEST] The witnessed inline-object invocation
+    (plan 2026-11-13-machinery-cli-operand-self-description Task 2): an
+    inline JSON object parses as a listing beside the path and stdin
+    forms; the verdict reports the listing used."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id=None,
+                        parent_absent_since=None)
+    proc = run_check(root, state_path=state, listing='{"automations": []}')
+    assert proc.returncode == 0, proc.stderr
+    verdict = parse_verdict(proc)
+    assert verdict["listing_used"] is True
+
+
+def test_listing_json_inline_array_parses_like_file_array(tmp_path):
+    """[class: REPOSITORY_TEST] A literal JSON array parses exactly like
+    an array delivered by file (the consumer's bare-array acceptance)."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id=None,
+                        parent_absent_since=None)
+    inline = run_check(root, state_path=state, listing="[]")
+    assert inline.returncode == 0, inline.stderr
+    assert parse_verdict(inline)["listing_used"] is True
+
+
+def test_listing_json_scalar_literal_takes_shape_refusal(tmp_path):
+    """[class: REPOSITORY_TEST] A JSON scalar literal (parses but neither
+    array nor object) takes the existing shape refusal naming
+    array-or-object, even when a same-named readable file exists; the
+    same file parses when passed as an absolute or ./-prefixed path
+    (the disambiguation-order pin)."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id=None,
+                        parent_absent_since=None)
+    # The same-named readable file exists BEFORE the bare-name run, so the
+    # bare run exercises the discriminating scenario: under the rejected
+    # path-exists-first detection order this bare name would be read as a
+    # file, so the shape refusal below kills that mutant.
+    pathed = tmp_path / "123"
+    pathed.write_text("[]", encoding="utf-8")
+    bare = run_check(root, state_path=state, listing="123", cwd=tmp_path)
+    assert bare.returncode == 3
+    assert "neither an array nor an object" in bare.stderr
+    via_abs = run_check(root, state_path=state, listing=str(pathed))
+    assert via_abs.returncode == 0, via_abs.stderr
+    via_dot = run_check(root, state_path=state, listing=str(tmp_path / "." / "123"))
+    assert via_dot.returncode == 0, via_dot.stderr
+
+
+def test_listing_json_unreadable_names_three_forms(tmp_path):
+    """[class: REPOSITORY_TEST] Input that is neither JSON nor a readable
+    path: the classified refusal (exit 3, OUTCOME: tool_error) whose
+    reason names all three accepted forms; a path whose content is
+    unparseable keeps the existing 'listing input is not parseable JSON'
+    pin; the stdin form stays unchanged."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id=None,
+                        parent_absent_since=None)
+    bad = run_check(root, state_path=state,
+                    listing=str(tmp_path / "no-such-file.json"))
+    assert bad.returncode == 3
+    assert bad.stdout.splitlines()[-1] == "OUTCOME: tool_error"
+    for form in ("inline JSON object", "path to a listing file", "stdin"):
+        assert form in bad.stderr, form
+    raw_listing = tmp_path / "broken.json"
+    raw_listing.write_text("{ not json", encoding="utf-8")
+    unparseable = run_check(root, state_path=state, listing=str(raw_listing))
+    assert unparseable.returncode == 3
+    assert "listing input is not parseable JSON" in unparseable.stderr
+
+
+def test_listing_json_stdin_form_unchanged(tmp_path):
+    """[class: REPOSITORY_TEST] The '-' stdin form parses a listing exactly
+    as before the inline-literal acceptance landed (regression pin beside
+    the edited detection code; plan 2026-11-13-machinery-cli-operand-
+    self-description Task 2)."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, parent_automation_id=None,
+                        parent_absent_since=None)
+    args = [sys.executable, str(SCRIPT), "--repo-root", root,
+            "--state-path", str(state), "--listing-json", "-"]
+    proc = subprocess.run(args, input='{"automations": []}',
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert parse_verdict(proc)["listing_used"] is True
+
+
+def test_listing_json_help_names_three_forms():
+    """[class: IMPLEMENTATION_REQUIRED] The --listing-json help text names
+    the three accepted forms."""
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0
+    help_text = " ".join(proc.stdout.split())
+    for form in ("inline automation listing JSON object", "path to a listing JSON file", "stdin"):
+        assert form in help_text, form
+
+
 def test_adoption_guards(tmp_path):
     """[class: REPOSITORY_TEST] A listing match whose id differs from the
     recorded one: no adoption when the recorded id is itself live-enabled;
@@ -598,3 +700,75 @@ def test_bookkeeping_edit_atomic_no_other_field(tmp_path, monkeypatch, capsys):
         "parent_automation_id", "parent_absent_since", "rearm_note"
     }
     assert verdict["class"] == "parent-ok"
+
+
+def test_pre_field_state_file_self_heals_structural_insert(tmp_path):
+    """[class: REPOSITORY_TEST] The witnessed stale-state invocation shape
+    (origin docs/history/backlog/2026-11-11-rearm-state-insert-forward-compat.md):
+    a pre-field state file missing parent_absent_since no longer ends every
+    observation in the same skip-with-report refusal. With --listing-json
+    showing an ENABLED recognition match, the armed-again clear inserts the
+    missing BOOKKEEPING_FIELDS key atomically in the tool's own
+    read-modify-write loop, byte-preserving every other byte; a field outside
+    the tool's own tuple still refuses a structural insert."""
+    root = str(tmp_path)
+    state = write_state(tmp_path, drop_keys=("parent_absent_since",))
+    raw_before = state.read_text(encoding="utf-8")
+    listing_path = tmp_path / "listing.json"
+    listing_path.write_text(
+        json.dumps([listing_entry(root, "parent-live-1", enabled=True)]),
+        encoding="utf-8",
+    )
+
+    proc = run_check(root, listing=listing_path)
+
+    assert proc.returncode == 0
+    verdict = parse_verdict(proc)
+    assert verdict["class"] == "parent-ok"
+    assert verdict["listing_used"] is True
+    raw_after = state.read_text(encoding="utf-8")
+    after = json.loads(raw_after)
+    assert after["parent_absent_since"] is None
+    assert after["parent_automation_id"] == "parent-live-1"
+    assert after["rearm_note"] is None
+    # Byte-for-byte elsewhere: the insert lands exactly before the closing
+    # brace, no other byte of the file moves.
+    idx = raw_before.rindex("}")
+    expected = (raw_before[:idx]
+                + ',\n  "parent_absent_since": null\n'
+                + raw_before[idx:])
+    assert raw_after == expected
+    # The verdict reports the inserted edit alongside the armed-again clear.
+    assert set(verdict["bookkeeping"]) >= {"parent_absent_since"}
+    assert verdict["bookkeeping"]["parent_absent_since"]["to"] is None
+
+
+def test_structural_insert_refusal_kept_outside_bookkeeping_fields(tmp_path):
+    """[class: REPOSITORY_TEST] A missing field outside BOOKKEEPING_FIELDS
+    still refuses a structural insert (fail-closed toward foreign schema
+    drift, the guard the fix narrows rather than removes)."""
+    state = write_state(tmp_path, drop_keys=("children",))
+    with pytest.raises(rearm_on_touch.RearmError, match="refusing a structural insert"):
+        rearm_on_touch.apply_bookkeeping(state, {"children": []})
+
+
+def test_empty_object_state_file_refuses_insert(tmp_path):
+    """[class: REPOSITORY_TEST] A memberless ({}) state file refuses the
+    insert fail-closed instead of splicing invalid JSON (the splice grammar
+    assumes an existing last member; the old unconditional refusal kept this
+    shape loud too)."""
+    state = write_state(tmp_path)
+    state.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(rearm_on_touch.RearmError, match="empty JSON object"):
+        rearm_on_touch.apply_bookkeeping(state, {"parent_absent_since": None})
+
+
+def test_typed_drifted_own_field_keeps_loud_refusal(tmp_path):
+    """[class: REPOSITORY_TEST] A tuple key present with a value the field
+    pattern cannot match (typed drift, e.g. a hand-edited number) keeps the
+    loud structural-insert refusal instead of degrading into a duplicate-key
+    insert; genuinely missing keys are the only insert path."""
+    state = write_state(tmp_path, parent_absent_since=123)
+    with pytest.raises(rearm_on_touch.RearmError,
+                       match="field pattern cannot"):
+        rearm_on_touch.apply_bookkeeping(state, {"parent_absent_since": None})

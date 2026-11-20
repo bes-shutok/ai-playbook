@@ -9,6 +9,17 @@ Modes:
   --check     validate the registry against the tracked tree; exit non-zero
               on regrowth, unresolved or non-exercising red-test witnesses,
               bad rows, or pending rows (skipped only under --allow-pending).
+  --render-baseline <path>
+              run the three known-red gate producer surfaces (this script's
+              --check, scripts/check_maintenance_pins.sh, and
+              scripts/skill_text_budget.py --check) against the primary
+              checkout (the first `git worktree list --porcelain` entry) and
+              write the known-red gate baseline JSON to <path>; a relative
+              path resolves against the primary checkout. Exits per
+              scripts/OUTCOME_CONTRACT.md (the render mode's register row
+              there declares the producer-subprocess operating-context
+              assumptions; the legacy --check/--scaffold exits stay outside
+              the contract).
 
 Tracked-tree and witness check inputs come from the committed tree (git
 ls-tree HEAD and git show HEAD:, never the index), so those checks are
@@ -20,11 +31,14 @@ present, is a scaffold cross-check that only adds rows, never a check input.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 REGISTRY_PATH = "scripts/machinery_registry.json"
@@ -340,23 +354,384 @@ def cmd_check(repo, allow_pending, skill_path=SKILL_PATH):
     return 0
 
 
+# --- Known-red gate baseline rendering (plan
+# 2026-11-13-known-red-gates-consumed-baseline, Task 1): the render mode is
+# this script's OUTCOME_CONTRACT surface; the legacy --check/--scaffold exits
+# stay outside the contract. ---
+
+RENDER_SCHEMA = "known-red-gates-baseline"
+RENDER_SCHEMA_VERSION = 1
+# per-producer capture timeout; the MACHINERY_RENDER_TIMEOUT_SECS override is
+# a declared test-only seam (render fixtures shrink the wait), never set in
+# production
+RENDER_PRODUCER_TIMEOUT_SECS = 300
+
+RENDER_PRODUCER_ORDER = ("machinery_inventory", "maintenance_pins",
+                         "skill_text_budget")
+RENDER_PRODUCER_SCRIPTS = {
+    "machinery_inventory": "machinery_inventory.py",
+    "maintenance_pins": "check_maintenance_pins.sh",
+    "skill_text_budget": "skill_text_budget.py",
+}
+# the expected terminal marker each producer must emit for its capture to
+# count; the inventory's legacy exit shape (no OUTCOME: line) is normal
+# output, so its marker is its own summary line
+RENDER_EXPECTED_MARKERS = {
+    "machinery_inventory": "machinery inventory check: ",
+    "maintenance_pins": "OUTCOME: ",
+    "skill_text_budget": "OUTCOME: ",
+}
+# capture vocabulary (the plan's Terms entry): line-prefix classes recorded
+# verbatim, longest prefix first so compound classes are not shadowed
+RENDER_CAPTURE_CLASSES = (
+    ("maintenance_pins", "PIN RECORDED RED EXPIRED"),
+    ("maintenance_pins", "PIN RECORDED RED MALFORMED"),
+    ("maintenance_pins", "PIN RECORDED RED"),
+    ("maintenance_pins", "PIN FAIL"),
+    ("maintenance_pins", "PIN WARN"),
+    ("maintenance_pins", "pin fail:"),
+    ("skill_text_budget", "CEILING BREACH"),
+    ("skill_text_budget", "BREACH"),
+    ("skill_text_budget", "PILOT OVER"),
+    ("skill_text_budget", "PILOT PENDING"),
+    ("machinery_inventory", "FAIL:"),
+)
+# excluded from capture: the pins suite's run-summary lines and the pre-pin
+# checkpoint's missing <path> arm, so a broken checkout's checkpoint failure
+# never baseline-classifies; those lines stay unknown actionable everywhere
+RENDER_EXCLUDED_PREFIXES = (
+    "PIN RECORDED REDS SUPPRESSED THIS RUN:",
+    "prune-range pins: first missing clause:",
+    "placement pins: first missing span:",
+    "missing ",
+)
+# controlling tracked inputs per producer section (the plan's staleness
+# entry); the budget section additionally covers the capped-file set the
+# scan reads (every agents/skills/*/[A-Za-z]*.md file), appended at capture
+RENDER_CONTROLLING_INPUTS = {
+    "machinery_inventory": (
+        "scripts/machinery_inventory.py",
+        "scripts/machinery_registry.json",
+        "agents/skills/maintenance/state-file.md",
+    ),
+    "maintenance_pins": (
+        "scripts/check_maintenance_pins.sh",
+        "scripts/gate_liveness_ledger.json",
+    ),
+    "skill_text_budget": (
+        "scripts/skill_text_budget.py",
+        "scripts/skill_text_budget_caps.json",
+    ),
+}
+
+
+def _git_probe(cwd, *args):
+    out = subprocess.run(["git", "-C", str(cwd)] + list(args),
+                         capture_output=True, text=True)
+    return out.returncode, out.stdout
+
+
+def resolve_primary_checkout(repo):
+    """The primary checkout: the first `git worktree list --porcelain`
+    entry (the home authority mechanism's resolution)."""
+    rc, out = _git_probe(repo, "worktree", "list", "--porcelain")
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            return line[len("worktree "):].strip()
+    return None
+
+
+def resolve_base_tip(primary):
+    """Base-tip provenance metadata: the primary checkout's default-branch
+    tip, resolved as origin/HEAD when resolvable, else the primary checkout's
+    own checked-out branch tip, else its detached HEAD."""
+    rc, ref = _git_probe(primary, "symbolic-ref", "--quiet",
+                         "refs/remotes/origin/HEAD")
+    if rc == 0:
+        rc2, commit = _git_probe(primary, "rev-parse", "--verify",
+                                 ref.strip() + "^{commit}")
+        if rc2 == 0:
+            return {"ref": ref.strip(), "commit": commit.strip(),
+                    "source": "origin-head"}
+    rc, branch = _git_probe(primary, "symbolic-ref", "--quiet", "HEAD")
+    if rc == 0:
+        rc2, commit = _git_probe(primary, "rev-parse", "--verify",
+                                 branch.strip() + "^{commit}")
+        if rc2 == 0:
+            return {"ref": branch.strip(), "commit": commit.strip(),
+                    "source": "primary-branch"}
+    rc, commit = _git_probe(primary, "rev-parse", "--verify", "HEAD^{commit}")
+    if rc == 0:
+        return {"ref": None, "commit": commit.strip(),
+                "source": "detached-head"}
+    return None
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def render_controlling_inputs(primary, producer):
+    """Per-section controlling-input digests over the primary checkout's
+    working-tree bytes (the consumer re-derives them at read time)."""
+    rels = list(RENDER_CONTROLLING_INPUTS[producer])
+    if producer == "skill_text_budget":
+        skills = Path(primary) / "agents" / "skills"
+        if skills.is_dir():
+            rels.extend(sorted(
+                path.relative_to(primary).as_posix()
+                for path in skills.glob("*/[A-Za-z]*.md") if path.is_file()))
+    files = {}
+    absent = []
+    for rel in rels:
+        path = Path(primary) / rel
+        if path.is_file():
+            files[rel] = _file_sha256(path)
+        else:
+            absent.append(rel)
+    blob = json.dumps(files, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return {"algorithm": "sha256", "files": files, "absent": absent,
+            "digest": hashlib.sha256(blob).hexdigest()}
+
+
+def classify_render_line(line):
+    """Classify one producer output line into its owning producer section and
+    captured class per the Terms capture vocabulary; None for excluded and
+    out-of-vocabulary lines."""
+    for prefix in RENDER_EXCLUDED_PREFIXES:
+        if line.startswith(prefix):
+            return None
+    for producer, prefix in RENDER_CAPTURE_CLASSES:
+        if line.startswith(prefix):
+            return producer, prefix
+    return None
+
+
+def render_producer_command(producer, primary):
+    """The producer subprocess command against the primary checkout; every
+    producer runs with cwd inside the primary checkout (the pins suite's
+    register default resolves the primary's tracked ledger through it)."""
+    script = Path(primary) / "scripts" / RENDER_PRODUCER_SCRIPTS[producer]
+    if producer == "maintenance_pins":
+        return ["bash", str(script)]
+    cmd = [sys.executable, str(script)]
+    if producer == "machinery_inventory":
+        cmd += ["--check", "--repo-root", str(primary)]
+    elif producer == "skill_text_budget":
+        cmd += ["--check"]
+    return cmd
+
+
+def _render_timeout():
+    timeout = RENDER_PRODUCER_TIMEOUT_SECS
+    override = os.environ.get("MACHINERY_RENDER_TIMEOUT_SECS")
+    if override and override.isdigit() and int(override) > 0:
+        timeout = int(override)
+    return timeout
+
+
+def capture_render_producer(producer, primary):
+    """Run one producer surface and return its capture record: status
+    (captured/unavailable), exit code, expected-output marker, and the
+    classified lines from both streams. A producer that fails to launch,
+    times out, or terminates without its expected marker is recorded
+    unavailable; a modeled fail exit carrying the marker is capture-success."""
+    record = {"status": "captured", "exit_code": None,
+              "unavailable_reason": None, "expected_output": False,
+              "captured_lines": []}
+    cmd = render_producer_command(producer, primary)
+    if not Path(cmd[1]).is_file():
+        record["status"] = "unavailable"
+        record["unavailable_reason"] = \
+            "producer script not found: {}".format(cmd[1])
+        return record
+    try:
+        proc = subprocess.run(cmd, cwd=str(primary), capture_output=True,
+                              text=True, errors="replace",
+                              timeout=_render_timeout())
+    except subprocess.TimeoutExpired:
+        record["status"] = "unavailable"
+        record["unavailable_reason"] = \
+            "timed out after {}s".format(_render_timeout())
+        return record
+    except OSError as exc:
+        record["status"] = "unavailable"
+        record["unavailable_reason"] = "failed to launch: {}".format(exc)
+        return record
+    record["exit_code"] = proc.returncode
+    stdout_lines = proc.stdout.splitlines()
+    stderr_lines = proc.stderr.splitlines()
+    marker = RENDER_EXPECTED_MARKERS[producer]
+    record["expected_output"] = any(
+        line.startswith(marker) for line in stdout_lines)
+    for stream, lines in (("stdout", stdout_lines), ("stderr", stderr_lines)):
+        for line in lines:
+            hit = classify_render_line(line)
+            if hit:
+                owner, klass = hit
+                record["captured_lines"].append(
+                    {"class": klass, "line": line, "stream": stream,
+                     "section": owner})
+    if not record["expected_output"]:
+        record["status"] = "unavailable"
+        record["unavailable_reason"] = (
+            "terminated without its expected output (exit {}, no {} line)"
+            .format(proc.returncode, marker.strip()))
+    return record
+
+
+def probe_output_writable(path):
+    """Writability probe refusing before any producer runs: an existing
+    baseline is append-opened (never truncated), a new path probes its
+    parent directory with a created-and-removed temp file. Returns the
+    observed error text, or None when writable."""
+    try:
+        if path.exists():
+            with open(path, "a"):
+                pass
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle, probe = tempfile.mkstemp(dir=str(path.parent),
+                                             prefix=".render-probe-")
+            os.close(handle)
+            os.unlink(probe)
+        return None
+    except OSError as exc:
+        return str(exc)
+
+
+def render_baseline_payload(primary, out_path):
+    sections = {}
+    for producer in RENDER_PRODUCER_ORDER:
+        section = render_controlling_inputs(primary, producer)
+        capture = capture_render_producer(producer, primary)
+        lines = []
+        for entry in capture.pop("captured_lines"):
+            entry["emitted_by"] = producer
+            lines.append(entry)
+        section["captured_lines"] = lines
+        section.update(capture)
+        sections[producer] = section
+    base_tip = resolve_base_tip(primary)
+    return {
+        "schema": RENDER_SCHEMA,
+        "schema_version": RENDER_SCHEMA_VERSION,
+        "generated_at":
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "base_tip": base_tip if base_tip else
+            {"ref": None, "commit": None, "source": "unresolvable"},
+        "primary_checkout": str(primary),
+        "write_home": str(out_path),
+        "producers": sections,
+    }
+
+
+def write_render_baseline(out_path, payload):
+    """Atomic write through a temp file in the output's directory, so a
+    failed write leaves any existing baseline byte-untouched."""
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    handle, tmp = tempfile.mkstemp(dir=str(out_path.parent),
+                                   prefix=".baseline-write-")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, str(out_path))
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def cmd_render_baseline(repo, out_arg):
+    primary = resolve_primary_checkout(repo)
+    if not primary:
+        print("render: cannot resolve the primary checkout (the first "
+              "`git worktree list --porcelain` entry)")
+        print("OUTCOME: tool_error")
+        return 3
+    out_path = Path(out_arg)
+    if not out_path.is_absolute():
+        out_path = Path(primary) / out_path
+    out_path = Path(os.path.abspath(str(out_path)))
+    error = probe_output_writable(out_path)
+    if error:
+        print("render: refusing to write baseline: {}: {}".format(
+            out_path, error))
+        print("OUTCOME: tool_error")
+        return 3
+    try:
+        payload = render_baseline_payload(primary, out_path)
+        write_render_baseline(out_path, payload)
+    except OSError as exc:
+        print("render: refusing to write baseline: {}: {}".format(
+            out_path, exc))
+        print("OUTCOME: tool_error")
+        return 3
+    unavailable = [producer for producer in RENDER_PRODUCER_ORDER
+                   if payload["producers"][producer]["status"] != "captured"]
+    for producer in unavailable:
+        print("render: producer unavailable: {}: {}".format(
+            producer, payload["producers"][producer]["unavailable_reason"]))
+    captured = sum(len(section["captured_lines"])
+                   for section in payload["producers"].values())
+    print("render: baseline written to {} (producers captured {}/{}, "
+          "{} red line(s) captured)".format(
+              out_path, len(RENDER_PRODUCER_ORDER) - len(unavailable),
+              len(RENDER_PRODUCER_ORDER), captured))
+    if unavailable:
+        print("OUTCOME: indeterminate")
+        return 2
+    print("OUTCOME: pass")
+    return 0
+
+
+class _RenderUsageParser(argparse.ArgumentParser):
+    # usage violations keep argparse's legacy exit shape for the legacy
+    # --check/--scaffold modes; a --render-baseline invocation is the
+    # contract-conformant surface, so its usage error is tool error (exit 3)
+    # with the final OUTCOME line on stdout
+    render_invocation = False
+
+    def error(self, message):
+        if self.render_invocation:
+            print("usage error: {}".format(message))
+            print("OUTCOME: tool_error")
+            sys.exit(3)
+        super().error(message)
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _RenderUsageParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--scaffold", action="store_true")
     group.add_argument("--check", action="store_true")
+    group.add_argument("--render-baseline", metavar="PATH", default=None,
+                       help="render the known-red gate baseline JSON to PATH")
     parser.add_argument("--allow-pending", action="store_true")
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--observed-state", default=None,
                         help="gitignored observed state file (scaffold cross-check only)")
     parser.add_argument("--skill-path", default=SKILL_PATH,
                         help="tracked skill file carrying the State file schema section")
+    parser.render_invocation = "--render-baseline" in (
+        sys.argv[1:] if argv is None else list(argv))
     args = parser.parse_args(argv)
     repo = args.repo_root or subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], capture_output=True,
         text=True).stdout.strip()
     if not repo:
         raise SystemExit("machinery_inventory: not inside a git repository")
+    if args.render_baseline:
+        return cmd_render_baseline(repo, args.render_baseline)
     if args.scaffold:
         return cmd_scaffold(repo, args.observed_state, skill_path=args.skill_path)
     return cmd_check(repo, args.allow_pending, args.skill_path)

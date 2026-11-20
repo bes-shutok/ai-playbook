@@ -699,3 +699,18 @@ Not commentary (out of scope of this rule): license and copyright headers; chang
 
 **Rule:** inspect with `--help` or by reading the argument-parsing source; never invoke the command bare to "see what it does". A command with no required arguments executes its full effect the moment it runs: locks are acquired, markers and manifests are written, and when the invoking shell dies the partial state strands for recovery. If a probe already ran, verify the side effects with the tool's own read-only status surface before any recovery, and release a stranded hold only with the token that invocation itself printed.
 
+## 44. The ai-playbook skills repository Declares the focused-never-full Test Suite Policy
+
+**Shape trigger:** Any execution-validation guidance, skill text, or plan that decides whether a repository's complete test suite runs, and any run in the ai-playbook skills repository selecting what plan validation executes.
+
+**Rule:** A repository declaring the `full-before-final` suite policy runs its complete suite once at its final boundary; a repository declaring the `focused-never-full` suite policy never runs it. The ai-playbook skills repository declares `focused-never-full`: its execution validation never runs its whole suite and instead runs plan-specific commands, the relevant focused regression suites (the liveness pin suite included when its pinned surfaces are touched), and the named repository gates (this repository's pins suite and public-hygiene scan). The declaration lives in the repository's `.ai-playbook/facts.md` as the `test_suite_policy` key.
+
+**Example:** A plan executed in the ai-playbook skills repository lists two focused pytest commands under its validation commands: Phase 2 runs those two commands plus the pins suite and the public-hygiene scan, and never assembles a whole-suite inventory run. The same plan executed in a repository declaring `full-before-final` adds one complete-suite run at that repository's final boundary.
+
+## 45. Never Assume an Environment Fact: Verify in the Actual Execution Context
+
+**Principle:** Family H (verify the real thing, not the abstraction) extended to the execution environment: what the fired context resolves is the contract, not what the authoring shell resolved.
+
+**Shape trigger:** you are authoring or reviewing anything a script, template, or generated artifact will later run in another context (command templates, launchers, plists, wrappers, cron payloads).
+
+**Rule:** never assume an environment fact - a utility's availability at any path, PATH resolution, a file at a named path, a tool version, a reachable service, permissions - in anything that artifact will later run. Resolve and verify each assumed fact at creation time in the actual execution context that will run the artifact (the scheduler or daemon context, not the interactive shell), and fail creation loudly when resolution fails. A success side effect of an early leg (a touched sentinel, a clean exit of an early chain stage) is not proof the payload ran: verify the payload's own start signal (its log, its exit, a post-start probe) before reporting the work done.

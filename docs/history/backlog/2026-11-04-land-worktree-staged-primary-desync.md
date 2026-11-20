@@ -1,10 +1,11 @@
-Status: covered-pending-execution (docs/history/plans/2026-11-06-land-worktree-staged-primary-desync.md)
+Status: covered (docs/history/plans/2026-11-06-land-worktree-staged-primary-desync.md)
 Priority: high
 Class: fix-class
 Origin class: witnessed defect (operator-directed recovery session over the 2026-11-04 primary checkout)
 Dedup probe: searched open backlog filenames and bodies for `land-worktree`, `staged state`, `primary checkout`, and `desync`; the landing-serialization plan owns dispatch serialization and the ref-lock span around this same compare-and-swap but never the primary index state; the lock-acquire-export rows own merge-lock env capture across tool-call shells; the landing-identity tree-oid row owns the landing record's evidence shape; the closeout-clobber-guard family owns post-hoc clobber guards. None covers the omitted primary staged-state pre-refusal.
 Cluster: docs/history/plans/2026-11-04-parallel-execution-landing-serialization-blockers.md (owns the landing serialization and the CAS critical section this desync rides)
 Cluster: docs/history/backlog/2026-11-07-rolling-log-freeze-foreign-bytes-setaside-recipe.md (same residue class; that row owns the consumer-side freeze-write recovery recipe, this row owns the producer-side landing guard)
+Cluster: the 2026-11-13 --landing-tail reconcile fix (post-fix recurrence of this family: the 2026-11-12 stray reverse-of-landing stage witnessed after this row's covering plan executed; the recurrence capture row was consumed by that ad-hoc landing, whose commit carries the EXEC-PROMPTS-PRUNE receipt)
 
 # land-worktree moves main across a staged primary checkout with no staged-state guard
 
@@ -31,3 +32,7 @@ Expected: the landing refuses when the primary checkout holds staged or locally-
 ## Ship when
 
 The pre-CAS guard refuses a fixture landing whose changed set intersects a staged primary path (suite cells in `scripts/test_land_squash.py`: intersecting staged path expects the named fail; non-intersecting staged path expects the landing to proceed), and the primary-checkout closeout carries the session-end staged-state census duty with the commit-or-restore disposition.
+
+**Stranded-record instances 2026-11-18/19 (continued):** three `docs/history/certification-seal-landing-diagnostics.md` appends sat uncommitted in the primary checkout at the 2026-11-19 filing (the 2026-11-18T15:04Z JSON row from run 20261118T144705Z-e01ea6ed342b, the 2026-11-19T00:44Z asd-ste100 row, the 2026-11-19T01:53Z read-only-verification-lane row); the class recurred twice within twelve hours (two landings closed with their own diagnostic appends uncommitted) and three peer sessions independently spent attribution steps re-diagnosing the same residue.
+
+**Cluster:** docs/history/backlog/2026-11-19-stale-capture-record-commit-peer-clobber.md (same window; that row owns the record commit that published a dead peer's stranded staged delta as history, this row's family's commit-side twin)

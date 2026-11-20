@@ -6,8 +6,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXECUTE_PLAN = ROOT / "agents/skills/execute-plan/SKILL.md"
-PLANS = ROOT / "agents/skills/plans/SKILL.md"
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the execute-plan skill split load-on-dispatch; the User Interruption section and its Active-plan referral subsection moved byte-verbatim to launch-rules-and-gates.md.
+EXECUTE_PLAN = ROOT / "agents/skills/execute-plan/launch-rules-and-gates.md"
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 3): the plans skill's sections moved byte-verbatim into modules beside the router; Phase 0 lives in phase-0-placement.md and the Integration Points in integration-points.md.
+PLANS = ROOT / "agents/skills/plans/phase-0-placement.md"
+PLANS_INTEGRATION = ROOT / "agents/skills/plans/integration-points.md"
 TEMPLATE_AUTHORING = ROOT / "agents/skills/maintenance/template-authoring.md"
 
 
@@ -43,7 +46,7 @@ class ActivePlanReferralContractTest(unittest.TestCase):
         cls.interruption = section(cls.execute, "## user interruption")
         cls.referral = section(cls.interruption, "### active-plan referral")
         cls.phase0 = section(cls.plans, "## phase 0: authoring placement setup (run at every authoring session start)")
-        cls.plans_integration = section(cls.plans, "### with `execute-plan` skill")
+        cls.plans_integration = section(PLANS_INTEGRATION.read_text(encoding="utf-8").lower(), "### with `execute-plan` skill")
 
     def test_interruption_table_covers_referral_timing_and_worker_outcomes(self) -> None:
         actions = {

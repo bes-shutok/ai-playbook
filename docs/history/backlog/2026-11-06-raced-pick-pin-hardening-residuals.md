@@ -3,6 +3,7 @@
 - **Status:** open
 - **Priority:** low
 - **Cluster:** docs/history/backlog/2026-11-06-raced-pick-ordering-precedence-tension.md (same authoring-continuation review family)
+- **Cluster:** the landed execution-lane coverage probe and pre-panel freshness recheck in agents/skills/maintenance/template-execution.md (served by the 2026-11-16 ad-hoc landing; same raced-pick detection defect class, execution lane; EXEC-PROMPTS prune receipt `exec-pick-pre-work-gates-lack-same-target-coverage-probe`)
 - **Class:** skill-text
 - **Driving force:** code-quality
 - **Origin:** Phase 3 review candidates, plan authoring-payload-raced-pick-continuation (landed branch 2026-11-06-raced-pick-continuation)

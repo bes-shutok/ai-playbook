@@ -11,13 +11,18 @@ docs-branch sync run hermetically against the fixture repo.
 """
 from __future__ import annotations
 
+import contextlib
+import atexit
 import hashlib
+import io
 import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -46,6 +51,8 @@ SWEEP_VALIDATOR_OVERRIDES = {
 }
 
 CORPUS_REL = "docs/maintenance/development_lessons.md"
+_FIXTURE_REPO_TEMPLATE: Path | None = None
+_FIXTURE_REPO_TEMPLATE_HOME: Path | None = None
 
 
 class FixtureMixin:
@@ -134,33 +141,74 @@ class FixtureMixin:
                 os.environ[name] = value
 
     def tearDown(self) -> None:
-        subprocess.run(["chmod", "-R", "u+w", str(self.tmp)], check=False)
-        subprocess.run(["rm", "-rf", str(self.tmp)], check=False)
+        def make_writable(path: Path) -> None:
+            try:
+                metadata = os.lstat(path)
+                if stat.S_ISLNK(metadata.st_mode):
+                    return
+                mode = metadata.st_mode | stat.S_IWUSR
+                if stat.S_ISDIR(metadata.st_mode):
+                    mode |= stat.S_IRUSR | stat.S_IXUSR
+                os.chmod(path, mode)
+            except OSError:
+                pass
+
+        def make_writable_and_retry(function, path, exc_info) -> None:
+            target = Path(path)
+            make_writable(target)
+            parent = target.parent
+            if parent == self.tmp or self.tmp in parent.parents:
+                make_writable(parent)
+            try:
+                function(path)
+            except OSError:
+                pass
+
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(self.tmp, onexc=make_writable_and_retry)
+        else:
+            def onerror(function, path, exc_info) -> None:
+                error = exc_info[1] if exc_info else None
+                make_writable_and_retry(function, path, error)
+
+            shutil.rmtree(self.tmp, onerror=onerror)
 
     def init_fixture_repo(self, branch: str | None = None) -> Path:
-        subprocess.run(["git", "init", "-q", str(self.fixture)], check=True)
-        git = self.git
-        git("config", "user.email", "t@example.test")
-        git("config", "user.name", "t")
-        (self.fixture / "seed.txt").write_text("seed\n")
-        (self.fixture / ".gitignore").write_text("docs/tmp/\n__pycache__/\n")
-        (self.fixture / ".ai-playbook").mkdir()
-        tmp_dir = self.fixture / "docs" / "tmp"
-        tmp_dir.mkdir(parents=True)
-        (self.fixture / ".ai-playbook" / "facts.md").write_text(
-            '```toml\n'
-            'plans_dir = "docs/history/plans/"\n'
-            'backlog_dir = "docs/history/backlog/"\n'
-            'reviews_dir = ".ai-playbook/reviews/"\n'
-            'tmp_dir = "docs/tmp/"\n'
-            'metrics_dir = "docs/tmp/metrics/"\n'
-            'review_certs_dir = ".ai-playbook/review-certs/"\n'
-            "```\n"
-        )
-        git("add", ".")
-        git("commit", "-qm", "seed")
+        global _FIXTURE_REPO_TEMPLATE, _FIXTURE_REPO_TEMPLATE_HOME
+        if _FIXTURE_REPO_TEMPLATE is None:
+            subprocess.run(["git", "init", "-q", str(self.fixture)], check=True)
+            git_config = self.fixture / ".git" / "config"
+            with git_config.open("a", encoding="utf-8") as config:
+                config.write("\n[user]\n\temail = t@example.test\n\tname = t\n")
+            (self.fixture / "seed.txt").write_text("seed\n")
+            (self.fixture / ".gitignore").write_text("docs/tmp/\n__pycache__/\n")
+            (self.fixture / ".ai-playbook").mkdir()
+            tmp_dir = self.fixture / "docs" / "tmp"
+            tmp_dir.mkdir(parents=True)
+            (self.fixture / ".ai-playbook" / "facts.md").write_text(
+                '```toml\n'
+                'plans_dir = "docs/history/plans/"\n'
+                'backlog_dir = "docs/history/backlog/"\n'
+                'reviews_dir = ".ai-playbook/reviews/"\n'
+                'tmp_dir = "docs/tmp/"\n'
+                'metrics_dir = "docs/tmp/metrics/"\n'
+                'review_certs_dir = ".ai-playbook/review-certs/"\n'
+                "```\n"
+            )
+            self.git("add", ".")
+            self.git("commit", "-qm", "seed")
+            _FIXTURE_REPO_TEMPLATE_HOME = Path(
+                tempfile.mkdtemp(prefix="done-run-fixture-template-")
+            )
+            _FIXTURE_REPO_TEMPLATE = _FIXTURE_REPO_TEMPLATE_HOME / "repo"
+            shutil.copytree(self.fixture, _FIXTURE_REPO_TEMPLATE)
+            atexit.register(shutil.rmtree, _FIXTURE_REPO_TEMPLATE_HOME, True)
+        else:
+            if self.fixture.exists():
+                shutil.rmtree(self.fixture)
+            shutil.copytree(_FIXTURE_REPO_TEMPLATE, self.fixture)
         if branch:
-            git("checkout", "-qb", branch)
+            self.git("checkout", "-qb", branch)
         return self.fixture
 
     def git(self, *args: str, repo: Path | None = None, check: bool = True):
@@ -281,6 +329,128 @@ class FixtureMixin:
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc, self.eval_exports(proc.stdout)
 
+    def seed_setup_session(self, *setup_args: str) -> tuple[subprocess.CompletedProcess, dict]:
+        """Seed a valid Step 0 boundary when setup itself is not under test.
+
+        Keep the real lock acquisition and manifest writer, while writing the
+        marker and zero-plan migration sidecars directly. Setup behavior has
+        dedicated tests that continue to use setup_session().
+        """
+        writer_args: list[str] = []
+        label = "fixture-run"
+        index = 0
+        while index < len(setup_args):
+            arg = setup_args[index]
+            if arg == "--label":
+                label = setup_args[index + 1]
+                index += 2
+            elif arg in {
+                "--owned-plan", "--owned-review", "--owned-path",
+                "--foreign-review", "--foreign-review-from",
+            }:
+                writer_args.extend((arg, setup_args[index + 1]))
+                index += 2
+            elif arg == "--claim-none":
+                writer_args.append(arg)
+                index += 1
+            else:
+                raise AssertionError(f"unsupported seeded setup argument: {arg}")
+
+        env = self.runner_env()
+        lock = subprocess.run(
+            [
+                "bash", str(LOCK_SCRIPT), "wait-acquire", "--label", label,
+                "--max-wait", env["DONE_LOCK_AGENT_MAX_WAIT_SECS"],
+            ],
+            cwd=str(self.fixture), env=env, capture_output=True, text=True,
+            timeout=60,
+        )
+        self.assertEqual(lock.returncode, 0, lock.stderr)
+        exports = self.eval_exports(lock.stdout)
+
+        now = time.time()
+        # Match `session_dir`'s Git-root path spelling. On macOS /var can be
+        # a symlink to /private/var, and done_run.sh compares the exported
+        # marker path with the path returned by `git rev-parse` byte-for-byte.
+        repo_root = Path(self.git("rev-parse", "--show-toplevel").stdout.strip())
+        repo_digest = hashlib.sha256(
+            str(repo_root).rstrip("/").encode("utf-8")
+        ).hexdigest()
+        marker = repo_root / "docs" / "tmp" / "done-session" / (
+            "run-start-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+        )
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            f"{int(now)} {repo_digest} {os.getpid()}\n", encoding="utf-8"
+        )
+
+        import done_sweep_gates_lib
+
+        prior_env = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(env)
+        writer_stdout = io.StringIO()
+        writer_stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(writer_stdout), contextlib.redirect_stderr(writer_stderr):
+                writer_rc = done_sweep_gates_lib._cmd_write_manifest(
+                    ["--run-marker", str(marker), *writer_args]
+                )
+        finally:
+            os.environ.clear()
+            os.environ.update(prior_env)
+        self.assertEqual(writer_rc, 0, writer_stderr.getvalue() + writer_stdout.getvalue())
+
+        writer_lines = writer_stdout.getvalue().splitlines()
+        manifest = next(
+            (line.removeprefix("manifest: ") for line in writer_lines if line.startswith("manifest: ")),
+            None,
+        )
+        run_id = next(
+            (line.removeprefix("run_id: ") for line in writer_lines if line.startswith("run_id: ")),
+            None,
+        )
+        self.assertTrue(manifest, writer_stdout.getvalue())
+        self.assertTrue(run_id, writer_stdout.getvalue())
+        exports.update(
+            {
+                "DONE_RUN_MARKER": str(marker),
+                "DONE_RUN_MANIFEST": manifest,
+                "DONE_RUN_ID": run_id,
+            }
+        )
+
+        record = json.loads(Path(manifest).read_text(encoding="utf-8"))
+        if len(record["owned_plan_paths"]) != 1:
+            count = len(record["owned_plan_paths"])
+            skip_path = self.done_session() / f"worktree-migrate-baseline-{run_id}-skip.json"
+            skip_path.write_text(
+                "{\"skip\": true, \"reason\": \"owned_plan_paths selects "
+                f"{count} owned plan(s); no single plan baseline to reuse; "
+                "the manual scoped copy is the session's before-commit duty\", "
+                "\"fallback\": \"manual scoped copy\"}\n",
+                encoding="utf-8",
+            )
+            repo_branch = self.git("branch", "--show-current").stdout.strip()
+            if repo_branch:
+                skeleton = self.done_session() / f"worktree-migrate-baseline-{run_id}-manifest.json"
+                skeleton.write_text(
+                    json.dumps(
+                        {"branch": [{"branch": repo_branch, "source": str(repo_root)}], "migrated": []}
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+
+        completed = subprocess.CompletedProcess(
+            args=["seed_setup_session", *setup_args],
+            returncode=0,
+            stdout="".join(
+                f"export {key}={shlex.quote(value)}\n" for key, value in exports.items()
+            ),
+            stderr=lock.stderr + writer_stdout.getvalue() + writer_stderr.getvalue(),
+        )
+        return completed, exports
+
     def commit_session(
         self, setup_proc: subprocess.CompletedProcess | None, exports: dict,
         *commit_args: str,
@@ -309,6 +479,49 @@ class FixtureMixin:
 
     def commit_count(self) -> int:
         return int(self.git("rev-list", "--count", "HEAD").stdout.strip())
+
+
+class FixtureMixinCleanupTest(unittest.TestCase):
+    def test_teardown_removes_read_only_fixture_tree(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="done-run-read-only-cleanup-"))
+        child = root / "child"
+        child.mkdir()
+        (child / "data.txt").write_text("fixture\n", encoding="utf-8")
+
+        def force_remove() -> None:
+            if not root.exists():
+                return
+            for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+                if not path.is_symlink() and path.is_dir():
+                    path.chmod(0o700)
+            root.chmod(0o700)
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.addCleanup(force_remove)
+        child.chmod(0o500)
+        root.chmod(0o500)
+        harness = FixtureMixin()
+        harness.tmp = root
+
+        FixtureMixin.tearDown(harness)
+
+        self.assertFalse(root.exists(), "teardown leaves no read-only fixture tree behind")
+
+
+class FixtureMixinTemplateIsolationTest(FixtureMixin, unittest.TestCase):
+    def test_fixture_template_copies_keep_mutations_isolated(self) -> None:
+        first = self.init_fixture_repo()
+        first_head = self.git("rev-parse", "HEAD").stdout.strip()
+        (first / "first-only.txt").write_text("first fixture\n", encoding="utf-8")
+
+        self.fixture = self.tmp / "second-repo"
+        self.fixture.mkdir()
+        second = self.init_fixture_repo()
+
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), first_head)
+        self.assertFalse((second / "first-only.txt").exists())
+        self.assertEqual((second / "seed.txt").read_text(encoding="utf-8"), "seed\n")
+        self.assertTrue((first / "first-only.txt").exists())
 
 
 class DoneRunSetupTest(FixtureMixin, unittest.TestCase):
@@ -1680,7 +1893,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
 
     def test_single_commit_witness_with_receipts_and_trace_order(self) -> None:
         _, learn_sha, receipts = self.learn_receipt_setup()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "seed.txt", "--owned-path", CORPUS_REL,
         )
         count_before = self.commit_count()
@@ -1731,7 +1944,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
             f"committed: {learn_sha} place backlog item\n"
             "committed: 0123456789abcdef0123456789abcdef01234567 cross-repo sha\n"
         )
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "seed.txt", "--owned-path", CORPUS_REL,
         )
         proc = self.commit_session(
@@ -1753,7 +1966,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
     def test_sync_wiring_pass_and_lock_span(self) -> None:
         self.init_fixture_repo()
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         proc = self.commit_session(
             setup_proc, exports,
             "--stage", "seed.txt", "--subject", "land the session work",
@@ -1892,7 +2105,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         final-closeout keeps the docs-branch sync and its lock span)."""
         self.init_fixture_repo()
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         proc = self.commit_session(
             setup_proc, exports,
             "--stage", "seed.txt", "--subject", "final closeout landing",
@@ -1908,7 +2121,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         self.init_fixture_repo()
         (self.fixture / "seed.txt").write_text("foreign baseline dirt\n")
         (self.fixture / "new.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "new.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "new.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -1926,7 +2139,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         receipt = reviews / "2026-01-01-foo-plan-review-bar-exec-r1.md"
         receipt.write_text("# exec receipt r1\n")
         self.git("add", str(receipt.relative_to(self.fixture)))
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", str(receipt.relative_to(self.fixture)),
         )
         count_before = self.commit_count()
@@ -1958,7 +2171,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         # every worktree line exists at the merge base while a HEAD-gained
         # line is removed, and the blob matches no ancestor vintage
         (self.fixture / "work.txt").write_text("b\nb\n")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -1982,7 +2195,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         # the index+worktree state equals the ancestor vintage: a leaked revert
         (self.fixture / "work.txt").write_text("a\nold\n")
         self.git("add", "work.txt")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -2000,7 +2213,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "stranger.txt").write_text("pre-staged stranger\n")
         self.git("add", "stranger.txt")
         (self.fixture / "new.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "new.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "new.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -2021,7 +2234,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         self.git("commit", "-qm", "add fmt")
         (self.fixture / "fmt.txt").write_text("a  \n")
         (self.fixture / "new.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "new.txt", "--owned-path", "fmt.txt",
         )
         proc = self.commit_session(
@@ -2043,7 +2256,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         self.git("commit", "-qm", "add fmt")
         (self.fixture / "fmt.txt").write_text("a  \n")
         (self.fixture / "new.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "new.txt", "--owned-path", "fmt.txt",
         )
         proc = self.commit_session(
@@ -2071,7 +2284,7 @@ class DoneRunCommitTest(FixtureMixin, unittest.TestCase):
         (side / "new-skill.md").write_text("# new skill\n")
         self.write_user_facts(("skills_repo_path", str(side)))
         (self.fixture / "new.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "new.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "new.txt")
         proc = self.commit_session(
             setup_proc, exports,
             "--stage", "new.txt", "--subject", "land main work",
@@ -2133,7 +2346,9 @@ class DoneRunDescriptionLengthCatchTest(FixtureMixin, unittest.TestCase):
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.write_over_skill()
         self.seed_ledger()
-        setup_proc, exports = self.setup_session(
+        # Setup is not under test here: the seed helper holds the same real
+        # lock + writer boundary as the full runner without its subprocess.
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", self.OVER_SKILL, "--owned-path", self.LEDGER_REL,
         )
         return exports, exports["DONE_RUN_ID"]
@@ -2350,7 +2565,7 @@ class DoneRunGuardFiringCommitTest(FixtureMixin, unittest.TestCase):
     def test_landing_row_written_before_staging_and_lands_once(self) -> None:
         self.seed_repo()
         (self.fixture / "work.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         run_id = exports["DONE_RUN_ID"]
         count_before = self.commit_count()
         proc = self.commit_session(
@@ -2382,7 +2597,7 @@ class DoneRunGuardFiringCommitTest(FixtureMixin, unittest.TestCase):
     def test_commit_hygiene_hit_skips_row_and_lands_anyway(self) -> None:
         self.seed_repo()
         (self.fixture / "work.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         env = self.commit_env()
         env.update(exports)
         # An active fixture deny pattern matching the row's evidence text: the
@@ -2430,7 +2645,7 @@ class DoneRunDeclaredStageChannelTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "b.txt").write_text("b\n")
         self.git("add", "a.txt", "b.txt")
         self.git("commit", "-qm", "add the owned work files")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "a.txt", "--owned-path", "b.txt",
         )
         count_before = self.commit_count()
@@ -2480,7 +2695,7 @@ class DoneRunDeclaredStageChannelTest(FixtureMixin, unittest.TestCase):
         ignored.mkdir()
         (ignored / "scratch.txt").write_text("scratch bytes\n")
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -2634,7 +2849,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
     def test_valid_untrack_lands_index_deletion_and_keeps_local_copy_and_rule(self) -> None:
         self.untrack_fixture()
         self.stage_target_deletion()
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -2676,7 +2891,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
     def test_untrack_path_absent_from_head_refuses_with_state_preserved(self) -> None:
         self.untrack_fixture()
         self.stage_target_deletion()
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         count_before = self.commit_count()
         snap = self.snapshot_state([self.TARGET_REL, "seed.txt"])
         proc = self.commit_session(
@@ -2695,7 +2910,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
     def test_untrack_path_still_indexed_refuses_with_state_preserved(self) -> None:
         self.untrack_fixture()
         # no git rm --cached: the target is still an index entry
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         count_before = self.commit_count()
         snap = self.snapshot_state([self.TARGET_REL, "seed.txt"])
         proc = self.commit_session(
@@ -2717,7 +2932,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.untrack_fixture()
         self.stage_target_deletion()
         (self.fixture / self.TARGET_REL).unlink()
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         count_before = self.commit_count()
         snap = self.snapshot_state(["seed.txt"])
         proc = self.commit_session(
@@ -2743,7 +2958,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.git("add", "plain.txt")
         self.git("commit", "-qm", "add a plain tracked file")
         self.git("rm", "--cached", "--quiet", "plain.txt")
-        setup_proc, exports = self.setup_session("--owned-path", "plain.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "plain.txt")
         count_before = self.commit_count()
         snap = self.snapshot_state(["plain.txt", "seed.txt"])
         proc = self.commit_session(
@@ -2766,7 +2981,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.stage_target_deletion()
         # keystore.bin stays a tracked index entry with unchanged content:
         # outside the staged delta, so the changed-blob scan never sees it
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", self.TARGET_REL,
             "--owned-path", "local-home/keystore.bin",
         )
@@ -2797,7 +3012,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         # caller before the invocation, then declared through --stage
         (self.fixture / "local-home" / "other.conf").write_text("forced bytes\n")
         self.git("add", "-f", "local-home/other.conf")
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         count_before = self.commit_count()
         snap = self.snapshot_state(
             [self.TARGET_REL, "local-home/other.conf", "seed.txt"]
@@ -2824,7 +3039,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         # a real declared edit authored after setup keeps the landing
         # non-empty, so the run reaches the captured-tree invariants
         # instead of the clean-index skip
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         (self.fixture / "seed.txt").write_text("seed\nrace edit\n")
         count_before = self.commit_count()
         head_before = self.git("rev-parse", "HEAD").stdout.strip()
@@ -2869,7 +3084,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.git("add", "-f", "late.conf")
         self.git("commit", "-qm", "force-track the ignored conf file")
         self.stage_target_deletion()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", self.TARGET_REL, "--owned-path", "late.conf",
         )
         (self.fixture / "seed.txt").write_text("seed\nrace edit\n")
@@ -2932,7 +3147,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
         self.untrack_fixture(second)
         self.stage_target_deletion()
         self.git("rm", "--cached", "--quiet", second)
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", self.TARGET_REL, "--owned-path", second,
         )
         count_before = self.commit_count()
@@ -2987,7 +3202,7 @@ class DoneRunUntrackDeclarationTest(FixtureMixin, unittest.TestCase):
             ledger_before = ledger.read_bytes()
         else:
             ledger_before = None
-        setup_proc, exports = self.setup_session("--owned-path", self.TARGET_REL)
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.TARGET_REL)
         proc = self.commit_session(
             setup_proc, exports,
             "--untrack", "never-tracked.conf",
@@ -3030,7 +3245,9 @@ class DoneRunDeclaredStageRecoveryReplayTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "closeout.md").write_text("committed run file\n")
         self.git("add", RECORD_ONLY_CORPUS_REL, "closeout.md")
         self.git("commit", "-qm", "add the run file and the record-only corpus")
-        return self.setup_session("--owned-path", "seed.txt")
+        # Setup is not under test here: the seed helper holds the same real
+        # lock + writer boundary as the full runner without its subprocess.
+        return self.seed_setup_session("--owned-path", "seed.txt")
 
     def learn_edit(self, body: str) -> None:
         (self.fixture / "closeout.md").write_text(f"committed run file\n{body}\n")
@@ -3250,7 +3467,7 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
 
     def test_empty_declared_set_over_staged_foreign_file_refuses_at_landing_commit(self) -> None:
         self.worktree_fixture()
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         self.provision_skip_evidence(exports)
         # the foreign entry is staged AFTER setup, owned by no declared set
         (self.fixture / "foreign.txt").write_text("foreign staged work\n")
@@ -3275,7 +3492,7 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
 
     def test_clean_index_empty_declared_set_keeps_existing_skip_line(self) -> None:
         self.worktree_fixture()
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         self.provision_skip_evidence(exports)
         count_before = self.commit_count()
         proc = self.commit_session(
@@ -3293,7 +3510,7 @@ class DoneRunEmptyDeclaredForeignIndexTest(FixtureMixin, unittest.TestCase):
 
     def test_owned_declared_set_lands_exactly_its_paths_in_the_worktree(self) -> None:
         self.worktree_fixture()
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         self.provision_skip_evidence(exports)
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
         count_before = self.commit_count()
@@ -3340,7 +3557,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         self.git("add", "work.txt")
         ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         return exports, ancestor_blob, prior_head
 
     def install_hook(self, name: str, body: str) -> Path:
@@ -3469,7 +3686,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "gone.txt").unlink()
         self.git("rm", "--cached", "--quiet", "gone.txt")
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "work.txt", "--owned-path", "gone.txt",
         )
         proc = self.run_commit(
@@ -3502,7 +3719,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         self.git("add", "work.txt", "other.txt")
         ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "work.txt", "--owned-path", "other.txt",
         )
         proc = self.run_commit(
@@ -3532,7 +3749,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         self.git("add", "work.txt")
         ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         proc = self.run_commit(
             "--stage", "work.txt",
             "--authorize-ancestor-restoration", "work.txt", ancestor_blob,
@@ -3682,7 +3899,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
             self.git("add", name)
         ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "work.txt", "--owned-path", "other.txt",
         )
         count_before = self.commit_count()
@@ -4153,7 +4370,7 @@ class DoneRunAuthorizedRestorationTest(FixtureMixin, unittest.TestCase):
         self.git("rm", "--cached", "--quiet", "gone.txt")
         ancestor_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "work.txt", "--owned-path", "gone.txt",
         )
         proc = self.run_commit(
@@ -4241,7 +4458,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_releases_both_locks_finalizes_manifest_removes_checkpoint(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "finalize-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "finalize-fixture")
         run_id = exports["DONE_RUN_ID"]
         checkpoint = self.make_checkpoint(run_id)
         self.assertTrue(checkpoint.exists())
@@ -4306,7 +4523,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_identity_refusal_with_held_lock_reports_without_full_retry(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "refusal-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "refusal-fixture")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         # The post-removal refusal shape: a schema-valid manifest whose
         # recorded root is a foreign 64-hex fingerprint, so finalize-manifest
@@ -4333,7 +4550,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_other_incomplete_cause_with_held_lock_keeps_full_retry(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "incomplete-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "incomplete-fixture")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         # Another incomplete-manifest cause, no identity refusal: the
         # session dir is read-only, so the finalize's own rewrite fails
@@ -4350,13 +4567,13 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_identity_refusal_unreadable_manifest_routes_refusal_disposition(self) -> None:
         """[class: REPOSITORY_TEST] Residual wrapper#identity-arm-invalid-json-miss
-        (the 2026-10-31 closeout-gates trio, landed 52750a1fe): an
+        (the 2026-10-31 closeout-gates trio, landed 843cc9709): an
         unparseable manifest makes the completion probe print `unknown`, and
         the held-lock guidance must still route to the refusal-specific
         disposition when the finalize above refused the manifest's identity,
         never to the generic unreadable arm."""
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "unreadable-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "unreadable-fixture")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         manifest.write_text("{not json")
         # The re-run shape: --run-id keeps the run bound while the manifest
@@ -4376,14 +4593,14 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_marking_withheld_with_held_lock_never_claims_identity_refusal(self) -> None:
         """[class: REPOSITORY_TEST] Residual wrapper-hold-guard-untested
-        (the 2026-10-31 closeout-gates trio, landed 52750a1fe): with the
+        (the 2026-10-31 closeout-gates trio, landed 843cc9709): with the
         marking withheld by the deferred-squash guard, the held-lock guidance
         keeps the full-retry advice and the identity-refusal disposition never
         prints (the `marking_withheld -eq 0` guard pins the deferred-squash
         path to its own resume advice)."""
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "withheld-held-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "withheld-held-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/withheld-held")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4401,7 +4618,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_completed_manifest_with_held_lock_keeps_release_only_retry(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "completed-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "completed-fixture")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         # A completed manifest: the finalize step has nothing left to mark,
         # so the only safe retry is release-only.
@@ -4437,7 +4654,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_deferred_squash_loud_line_withholds_marking(self) -> None:
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "deferred-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "deferred-fixture")
         run_id = exports["DONE_RUN_ID"]
         # A run-branch landing commit the squash never carried to the base.
         self.git("checkout", "-qb", "run/deferred")
@@ -4479,7 +4696,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_rerun_after_squash_lands_consumes_withheld_state(self) -> None:
         self.init_fixture_repo()
         base_branch = self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "resume-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "resume-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/resume")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4529,7 +4746,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_landed_landing_keeps_current_success_shape(self) -> None:
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "landed-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "landed-fixture")
         run_id = exports["DONE_RUN_ID"]
         # The primary-placement shape: the landing commit sits on the base.
         (self.fixture / "work.txt").write_text("work\n")
@@ -4551,7 +4768,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_squash_proof_tree_match_keeps_success_shape(self) -> None:
         self.init_fixture_repo()
         base_branch = self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "squashed-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "squashed-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/squashed")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4579,7 +4796,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_rebased_squash_proof_patch_id_match_keeps_success_shape(self) -> None:
         self.init_fixture_repo()
         base_branch = self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "rebased-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "rebased-fixture")
         run_id = exports["DONE_RUN_ID"]
         # The facts append is a tracked-file edit; commit it so the later
         # rebase runs against a clean tree.
@@ -4619,7 +4836,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_unresolvable_base_skips_honesty_check_with_complete_marking(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "failopen-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "failopen-fixture")
         run_id = exports["DONE_RUN_ID"]
         # A ledger landing commit with a base that cannot resolve: the
         # fixture facts carry no base_branch key and no origin/HEAD exists,
@@ -4644,7 +4861,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_origin_head_fallback_defers_naming_short_branch(self) -> None:
         self.init_fixture_repo()
         base_branch = self.git("symbolic-ref", "--short", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session("--label", "origin-head-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "origin-head-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/origin-head")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4674,7 +4891,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_guard_child_defers_after_marking_names_branch_commit(self) -> None:
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "child-corner-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "child-corner-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/childcorner")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4708,7 +4925,9 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_squash_proof_window_bound_pins_500_commit_scan(self) -> None:
         self.init_fixture_repo()
         base_branch = self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "window-fixture")
+        facts_path = self.fixture / ".ai-playbook" / "facts.md"
+        facts_with_base_branch = facts_path.read_text(encoding="utf-8")
+        setup_proc, exports = self.seed_setup_session("--label", "window-fixture")
         run_id = exports["DONE_RUN_ID"]
         self.git("checkout", "-qb", "run/window")
         (self.fixture / "work.txt").write_text("work\n")
@@ -4726,11 +4945,32 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         squash = self.git("commit-tree", tree, "-p", base_tip, "-m", "squash").stdout.strip()
         self.git("update-ref", f"refs/heads/{base_branch}", squash, base_tip)
         self.git("checkout", base_branch)
-        marker = self.fixture / "advance.txt"
+        history_start = self.git("rev-parse", "HEAD").stdout.strip()
+        # `git commit` once per history entry costs over a thousand Git
+        # process launches and does not exercise the behavior under test.
+        # Feed the same 501 distinct-tree commits to Git's bulk importer, then
+        # sync the checked-out worktree once before the real finalize scan.
+        commit_time = int(time.time())
+        imports = []
         for i in range(501):
-            marker.write_text(f"advance {i}\n")
-            self.git("add", "advance.txt")
-            self.git("commit", "-qm", f"advance {i}")
+            message = f"advance {i}\n"
+            content = message
+            imports.append(
+                f"commit refs/heads/{base_branch}\n"
+                f"mark :{i + 1}\n"
+                f"committer t <t@example.test> {commit_time + i} +0000\n"
+                f"data {len(message.encode('utf-8'))}\n{message}"
+                f"from {history_start if i == 0 else ':' + str(i)}\n"
+                f"M 100644 inline advance.txt\n"
+                f"data {len(content.encode('utf-8'))}\n{content}\n"
+            )
+        imported = subprocess.run(
+            ["git", "-C", str(self.fixture), "fast-import", "--quiet"],
+            input="".join(imports), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.git("reset", "--hard", base_branch)
+        facts_path.write_text(facts_with_base_branch, encoding="utf-8")
         env = self.runner_env()
         env.update(exports)
         proc = self.run_finalize(env=env)
@@ -4807,7 +5047,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
             "# Plan\n\nreview record: 2026-10-11-cited-plan-review-fixture-exec-r1.md\n",
             encoding="utf-8",
         )
-        setup_proc, exports = self.setup_session("--label", "scan-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "scan-fixture")
         env = self.runner_env()
         env.update(exports)
         proc = self.run_finalize(env=env)
@@ -4846,7 +5086,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def finalize_from_fixture(
         self, label: str, *setup_args: str,
     ) -> subprocess.CompletedProcess:
-        setup_proc, exports = self.setup_session("--label", label, *setup_args)
+        setup_proc, exports = self.seed_setup_session("--label", label, *setup_args)
         env = self.runner_env()
         env.update(exports)
         return self.run_finalize(env=env)
@@ -5040,7 +5280,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger()
         (self.fixture / "work.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         run_id = exports["DONE_RUN_ID"]
         firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
         proc = self.commit_session(
@@ -5076,7 +5316,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger()
         (self.fixture / "work.txt").write_text("session work\n")
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         run_id = exports["DONE_RUN_ID"]
         metachar_firing = f"description-length:catch:ev-with[0]brackets:run_id={run_id}"
         absent_firing = f"description-length:catch:absent-evidence:run_id={run_id}"
@@ -5104,7 +5344,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_fallback_child_lands_row_under_parent_lock(self) -> None:
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger()
-        setup_proc, exports = self.setup_session("--label", "fallback-child-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "fallback-child-fixture")
         run_id = exports["DONE_RUN_ID"]
         firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
         count_before = self.commit_count()
@@ -5138,7 +5378,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("#!/bin/sh\nexit 1\n")
         hook.chmod(0o755)
-        setup_proc, exports = self.setup_session("--label", "child-precommit-fail")
+        setup_proc, exports = self.seed_setup_session("--label", "child-precommit-fail")
         run_id = exports["DONE_RUN_ID"]
         firing = f"description-length:catch:fixture-evidence:run_id={run_id}"
         count_before = self.commit_count()
@@ -5172,7 +5412,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the fixture deletes the branch ref after setup to reach the shape.
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger()
-        setup_proc, exports = self.setup_session("--label", "child-unborn-head")
+        setup_proc, exports = self.seed_setup_session("--label", "child-unborn-head")
         self.git("update-ref", "-d", "refs/heads/feature/PROJ-1234-done-run")
         # No hook injection: on unborn HEAD the child dies at the captured
         # landing's HEAD resolution before any hook would run; the failure is
@@ -5208,7 +5448,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_postcommit_child_failure_preserves_committed_row(self) -> None:
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger()
-        setup_proc, exports = self.setup_session("--label", "child-postcommit-fail")
+        setup_proc, exports = self.seed_setup_session("--label", "child-postcommit-fail")
         run_id = exports["DONE_RUN_ID"]
         # The owned-commits ledger path is a directory: the child's fused
         # owned-commits append fails right after its ref update lands.
@@ -5245,7 +5485,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the release and status checks still run.
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         self.seed_tracked_guard_ledger(payload="{not json")
-        setup_proc, exports = self.setup_session("--label", "append-fail-fixture")
+        setup_proc, exports = self.seed_setup_session("--label", "append-fail-fixture")
         env = self.commit_env()
         env.update(exports)
         proc = self.run_finalize(
@@ -5279,7 +5519,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_state_line_reports_applied_on_bound_success(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-applied")
+        setup_proc, exports = self.seed_setup_session("--label", "state-applied")
         run_id = exports["DONE_RUN_ID"]
         env = self.runner_env()
         env.update(exports)
@@ -5293,7 +5533,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_state_line_reports_already_complete_on_release_only_retry(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-already")
+        setup_proc, exports = self.seed_setup_session("--label", "state-already")
         run_id = exports["DONE_RUN_ID"]
         # A completed manifest: this invocation applies nothing, so the line
         # names the already-complete outcome (a release-only retry).
@@ -5314,7 +5554,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
     def test_finalize_state_line_reports_withheld_besides_deferred_lines(self) -> None:
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "state-withheld")
+        setup_proc, exports = self.seed_setup_session("--label", "state-withheld")
         run_id = exports["DONE_RUN_ID"]
         # A run-branch landing commit the squash never carried to the base.
         self.git("checkout", "-qb", "run/state-withheld")
@@ -5348,7 +5588,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the classification the FAILED advice carries, and the existing
         # do-not-rerun advice stays the refused arm's duty.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-refused")
+        setup_proc, exports = self.seed_setup_session("--label", "state-refused")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.rewrite_manifest(
             manifest, repo_root=hashlib.sha256(b"/elsewhere/repo").hexdigest(),
@@ -5378,7 +5618,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the exact-line equality. (A pure reordering of the emission is not
         # caught here; the line's position is unwitnessed — r2 finding 3.)
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "identity-free")
+        setup_proc, exports = self.seed_setup_session("--label", "identity-free")
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.rewrite_manifest(
             manifest, repo_root=hashlib.sha256(b"/elsewhere/repo").hexdigest(),
@@ -5408,7 +5648,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # A non-identity finalize-manifest failure (the read-only-session
         # fixture shape): marking=failed plus the concrete re-run duty.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-failed")
+        setup_proc, exports = self.seed_setup_session("--label", "state-failed")
         run_id = exports["DONE_RUN_ID"]
         self.done_session().chmod(0o555)
         env = self.runner_env()
@@ -5427,7 +5667,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_state_line_not_bound_lib_note_names_run_id_arg(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-libnote")
+        setup_proc, exports = self.seed_setup_session("--label", "state-libnote")
         # The lib's no-run-manifest note: the --run-id arg names a record the
         # session directory does not hold, so nothing was bound and the line
         # names the argument with marking=not-bound, exit 0 preserved.
@@ -5459,7 +5699,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # beside the release-failure FAILED advice with the non-zero exit
         # preserved.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-rlfail-applied")
+        setup_proc, exports = self.seed_setup_session("--label", "state-rlfail-applied")
         run_id = exports["DONE_RUN_ID"]
         proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
         self.assertNotEqual(proc.returncode, 0)
@@ -5476,7 +5716,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # stands beside the release-failure FAILED advice with the non-zero
         # exit preserved.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-rlfail-already")
+        setup_proc, exports = self.seed_setup_session("--label", "state-rlfail-already")
         run_id = exports["DONE_RUN_ID"]
         self.rewrite_manifest(Path(exports["DONE_RUN_MANIFEST"]), complete=True)
         proc = self.run_finalize(env=self.held_lock_finalize_env(exports))
@@ -5500,7 +5740,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # The expected form is derived from the real tr/sed/cut pipeline, not
         # restated from the sanitizer's comment.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "state-hostile")
+        setup_proc, exports = self.seed_setup_session("--label", "state-hostile")
         hostile = (
             "a\nb\tc\rd e|f;g`h$i'j\"k(l)m&n*o+p,q.r-s" + "Z" * 70
         )
@@ -5527,7 +5767,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # second advice line or smuggle metacharacters into the re-run form.
         self.init_fixture_repo()
         self.facts_with_base_branch()
-        setup_proc, exports = self.setup_session("--label", "deferred-hostile")
+        setup_proc, exports = self.seed_setup_session("--label", "deferred-hostile")
         # No newline/CR/tab: the hostile bytes must survive as a single-line
         # ledger filename for the withholding arm to key on.
         hostile = "a b|c;d$e%f^g&h*i(j)k" + "Z" * 70
@@ -5613,7 +5853,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # no explicit args) must refuse instead of marking the peer record,
         # and the marker-resolved peer run id appears nowhere in the output.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "unbound-marker")
+        setup_proc, exports = self.seed_setup_session("--label", "unbound-marker")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
         peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
@@ -5668,7 +5908,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # fallback binds the newest canonical record. The env-lost finalize
         # must refuse, and the fallback-resolved peer id appears nowhere.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "unbound-fallback")
+        setup_proc, exports = self.seed_setup_session("--label", "unbound-fallback")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
         active_marker = json.loads(own_manifest.read_text())["marker"]
@@ -5697,7 +5937,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the releases already ran), never the release-only-safe advice the
         # complete peer manifest would otherwise earn.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "unbound-held")
+        setup_proc, exports = self.seed_setup_session("--label", "unbound-held")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         active_marker = json.loads(own_manifest.read_text())["marker"]
         peer_manifest = self.craft_manifest_file(
@@ -5739,7 +5979,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # resolver (canonical-name validation applies), so the newest-marker
         # peer record is never bound or marked.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "manifest-bound")
+        setup_proc, exports = self.seed_setup_session("--label", "manifest-bound")
         own_id = exports["DONE_RUN_ID"]
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
@@ -5774,7 +6014,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # peer record and exits 0, so this case is RED on that mutant and
         # GREEN on the real equality).
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "resolver-rejected")
+        setup_proc, exports = self.seed_setup_session("--label", "resolver-rejected")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         own_bytes = own_manifest.read_bytes()
         self.release_setup_hold(exports)
@@ -5810,7 +6050,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # never overridable through the fallback and the peer record the
         # shadow copies is never checkpointed or marked.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "shadow-name")
+        setup_proc, exports = self.seed_setup_session("--label", "shadow-name")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         own_bytes = own_manifest.read_bytes()
         self.release_setup_hold(exports)
@@ -5855,7 +6095,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # resolves), recorded in the r1 staging doc's F5 body. The explicit
         # --run-id sole-evidence shape is exempt by design.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "agreement-rekey")
+        setup_proc, exports = self.seed_setup_session("--label", "agreement-rekey")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         checkpoint = self.make_checkpoint(exports["DONE_RUN_ID"])
         self.release_setup_hold(exports)
@@ -5889,7 +6129,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # marking=applied, never the false `run_id=none marking=not-bound`
         # exit 0 over a resolution that selected a record.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "bound-fallback")
+        setup_proc, exports = self.seed_setup_session("--label", "bound-fallback")
         own_id = exports["DONE_RUN_ID"]
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         checkpoint = self.make_checkpoint(own_id)
@@ -5929,7 +6169,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # the selected peer id is never echoed and neither record is
         # mutated.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "disagreeing-id")
+        setup_proc, exports = self.seed_setup_session("--label", "disagreeing-id")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
         peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
@@ -5962,7 +6202,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # marker is newest, so nothing ties the selected peer record to this
         # run and the invocation refuses with the shared shape.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "manifest-hint-only")
+        setup_proc, exports = self.seed_setup_session("--label", "manifest-hint-only")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
         peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
@@ -5997,7 +6237,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # run-manifest-<RUN_ID>.json): the release-only-safe advice, never
         # the peer-derived full-retry advice.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "divergent-target")
+        setup_proc, exports = self.seed_setup_session("--label", "divergent-target")
         own_id = exports["DONE_RUN_ID"]
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         # The peer record is crafted from the still-incomplete own record,
@@ -6048,7 +6288,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # wrong-run hazard is contained on the marker arm, not only the
         # newest-glob fallback — and the peer manifest bytes stay untouched.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "safety-marker")
+        setup_proc, exports = self.seed_setup_session("--label", "safety-marker")
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
         peer_marker = self.craft_confirmed_marker("run-start-20991231T235959Z")
@@ -6080,7 +6320,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # selected manifest's run_id stays bound: the marking proceeds
         # unchanged with marking=applied and the checkpoint is consumed.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "keep-working")
+        setup_proc, exports = self.seed_setup_session("--label", "keep-working")
         own_id = exports["DONE_RUN_ID"]
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         checkpoint = self.make_checkpoint(own_id)
@@ -6113,7 +6353,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
         # resolver selected stays byte-identical, and the line reports the
         # own id with marking=applied.
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "sole-evidence")
+        setup_proc, exports = self.seed_setup_session("--label", "sole-evidence")
         own_id = exports["DONE_RUN_ID"]
         own_manifest = Path(exports["DONE_RUN_MANIFEST"])
         self.release_setup_hold(exports)
@@ -6415,7 +6655,7 @@ class DoneRunFinalizeTest(FixtureMixin, unittest.TestCase):
 
     def test_finalize_primary_dispatch_is_silent_noop_no_rewrite_no_report(self) -> None:
         self.init_fixture_repo()
-        setup_proc, exports = self.setup_session("--label", "shadow-primary-dispatch")
+        setup_proc, exports = self.seed_setup_session("--label", "shadow-primary-dispatch")
         run_id = exports["DONE_RUN_ID"]
         manifest = Path(exports["DONE_RUN_MANIFEST"])
         env = self.runner_env()
@@ -6660,7 +6900,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.git("symbolic-ref", "refs/remotes/origin/HEAD",
                  "refs/remotes/origin/main")
         self.stage_deletion_already_staged("records/audit.md")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "records/audit.md",
         )
         count_before = self.commit_count()
@@ -6689,7 +6929,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.git("add", "gone.txt")
         self.git("commit", "-qm", "add gone")
         (self.fixture / "gone.txt").unlink()
-        setup_proc, exports = self.setup_session("--owned-path", "gone.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "gone.txt")
         proc = self.commit_session(
             setup_proc, exports,
             "--stage", "gone.txt", "--subject", "drop the tracked file",
@@ -6701,7 +6941,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
 
     def test_absent_untracked_declaration_refuses_named(self) -> None:
         self.init_fixture_repo(branch="feature/PROJ-1-done-run")
-        setup_proc, exports = self.setup_session("--owned-path", "ghost.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "ghost.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -6723,7 +6963,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         kept_rel = "docs/history/plans/2026-01-02-kept-plan.md"
         (self.fixture / kept_rel).write_text("# kept plan\nwork\n")
         self.stage_deletion_already_staged(plan_rel)
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", plan_rel, "--owned-path", kept_rel,
         )
         proc = self.commit_session(
@@ -6760,7 +7000,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.git("add", "new.txt")
         self.git("commit", "-qm", "add new work")
         self.stage_deletion_already_staged("old.txt")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "old.txt", "--owned-path", "new.txt",
         )
         proc = self.commit_session(
@@ -6782,7 +7022,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.git("commit", "-qm", "add artifact")
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
         self.stage_deletion_already_staged("artifact.txt")
-        setup_proc, exports = self.setup_session(
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "seed.txt", "--owned-path", "artifact.txt",
         )
         proc = self.commit_session(
@@ -6803,7 +7043,7 @@ class DoneRunDeclaredDeletionTest(FixtureMixin, unittest.TestCase):
         self.git("commit", "-qm", "add stranger")
         (self.fixture / "new.txt").write_text("session work\n")
         self.stage_deletion_already_staged("stranger.txt")
-        setup_proc, exports = self.setup_session("--owned-path", "new.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "new.txt")
         count_before = self.commit_count()
         proc = self.commit_session(
             setup_proc, exports,
@@ -6858,7 +7098,9 @@ class DoneRunDirtCorrectionSetTest(FixtureMixin, unittest.TestCase):
             (self.fixture / rel).write_text(content)
             self.git("add", rel)
             blobs[rel] = self.git("ls-files", "-s", rel).stdout.split()[1]
-        setup_proc, exports = self.setup_session(
+        # Setup is not under test here: the seed helper holds the same real
+        # lock + writer boundary as the full runner without its subprocess.
+        setup_proc, exports = self.seed_setup_session(
             "--owned-path", "work.txt", "--owned-path", "other.txt",
         )
         return exports, prior_head, blobs
@@ -7175,7 +7417,9 @@ class DoneRunDirtCachedDiffAuthorizationSeparationTest(FixtureMixin, unittest.Te
         self.git("add", "work.txt")
         vintage_blob = self.git("rev-parse", "HEAD~1:work.txt").stdout.strip()
         prior_head = self.git("rev-parse", "HEAD").stdout.strip()
-        setup_proc, exports = self.setup_session("--owned-path", "work.txt")
+        # Setup is not under test here: the seed helper holds the same real
+        # lock + writer boundary as the full runner without its subprocess.
+        setup_proc, exports = self.seed_setup_session("--owned-path", "work.txt")
         return exports, prior_head, vintage_blob
 
     def test_dirt_only_authorization_leaves_cached_diff_refusal(self) -> None:
@@ -7446,7 +7690,7 @@ class DoneRunGitEnvironmentIsolationTest(FixtureMixin, unittest.TestCase):
         self.init_fixture_repo(branch="feature/PROJ-1234-done-run")
         (self.fixture / "seed.txt").write_text("seed\nwork\n")
         count_before = self.commit_count()
-        setup_proc, exports = self.setup_session("--owned-path", "seed.txt")
+        setup_proc, exports = self.seed_setup_session("--owned-path", "seed.txt")
         proc = self.commit_session(
             setup_proc, exports,
             "--stage", "seed.txt",
@@ -8672,6 +8916,15 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         "subprocess.run(['git', 'add', 'stranger-window.txt'], check=True)\n"
         "print('OUTCOME: pass')\n"
     )
+    # The same pre-landing helper window, but mutating the declared owned
+    # log path itself: worktree-only bytes (never staged), so the commit-
+    # time worktree bytes diverge from both the staged blob and the
+    # declared expectation.
+    DOCTOR_RS_GUARD_APPENDS_TO_DECLARED_LOG = (
+        "with open('" + PLAN_LOG + "', 'a') as handle:\n"
+        "    handle.write('\\n- capture-window worktree append\\n')\n"
+        "print('OUTCOME: pass')\n"
+    )
 
     # ---- fixture helpers -------------------------------------------------- #
 
@@ -8686,7 +8939,9 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         (log_dir / "EXEC-PROMPTS.md").write_text("# EXEC prompts\n")
         self.git("add", self.PLAN_LOG, self.EXEC_LOG)
         self.git("commit", "-qm", "seed the rolling prompt logs")
-        setup_proc, exports = self.setup_session("--owned-path", self.PLAN_LOG)
+        # Setup is not under test here: the seed helper holds the same real
+        # lock + writer boundary as the full runner without its subprocess.
+        setup_proc, exports = self.seed_setup_session("--owned-path", self.PLAN_LOG)
         branch = self.git("branch", "--show-current").stdout.strip()
         head = self.git("rev-parse", "HEAD").stdout.strip()
         return exports, "refs/heads/" + branch, head
@@ -8695,6 +8950,16 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         env = self.commit_env()
         env.update(exports)
         return env
+
+    def capture_refusal_snapshot(self, *paths: str) -> tuple[str, str, dict[str, bytes | None]]:
+        """Capture the ref, exact index listing, and selected worktree bytes."""
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        index = self.git("ls-files", "-s", "-z").stdout
+        worktree = {}
+        for path in paths:
+            target = self.fixture / path
+            worktree[path] = target.read_bytes() if target.exists() else None
+        return head, index, worktree
 
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").stdout.strip()
@@ -8938,6 +9203,7 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         (self.fixture / "stranger.txt").write_text("foreign staged bytes\n")
         self.git("add", "stranger.txt")
         (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        before = self.capture_refusal_snapshot("stranger.txt", self.PLAN_LOG)
         proc = self.run_commit(
             "--stage", self.PLAN_LOG,
             "--subject", "log: append beside a foreign staging",
@@ -8945,6 +9211,8 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
             env=self.rolling_env(exports),
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
+        after = self.capture_refusal_snapshot("stranger.txt", self.PLAN_LOG)
+        self.assertEqual(before, after)
         self.assertIn(
             "a staged path outside the declared owned log set", proc.stderr,
         )
@@ -8988,6 +9256,183 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         self.assertEqual(self.head(), oid)
         self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
         self.assert_cleanup_blocks_on_residue(proc)
+
+    # ---- writer-declared expected-bytes advisory (--log-expected) --------- #
+    # Plan 2026-11-17-declared-log-path-foreign-unstaged-byte-carry.md
+    # Task 1: the writer declares each declared owned log path's expected
+    # post-edit blob id and the transaction compares it against the staged
+    # blob id after its own staging; a mismatch emits one warning-only
+    # advisory naming both blob ids (a divergence signal, never an
+    # authorship finding) and the commit proceeds; usage-class arms refuse
+    # with rc 3 before anything mutates.
+
+    def log_expected_advisories(self, proc: subprocess.CompletedProcess) -> list[str]:
+        return [
+            line for line in proc.stderr.splitlines()
+            if "log-expected advisory" in line
+        ]
+
+    def test_log_expected_mismatch_advises_once_and_lands(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        # the writer's authored bytes at its final edit, declared through
+        # hash-object before the commit
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        expected = self.git("hash-object", self.PLAN_LOG).stdout.strip()
+        # a parallel emitter's unstaged append rides the same declared path:
+        # the staged bytes go beyond the declared expectation
+        with (self.fixture / self.PLAN_LOG).open("a", encoding="utf-8") as handle:
+            handle.write("\n- parallel emitter's unstaged entry\n")
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append the prompt entry",
+            "--expected-ref", ref, "--expected-oid", oid,
+            "--log-expected", f"{self.PLAN_LOG}={expected}",
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # ONE single-line advisory naming the path and both blob ids, a
+        # divergence signal routed through the Write boundary rule home
+        advisories = self.log_expected_advisories(proc)
+        self.assertEqual(len(advisories), 1)
+        self.assertIn(self.PLAN_LOG, advisories[0])
+        self.assertIn(expected, advisories[0])
+        self.assertIn("divergence signal", advisories[0])
+        self.assertIn(
+            "docs/history/backlog/PLAN-PROMPTS.md Standing rules", advisories[0],
+        )
+        staged_blob = self.git("rev-parse", f"HEAD:{self.PLAN_LOG}").stdout.strip()
+        self.assertNotEqual(staged_blob, expected)
+        self.assertIn(staged_blob, advisories[0])
+        # the commit proceeded and landed on the captured pair
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+        self.assertIn(
+            "parallel emitter's unstaged entry",
+            self.git("show", f"HEAD:{self.PLAN_LOG}").stdout,
+        )
+
+    def test_log_expected_advisory_binds_to_staged_blob_not_commit_time_worktree_bytes(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        # the writer's authored bytes at its final edit, declared through
+        # hash-object before the commit
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        expected = self.git("hash-object", self.PLAN_LOG).stdout.strip()
+        # a parallel emitter's unstaged append rides the same declared path
+        # before the runner's staging, so the staged blob already diverges
+        # from the declared expectation
+        with (self.fixture / self.PLAN_LOG).open("a", encoding="utf-8") as handle:
+            handle.write("\n- parallel emitter's unstaged entry\n")
+        # the doctored reverse-squash guard appends further bytes to the
+        # SAME declared path in the pre-landing helper window (the
+        # capture-window doctoring idiom): after the runner's own git add
+        # and the advisory's staged-blob read, before the landing commit,
+        # so at commit time the worktree bytes differ from both the staged
+        # blob and the declared expectation
+        runner_dir = self.temp_runner_dir({
+            "reverse_squash_guard.py": self.DOCTOR_RS_GUARD_APPENDS_TO_DECLARED_LOG,
+        })
+        proc = self.run_temp_commit(
+            runner_dir, exports,
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append under a capture-window worktree mutation",
+            "--expected-ref", ref, "--expected-oid", oid,
+            "--log-expected", f"{self.PLAN_LOG}={expected}",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # ONE single-line advisory naming the DECLARED expected blob id and
+        # the INDEX's staged blob id (never the commit-time worktree bytes
+        # the doctored append produced); this fails for an implementation
+        # that hashes the worktree file at commit time instead of reading
+        # the staged blob at the transaction's binding point
+        advisories = self.log_expected_advisories(proc)
+        self.assertEqual(len(advisories), 1)
+        self.assertIn(self.PLAN_LOG, advisories[0])
+        self.assertIn(expected, advisories[0])
+        staged_blob = self.git("rev-parse", f"HEAD:{self.PLAN_LOG}").stdout.strip()
+        self.assertNotEqual(staged_blob, expected)
+        self.assertIn(staged_blob, advisories[0])
+        worktree_blob = self.git("hash-object", self.PLAN_LOG).stdout.strip()
+        self.assertNotEqual(worktree_blob, staged_blob)
+        self.assertNotIn(worktree_blob, advisories[0])
+        # the binding point landed the staged bytes; the doctored append
+        # stayed unstaged worktree residue beside them
+        landed = self.git("show", f"HEAD:{self.PLAN_LOG}").stdout
+        self.assertIn("parallel emitter's unstaged entry", landed)
+        self.assertNotIn("capture-window worktree append", landed)
+        self.assertIn(
+            "capture-window worktree append",
+            (self.fixture / self.PLAN_LOG).read_text(encoding="utf-8"),
+        )
+        # the commit proceeded and landed on the captured pair
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+
+    def test_log_expected_match_passes_silently(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        expected = self.git("hash-object", self.PLAN_LOG).stdout.strip()
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append the prompt entry",
+            "--expected-ref", ref, "--expected-oid", oid,
+            "--log-expected", f"{self.PLAN_LOG}={expected}",
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # a matching expectation passes silently: no advisory anywhere
+        self.assertNotIn("log-expected advisory", proc.stdout + proc.stderr)
+        staged_blob = self.git("rev-parse", f"HEAD:{self.PLAN_LOG}").stdout.strip()
+        self.assertEqual(staged_blob, expected)
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+
+    def test_log_expected_malformed_blob_id_refuses_usage(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        (self.fixture / self.PLAN_LOG).write_text("# PLAN prompts\n" + self.ENTRY)
+        count_before = self.commit_count()
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: append the prompt entry",
+            "--expected-ref", ref, "--expected-oid", oid,
+            "--log-expected", f"{self.PLAN_LOG}=not-a-blob-id",
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertIn("malformed expected blob id", proc.stderr)
+        # nothing staged or committed, the writer's delta untouched
+        self.assertEqual(self.staged_paths(), [])
+        self.assertEqual(self.head(), oid)
+        self.assertEqual(self.commit_count(), count_before)
+        self.assertTrue(self.worktree_dirty(self.PLAN_LOG))
+        self.assert_no_rolling_cleanup(proc)
+
+    def test_log_expected_deletion_shape_advises_and_lands(self) -> None:
+        exports, ref, oid = self.log_fixture()
+        # a worktree-absent tracked declared path stages as a deletion
+        head_blob = self.git("rev-parse", f"HEAD:{self.PLAN_LOG}").stdout.strip()
+        (self.fixture / self.PLAN_LOG).unlink()
+        proc = self.run_commit(
+            "--stage", self.PLAN_LOG,
+            "--subject", "log: the declared log path stages as a deletion",
+            "--expected-ref", ref, "--expected-oid", oid,
+            "--log-expected", f"{self.PLAN_LOG}={head_blob}",
+            env=self.rolling_env(exports),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # the deletion-shape advisory names the path, the declared expected
+        # blob id, and the no-staged-content shape
+        advisories = self.log_expected_advisories(proc)
+        self.assertEqual(len(advisories), 1)
+        self.assertIn("deletion shape", advisories[0])
+        self.assertIn(self.PLAN_LOG, advisories[0])
+        self.assertIn(head_blob, advisories[0])
+        self.assertIn("no staged content", advisories[0])
+        # the commit proceeded and the landed commit records the deletion
+        parents = self.git("rev-list", "--parents", "-1", "HEAD").stdout.split()
+        self.assertEqual(parents, [self.head(), oid])
+        self.assertEqual(
+            self.git("ls-tree", "HEAD", "--", self.PLAN_LOG).stdout.strip(), "",
+        )
 
     # ---- done-lock consumers against an active primary log write ---------- #
 
@@ -9286,12 +9731,15 @@ class DoneRunRollingLogRefBoundCommitTest(FixtureMixin, unittest.TestCase):
         # a later writer of the same log refuses before git add, leaving
         # the residue bytes untouched
         (self.fixture / writer_log).write_text("# log\n- a later entry\n")
+        before = self.capture_refusal_snapshot(writer_log, other_log)
         later = self.run_commit(
             "--stage", writer_log, "--subject", "log: later same-log write",
             "--expected-ref", ref, "--expected-oid", oid,
             env=self.rolling_env(exports),
         )
         self.assertEqual(later.returncode, 1, later.stderr)
+        after = self.capture_refusal_snapshot(writer_log, other_log)
+        self.assertEqual(before, after)
         self.assertIn(
             "a staged delta already exists on a rolling prompt log",
             later.stderr,
@@ -9636,6 +10084,538 @@ class DoneRunManifestSelectionTest(FixtureMixin, unittest.TestCase):
             self.ENTRY.strip(),
             self.git("show", f"HEAD:{self.PLAN_LOG}").stdout,
         )
+
+
+class DoneRunArchiveCeremonyReportArmTest(FixtureMixin, unittest.TestCase):
+    """Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md
+    Task 1: RED characterization witnesses for the post-landing
+    archive-ceremony report arm at the owning closeout, written against this
+    suite's bash finalize harness (FixtureMixin.run_finalize) beside the
+    missing-review-record scan witnesses. No arm exists on the current
+    digest, so the gap-closed, pinned-context, span-anchored,
+    could-not-evaluate, and blocker-posture witnesses fail RED; the
+    clean-archive control is expected green from birth.
+
+    Line-shape contract the arm implements (plan Task 2):
+    - an always-present summary line carrying ``archive-ceremony
+      evaluation:``, ``findings=<N>``, ``evaluated_commit=<sha>``,
+      ``evaluated_at=<utc>``, and ``reviews_root=<resolved reviews home>``;
+    - one ``archive-ceremony finding:`` line per reported archive finding,
+      naming the archive path, the failing acceptance route, the
+      reconstruction producer ``scripts/produce_exec_review_record.py``, and
+      the evaluated commit and evaluation time;
+    - a distinct ``could-not-evaluate`` posture line (carrying
+      ``archive-ceremony`` and ``could-not-evaluate``) for an unresolvable
+      span boundary or a derivation blocker, never a pass-shaped clean line.
+    """
+
+    def run_finalize(
+        self, *args: str, env: dict | None = None, cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(RUNNER), "finalize", *args],
+            cwd=str(cwd or self.fixture),
+            env=env or self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    # ---- arm-output line extractors (the line-shape contract) ----------- #
+
+    def evaluation_summary_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony evaluation:" in line and "findings=" in line
+        ]
+
+    def finding_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony finding:" in line
+        ]
+
+    def could_not_evaluate_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony" in line and "could-not-evaluate" in line
+        ]
+
+    # ---- fixture builders ------------------------------------------------ #
+
+    def write_plan_file(self, stem: str) -> str:
+        """A box-complete executed plan committed at the plans root; the
+        archive rider (archive_rider) lands after the run's own sweep, the
+        witnessed incident shape (the rider is the last commit)."""
+        plan_rel = f"docs/history/plans/{stem}.md"
+        path = self.fixture / plan_rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Plan\n\n- [x] executed\n", encoding="utf-8")
+        self.git("add", plan_rel)
+        self.git("commit", "-qm", f"add the executed plan {stem}")
+        return plan_rel
+
+    def archive_rider(self, plan_rel: str) -> tuple[str, str]:
+        """The post-sweep archive rider: the committed rename into the
+        completed archive state; returns (archive rel, rider HEAD sha)."""
+        archive_rel = plan_rel.replace(
+            "docs/history/plans/", "docs/history/plans/completed/", 1
+        )
+        (self.fixture / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+        self.git("mv", plan_rel, archive_rel)
+        self.git("commit", "-qm", "archive the plan (the post-sweep rider)")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        return archive_rel, head
+
+    def add_worktree(self, branch: str) -> Path:
+        """A linked worktree becomes the fixture root (the arm's running
+        checkout), the missing-review-record scan witnesses' worktree
+        idiom; callers seed the primary before calling this."""
+        worktree = self.tmp / "worktree"
+        self.git("worktree", "add", "-qb", branch, str(worktree))
+        self.fixture = worktree
+        return worktree
+
+    def git_reported_primary(self) -> Path:
+        """The primary checkout exactly as the scan derives it: the first
+        worktree line of git worktree list --porcelain (git itself prints
+        the realpath)."""
+        return Path(
+            self.git("worktree", "list", "--porcelain").stdout.splitlines()[0]
+            [len("worktree "):]
+        )
+
+    def write_foreign_primary_boundary(
+        self, primary: Path, start_commit: str, run_id: str
+    ) -> str:
+        """A content-confirmed foreign run boundary in the PRIMARY session
+        dir: a run-start marker stamped one day past this fixture's own
+        markers plus a schema-valid run manifest bound to it and
+        start-anchored at start_commit (manifest schema_version 1, the
+        loader's current constant). The span-anchored witness plants it so
+        any evaluation that re-roots the span resolution at the primary
+        checkout selects a span base that hides the rider archive; the
+        owning checkout's own manifest must win instead."""
+        session = primary / "docs" / "tmp" / "done-session"
+        session.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            str(primary).rstrip("/").encode("utf-8")
+        ).hexdigest()
+        epoch = time.time() + 86400
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
+        marker = f"run-start-{stamp}"
+        (session / marker).write_text(
+            f"{epoch:.0f} {digest} 424242\n", encoding="utf-8"
+        )
+        payload = {
+            "schema": 1,
+            "run_id": run_id,
+            "marker": marker,
+            "created_epoch": epoch,
+            "repo_root": digest,
+            "pid": 424242,
+            "start_commit": start_commit,
+            "start_porcelain": [],
+            "owned_paths": [],
+            "owned_plan_paths": [],
+            "owned_review_paths": [],
+            "foreign_review_paths": [],
+            "adopted_from": None,
+            "complete": False,
+            "dispositioned": None,
+        }
+        (session / f"run-manifest-{run_id}.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return marker
+
+    # ---- witnesses ------------------------------------------------------- #
+
+    def test_finalize_reports_archived_plan_missing_exec_review_record_after_rider(self) -> None:
+        """[class: REPOSITORY_TEST] Gap closed: a completed run whose landing
+        span carries an archived plan whose only execution-round record is
+        code-review-kind (no ``-plan-review-`` infix, no binding sidecar) has
+        the owning closeout's post-landing archive-ceremony evaluation report
+        the finding in the completion output instead of silence, naming the
+        archive path, the failing acceptance route, the reconstruction
+        producer, and the evaluated commit and evaluation time, with the
+        finalize still exiting 0 (warning-only)."""
+        self.init_fixture_repo()
+        reviews = self.fixture / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        # The witnessed shape (the origin row's evidence): the only
+        # exec-round record is code-review-kind, so neither acceptance route
+        # matches it.
+        (reviews / "2026-11-07-code-review-gap-plan-exec-r1.md").write_text(
+            "# code review record\n", encoding="utf-8",
+        )
+        plan_rel = self.write_plan_file("2026-11-07-gap-plan")
+        setup_proc, exports = self.seed_setup_session("--label", "archive-rider")
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        findings = self.finding_lines(proc.stdout)
+        self.assertTrue(findings, proc.stdout + proc.stderr)
+        finding = "\n".join(findings)
+        self.assertIn(archive_rel, finding)
+        self.assertIn("has no exec-review record", finding)
+        self.assertIn("scripts/produce_exec_review_record.py", finding)
+        self.assertIn(head, finding)
+        self.assertIn("evaluated_at=", finding)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=1", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+        self.assertIn("evaluated_at=", summary)
+        self.assertIn("reviews_root=", summary)
+        # The neighboring missing-review-record scan stays beside the arm.
+        self.assertIn(
+            "missing-review-record scan: 0 missing record(s)", proc.stdout
+        )
+
+    def test_finalize_archive_evaluation_resolves_reviews_corpus_at_primary(self) -> None:
+        """[class: REPOSITORY_TEST] Pinned context: the archive's accepting
+        record exists only in the primary reviews home (the worktree's
+        transfer-in copy carries only a code-review-kind record), so the
+        evaluation under the pinned hybrid context observes it and the
+        always-present summary line names the resolved reviews root (the
+        primary home) with a clean outcome; a worktree-rooted corpus
+        evaluation would report the finding instead and fails this check."""
+        primary = self.init_fixture_repo()
+        reviews = primary / ".ai-playbook" / "reviews"
+        reviews.mkdir()
+        (reviews / "2026-11-07-plan-review-pinned-plan-exec-r1.md").write_text(
+            "# exec review r1\n", encoding="utf-8",
+        )
+        plan_rel = self.write_plan_file("2026-11-07-pinned-plan")
+        self.add_worktree("feature/pinned-archive-corpus")
+        primary = self.git_reported_primary()
+        # The partial transfer-in copy: only a non-accepting record.
+        wt_reviews = self.fixture / ".ai-playbook" / "reviews"
+        wt_reviews.mkdir(parents=True)
+        (wt_reviews / "2026-11-07-code-review-pinned-plan-exec-r1.md").write_text(
+            "# worktree-side code review\n", encoding="utf-8",
+        )
+        setup_proc, exports = self.seed_setup_session(
+            "--label", "pinned-arm", "--claim-none",
+        )
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=0", summary)
+        self.assertIn(f"reviews_root={primary}/.ai-playbook/reviews/", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+
+    def test_finalize_archive_span_stays_anchored_at_owning_manifest(self) -> None:
+        """[class: REPOSITORY_TEST] Span anchored at the owning checkout: the
+        owning run manifest exists only in the owning checkout's session dir
+        while the primary session dir holds a newer foreign manifest
+        start-anchored past the rider archive; the evaluation's run manifest
+        span still comes from the owning manifest (the finding reports) and
+        the foreign manifest never becomes the span base (a foreign base
+        would hide the archive and report clean)."""
+        primary = self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-span-plan")
+        self.add_worktree("feature/span-anchor")
+        primary = self.git_reported_primary()
+        setup_proc, exports = self.seed_setup_session(
+            "--label", "span-arm", "--claim-none",
+        )
+        archive_rel, head = self.archive_rider(plan_rel)
+        self.write_foreign_primary_boundary(primary, head, "foreign-span-run")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        findings = self.finding_lines(proc.stdout)
+        self.assertTrue(findings, proc.stdout + proc.stderr)
+        finding = "\n".join(findings)
+        self.assertIn(archive_rel, finding)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=1", summary)
+        self.assertIn(f"evaluated_commit={head}", summary)
+
+    def test_finalize_archive_evaluation_reports_could_not_evaluate_on_unresolvable_span_boundary(self) -> None:
+        """[class: REPOSITORY_TEST] Could-not-evaluate: neither the owning
+        run manifest's start commit nor ORIG_HEAD resolves as the span
+        boundary and a red committed archive is present, so the arm reports
+        a distinct could-not-evaluate line and never a pass-shaped clean
+        line or an archive finding."""
+        self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-boundary-plan")
+        setup_proc, exports = self.seed_setup_session("--label", "boundary-arm")
+        archive_rel, head = self.archive_rider(plan_rel)
+        # Neither span boundary resolves: the owning manifest's start commit
+        # is rewritten to a SHA no object satisfies, and ORIG_HEAD is removed
+        # from the checkout's git dir.
+        self.rewrite_manifest(
+            Path(exports["DONE_RUN_MANIFEST"]), start_commit="0" * 40,
+        )
+        git_dir = self.git("rev-parse", "--absolute-git-dir").stdout.strip()
+        Path(git_dir, "ORIG_HEAD").unlink(missing_ok=True)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = self.could_not_evaluate_lines(proc.stdout + proc.stderr)
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+
+    def test_finalize_archive_derivation_blocker_reports_could_not_evaluate_not_finding(self) -> None:
+        """[class: REPOSITORY_TEST] Blocker-class posture: an unreadable
+        plan-deliverables file beside a red committed archive drives the
+        gate's derivation blocker, so the arm reports the could-not-evaluate
+        posture line and no archive-finding line naming the reconstruction
+        producer for it."""
+        self.init_fixture_repo()
+        plan_rel = self.write_plan_file("2026-11-07-blocker-plan")
+        setup_proc, exports = self.seed_setup_session("--label", "blocker-arm")
+        deliverables = self.done_session() / "plan-deliverables.txt"
+        deliverables.write_text(f"{plan_rel}\n", encoding="utf-8")
+        deliverables.chmod(0o000)
+        archive_rel, head = self.archive_rider(plan_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = self.could_not_evaluate_lines(proc.stdout + proc.stderr)
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn(
+            "scripts/produce_exec_review_record.py", proc.stdout + proc.stderr
+        )
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+
+    def test_finalize_clean_archive_reports_no_finding(self) -> None:
+        """[class: REPOSITORY_TEST] Clean archive, the negative control
+        expected green from birth (it guards against false positives, not
+        against the gap): two box-complete archives whose execution evidence
+        satisfies the two acceptance routes (a filename-series
+        ``-plan-review-<slug>-exec-r<N>`` record, and a binding receipt whose
+        sidecar carries the plan identity, the reviewed-bytes digest, and a
+        yes verdict) report no finding at the finalize boundary."""
+        self.init_fixture_repo()
+        reviews = self.fixture / ".ai-playbook" / "reviews"
+        reviews.mkdir(parents=True)
+        series_rel = self.write_plan_file("2026-11-07-clean-series-plan")
+        bound_rel = self.write_plan_file("2026-11-07-clean-bound-plan")
+        # Acceptance route 1: the filename-series exec-review record.
+        (reviews / "2026-11-07-plan-review-clean-series-plan-exec-r1.md").write_text(
+            "# exec review r1\n", encoding="utf-8",
+        )
+        # Acceptance route 2: the binding receipt; the rider is a committed
+        # rename, so the sidecar binds the pre-archive identity and the
+        # reviewed (parent-blob) bytes digest.
+        bound_bytes = (self.fixture / bound_rel).read_bytes()
+        sidecar = {
+            "schema_version": 1,
+            "record_kind": "canonical",
+            "source_kind": "plan",
+            "source_digest": hashlib.sha256(bound_bytes).hexdigest(),
+            "verdict": "yes",
+            "extensions": {"plan_identity": bound_rel},
+        }
+        (reviews / "2026-11-07-plan-review-clean-bound-plan-r1.md").write_text(
+            "# plan review r1\n", encoding="utf-8",
+        )
+        (reviews / "2026-11-07-plan-review-clean-bound-plan-r1.stats.json").write_text(
+            json.dumps(sidecar, indent=2) + "\n", encoding="utf-8",
+        )
+        # The reviews home carries plan-review staging candidates this run
+        # does not own, so setup rides --claim-none (the scan witnesses'
+        # idiom for a run that owns no staging doc).
+        setup_proc, exports = self.seed_setup_session(
+            "--label", "clean-arm", "--claim-none",
+        )
+        series_archive, head = self.archive_rider(series_rel)
+        bound_archive, head = self.archive_rider(bound_rel)
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertFalse(
+            self.finding_lines(proc.stdout + proc.stderr),
+            proc.stdout + proc.stderr,
+        )
+        self.assertNotIn("could-not-evaluate", proc.stdout + proc.stderr)
+        self.assertIn(
+            "missing-review-record scan: 0 missing record(s)", proc.stdout
+        )
+
+
+class DoneRunArchiveCeremonyArmSafetyTest(FixtureMixin, unittest.TestCase):
+    """Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md
+    Task 2: GREEN-side safety witnesses for the wired post-landing
+    archive-ceremony report arm at the bash finalize boundary. The Task 1
+    class above pins the finding, pinned-context, span, and posture shapes
+    end to end; this class pins the arm's own failure posture (the bash
+    fail-open guard), the no-archive findings=0 summary, and the unchanged
+    closeout boundary (warning-only, no exit-code mutation, no refusal
+    path). Class-local extractors, mirroring the Task 1 class."""
+
+    def run_finalize(
+        self, *args: str, env: dict | None = None, cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(RUNNER), "finalize", *args],
+            cwd=str(cwd or self.fixture),
+            env=env or self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    def evaluation_summary_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony evaluation:" in line and "findings=" in line
+        ]
+
+    def finding_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony finding:" in line
+        ]
+
+    def could_not_evaluate_lines(self, output: str) -> list[str]:
+        return [
+            line for line in output.splitlines()
+            if "archive-ceremony" in line and "could-not-evaluate" in line
+        ]
+
+    def test_finalize_arm_failure_reports_could_not_evaluate_and_keeps_boundary(
+        self,
+    ) -> None:
+        """[class: REPOSITORY_TEST] Arm failure posture: the arm's own
+        python invocation fails, so the bash-side fail-open guard emits the
+        distinct could-not-evaluate warning on the failure channel (never a
+        pass-shaped or bare-clean line, no finding line), the finalize exit
+        code stays 0, and the boundary still completes (the marking applied
+        and both locks released)."""
+        self.init_fixture_repo()
+        setup_proc, exports = self.seed_setup_session("--label", "arm-failure")
+        env = self.runner_env()
+        env.update(exports)
+        # A python3 shim that fails only the arm's invocation (the argv
+        # token the arm alone carries) and execs the real interpreter for
+        # every other finalize call, so the guard under test is the bash
+        # ``||`` posture and nothing else in the boundary changes.
+        shim_dir = self.tmp / "shim-bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "python3"
+        shim.write_text(
+            "#!/bin/sh\n"
+            "for arg in \"$@\"; do\n"
+            "  case \"$arg\" in\n"
+            "    archive-ceremony-report) exit 70 ;;\n"
+            "  esac\n"
+            "done\n"
+            f"exec \"{Path(sys.executable).resolve()}\" \"$@\"\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env["PATH"] = str(shim_dir) + os.pathsep + env["PATH"]
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        posture = "\n".join(self.could_not_evaluate_lines(proc.stderr))
+        self.assertTrue(posture, proc.stdout + proc.stderr)
+        self.assertNotIn("findings=0", proc.stdout + proc.stderr)
+        self.assertEqual(self.finding_lines(proc.stdout + proc.stderr), [])
+        # The boundary completed: the marking applied and both locks freed.
+        self.assertIn("marking=applied", proc.stdout)
+        self.assertIn("done lock status: free", proc.stdout)
+        self.assertIn(": free", self.lock_status())
+        self.assertIn(": free", self.lock_status(merge=True))
+
+    def lock_status(self, merge: bool = False) -> str:
+        return subprocess.run(
+            ["bash", str(LOCK_SCRIPT), "merge-status" if merge else "status"],
+            cwd=str(self.fixture),
+            env=self.runner_env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout
+
+    def test_finalize_without_archive_surfaces_reports_findings_zero_summary(
+        self,
+    ) -> None:
+        """[class: REPOSITORY_TEST] No archive surfaces changed in the run's
+        span: the gate does not re-run and the always-present summary line
+        still reports findings=0 with the evaluated commit, evaluation
+        time, and resolved reviews root; no finding line and no
+        could-not-evaluate posture anywhere (the no-false-report control
+        for a closeout with no archives at all)."""
+        self.init_fixture_repo()
+        setup_proc, exports = self.seed_setup_session("--label", "no-archive")
+        env = self.runner_env()
+        env.update(exports)
+        proc = self.run_finalize(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        summary = "\n".join(self.evaluation_summary_lines(proc.stdout))
+        self.assertIn("findings=0", summary)
+        self.assertIn("evaluated_commit=", summary)
+        self.assertIn("evaluated_at=", summary)
+        self.assertIn("reviews_root=", summary)
+        self.assertEqual(self.finding_lines(proc.stdout + proc.stderr), [])
+        self.assertNotIn("could-not-evaluate", proc.stdout + proc.stderr)
+
+
+# These classes have independent TestCase fixtures and are exposed through
+# separate unittest discovery entrypoints below. Keep implementations beside
+# the shared fixture mixin; entrypoint modules select each class without
+# copying methods or changing their IDs.
+_SHARDED_TEST_CLASSES = frozenset(
+    {
+        "DoneRunAuthorizedRestorationTest",
+        "DoneRunCloseoutBaselineArmTest",
+        "DoneRunCommitTest",
+        "DoneRunFinalizeTest",
+    }
+)
+
+
+def _iter_test_cases(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from _iter_test_cases(item)
+        else:
+            yield item
+
+
+def _load_wrapper_test_shard(loader, class_name: str, method_names=None):
+    tests = loader.loadTestsFromTestCase(globals()[class_name])
+    if method_names is None:
+        return tests
+    selected = set(method_names)
+    return unittest.TestSuite(
+        test for test in _iter_test_cases(tests)
+        if test._testMethodName in selected
+    )
+
+
+def load_tests(loader, standard_tests, pattern):
+    """Leave the large fixture-isolated classes to their bounded entrypoints."""
+    return unittest.TestSuite(
+        test for test in _iter_test_cases(standard_tests)
+        if test.__class__.__name__ not in _SHARDED_TEST_CLASSES
+    )
 
 
 if __name__ == "__main__":

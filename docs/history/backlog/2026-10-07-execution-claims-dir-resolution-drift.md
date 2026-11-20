@@ -1,5 +1,7 @@
 # execution claims dir resolution drift between writer and fence
 
+Cluster: docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/2026-10-06-claim-fence-test-coverage-gaps.md (same claim-fence surface; this row owns path resolution while siblings own stem matching and regression coverage)
+
 Driving force: reliability
 Date filed: 2026-10-07
 Origin: Task 1 intermediate review (execution-claim-write-enforcement) backlog capture

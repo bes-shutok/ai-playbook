@@ -6,6 +6,8 @@ Plan review record: the staging series .ai-playbook/reviews/2026-11-02-plan-revi
 Execution budget: 1.5h total, largest task 1.0h
 Authoring claim: 2026-10-06-staging-preflight-done-readiness-shared-payload-span.md (session sess_6e8a47a5-54c0-42a4-8974-cf1f5b55883c)
 
+Completion note (2026-11-16): the original landing claim was false in its operative content; the hand-rolled landing 2c39a721f carried no bytes (audited in docs/history/backlog/2026-11-16-shared-seam-fence-operative-bytes-never-landed.md, lesson 378), so Tasks 1-2's spans and companion pins did not exist in any commit's operative surfaces. They are re-landed by commit c530387f6 (Task 1's bullet against the structural failure modes list's today-home agents/skills/plans/plan-quality-gate.md; Task 2's note re-anchored to agents/skills/execute-plan/run-setup.md's readiness pre-round paragraph), with both companion pins in the same change; this note reconciles this file's executed-status claim with that re-landing.
+
 ## Terms
 
 - Shared-file seam: two open plans whose `Files:` lists name the same file section and both prescribe edits there.

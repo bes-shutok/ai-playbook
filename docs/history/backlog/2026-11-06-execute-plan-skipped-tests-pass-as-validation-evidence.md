@@ -6,7 +6,8 @@ Origin class: consumer-feedback (company)
 
 # Repository-standard validation evidence accepts a green run whose Docker-backed tests were skipped
 
-Cluster: docs/history/backlog/2026-11-05-debugging-validation-misses-required-ci-checks.md (same family: a required check is skipped yet verification is reported green; that item covers the debugging skill, this one covers execute-plan, execute-plan-stack, and unit-test-runner)
+Cluster: docs/history/backlog/2026-11-05-debugging-validation-misses-required-ci-checks.md, covered and deleted 2026-11-15 by this repo's ad-hoc landing; witness home: the debugging-skill-recall-and-validation EXEC-PROMPTS receipt (same family: a required check is skipped yet verification is reported green; that item covers the debugging skill, this one covers execute-plan, execute-plan-stack, and unit-test-runner)
+Cluster: docs/history/backlog/2026-11-09-static-only-review-leaves-runtime-claims-unrecorded.md (same family: a degraded environment yields a green or clean verdict without a record of what could not run)
 
 ## Problem
 

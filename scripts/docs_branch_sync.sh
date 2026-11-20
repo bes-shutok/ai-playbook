@@ -343,12 +343,27 @@ def path_is_under(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
+def is_nested_root_copy(root: ArchiveRoot, path: str) -> bool:
+    """A nested root copy is a path under an archive root whose first
+    component below that root equals the root's own last component (the
+    archive role name), for example `.ai-playbook/reviews/reviews/<f>`; it
+    is a copy of the home inside itself, never archive content. A nested
+    copy of a nested copy is covered by the same first-component rule."""
+    root_parts = root.relative.split("/")
+    parts = path.split("/")
+    if parts[:len(root_parts)] != root_parts:
+        return False
+    below = parts[len(root_parts):]
+    return bool(below) and below[0] == root.role
+
+
 def root_for(path: str, roots: list[ArchiveRoot]) -> ArchiveRoot | None:
     parts = path.split("/")
     matches = [
         root for root in roots
         if len(parts) > len(root.relative.split("/"))
         and parts[:len(root.relative.split("/"))] == root.relative.split("/")
+        and not is_nested_root_copy(root, path)
     ]
     return max(matches, key=lambda item: len(item.relative)) if matches else None
 
@@ -419,6 +434,14 @@ def collect_local_files(repo: Path, roots: list[ArchiveRoot]) -> dict[str, Local
                     info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                     candidate_parts = (*relative_parts, name)
                     candidate = repo.joinpath(*candidate_parts)
+                    candidate_relative = candidate.relative_to(repo).as_posix()
+                    if is_nested_root_copy(root, candidate_relative):
+                        # A nested copy of the archive root inside itself is
+                        # never archive content: skip the whole subtree so
+                        # its files are neither collected/published nor
+                        # symlink-validated (an escaping symlink inside a
+                        # nested copy must not refuse the sync).
+                        continue
                     if stat.S_ISLNK(info.st_mode):
                         target = os.readlink(name, dir_fd=directory_fd)
                         discovered.append((root, candidate, info, target))

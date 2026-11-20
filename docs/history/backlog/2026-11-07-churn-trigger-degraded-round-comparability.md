@@ -1,7 +1,7 @@
 # Review-plan churn-trigger trajectory comparison counts a coverage-degraded round as a comparable trajectory point
 
 - **Filed:** 2026-11-07, learn Step 1.8 capture from the budget-resume-carrier-gc authoring session (r2-r4 review loop)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-08-churn-trigger-degraded-round-comparability.md)
 - **Workflow:** backlog
 - **Priority:** high (a degraded round's totals can spuriously fire the non-convergence machinery, whose terminal state is an operator pause)
 - **Origin class:** session-witnessed flow gap (review-plan loop rule, the churn-trigger definition)

@@ -1,5 +1,7 @@
 # Backlog: fix Task 1's standalone-gate bullet's "the four Why-named files" gloss to name the ceiling class's actual enumeration home
 
+Cluster: docs/history/backlog/2026-11-07-operative-file-read-budget-suite-admission-comment.md (same Task 1 residual family from the operative-file-read-budget plan; one concerns suite admission prose, the other its standalone-gate gloss)
+
 - **Filed:** 2026-11-07, review round r4 certification-residual capture for docs/history/plans/2026-11-07-operative-file-read-budget-gate.md
 - **Status:** open
 - **Workflow:** backlog

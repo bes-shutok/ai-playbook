@@ -1,5 +1,7 @@
 # Backlog: twin plan's implementation notes misstate the active-dir resolution site
 
+Cluster: docs/history/backlog/2026-11-03-coverage-gate-directory-operand-self-conflict.md; docs/history/backlog/2026-11-03-lesson-372-primary-path-remedy-superseded.md (same coverage-gate twin exemption change; this row covers plan notes while siblings cover active-directory resolution and lesson guidance)
+
 Status: open
 Workflow: backlog
 Priority: low

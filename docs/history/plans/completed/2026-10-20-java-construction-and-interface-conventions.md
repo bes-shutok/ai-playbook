@@ -180,3 +180,8 @@ Files:
 - [x] In the architecture lens's Package Organization list, add the line `Interface declared inside another type: declare it as a top-level type in its own source file; the language guideline owns the rule. Pattern: architecture#nested-interface`. Use no language or framework names. [class: IMPLEMENTATION_REQUIRED]
 - [x] Given the edited lenses, expect the portability checker and the door-pattern registry test (the two scripts the Validation Commands block runs) to exit 0 and the full block to print `validation OK`. [class: REPOSITORY_TEST]
 - [x] Commit: `review-agents: bound the builder heuristic and flag nested interfaces`. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-20-java-construction-and-interface-guidance.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

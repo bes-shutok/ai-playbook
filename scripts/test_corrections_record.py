@@ -130,6 +130,42 @@ def assert_refusal(test, msg, leg, *phrases):
         test.assertNotIn(banned, msg)
 
 
+def append_history_chain(repo, count, prefix="filler", delete_path=None):
+    """Append an exact history chain with one Git process.
+
+    These anchor-boundary fixtures need hundreds of first-parent candidates.
+    fast-import builds the chain without launching Git once per filler
+    commit. The optional first-commit deletion keeps the candidate ancestry
+    while avoiding 400 identical blob reads during the scan.
+    """
+    commands = []
+    parent = repo.head()
+    for index in range(count):
+        message = f"{prefix} {index}\n".encode("utf-8")
+        stamp = repo.next_date()
+        mark = f":{index + 1}"
+        commands.extend((
+            b"commit refs/heads/main\n",
+            f"mark {mark}\n".encode(),
+            f"committer Fixture <fixture@example.invalid> {stamp} +0000\n".encode(),
+            f"data {len(message)}\n".encode(),
+            message,
+            f"from {parent}\n".encode(),
+        ))
+        if index == 0 and delete_path is not None:
+            commands.append(f"D {delete_path}\n".encode())
+        commands.append(b"\n")
+        parent = mark
+    proc = subprocess.run(
+        ["git", "-C", str(repo.root), "fast-import", "--quiet"],
+        input=b"".join(commands), capture_output=True,
+        env=cr.hermetic_git_env(), check=False,
+    )
+    if proc.returncode:
+        raise AssertionError((proc.returncode, proc.stderr.decode(errors="replace")))
+    return repo.head()
+
+
 class RecordSchemaTest(unittest.TestCase):
     def setUp(self):
         self.plan_row = plan_row("a" * 64, "b" * 64, "c" * 40)
@@ -498,8 +534,7 @@ class AnchorLegTest(unittest.TestCase):
                                               hx(D1), close)
         repo.commit_file(PLAN_REL, D2,
                          "move the bytes off the sealed digest")
-        for index in range(401):
-            repo.commit_allow_empty("filler %d" % index)
+        append_history_chain(repo, 401, delete_path=PLAN_REL)
         # 401 first-parent candidates at or past the move commit: the scan
         # enumerates at most 400 commits and reports a plain no-match even
         # though the sealed bytes sit just beyond the cap.
@@ -519,8 +554,7 @@ class AnchorLegTest(unittest.TestCase):
         start = repo.commit_file(PLAN_REL, D1, "seed plan")
         repo.commit_file(PLAN_REL, D2, "move the bytes off the sealed "
                                         "digest")
-        for index in range(398):
-            repo.commit_allow_empty("filler %d" % index)
+        append_history_chain(repo, 398, delete_path=PLAN_REL)
         # Candidate positions from HEAD: 398 fillers, the D2 move (399),
         # the sealed D1 seed at candidate 400 exactly.
         anchor, scan_error = cr.resolve_landed_anchor(
@@ -858,6 +892,100 @@ class ChainLegsTest(unittest.TestCase):
         assert_refusal(self, msg, "vacuous", "zero hops")
 
 
+GHOST_SHA = "1" * 40
+
+
+class SealLegDiagnosticsTest(unittest.TestCase):
+    """The seal-leg diagnostics separation plan Task 1 canaries: each
+    witnessed failure world reads from the refusal text alone; every
+    verdict stays fail-closed exactly as before (message text only)."""
+
+    def test_unresolvable_anchor_world_names_the_declared_sha(self):
+        # A declared round-start sha with no commit object and no
+        # ancestor carrying the sealed bytes: the anchor-leg refusal
+        # names the declared sha as unresolvable.
+        repo, c = plan_fixture(self)
+        repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, GHOST_SHA, hx(D3),
+                              c["close"])
+        ok, msg = vplan(repo, [], hx(D3), D3)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", GHOST_SHA,
+                       cr.UNRESOLVABLE_ANCHOR_PHRASE,
+                       "no first-parent ancestor")
+
+    def test_composed_world_refusal_carries_both_namings(self):
+        # A nonexistent declared round-start sha whose sealed bytes a
+        # later substitute commit carries: one ordering refusal carrying
+        # BOTH the unresolvable naming and the substitute naming, with
+        # the pinned ordering prefix byte-retained.
+        repo, c = plan_fixture(self)
+        repo.commit_file(PLAN_REL, D3, "later substitute commit")
+        # The rescue resolves at the first HEAD-reachable commit whose
+        # plan blob re-hashes to the sealed digest; the seal-entry
+        # commit itself carries the substituted tree.
+        sub = repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, GHOST_SHA,
+                                    hx(D3), c["close"])
+        ok, msg = vplan(repo, [], hx(D3), D3)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "seal",
+                       "the round-start commit postdates the round-close",
+                       GHOST_SHA, cr.UNRESOLVABLE_ANCHOR_PHRASE, sub,
+                       cr.BYTE_RESOLVED_SUBSTITUTE_PHRASE)
+
+    def test_substitute_world_names_the_substitute_and_firing_leg(self):
+        # A moved (existing but non-ancestor) declared round-start
+        # anchor whose sealed bytes a later substitute carries: the
+        # ordering refusal names the substitute commit with the
+        # byte-resolved substitute phrase and its firing leg; the
+        # declared sha is not named unresolvable because it resolves.
+        repo, c = plan_fixture(self)
+        repo.commit_file(PLAN_REL, D3, "later substitute commit")
+        moved = orphan_commit(repo, message="moved anchor")
+        sub = repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, moved, hx(D3),
+                                    c["close"])
+        ok, msg = vplan(repo, [], hx(D3), D3)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "seal",
+                       "the round-start commit postdates the round-close",
+                       sub, cr.BYTE_RESOLVED_SUBSTITUTE_PHRASE)
+        self.assertNotIn(cr.UNRESOLVABLE_ANCHOR_PHRASE, msg)
+
+    def test_bare_rewrite_refusal_carries_the_substitution_naming(self):
+        # A byte-resolved substitute in play (the declared round-close
+        # sha is nonexistent and the rescue substitutes it) and a
+        # declared digest the substituted bytes do not match: the
+        # zero-hop bare-rewrite refusal also carries the substitution
+        # naming with its firing leg.
+        repo, c = plan_fixture(self)
+        # The declared round-start anchor sits at a real D3-carrying
+        # commit, so the re-hash arm passes; the declared round-close
+        # sha is nonexistent and the rescue substitutes it, keeping the
+        # substitution in play when the zero-hop bare-rewrite arm fires.
+        start_sub = repo.commit_file(PLAN_REL, D3,
+                                     "later substitute commit")
+        sub = repo.write_seal_entry(PLAN_SLUG, 1, PLAN_REL, start_sub,
+                                    hx(D3), GHOST_SHA)
+        ok, msg = vplan(repo, [], hx(D2), D2)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", "bare rewrite", sub,
+                       cr.BYTE_RESOLVED_SUBSTITUTE_PHRASE)
+
+    def test_honest_resolution_stays_note_free(self):
+        # The success path (plain ancestors, no rescue) carries no
+        # substitution naming, and a refusal with no substitute in play
+        # stays clean of the diagnostics phrases.
+        repo, c = plan_fixture(self)
+        ok, msg = vplan(repo, [], hx(D1), D1)
+        self.assertTrue(ok, msg)
+        self.assertNotIn(cr.BYTE_RESOLVED_SUBSTITUTE_PHRASE, msg)
+        self.assertNotIn(cr.UNRESOLVABLE_ANCHOR_PHRASE, msg)
+        ok, msg = vplan(repo, [], hx(D2), D2)
+        self.assertFalse(ok)
+        assert_refusal(self, msg, "anchor", "bare rewrite")
+        self.assertNotIn(cr.BYTE_RESOLVED_SUBSTITUTE_PHRASE, msg)
+        self.assertNotIn(cr.UNRESOLVABLE_ANCHOR_PHRASE, msg)
+
+
 class SealLegTest(unittest.TestCase):
     def code_fixture(self):
         repo = cr.build_scratch_repo(self)
@@ -1186,7 +1314,8 @@ class AckReceiptTest(unittest.TestCase):
         with open(lock_path, "a+") as held:
             fcntl.flock(held, fcntl.LOCK_EX)
             ok, msg = cr.append_corrections(
-                record, [self.row], self.repo.root, PLAN_SLUG)
+                record, [self.row], self.repo.root, PLAN_SLUG,
+                timeout=0.15)
             self.assertFalse(ok)
             assert_refusal(self, msg, "append", "concurrent certification",
                            "mutation")

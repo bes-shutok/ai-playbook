@@ -1,5 +1,7 @@
 # Gate-report retention sweep polish family (r1 review residuals)
 
+Cluster: docs/history/backlog/2026-10-31-gate-removal-shared-slug-second-witness.md (same gate-removal retention surface; this row owns review polish, the sibling owns the inherited-manifest witness)
+
 Driving force: code-quality
 
 Origin: Phase 3 r1 fresh-adversarial panel (plan docs/history/plans/2026-10-29-done-gate-report-retention.md, run zcode-exec-automation-75d270c1-pick1, 2026-10-30). Zero blocking; three Low correctness findings and two docstring/wording precision items below.

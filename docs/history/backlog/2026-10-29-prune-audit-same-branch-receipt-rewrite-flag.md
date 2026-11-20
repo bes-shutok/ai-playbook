@@ -8,6 +8,7 @@
 - **Cluster:** docs/history/plans/completed/2026-10-28-landing-gate-prune-audit-leg.md (the leg's own landing plan; the removal classes and their excusals live there)
 - **Cluster:** docs/history/backlog/2026-10-24-collateral-served-nul-origin-uncaught-valueerror.md (same checker surface scripts/check_prompt_log_origins.py; distinct defect: that row's uncaught ValueError in --collateral-served vs this row's receipt-line flag semantics)
 - **Cluster:** docs/history/backlog/2026-11-01-prune-audit-standing-flags-unowned-accumulation.md (same checker; distinct class: that row owns the standing true-positive flag accumulation and its missing repair route, this row owns the net-add rewrite false positive)
+- **Cluster:** the collateral sibling-receipt deletion class was closed by the warning-only COLLATERAL-RECEIPT-REMOVAL arm (landing 618565f8f, diagnostic verdict undetected; the origin row 2026-11-17-prune-audit-collateral-sibling-receipt-deletion-undetected.md was deleted per the covered-row rule)
 - **Skill/step:** `scripts/check_prompt_log_origins.py`, the receipt-line-removal audit class
 - **Class:** diagnostic-class
 - **Origin class:** session witness (interactive exec run, ad-hoc landing, 2026-10-29)
@@ -30,3 +31,7 @@ Reproduce on a fixture branch: commit A adds a receipt-ledger line, commit B rew
 
 - Witnessed 2026-10-29 during the pick 1 landing window (landing 2331ebe8 carries the final single-commit receipt form; the run's review record `.ai-playbook/reviews/2026-10-29-zero-plan-branch-only-migration-manifest-adhoc-code-review-r2.md` holds the final reviewed digest).
 - The excusal sites: `scripts/check_prompt_log_origins.py`, the pure receipt-line-removal loop (the `retoken shape` comment and the `RECEIPT-LINE-REMOVED-WITHOUT-WITNESS` emission).
+
+## Witness extension 2026-11-16 (interactive exec run, landed-receipt rewrite class)
+
+An interactive exec run's follow-up commit rewrote a receipt line already landed on main (clarifying the reconcile closure receipt's inventory arithmetic) and the landing refused `RECEIPT-LINE-REMOVED-WITHOUT-WITNESS` against that rewriting commit, matching this row's flag class on the LANDED side of the same checker surface: the same-commit retoken excusal did not apply because the re-added line carried new tokens (the clarifications), so the commit held a removal without a same-slug retoken. With the removal commit immutable on main, the squash remedy from the Finding was unavailable; the working shape was additive: an `EXEC-PROMPTS-RECEIPT-RIDER: <slug>` line appended beside the landed receipt (the landed line byte-unchanged) passed the audit as a pure addition. A second surface witness in the same run: the first rider landing missed its own append because the append was unstaged when `git commit --amend` consumed only the index; the r2 verification round caught the gap. Candidate remedy direction for the checker: a net-additive commit whose only receipt-line delta is an appended `*-RECEIPT-RIDER` line naming an already-landed commit could be excused from the rewrite flag the way the same-commit retoken excusal covers the branch-internal case.

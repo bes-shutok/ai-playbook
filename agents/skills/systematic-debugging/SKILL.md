@@ -190,6 +190,7 @@ You MUST complete each phase before proceeding to the next.
    - Test passes now?
    - No other tests broken?
    - Issue actually resolved?
+   - Run the target project's declared validation commands (its checked-in guidelines declare the required checks, non-test checks such as formatters or linters included). Report any skipped or narrowed required check in the verification result, and do not call verification complete while a required check was skipped. Keep test-only tooling separate from this full validation.
 
 4. **If Fix Doesn't Work**
    - STOP
@@ -264,7 +265,7 @@ If you catch yourself thinking:
 | **1. Root Cause** | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY |
 | **2. Pattern** | Find working examples, compare | Identify differences |
 | **3. Hypothesis** | Form theory, test minimally | Confirmed or new hypothesis |
-| **4. Implementation** | Create test, fix, verify | Bug resolved, tests pass |
+| **4. Implementation** | Create test, fix, verify | Bug resolved, tests and required checks pass |
 
 ## When Process Reveals "No Root Cause"
 

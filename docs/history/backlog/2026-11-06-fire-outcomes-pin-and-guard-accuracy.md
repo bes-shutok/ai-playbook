@@ -6,6 +6,10 @@ Driving force: reliability (residual review findings from the 2026-11-06 automat
 
 Cluster: closeout-recovery, docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (same script, sibling defect class: this row owns its recorded findings, that row owns the registry admission)
 
+Cluster: docs/history/backlog/2026-11-14-post-fire-verification-arm-zero-executions.md (same script family: that row owns the survey arm's trigger wiring and its zero-execution evidence, this row the adapter's accuracy residuals)
+Cluster: docs/history/backlog/2026-11-17-fire-outcome-dispatch-failure-skip-blind-spot.md (same script family: that row owns the terminal-evidence vocabulary gap over failed_to_dispatch and skipped rows, this row the pin and live-guard accuracy residuals)
+Cluster: docs/history/backlog/2026-11-20-automation-run-terminal-outcome-contradicts-session-store.md (same script family: that row owns the source table's own outcome accuracy, this row the adapter's pin and live-guard accuracy residuals)
+
 Findings captured:
 
 1. Weak pin literal: the `mode=ro` pin in `scripts/check_maintenance_pins.sh` (post-fire family) matches two occurrences in `scripts/maintenance_fire_outcomes.py` (docstring + operative URI), so dropping the operative occurrence while the docstring survives keeps the pin green. Tighten to a single-occurrence-anchored literal or pin the operative line's context.

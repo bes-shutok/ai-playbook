@@ -47,6 +47,7 @@ The dependent artifact enters the consistency read-set only via the contract-imp
 1. A validation command that does not exercise what the surrounding text claims it proves (checks presence, not behavior).
 2. A gate phrased as a claim ("tests cover X") with no command or observable evidence that runs X.
 3. Inherited or validated-by-prior-round statements used as proof without a re-verification step; treat the claim as a flag to re-probe, not as evidence.
+4. A validation command whose interpreter mismatches the target script's extension (a `.sh` path invoked with `python3`, a `.py` path invoked with `bash`); the plans skill's validation-authoring rules (`agents/skills/plans/validation-authoring-rules.md` rule 46) refuse the mismatch at authoring, so one surviving to review is a finding.
 
 ## Evidence requirements
 

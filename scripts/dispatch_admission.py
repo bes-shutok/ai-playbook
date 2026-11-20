@@ -12,6 +12,18 @@ hold conservatively: an outstanding run with an empty recorded owned-path
 set, or one with no done-setup manifest from which to derive owned paths,
 is treated as intersecting with the reason named.
 
+Evidence-strict reads (outstanding-manifest recovery plan Task 3): a
+candidate manifest that derives an empty owned-path set refuses, and a
+non-list owned-path field or a non-string list item on either operand is
+malformed evidence that refuses the candidate or takes that outstanding
+run's conservative verdict at its loop position, with the dropped
+evidence named, instead of a silent-subset pass. The fixed precedence:
+unreadable, unparseable, and non-object inputs on either operand stay
+tool errors and are checked first; then the candidate's malformed
+evidence, then its empty set, both before the outstanding-run loop;
+then each outstanding run's malformed evidence under the first-blocker
+order.
+
 Candidate owned-path sources (first given wins the union):
   --owned-path PATH          explicit path, repeatable
   --candidate-manifest PATH  a done-setup run manifest (the union of its
@@ -43,19 +55,24 @@ either parses or is a tool error.
 
 import argparse
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 PROG = "dispatch_admission"
 
 
 @dataclass
 class Candidate:
-    """The dispatch candidate: a run id plus its owned-path set."""
+    """The dispatch candidate: a run id plus its owned-path set.
+    ``malformed_evidence`` names owned-path evidence the manifest reader
+    would have had to drop (the malformed-evidence refusal case)."""
     run_id: str
     owned_paths: List[str]
+    malformed_evidence: Optional[str] = None
 
 
 @dataclass
@@ -63,10 +80,14 @@ class OutstandingRun:
     """A recorded outstanding run. ``owned_paths`` is None when the run
     carries no done-setup manifest from which to derive owned paths (the
     missing-source conservative case); an empty list is a manifest that
-    records an empty owned-path set (the empty-set conservative case)."""
+    records an empty owned-path set (the empty-set conservative case).
+    ``malformed_evidence`` names owned-path evidence the reader would
+    have had to drop; it takes that run's conservative verdict at its
+    loop position before the other arms."""
     run_id: str
     owned_paths: Optional[List[str]]
     source: str = ""
+    malformed_evidence: Optional[str] = None
 
 
 @dataclass
@@ -82,11 +103,33 @@ class AdmissionVerdict:
 def check_admission(candidate: Candidate,
                     outstanding_runs: List[OutstandingRun]) -> AdmissionVerdict:
     """Test the candidate's owned-path set against each outstanding run's
-    recorded set in argument order; the first blocker decides. A run with
-    no manifest source or an empty recorded set takes the conservative
+    recorded set in argument order; the first blocker decides. The
+    candidate's malformed evidence, then its empty owned-path set, refuse
+    before the outstanding-run loop. A run with malformed evidence, no
+    manifest source, or an empty recorded set takes the conservative
     verdict (treated as intersecting) with the reason named."""
+    if candidate.malformed_evidence:
+        return AdmissionVerdict(
+            admitted=False,
+            reason=("candidate owned-path evidence is malformed (%s); "
+                    "refusing" % candidate.malformed_evidence),
+        )
+    if not candidate.owned_paths:
+        return AdmissionVerdict(
+            admitted=False,
+            reason="candidate owned-path set is empty; refusing",
+        )
     candidate_set = set(candidate.owned_paths)
     for run in outstanding_runs:
+        if run.malformed_evidence:
+            return AdmissionVerdict(
+                admitted=False,
+                reason=("outstanding run %s carries malformed owned-path "
+                        "evidence (%s); treated as intersecting "
+                        "(conservative verdict)"
+                        % (run.run_id, run.malformed_evidence)),
+                blocking_run_id=run.run_id,
+            )
         if run.owned_paths is None:
             return AdmissionVerdict(
                 admitted=False,
@@ -119,10 +162,56 @@ def check_admission(candidate: Candidate,
     )
 
 
+CLAIM_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def claim_age_hours(stamp: str, now: Optional[datetime] = None) -> Optional[float]:
+    """Age in hours of a claim ``updated:`` stamp in the claim writer's
+    shape (``date -u +%Y-%m-%dT%H:%M:%SZ``), or None when the stamp does
+    not parse (the caller keeps that run's ordinary verdict: staleness
+    never loosens evidence)."""
+    try:
+        updated = datetime.strptime(stamp, CLAIM_STAMP_FORMAT).replace(
+            tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    current = now if now is not None else datetime.now(timezone.utc)
+    return (current - updated).total_seconds() / 3600.0
+
+
+def partition_stale(outstanding_runs: List[OutstandingRun],
+                    claim_updated: Dict[str, str],
+                    stale_after_hours: Optional[float],
+                    now: Optional[datetime] = None):
+    """Split the outstanding runs into the runs that still reach the
+    blocking loop and the stale-parked ones (a paired claim stamp older
+    than the horizon), preserving argument order. Without a horizon no
+    staleness is evaluated and every run stays live; a run with no paired
+    stamp, or an unparseable one, stays live too. Staleness is decided
+    before owned-path evidence: a stale-parked run is excluded whatever
+    its evidence state."""
+    if stale_after_hours is None:
+        return list(outstanding_runs), []
+    live: List[OutstandingRun] = []
+    stale: List[Tuple[str, float]] = []
+    for run in outstanding_runs:
+        stamp = claim_updated.get(run.run_id)
+        age = claim_age_hours(stamp, now) if stamp is not None else None
+        if age is not None and age > stale_after_hours:
+            stale.append((run.run_id, age))
+        else:
+            live.append(run)
+    return live, stale
+
+
 def owned_paths_from_manifest(path: str) -> List[str]:
-    """Read a done-setup run manifest and return the union of its owned
-    path list fields. An unreadable or unparseable manifest is a tool
-    error (the check cannot run reliably over a missing input)."""
+    """Read a done-setup run manifest (or an admission record) and return
+    the union of its owned path list fields. An unreadable or unparseable
+    manifest is a tool error (the check cannot run reliably over a missing
+    input). A non-list owned-path field or a non-string list item is
+    malformed evidence: the reader refuses to silently drop it and raises
+    MalformedEvidence naming each dropped item, so the caller refuses (or
+    conservatively verdicts) instead of admitting on a silent subset."""
     try:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -132,10 +221,23 @@ def owned_paths_from_manifest(path: str) -> List[str]:
     if not isinstance(payload, dict):
         raise ToolError("outstanding manifest %s is not a JSON object" % path)
     paths: List[str] = []
+    dropped: List[str] = []
     for key in ("owned_paths", "owned_plan_paths", "owned_review_paths"):
         value = payload.get(key)
-        if isinstance(value, list):
-            paths.extend(item for item in value if isinstance(item, str))
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            dropped.append("%s is not a list (%s)"
+                           % (key, type(value).__name__))
+            continue
+        for index, item in enumerate(value):
+            if isinstance(item, str):
+                paths.append(item)
+            else:
+                dropped.append("%s[%d] is not a string (%s)"
+                               % (key, index, type(item).__name__))
+    if dropped:
+        raise MalformedEvidence("; ".join(dropped))
     return paths
 
 
@@ -181,6 +283,14 @@ def owned_paths_from_plan(path: str) -> List[str]:
 class ToolError(Exception):
     """The script cannot perform its check reliably (missing inputs,
     unsupported data, usage violation)."""
+
+
+class MalformedEvidence(Exception):
+    """A manifest or admission record carries owned-path evidence the
+    reader would have to drop (a non-list owned-path field or a
+    non-string list item); the message names each dropped item. This is
+    a refusal, not a tool error: the consult can still verdict on it
+    (candidate refuse, outstanding conservative), so it never exits 3."""
 
 
 class _UsageToolErrorParser(argparse.ArgumentParser):
@@ -237,6 +347,16 @@ def build_parser():
                         action=_OutstandingRunAction, metavar="RUN_ID",
                         help="outstanding run carrying no done-setup "
                              "manifest, repeatable")
+    parser.add_argument("--stale-after-hours", type=float,
+                        help="claim-staleness horizon in hours: an "
+                             "outstanding run whose paired claim stamp is "
+                             "older is stale-parked (named, non-blocking); "
+                             "without it no staleness is evaluated")
+    parser.add_argument("--outstanding-claim-updated", action="append",
+                        nargs=2, metavar=("RUN_ID", "ISO"), default=[],
+                        help="an outstanding run's claim updated: stamp "
+                             "(YYYY-MM-DDTHH:MM:SSZ), repeatable, keyed by "
+                             "run id")
     parser.set_defaults(outstanding_runs=[])
     return parser
 
@@ -245,8 +365,17 @@ def main(argv=None):
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
+        candidate_evidence = None
         if args.candidate_manifest:
-            candidate_paths = owned_paths_from_manifest(args.candidate_manifest)
+            try:
+                candidate_paths = owned_paths_from_manifest(
+                    args.candidate_manifest)
+            except MalformedEvidence as exc:
+                # deferred, not refused here: the tool-error boundary is
+                # checked first, so an unreadable outstanding input must
+                # still decide as the tool error before this refusal
+                candidate_paths = []
+                candidate_evidence = str(exc)
         elif args.plan:
             candidate_paths = owned_paths_from_plan(args.plan)
         elif args.owned_path:
@@ -259,11 +388,22 @@ def main(argv=None):
         outstanding_runs: List[OutstandingRun] = []
         for kind, run_id, manifest in args.outstanding_runs:
             if kind == "with-manifest":
-                outstanding_runs.append(OutstandingRun(
-                    run_id=run_id,
-                    owned_paths=owned_paths_from_manifest(manifest),
-                    source="done-setup manifest %s" % manifest,
-                ))
+                source = "done-setup manifest %s" % manifest
+                try:
+                    paths = owned_paths_from_manifest(manifest)
+                except MalformedEvidence as exc:
+                    outstanding_runs.append(OutstandingRun(
+                        run_id=run_id,
+                        owned_paths=None,
+                        source=source,
+                        malformed_evidence=str(exc),
+                    ))
+                else:
+                    outstanding_runs.append(OutstandingRun(
+                        run_id=run_id,
+                        owned_paths=paths,
+                        source=source,
+                    ))
             else:
                 outstanding_runs.append(OutstandingRun(
                     run_id=run_id,
@@ -271,8 +411,31 @@ def main(argv=None):
                     source="no done-setup manifest recorded",
                 ))
 
-        candidate = Candidate(args.candidate_run, candidate_paths)
-        verdict = check_admission(candidate, outstanding_runs)
+        if args.stale_after_hours is not None:
+            if not math.isfinite(args.stale_after_hours):
+                raise ToolError("usage: --stale-after-hours must be a "
+                                "finite number")
+            if args.stale_after_hours < 0:
+                raise ToolError("usage: --stale-after-hours must not be "
+                                "negative")
+        claim_updated: Dict[str, str] = {}
+        if args.stale_after_hours is not None:
+            known_ids = {run.run_id for run in outstanding_runs}
+            for run_id, stamp in args.outstanding_claim_updated:
+                if run_id not in known_ids:
+                    raise ToolError("usage: --outstanding-claim-updated names "
+                                    "run %s, which matches no outstanding run"
+                                    % run_id)
+                if run_id in claim_updated:
+                    raise ToolError("usage: --outstanding-claim-updated names "
+                                    "run %s twice" % run_id)
+                claim_updated[run_id] = stamp
+        live_runs, stale_runs = partition_stale(
+            outstanding_runs, claim_updated, args.stale_after_hours)
+
+        candidate = Candidate(args.candidate_run, candidate_paths,
+                              malformed_evidence=candidate_evidence)
+        verdict = check_admission(candidate, live_runs)
 
         print("dispatch admission: %s" % ("ADMITTED" if verdict.admitted
                                           else "REFUSED"))
@@ -280,11 +443,16 @@ def main(argv=None):
         print("candidate owned paths: %d" % len(candidate.owned_paths))
         for run in outstanding_runs:
             print("outstanding run: %s (%s)" % (run.run_id, run.source))
+        for run_id, age in stale_runs:
+            print("stale-parked outstanding run: %s (claim age %.2fh exceeds "
+                  "the %.2fh horizon; excluded from the blocking loop)"
+                  % (run_id, age, args.stale_after_hours))
         if verdict.admitted:
             print("verdict: %s" % verdict.reason)
             print("OUTCOME: pass")
             return 0
-        print("blocking outstanding run: %s" % verdict.blocking_run_id)
+        if verdict.blocking_run_id is not None:
+            print("blocking outstanding run: %s" % verdict.blocking_run_id)
         print("reason: %s" % verdict.reason)
         if verdict.intersecting_paths:
             print("intersecting paths: %s" % ", ".join(verdict.intersecting_paths))

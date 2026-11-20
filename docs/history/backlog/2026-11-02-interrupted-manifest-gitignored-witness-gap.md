@@ -1,6 +1,6 @@
 # Backlog: dead-run dispositions can never witness gitignored-only deliverables
 
-Status: open
+Status: covered (docs/history/plans/2026-11-09-interrupted-manifest-gitignored-witness-gap.md)
 Priority: medium
 Class: fix-class
 Origin class: self-serving

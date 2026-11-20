@@ -1,0 +1,11 @@
+[env]
+AI_PLAYBOOK_TEST_VENV = "{{ env.HOME }}/.agents/venvs/ai-playbook-test/bin"
+PYTHONHOME = ""
+PYTHONPATH = ""
+_.path = ["{{ env.HOME }}/.agents/venvs/ai-playbook-test/bin"]
+
+[tasks."test:required"]
+description = "Run the complete required Python test inventory with bounded parallelism"
+raw_args = true
+run = "python3 scripts/run_required_test_suite.py --workers 8 --per-script-timeout 60 --suite-timeout 270 --json-report docs/tmp/test-suite-fast-feedback-runner-report.json"
+timeout = "295s"

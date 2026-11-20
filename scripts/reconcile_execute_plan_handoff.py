@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Receipt-backed reconciliation for one done-pending execute-plan handoff.
+"""Receipt-backed transitions for one done-pending execute-plan handoff.
 
 Bounded recovery operation for the host-native execute-plan orchestrator: a
 task whose accepted worker completion is recorded as terminal (status
@@ -11,13 +11,23 @@ only, the receipt (``tasks[task_id].handoff_reconciliation``), the launched
 task-scope digest (``tasks[task_id].task_scope_digest``), and the reconciled
 checkbox projection.
 
-Ownership boundary: this module owns only receipt validation and the atomic
-per-task reconciliation. It never runs preflight, launches workers, owns
-recovery routing, touches ``scripts/execute_plan_runtime.py``'s retained
-operations, or commits. The orchestrator parent remains the sole caller and
-keeps every other runtime-state update, ordinary preflight, the done commit
-gate, and the existing prelaunch remedies (the reviewed task-scope change
-referral and the fresh-review path) unchanged.
+The two receipt-backed transitions are deliberately bounded. ``reconcile``
+validates an accepted done-pending handoff against the reviewed task and
+stores its reconciliation receipt and checkbox projection.
+``recover-scope-drift`` handles the narrower case where reviewed task scope
+changed after acceptance and the accepted source effect is provably absent
+or neutral; it stores a scope-recovery receipt and requeues the task as
+pending while preserving the historical terminal receipt and effect baseline.
+
+Ownership boundary: this module owns only receipt validation and one atomic
+per-task state replacement for either operation. It never runs ordinary
+preflight, launches workers, chooses the next task, owns recovery routing,
+touches ``scripts/execute_plan_runtime.py``'s retained operations, or commits.
+The orchestrator parent remains the sole caller: it handles preflight,
+reselects an unchecked pending task after successful scope-drift recovery,
+dispatches a distinct worker, owns every other runtime-state update, and
+keeps the done commit gate and existing prelaunch remedies (the reviewed
+task-scope change referral and fresh-review path).
 
 Serialization contract (the existing execution claim plus the parent-only
 sequential writer): the helper requires the repository's active execution
@@ -55,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -62,6 +73,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -105,14 +117,18 @@ RECEIPT_IDENTITY_FIELDS = (
 
 # Re-read drift mapping: the receipt field whose change between validation
 # and the immediate pre-replacement re-read names the refusal.
+# `task_id` and `plan_task` remain in the receipt identity but come from the
+# immutable helper arguments, so they cannot differ between these two reads.
+# Keep `plan_slug`, `task_scope_digest`, and `checkbox_projection` as
+# precedence witnesses: `_derive_receipt` rejects a noncanonical slug before
+# producing a receipt, while stale review evidence for changed plan bytes
+# refuses before the derived scope and projection reach this comparison.
 DRIFT_REASON_BY_FIELD = {
     "expected_generation": "stale-generation",
     "run_session_id": "run-identity-drift",
     "plan_slug": "plan-identity-drift",
     "plan_path": "plan-identity-drift",
     "plan_digest": "plan-bytes-changed",
-    "task_id": "task-identity-drift",
-    "plan_task": "task-identity-drift",
     "task_scope_digest": "task-scope-changed",
     "worker_receipt_digest": "worker-receipt-changed",
     "review": "review-evidence-drift",
@@ -123,6 +139,32 @@ NEXT_ACTION = (
     "rerun ordinary preflight and the done commit gate, then select the "
     "next task; never hand-edit runtime_state.json"
 )
+
+# The nine scope-recovery receipt groups named in the plan Terms. Each group
+# gets one stable refusal class so a changed witness is diagnosable at the
+# final compare immediately before replacement.
+SCOPE_RECOVERY_GROUPS = {
+    "run_and_plan_identity": (("run_session_id", "plan_slug", "plan_path", "plan_digest"), "scope-recovery-identity-drift"),
+    "task_identity": (("task_id", "plan_task"), "scope-recovery-task-identity-drift"),
+    "generation_binding": (("expected_generation",), "scope-recovery-stale-generation"),
+    "prior_launched_scope_digest": (("prior_task_scope_digest",), "scope-recovery-launch-scope-changed"),
+    "recovered_current_scope_digest": (("task_scope_digest",), "scope-recovery-task-scope-changed"),
+    "worker_receipt_digest": (("worker_receipt_digest",), "scope-recovery-worker-receipt-changed"),
+    "effect_verdicts": (("effect_verdicts",), "scope-recovery-effect-evidence-changed"),
+    "review_evidence": (("review",), "scope-recovery-review-evidence-drift"),
+    "projection": (("checkbox_projection",), "scope-recovery-projection-changed"),
+}
+
+
+def _classify_effect(baseline: str, post: str, current: str) -> str:
+    """Return the plan's total, ordered baseline/post/current partition."""
+    if baseline == post:
+        return "neutral" if current == baseline else "evolved"
+    if current == post:
+        return "present"
+    if current == baseline:
+        return "absent"
+    return "evolved"
 
 
 class _Refusal(Exception):
@@ -176,6 +218,220 @@ def _read_bytes(path: Path) -> bytes:
 
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _open_directory_at(parent_fd: int, component: str) -> int:
+    """Open one child directory without following a symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    return os.open(component, flags, dir_fd=parent_fd)
+
+
+def _open_repository_root(repo_root: Path | str) -> int:
+    """Pin the canonical repository root by walking from a held ``/`` fd."""
+    try:
+        canonical_root = Path(repo_root).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise _ToolError("repository-root-unreadable", [f"repository root {repo_root} cannot be resolved: {exc}"]) from exc
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        initial_fd = os.open(os.path.sep, flags)
+    except OSError as exc:
+        raise _ToolError("repository-root-unreadable", [f"filesystem root cannot be opened: {exc}"]) from exc
+    with _CaptureDescriptorOwner(str(repo_root), "repository-root-unreadable") as descriptors:
+        current_fd = descriptors.own(initial_fd)
+        for component in canonical_root.parts[1:]:
+            try:
+                before = _stat_at(current_fd, component)
+            except OSError as exc:
+                raise _ToolError("repository-root-unreadable", [f"repository root component {component!r} cannot be inspected: {exc}"]) from exc
+            if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+                raise _ToolError("repository-root-unreadable", [f"repository root component {component!r} is a symlink or non-directory"])
+            try:
+                next_fd = _open_directory_at(current_fd, component)
+            except OSError as exc:
+                raise _ToolError("repository-root-unreadable", [f"repository root component {component!r} changed or cannot be opened: {exc}"]) from exc
+            descriptors.own(next_fd)
+            try:
+                opened = os.fstat(next_fd)
+            except OSError as exc:
+                raise _ToolError("repository-root-unreadable", [f"repository root component {component!r} cannot be verified: {exc}"]) from exc
+            if not stat.S_ISDIR(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise _ToolError("repository-root-unreadable", [f"repository root component {component!r} changed during traversal"])
+            descriptors.close(current_fd)
+            current_fd = next_fd
+        descriptors.raise_if_close_failed()
+        return descriptors.disown(current_fd)
+
+
+def _stat_at(parent_fd: int, name: str) -> os.stat_result:
+    """Inspect a directory entry itself, never its symlink target."""
+    return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+
+
+def _open_regular_file_at(parent_fd: int, name: str) -> int:
+    """Open a leaf without following links and without blocking on FIFOs."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    return os.open(name, flags, dir_fd=parent_fd)
+
+
+class _CaptureDescriptorOwner:
+    """Own capture descriptors and preserve primary errors during cleanup.
+
+    A descriptor stays registered until its close has been attempted. Close
+    errors are reported only after every owned descriptor has had a cleanup
+    attempt, and never replace an error already leaving the capture scope.
+    """
+
+    def __init__(self, path: str, reason_code: str = "effect-path-unreadable"):
+        self.path = path
+        self.reason_code = reason_code
+        self._fds: list[int] = []
+        self._close_error: OSError | None = None
+
+    def __enter__(self) -> "_CaptureDescriptorOwner":
+        return self
+
+    def own(self, fd: int) -> int:
+        self._fds.append(fd)
+        return fd
+
+    def disown(self, fd: int) -> int:
+        self._fds.remove(fd)
+        return fd
+
+    def raise_if_close_failed(self) -> None:
+        if self._close_error is not None:
+            raise _ToolError(
+                self.reason_code,
+                [f"effect path {self.path!r} descriptor cleanup failed: {self._close_error}"],
+            ) from self._close_error
+
+    def close(self, fd: int) -> None:
+        try:
+            self._fds.remove(fd)
+        except ValueError:
+            return
+        try:
+            os.close(fd)
+        except OSError as exc:
+            if self._close_error is None:
+                self._close_error = exc
+
+    def __exit__(self, exc_type: Any, exc: BaseException | None, _tb: Any) -> bool:
+        for fd in reversed(self._fds.copy()):
+            self.close(fd)
+        if exc is None and self._close_error is not None:
+            raise _ToolError(
+                self.reason_code,
+                [f"effect path {self.path!r} descriptor cleanup failed: {self._close_error}"],
+            ) from self._close_error
+        return False
+
+
+def _validated_effect_parts(path: str) -> tuple[str, ...]:
+    if not isinstance(path, str) or not path or "\\" in path or "\x00" in path:
+        raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} is not a repository-relative POSIX path"])
+    parts = tuple(path.split("/"))
+    if path.startswith("/") or any(part in ("", ".", "..") for part in parts):
+        raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} is not a canonical contained repository-relative path"])
+    return parts
+
+
+def _capture_one_effect(root_fd: int, path: str, parts: tuple[str, ...]) -> str:
+    try:
+        current_fd = os.dup(root_fd)
+    except OSError as exc:
+        raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent descriptor cannot be duplicated: {exc}"]) from exc
+    with _CaptureDescriptorOwner(path) as descriptors:
+        descriptors.own(current_fd)
+        for component in parts[:-1]:
+            try:
+                before = _stat_at(current_fd, component)
+            except FileNotFoundError:
+                return "absent"
+            except OSError as exc:
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent cannot be inspected: {exc}"]) from exc
+            if stat.S_ISLNK(before.st_mode):
+                raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} contains a symlink component"])
+            if not stat.S_ISDIR(before.st_mode):
+                raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} contains a non-directory component"])
+            try:
+                next_fd = _open_directory_at(current_fd, component)
+            except FileNotFoundError:
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent changed during traversal"])
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} contains a symlink or non-directory component: {exc}"]) from exc
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent is unreadable: {exc}"]) from exc
+            descriptors.own(next_fd)
+            try:
+                opened = os.fstat(next_fd)
+            except OSError as exc:
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent cannot be verified: {exc}"]) from exc
+            if not stat.S_ISDIR(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} parent changed during traversal"])
+            descriptors.close(current_fd)
+            current_fd = next_fd
+
+        leaf = parts[-1]
+        try:
+            before = _stat_at(current_fd, leaf)
+        except FileNotFoundError:
+            return "absent"
+        except OSError as exc:
+            raise _ToolError("effect-path-unreadable", [f"effect path {path!r} cannot be inspected: {exc}"]) from exc
+        if stat.S_ISLNK(before.st_mode):
+            raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} is a symlink"])
+        if not stat.S_ISREG(before.st_mode):
+            raise _ToolError("effect-path-unreadable", [f"effect path {path!r} is not a regular file"])
+        try:
+            file_fd = _open_regular_file_at(current_fd, leaf)
+        except FileNotFoundError:
+            return "absent"
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise _Refusal("effect-path-escapes-root", [f"effect path {path!r} became a symlink before open"]) from exc
+            raise _ToolError("effect-path-unreadable", [f"effect path {path!r} cannot be opened: {exc}"]) from exc
+        descriptors.own(file_fd)
+        try:
+            after = os.fstat(file_fd)
+            if not stat.S_ISREG(after.st_mode):
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} is not a regular file"])
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise _ToolError("effect-path-unreadable", [f"effect path {path!r} changed while it was being opened"])
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(file_fd, 65536)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            return digest.hexdigest()
+        except OSError as exc:
+            raise _ToolError("effect-path-unreadable", [f"effect path {path!r} cannot be read: {exc}"]) from exc
+        finally:
+            descriptors.close(file_fd)
+
+
+def capture_effect_evidence(repo_root: Path | str, paths: list[str]) -> dict[str, str]:
+    """Return an all-or-nothing map of safe raw-byte digests or ``absent``.
+
+    Traversal starts at a held repository-root descriptor and every component
+    is opened relative to its held parent with no-follow semantics. The leaf
+    is opened nonblocking and checked by descriptor before any bytes are read.
+    """
+    if not paths:
+        raise _Refusal("effect-evidence-unavailable", ["at least one repository-relative path is required"])
+    validated = [(path, _validated_effect_parts(path)) for path in paths]
+    root_fd = _open_repository_root(repo_root)
+    with _CaptureDescriptorOwner(paths[0]) as descriptors:
+        descriptors.own(root_fd)
+        captured: dict[str, str] = {}
+        for path, parts in validated:
+            if path in captured:
+                raise _Refusal("effect-evidence-unavailable", [f"effect path {path!r} is duplicated"])
+            captured[path] = _capture_one_effect(root_fd, path, parts)
+        return captured
 
 
 def _canonical_object_digest(value: Any) -> str:
@@ -505,12 +761,13 @@ class HandoffReconciler:
             raise
         scope = task_scope_digest(section)
         projection = checkbox_projection(section)
-        if state["plan_slug"] != self.plan_path.stem:
+        canonical_plan_slug = plan_readiness.feature_slug(self.plan_path)
+        if state["plan_slug"] != canonical_plan_slug:
             raise _Refusal(
                 "plan-identity-mismatch",
                 [
                     f"runtime state plan_slug {state['plan_slug']!r} does not match the plan "
-                    f"filename stem {self.plan_path.stem!r}",
+                    f"canonical filename slug {canonical_plan_slug!r}",
                 ],
                 generation=generation,
             )
@@ -542,8 +799,9 @@ class HandoffReconciler:
                     [
                         f"launched task-scope digest {launched_scope} does not match the current "
                         f"normalized task section digest {scope}",
-                        "task text changed beyond the checkbox markers after launch; the "
-                        "reviewed task-scope change referral route stays the remedy for that case",
+                        "for an accepted done-pending task, recover-scope-drift is the "
+                        "post-acceptance route; a prelaunch scope change still uses the "
+                        "reviewed task-scope change referral",
                     ],
                     generation=generation,
                 )
@@ -771,6 +1029,134 @@ class HandoffReconciler:
             requested,
         )
 
+    # -- scope-drift recovery -------------------------------------------------- #
+
+    def _scope_drift_admission(self, plan_raw: bytes, state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate recovery-only gates in their contract order.
+
+        Unlike reconcile, recovery requires a recorded launch digest and an
+        incomplete reviewed projection: a requeued task must be selectable by
+        the ordinary loop. Effect evidence is post-only; the launch baseline
+        is supplied by the pre-prompt record.
+        """
+        generation = state["generation"]
+        plan_text = self._decode_plan(plan_raw)
+        section = _extract_task_section(plan_text, self.task_number)
+        scope = task_scope_digest(section)
+        projection = checkbox_projection(section)
+        canonical_plan_slug = plan_readiness.feature_slug(self.plan_path)
+        if state["plan_slug"] != canonical_plan_slug:
+            raise _Refusal("plan-identity-mismatch", [f"runtime state plan_slug {state['plan_slug']!r} does not match the plan canonical filename slug {canonical_plan_slug!r}"], generation)
+        self._verify_claim()
+        plan_digest = _sha256(plan_raw)
+        review = self._review_evidence(plan_digest)
+        record = self._task_record(state)
+        if record.get("status") != DONE_PENDING_STATUS:
+            raise _Refusal("task-state-not-done-pending", [f"task '{self.task_key}' status is {record.get('status')!r}, want {DONE_PENDING_STATUS!r}", "only an accepted done-pending task can recover scope drift"], generation)
+        worker_digest = self._terminal_receipt_digest(record)
+        launched_scope = record.get("task_scope_digest")
+        if not isinstance(launched_scope, str) or not launched_scope:
+            raise _Refusal("launch-scope-unrecorded", [f"task '{self.task_key}' has no recorded launch task_scope_digest; recovery requires the pre-prompt scope receipt"], generation)
+        if launched_scope == scope:
+            raise _Refusal("scope-unchanged", ["the launched task scope equals the current reviewed scope; use the ordinary reconcile operation"], generation)
+        if projection["total"] == 0 or projection["checked"] == projection["total"]:
+            raise _Refusal("projection-complete", [f"reviewed task projection is {projection['checked']}/{projection['total']}; the loop cannot reselect a fully checked or checklist-less task"], generation)
+
+        receipt = record["terminal_receipt"]
+        evidence = receipt.get("effect_evidence") if isinstance(receipt, dict) else None
+        if not isinstance(evidence, dict) or not evidence:
+            raise _Refusal("effect-evidence-unavailable", ["accepted terminal receipt has no non-empty effect_evidence map"], generation)
+        if not any(isinstance(path, str) and path.strip() for path in evidence):
+            raise _Refusal("effect-evidence-unavailable", ["effect_evidence contains no changed-path keys"], generation)
+        baseline = record.get("effect_baseline")
+        if not isinstance(baseline, dict) or any(path not in baseline for path in evidence):
+            raise _Refusal("effect-baseline-unrecorded", ["effect_baseline is absent or lacks a baseline cell for a changed path"], generation)
+        # The shared capture resolver validates every path before reading and
+        # returns only after a complete map has been safely collected.
+        try:
+            current = capture_effect_evidence(self.repo_root, list(evidence))
+        except _Refusal as exc:
+            raise _Refusal(exc.reason_code, exc.evidence, generation) from exc
+        except _ToolError as exc:
+            raise _ToolError(exc.reason_code, exc.evidence) from exc
+        return ({
+            "run_session_id": state["run_session_id"], "plan_slug": state["plan_slug"],
+            "plan_path": _stable_identity(self.plan_path, self.repo_root), "plan_digest": plan_digest,
+            "task_id": self.task_key, "plan_task": self.task_number, "expected_generation": generation,
+            "prior_task_scope_digest": launched_scope, "task_scope_digest": scope,
+            "worker_receipt_digest": worker_digest, "review": review,
+            "checkbox_projection": projection,
+        }, {"record": record, "evidence": evidence, "baseline": baseline, "current": current})
+
+    def recover_scope_drift(self) -> tuple[dict[str, Any], str]:
+        try:
+            self._recover_scope_drift()
+        except _Success as exc:
+            return _result("success", exc.reason_code, exc.evidence, task_id=self.task_key, plan_task=self.task_number, generation=exc.generation, receipt=exc.receipt), PASS
+        except _Refusal as exc:
+            return _result("refused", exc.reason_code, exc.evidence, task_id=self.task_key, generation=exc.generation), FAIL
+        except _ToolError as exc:
+            return _result("error", exc.reason_code, exc.evidence, task_id=self.task_key), TOOL_ERROR
+        raise AssertionError("scope-drift recovery returned without a result")
+
+    def _recover_scope_drift(self) -> None:
+        try:
+            plan_raw = _read_bytes(self.plan_path)
+        except OSError as exc:
+            raise _ToolError("plan-unreadable", [f"plan operand unreadable at {self.plan_path}: {exc}"]) from exc
+        if not plan_raw.strip():
+            raise _ToolError("plan-unreadable", [f"plan operand missing or empty: {self.plan_path}"])
+        _, state = self._read_state()
+        receipt, evidence = self._scope_drift_admission(plan_raw, state)
+        # The effect probe is total: every changed path gets exactly one
+        # verdict before the fail-closed aggregate decision.
+        verdicts: dict[str, str] = {}
+        for key, post in evidence["evidence"].items():
+            before = evidence["baseline"][key]
+            now = evidence["current"][key]
+            verdicts[key] = _classify_effect(before, post, now)
+        if "present" in verdicts.values():
+            raise _Refusal("effect-present", [f"accepted effect is present or mixed with another non-clear verdict: {verdicts!r}"], state["generation"])
+        if "evolved" in verdicts.values():
+            raise _Refusal("effect-evolved", [f"accepted effect path evolved beyond its recorded baseline and post digests: {verdicts!r}"], state["generation"])
+        # Immediate pre-replacement read: recompute all admission evidence and
+        # require byte-level receipt identity before mutating the state.
+        fresh_plan = _read_bytes(self.plan_path)
+        fresh_raw, fresh_state = self._read_state()
+        fresh_receipt, fresh_evidence = self._scope_drift_admission(fresh_plan, fresh_state)
+        fresh_verdicts = {
+            key: _classify_effect(fresh_evidence["baseline"][key], post, fresh_evidence["current"][key])
+            for key, post in fresh_evidence["evidence"].items()
+        }
+        expected_recovery_receipt = dict(receipt, effect_verdicts=verdicts)
+        fresh_recovery_receipt = dict(fresh_receipt, effect_verdicts=fresh_verdicts)
+        changed_group = next((
+            group for group, (fields, _) in SCOPE_RECOVERY_GROUPS.items()
+            if any(expected_recovery_receipt.get(field) != fresh_recovery_receipt.get(field) for field in fields)
+        ), None)
+        effect_probe_changed = (
+            fresh_evidence["evidence"] != evidence["evidence"]
+            or fresh_evidence["baseline"] != evidence["baseline"]
+            or fresh_evidence["current"] != evidence["current"]
+        )
+        if effect_probe_changed:
+            changed_group = "effect_verdicts"
+        if changed_group is not None:
+            reason = SCOPE_RECOVERY_GROUPS[changed_group][1]
+            raise _Refusal(reason, [f"scope-recovery receipt group {changed_group!r} changed before replacement"], fresh_state["generation"])
+        new_state = copy.deepcopy(fresh_state)
+        record = dict(new_state["tasks"][self.task_key])
+        recovery_receipt = dict(receipt, effect_verdicts=verdicts)
+        record["status"] = "pending"
+        record["checkbox"] = False
+        record["task_scope_digest"] = receipt["task_scope_digest"]
+        record["scope_recovery"] = recovery_receipt
+        new_state["tasks"][self.task_key] = record
+        new_state["generation"] = fresh_state["generation"] + 1
+        payload = json.dumps(new_state, sort_keys=True, indent=2, ensure_ascii=False).encode("utf-8") + STATE_SUFFIX_NEWLINE
+        self._atomic_write(payload)
+        raise _Success("scope-drift-recovered", [f"task '{self.task_key}' requeued at generation {new_state['generation']} with its accepted terminal receipt preserved"], new_state["generation"], recovery_receipt)
+
 
 _replace = os.replace
 
@@ -795,29 +1181,39 @@ def build_parser() -> _OutcomeParser:
         "runtime_state.json replacement; nothing else).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    operation = subparsers.add_parser(
-        "reconcile",
-        help="reconcile one done-pending task against the reviewed plan bytes",
-    )
-    operation.add_argument("--state", type=Path, required=True, help="the run's runtime_state.json path")
-    operation.add_argument("--plan", type=Path, required=True, help="the exact active plan path")
-    operation.add_argument("--task", type=int, required=True, help="the plan task number (### Task N:)")
-    operation.add_argument(
-        "--task-key",
-        default=None,
-        help="runtime_state tasks map key (defaults to the task number)",
-    )
-    operation.add_argument(
-        "--session",
-        required=True,
-        help="this session's id; the active execution claim must name it",
-    )
-    operation.add_argument("--repo-root", type=Path, default=Path.cwd(), help="repository root")
+    capture = subparsers.add_parser("capture-effect-evidence", help="capture a complete read-only effect evidence map")
+    capture.add_argument("--repo-root", type=Path, default=Path.cwd(), help="repository root")
+    capture.add_argument("paths", nargs="+", help="repository-relative paths to capture")
+    for name, help_text in (
+        ("reconcile", "reconcile one done-pending task against reviewed plan bytes"),
+        ("recover-scope-drift", "requeue a done-pending task after reviewed scope drift when its effect is absent"),
+    ):
+        operation = subparsers.add_parser(name, help=help_text)
+        operation.add_argument("--state", type=Path, required=True, help="the run's runtime_state.json path")
+        operation.add_argument("--plan", type=Path, required=True, help="the exact active plan path")
+        operation.add_argument("--task", type=int, required=True, help="the plan task number (### Task N:)")
+        operation.add_argument("--task-key", default=None, help="runtime_state tasks map key (defaults to the task number)")
+        operation.add_argument("--session", required=True, help="this session's id; the active execution claim must name it")
+        operation.add_argument("--repo-root", type=Path, default=Path.cwd(), help="repository root")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "capture-effect-evidence":
+        try:
+            result = capture_effect_evidence(args.repo_root, args.paths)
+        except _Refusal as exc:
+            print(json.dumps(_result("refused", exc.reason_code, exc.evidence), sort_keys=True), file=sys.stderr)
+            print(f"OUTCOME: {FAIL}", file=sys.stderr)
+            return 1
+        except _ToolError as exc:
+            print(json.dumps(_result("error", exc.reason_code, exc.evidence), sort_keys=True), file=sys.stderr)
+            print(f"OUTCOME: {TOOL_ERROR}", file=sys.stderr)
+            return 3
+        print(json.dumps({"status": "success", "effect_evidence": result}, sort_keys=True))
+        print(f"OUTCOME: {PASS}")
+        return 0
     reconciler = HandoffReconciler(
         state_path=args.state,
         plan_path=args.plan,
@@ -826,7 +1222,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         task_key=args.task_key,
     )
-    result, outcome = reconciler.reconcile()
+    result, outcome = reconciler.reconcile() if args.command == "reconcile" else reconciler.recover_scope_drift()
     print(json.dumps(result, sort_keys=True))
     print(f"OUTCOME: {outcome}")
     if outcome == PASS:

@@ -1,5 +1,7 @@
 # Backlog: lesson #372's primary-path remedy superseded by the twin exemption
 
+Cluster: docs/history/backlog/2026-11-03-coverage-gate-directory-operand-self-conflict.md; docs/history/backlog/2026-11-03-twin-plan-note-resolution-site-drift.md (same coverage-gate twin exemption change; this row covers lesson guidance while siblings cover active-directory resolution and plan notes)
+
 Status: open
 Workflow: backlog
 Priority: low

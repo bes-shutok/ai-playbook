@@ -80,7 +80,18 @@ Usage:
         --review-started-at-ms <positive integer> \
         [--review-mode MODE] [--round N] [--date YYYY-MM-DD] \
         [--artifact-slug SLUG] [--last-fix-commit SHA] \
-        [--prior-findings-filter yes|no]
+        [--prior-findings-filter yes|no] [--kind plan-review|exec-completion] \
+        [--certified-range BASE...HEAD]
+
+    # The exec-completion arm (plan family with the -exec series token; the
+    # completion receipt mint, extensions.certified_range required):
+
+    python3 scripts/produce_exec_review_record.py \
+        --out-dir DIR --session SESSION --plan PLAN \
+        --findings-json FINDINGS.json \
+        --review-run-id <32-char lowercase hex> \
+        --review-started-at-ms <positive integer> \
+        --kind exec-completion --certified-range BASE...HEAD
 
     # The code-family arm (--plan and --range are mutually exclusive and
     # one is required; --artifact-slug is required in range mode):
@@ -94,12 +105,21 @@ Usage:
         [--review-mode MODE] [--round N] [--date YYYY-MM-DD] \
         [--last-fix-commit SHA] [--prior-findings-filter yes|no]
 
-The findings JSON schema:
+    The findings JSON schema:
 
     {
       "plan": "<repo-relative plan path, optional; cross-checked with --plan, ignored with --range>",
       "review_round": <int, optional>,
       "review_mode": "<enum, optional>",
+      "overflow": [
+        {
+          "title": "<str>", "note": "<str>",
+          "severity": "<High|Medium|Low, optional, default Low>",
+          "blocking": <bool, must be false or absent; a blocking row refuses>,
+          "workers": ["<str>, optional"], "file": "<str, optional>",
+          "line": <int, optional>, "pattern": "<str, optional>"
+        }
+      ],
       "findings": [
         {
           "id": <int>, "title": "<str>", "severity": "<Critical|High|Medium|Low>",
@@ -125,6 +145,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime
+import hashlib
 import importlib.util
 import io
 import json
@@ -236,13 +257,18 @@ def load_findings_input(path: Path) -> dict:
         raise ProducerToolError(f"findings JSON {path} is not valid JSON: {exc}")
     if not isinstance(data, dict):
         raise ProducerToolError("findings JSON must be an object")
-    allowed = {"plan", "review_round", "review_mode", "findings"}
+    allowed = {"plan", "review_round", "review_mode", "findings", "overflow"}
     unknown = sorted(set(data) - allowed)
     if unknown:
         raise ProducerToolError(
             f"findings JSON rejects unknown key(s) {unknown}; allowed keys "
             f"are {sorted(allowed)}"
         )
+    overflow = data.get("overflow")
+    if overflow is not None:
+        if not isinstance(overflow, list):
+            raise ProducerToolError("findings JSON 'overflow' must be a list")
+        data["overflow"] = [_normalize_overflow_row(row, index) for index, row in enumerate(overflow)]
     findings = data.get("findings")
     if not isinstance(findings, list):
         raise ProducerToolError("findings JSON 'findings' must be a list")
@@ -344,6 +370,87 @@ def _normalize_finding(row: object, index: int) -> dict:
     return normalized
 
 
+def _normalize_overflow_row(row: object, index: int) -> dict:
+    """Schema-check one overflow row from the findings JSON ``overflow``
+    array. The validator's canonical overflow placement gate forbids a
+    Critical or blocking item in overflow, so both shapes refuse here at
+    the input boundary. Raises ``ProducerToolError`` on a malformed row."""
+    if not isinstance(row, dict):
+        raise ProducerToolError(f"overflow row at index {index} must be an object")
+    allowed = {"title", "note", "severity", "blocking", "workers", "file", "line", "pattern"}
+    unknown = sorted(set(row) - allowed)
+    if unknown:
+        raise ProducerToolError(
+            f"overflow row at index {index} rejects unknown key(s) {unknown}"
+        )
+    title = row.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ProducerToolError(
+            f"overflow row at index {index} needs a non-empty string 'title'"
+        )
+    note = row.get("note")
+    if not isinstance(note, str) or not note.strip():
+        raise ProducerToolError(
+            f"overflow row at index {index} needs a non-empty string 'note'"
+        )
+    severity = row.get("severity", "Low")
+    if severity not in SEVERITY_ORDER:
+        raise ProducerToolError(
+            f"overflow row at index {index} severity {severity!r} must be one "
+            f"of {list(SEVERITY_ORDER)}"
+        )
+    if severity == "Critical":
+        raise ProducerToolError(
+            f"overflow row at index {index} is Critical; the validator's "
+            "canonical overflow placement gate forbids Critical findings in "
+            "overflow, keep it in 'findings'"
+        )
+    blocking = row.get("blocking", False)
+    if blocking is not False:
+        raise ProducerToolError(
+            f"overflow row at index {index} is blocking; the validator's "
+            "canonical overflow placement gate forbids blocking findings in "
+            "overflow, keep it in 'findings'"
+        )
+    workers = row.get("workers")
+    if workers is not None and (
+        not isinstance(workers, list)
+        or not workers
+        or not all(isinstance(item, str) and item.strip() for item in workers)
+    ):
+        raise ProducerToolError(
+            f"overflow row at index {index} 'workers' must be a non-empty "
+            "list of strings when present"
+        )
+    file_ref = row.get("file")
+    if file_ref is not None and (not isinstance(file_ref, str) or not file_ref.strip()):
+        raise ProducerToolError(
+            f"overflow row at index {index} 'file' must be a non-empty string when present"
+        )
+    line = row.get("line")
+    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
+        raise ProducerToolError(
+            f"overflow row at index {index} 'line' must be an integer when present"
+        )
+    pattern = row.get("pattern", DEFAULT_PATTERN)
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ProducerToolError(
+            f"overflow row at index {index} 'pattern' must be a non-empty string when present"
+        )
+    normalized = dict(row)
+    normalized.update(
+        {
+            "title": title.strip(),
+            "note": note.strip(),
+            "severity": severity,
+            "blocking": False,
+            "pattern": pattern.strip(),
+            "workers": [item.strip() for item in workers] if workers else [],
+        }
+    )
+    return normalized
+
+
 def _kebab_slug(text: str) -> str:
     lowered = text.strip().lower()
     kebab = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
@@ -352,6 +459,42 @@ def _kebab_slug(text: str) -> str:
 
 def _default_artifact_slug(plan_path: Path) -> str:
     return _kebab_slug(plan_path.stem)
+
+
+# The plans roots the mint-time exec-record warning probe scans (the
+# active-plan root is the arm's primary firing window; the completed root
+# is the post-archive window; deferred and rejected subdirectories are
+# outside the probe's scan set).
+PLANS_ROOTS = ("docs/history/plans", "docs/history/plans/completed")
+
+# The date-prefixed plan filename shape whose canonical slug strips the
+# leading date prefix (plan-exec-record-grammar terms).
+_PLAN_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def _canonical_plan_slug(stem: str) -> str:
+    return _PLAN_DATE_PREFIX_RE.sub("", stem)
+
+
+def _matching_plan_slug(repo_root: Path | None, artifact_slug: str) -> bool:
+    """Fail-open slug match: True only when ``artifact_slug`` exactly
+    equals a canonical plan slug under the plans roots of ``repo_root``.
+    Any resolution failure (no root, unreadable root, walk error) decides
+    "no match" and never raises: the warning arm is warning-only."""
+    if repo_root is None or not artifact_slug:
+        return False
+    try:
+        for root_rel in PLANS_ROOTS:
+            root = repo_root / root_rel
+            if not root.is_dir():
+                continue
+            for plan_path in root.iterdir():
+                if plan_path.is_file() and plan_path.suffix == ".md":
+                    if _canonical_plan_slug(plan_path.stem) == artifact_slug:
+                        return True
+    except OSError:
+        return False
+    return False
 
 
 def _existing_anchor(path: Path) -> Path:
@@ -365,6 +508,46 @@ def _existing_anchor(path: Path) -> Path:
             break
         probe = parent
     return probe
+
+
+_EGRESS_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _resolve_egress_digest(args: argparse.Namespace) -> str | None:
+    """Resolve the mint-time archive-egress digest from the optional
+    ``--egress-digest``/``--egress-path`` pair (mutually exclusive at the
+    argparse layer). ``--egress-digest`` takes the archived bytes' sha256
+    verbatim; ``--egress-path`` digests the named file's bytes at mint
+    time (the archive-destination path inside the run worktree, which
+    exists pre-landing). Returns None when neither flag is present.
+    Raises ``ProducerToolError`` (exit 3) on malformed input."""
+    digest_spec = getattr(args, "egress_digest", None)
+    path_spec = getattr(args, "egress_path", None)
+    if digest_spec is None and path_spec is None:
+        return None
+    if digest_spec is not None:
+        digest = digest_spec.strip().lower()
+        if not _EGRESS_DIGEST_RE.fullmatch(digest):
+            raise ProducerToolError(
+                f"--egress-digest {digest_spec!r} must be a 64-character "
+                "lowercase hex sha256 (the archived bytes' digest the "
+                "reverse-squash guard's evidence leg greps)"
+            )
+        return digest
+    egress_path = Path(path_spec).expanduser()
+    if not egress_path.is_file():
+        raise ProducerToolError(
+            f"egress path not found: {egress_path} (the archive "
+            "destination must exist at mint time; the producer digests "
+            "its bytes once, never re-reads them)"
+        )
+    try:
+        egress_bytes = egress_path.read_bytes()
+    except OSError as exc:
+        raise ProducerToolError(
+            f"cannot read egress path {egress_path}: {exc}"
+        )
+    return hashlib.sha256(egress_bytes).hexdigest()
 
 
 def _resolve_range_source(args: argparse.Namespace, range_spec: str) -> dict:
@@ -496,7 +679,7 @@ def build_finding_block(finding: dict) -> str:
     return "\n".join(lines)
 
 
-def build_findings_section(findings: list[dict]) -> str:
+def build_findings_section(findings: list[dict], overflow: list[dict]) -> str:
     """The ``## Findings`` body: all four severity groups in canonical
     order, each finding under its severity heading, then the overflow
     manifest."""
@@ -512,7 +695,32 @@ def build_findings_section(findings: list[dict]) -> str:
         blocks = [f"### {severity}"]
         blocks.extend(build_finding_block(row) for row in rows)
         sections.append("\n\n".join(blocks))
-    return "\n\n".join(sections) + "\n\n### Overflow manifest\nNone."
+    return "\n\n".join(sections) + "\n\n### Overflow manifest\n" + build_overflow_manifest(overflow)
+
+
+def build_overflow_manifest(overflow: list[dict]) -> str:
+    """The ``### Overflow manifest`` body: one bullet per overflow row
+    (the credible candidates that did not fit the per-worker budget),
+    ``None.`` when the manifest is empty."""
+    if not overflow:
+        return "None."
+    rows = []
+    for row in overflow:
+        location = ""
+        file_ref = row.get("file")
+        if isinstance(file_ref, str) and file_ref.strip():
+            line_no = row.get("line")
+            anchor = (
+                f"{file_ref.strip()}:{line_no}" if line_no is not None else file_ref.strip()
+            )
+            location = f", location: `{anchor}`"
+        rows.append(
+            f"- **{row['title']}** ({row['severity']}, non-blocking)"
+            + (f", workers: {', '.join(row['workers'])}" if row["workers"] else "")
+            + location
+            + f": {row['note']}"
+        )
+    return "\n".join(rows)
 
 
 def build_markdown(ctx: dict) -> str:
@@ -523,7 +731,13 @@ def build_markdown(ctx: dict) -> str:
     solo = sum(1 for row in findings if len(row["workers"]) == 1)
     echo = sum(1 for row in findings if len(row["workers"]) > 1)
     panel_rows = []
+    # The focused-panel inputs (codex-plan-review-producer-focused-panel):
+    # only the workers that actually ran render rows; a full panel selects
+    # every base worker, preserving the historical bytes exactly.
+    selected = ctx["selected_set"]
     for worker, lenses in PANEL_WORKER_LENSES:
+        if worker not in selected:
+            continue
         attributed = [row for row in findings if worker in row["workers"]]
         row_solo = sum(1 for row in attributed if len(row["workers"]) == 1)
         row_echo = sum(1 for row in attributed if len(row["workers"]) > 1)
@@ -581,9 +795,16 @@ def build_markdown(ctx: dict) -> str:
         # The post-fix witness-ledger gate requires one of the two legal
         # shapes; the producer carries the documented empty shape.
         meta_lines.append("- Witness ledger: N/A (no public mutators)")
+    if ctx.get("egress_digest"):
+        # The mint-time archive-egress digest (producer-egress-digest-mint
+        # arm): the reverse-squash guard's evidence leg greps the record
+        # content for the archived bytes' sha256, so the digest rides both
+        # surfaces at mint instead of a hand `cat >>` backfill after the
+        # completion pass.
+        meta_lines.append(f"- Archive-egress digest: {ctx['egress_digest']}")
     meta_lines.extend(
         [
-            "- Panel mode: full",
+            f"- Panel mode: {ctx['panel_mode']}",
             digest_line,
             f"- review-run-id: {ctx['review_run_id']}",
             f"- review-started-at-ms: {ctx['review_started_at_ms']}",
@@ -596,14 +817,21 @@ def build_markdown(ctx: dict) -> str:
             "|--------|--------|---------------|--------|-----|------|------|----------|",
         ]
     )
+    if ctx["selection_reason"]:
+        # The focused-panel record carries the selection reason on the
+        # Markdown surface beside the sidecar field (the validator's
+        # focused gate keys on the sidecar; this line mirrors it for the
+        # human reader, the exemplar focused records' shape).
+        meta_lines.append(f"- Selection reason: {ctx['selection_reason']}")
     meta_lines.extend(panel_rows)
     meta_lines.extend(
         [
             "### Counts",
-            "- Workers launched: 5",
+            f"- Workers launched: {len(ctx['selected_workers'])}",
             f"- Raw findings (all workers): {findings_count}",
             f"- Staged findings: {findings_count}",
             "- Discarded during synthesis: 0",
+            f"- Overflow: {len(ctx['overflow'])}",
             f"- Solo staged (unique agent origin): {solo}",
             f"- Echo staged (multi-agent dedup): {echo}",
             "### Deduplication groups",
@@ -617,7 +845,7 @@ def build_markdown(ctx: dict) -> str:
             f"- Coverage: {ctx['coverage_outcome']}",
             "## Findings",
             "",
-            build_findings_section(findings),
+            build_findings_section(findings, ctx["overflow"]),
             "## Verdict for this round (before fixes)",
             verdict_line,
             "",
@@ -648,7 +876,12 @@ def build_payload(ctx: dict) -> dict:
         )
     ]
     panel = []
+    # Same focused selection as the Markdown rows: only the workers that
+    # actually ran (full keeps all five).
+    selected = ctx["selected_set"]
     for worker, lenses in PANEL_WORKER_LENSES:
+        if worker not in selected:
+            continue
         attributed = [row for row in ctx["findings"] if worker in row["workers"]]
         panel.append(
             {
@@ -663,8 +896,15 @@ def build_payload(ctx: dict) -> dict:
                 "relaunch": False,
             }
         )
+    # Focused coverage lenses derive from the workers that ran; full keeps
+    # the whole corpus lens set.
     material_lens_set = sorted(
-        {lens for lenses in vrs.REQUIRED_PANEL_LENSES.values() for lens in lenses}
+        {
+            lens
+            for worker, lenses in vrs.REQUIRED_PANEL_LENSES.items()
+            if worker in selected
+            for lens in lenses
+        }
     )
     extensions = {
         "convergence": {"self_heal_attempt": ctx["self_heal_state"]},
@@ -676,22 +916,36 @@ def build_payload(ctx: dict) -> dict:
             "base": ctx["range_base"],
             "head": ctx["range_head"],
         }
+    elif ctx["certified_range"] is not None:
+        # The exec-completion annotation: the same optional field records
+        # the landed range the completion receipt certifies, resolved
+        # through the shared range source rules.
+        extensions["certified_range"] = {
+            "base": ctx["certified_range"]["base"],
+            "head": ctx["certified_range"]["head"],
+        }
+    if ctx.get("egress_digest"):
+        # Free-form extensions subtree (the validator sweeps no keys or
+        # values inside it): the digest mirrors the Metadata line so the
+        # pair's machine-readable half carries the same evidence.
+        extensions["archive_egress_digest"] = ctx["egress_digest"]
     return {
         "schema_version": 1,
         "review_type": ctx["review_type"],
         "date": ctx["date"],
         "artifact_slug": ctx["artifact_slug"],
         "round": f"r{ctx['round']}",
-        "panel_mode": "full",
-        "selection_reason": None,
+        "panel_mode": ctx["panel_mode"],
+        "selection_reason": ctx["selection_reason"],
         "source_kind": ctx["source_kind"],
         "source_digest": ctx["source_digest"],
         "escalation_reason": None,
         "counts": {
-            "workers_launched": 5,
+            "workers_launched": len(ctx["selected_workers"]),
             "raw_findings": len(ctx["findings"]),
             "staged_findings": len(ctx["findings"]),
             "discarded": 0,
+            "overflow": len(ctx["overflow"]),
             "solo_staged": sum(1 for row in ctx["findings"] if len(row["workers"]) == 1),
             "echo_staged": sum(1 for row in ctx["findings"] if len(row["workers"]) > 1),
         },
@@ -701,7 +955,17 @@ def build_payload(ctx: dict) -> dict:
         "severity_calibration": [],
         "triage_outcomes": [],
         "findings": findings_payload,
-        "overflow": [],
+        "overflow": [
+            {
+                "id": index + 1,
+                "severity": row["severity"],
+                "blocking": False,
+                "pattern": row["pattern"],
+                "note": row["note"],
+                "workers": list(row["workers"]),
+            }
+            for index, row in enumerate(ctx["overflow"])
+        ],
         "soften_watchlist": [],
         "verdict": ctx["verdict_field"],
         "review_mode": ctx["review_mode"],
@@ -812,6 +1076,24 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
     range_source = None
     plan_bytes = None
     range_spec = getattr(args, "range", None)
+    certified_range = None
+    certified_range_spec = getattr(args, "certified_range", None)
+    if certified_range_spec is not None:
+        if range_spec is not None:
+            raise ProducerToolError(
+                "--certified-range and --range are mutually exclusive: a "
+                "certified range annotates a plan-family record's sidecar, "
+                "never a code-family record that already certifies its own "
+                "range"
+            )
+        if getattr(args, "kind", "plan-review") != "exec-completion":
+            raise ProducerToolError(
+                "--certified-range requires --kind exec-completion: the "
+                "certified range is the completion receipt's annotation, "
+                "never a free-standing option on the default plan-review "
+                "arm"
+            )
+        certified_range = _resolve_range_source(args, certified_range_spec)
     if range_spec is not None:
         range_source = _resolve_range_source(args, range_spec)
     else:
@@ -822,6 +1104,20 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
             plan_bytes = plan_path.read_bytes()
         except OSError as exc:
             raise ProducerToolError(f"cannot read plan file {plan_path}: {exc}")
+        if (
+            getattr(args, "egress_digest", None) is not None
+            or getattr(args, "egress_path", None) is not None
+        ) and getattr(args, "kind", "plan-review") != "exec-completion":
+            # The digest annotates the completion receipt the reverse-squash
+            # guard's anchored ``-exec-r<N>`` filename grammar matches; on a
+            # plain round record it would be dead evidence on both surfaces
+            # (the r1 panel's converged Low, folded in-change).
+            raise ProducerToolError(
+                "--egress-digest/--egress-path require --kind "
+                "exec-completion: the archive-egress digest annotates the "
+                "completion receipt the guard's evidence leg matches, never "
+                "a round record whose filename no evidence leg reads"
+            )
 
         json_plan = findings_input.get("plan")
         if json_plan is not None:
@@ -894,6 +1190,7 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
 
     last_fix = (args.last_fix_commit or "").strip() or None
     findings = findings_input["findings"]
+    overflow = findings_input.get("overflow") or []
     clean_round = not findings
     if last_fix is not None and last_fix.lower() in _NULL_LAST_FIX_TOKENS:
         last_fix = None
@@ -901,12 +1198,38 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         # The freshness gate: a last-fix clean round's mode must be
         # fresh-adversarial; the producer refuses the unsupported
         # combination instead of emitting a record the validator refuses.
+        # Round-shape mapping (exec-review-record-producer-gaps): a clean
+        # post-fix verification round is recorded as fresh-adversarial with
+        # --last-fix-commit; the validator's clean-verdict contradiction has
+        # no verification-only shape ("a verification-only pass never
+        # satisfies the clean-round condition"), so the mapping is the only
+        # sanctioned spelling.
         raise ProducerToolError(
             f"--last-fix-commit with a clean (empty-findings) round "
-            f"requires --review-mode fresh-adversarial; got {review_mode!r}"
+            f"requires --review-mode fresh-adversarial; got {review_mode!r}. "
+            "Round-shape mapping: a clean post-fix verification round is "
+            "recorded as fresh-adversarial with --last-fix-commit <sha>; a "
+            "clean verification-only round has no sanctioned record shape "
+            "(the validator refuses it post-write)"
         )
 
     if range_source is not None:
+        if getattr(args, "kind", "plan-review") == "exec-completion":
+            raise ProducerToolError(
+                "--kind exec-completion is a plan-family annotation; the "
+                "code-family range arm already certifies its own range"
+            )
+        if (
+            getattr(args, "egress_digest", None) is not None
+            or getattr(args, "egress_path", None) is not None
+        ):
+            raise ProducerToolError(
+                "--egress-digest/--egress-path are plan-family options: "
+                "the archive-egress digest annotates the exec-review "
+                "completion receipt the reverse-squash guard's evidence "
+                "leg greps, never a code-family record"
+            )
+        egress_digest = None
         slug = args.artifact_slug
         if slug is None:
             raise ProducerToolError(
@@ -916,6 +1239,31 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
             )
     else:
         slug = args.artifact_slug or _default_artifact_slug(plan_path)
+        if getattr(args, "kind", "plan-review") == "exec-completion":
+            # The exec-completion arm: the completion receipt mint the
+            # ``*-plan-review-<slug>-exec-r<N>.md`` series grammar pins
+            # (scripts/reverse_squash_guard.py EXEC_REVIEW_RECORD_RE,
+            # scripts/done_sweep_gates_lib.py EXEC_REVIEW_SERIES_RE). The
+            # series token is the slug suffix ``-exec``, appended here so
+            # the minted filename lands in the pinned grammar without the
+            # caller hand-splicing the slug. A slug already carrying the
+            # token refuses (no double append). The arm is an annotation of
+            # the plan-family record, so the certified range it names is
+            # required input: an exec completion receipt certifies a
+            # concrete landed range.
+            if slug.endswith("-exec"):
+                raise ProducerToolError(
+                    f"artifact slug {slug!r} already carries the -exec "
+                    "series token; --kind exec-completion appends it once"
+                )
+            if certified_range is None:
+                raise ProducerToolError(
+                    "--kind exec-completion requires --certified-range "
+                    "BASE...HEAD: the receipt's sidecar "
+                    "extensions.certified_range names the landed range the "
+                    "completion certifies"
+                )
+            slug = f"{slug}-exec"
     if _IDENTITY_QUALIFIED_TAIL_RE.search(slug):
         raise ProducerToolError(
             f"artifact slug {slug!r} ends in the identity-qualified tail "
@@ -929,6 +1277,12 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         )
 
     if range_source is not None:
+        # The mint-time exec-record warning decision (fail-open, computed
+        # once here so produce emits it only on the success path).
+        repo_root_for_probe = review_plan_identity.repository_root(
+            _existing_anchor(Path(args.out_dir))
+        )
+        exec_record_warning = _matching_plan_slug(repo_root_for_probe, slug)
         record_name = (
             f"{date_value}-{slug}{CODE_FAMILY_FILENAME_SUFFIX}"
             f"-r{round_value}.md"
@@ -949,9 +1303,58 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         review_type = PLAN_FAMILY_LABEL
         source_kind = "plan"
         source_digest = vrs.compute_source_digest("plan", plan_bytes)
+        egress_digest = _resolve_egress_digest(args)
 
     record_path = Path(args.out_dir) / record_name
     coverage_outcome = "clean"
+    # The focused-panel inputs: resolved once here so both builders stay
+    # pure readers reading ctx["selected_workers"] (the full panel is the
+    # historical default shape). The getattr fallbacks keep the older
+    # hand-built Namespace test fixtures mintable; the CLI parser always
+    # sets all three.
+    panel_mode = getattr(args, "panel_mode", None) or "full"
+    selection_reason = getattr(args, "selection_reason", None)
+    if panel_mode == "focused":
+        if not selection_reason or not selection_reason.strip():
+            raise ProducerRefusal(
+                "focused panel requires a non-empty --selection-reason "
+                "(the validator's focused gate refuses a focused record "
+                "without one)"
+            )
+        if "\n" in selection_reason or "\r" in selection_reason:
+            # A line break would splice non-canonical lines into the
+            # Metadata block; the reason stays one single-line field.
+            raise ProducerRefusal(
+                "--selection-reason must be a single line (a line break "
+                "would splice extra lines into the Metadata block)"
+            )
+        seen_workers: list[str] = []
+        for worker in getattr(args, "workers", None) or []:
+            if worker not in vrs.REQUIRED_PANEL_LENSES:
+                raise ProducerRefusal(
+                    f"unknown worker {worker!r}; the known workers are "
+                    + ", ".join(sorted(vrs.REQUIRED_PANEL_LENSES))
+                )
+            if worker not in seen_workers:
+                seen_workers.append(worker)
+        if not seen_workers:
+            raise ProducerRefusal(
+                "focused panel requires at least one --worker (the workers "
+                "that actually ran); use the default full panel otherwise"
+            )
+        selected_workers = seen_workers
+    else:
+        if selection_reason:
+            raise ProducerRefusal(
+                "--selection-reason pairs only with --panel-mode focused "
+                "(a full record's selection_reason is the null form)"
+            )
+        if getattr(args, "workers", None):
+            raise ProducerRefusal(
+                "--worker pairs only with --panel-mode focused (a full "
+                "panel always launches every base worker)"
+            )
+        selected_workers = list(vrs.REQUIRED_PANEL_LENSES)
     ctx = {
         "session": args.session,
         "plan_ref": None if range_source is not None else plan_ref,
@@ -970,11 +1373,19 @@ def build_context(args: argparse.Namespace, findings_input: dict) -> dict:
         "artifact_slug": slug,
         "source_digest": source_digest,
         "coverage_outcome": coverage_outcome,
+        "panel_mode": panel_mode,
+        "selection_reason": selection_reason,
+        "selected_workers": selected_workers,
+        "selected_set": set(selected_workers),
         # The verdict field both builders read: computed once here so
         # build_markdown and build_payload are pure readers and the call
         # order between them is not load-bearing.
         "verdict_field": "no" if findings else "yes",
         "findings": findings,
+        "overflow": overflow,
+        "certified_range": certified_range,
+        "egress_digest": egress_digest,
+        "exec_record_warning": exec_record_warning if range_source is not None else False,
         "record_path": record_path,
     }
     # The chain grammar reads the validator's public seam (the derivation's
@@ -1011,6 +1422,21 @@ def produce(args: argparse.Namespace) -> int:
         print("OUTCOME: fail")
         return 1
     print(f"validated: OUTCOME: pass (validator hard mode) for {record_path}")
+    if ctx.get("exec_record_warning"):
+        # The mint-time exec-record warning arm: warning-only, stderr
+        # never the stdout outcome grammar, emitted on the success path
+        # only (a refused pair self-deletes and leaves nothing to warn
+        # about). Names the consuming gate and the repair producer route.
+        print(
+            "warning: this code-family record cannot stand as the "
+            "archived plan's execution evidence: the archive-ceremony "
+            "gate (scripts/done_sweep_gates_lib.py) accepts neither its "
+            "filename family nor its sidecar as execution evidence; mint "
+            "the acceptable exec-series receipt instead with "
+            "scripts/produce_exec_review_record.py --kind exec-completion "
+            "(the -plan-review-<slug>-exec-r<N> grammar)",
+            file=sys.stderr,
+        )
     print("OUTCOME: pass")
     return 0
 
@@ -1074,6 +1500,28 @@ def main(argv: list[str] | None = None) -> int:
         help="artifact slug (default: kebab-cased plan filename stem)",
     )
     parser.add_argument(
+        "--kind",
+        default="plan-review",
+        choices=("plan-review", "exec-completion"),
+        help=(
+            "record arm: plan-review (default) or exec-completion (the "
+            "*-plan-review-<slug>-exec-r<N> completion receipt mint; "
+            "appends the -exec series token to the slug and requires "
+            "--certified-range)"
+        ),
+    )
+    parser.add_argument(
+        "--certified-range",
+        default=None,
+        metavar="BASE...HEAD",
+        help=(
+            "landed range the record certifies (plan family only; "
+            "populates sidecar extensions.certified_range with the "
+            "resolved base and head); required with --kind exec-completion, "
+            "mutually exclusive with --range"
+        ),
+    )
+    parser.add_argument(
         "--review-run-id",
         required=True,
         help="32-character lowercase hex review run id (review_usage_capture.py mint)",
@@ -1090,9 +1538,58 @@ def main(argv: list[str] | None = None) -> int:
         help="last fix commit sha when this round reviews a fix (default: none)",
     )
     parser.add_argument(
+        "--panel-mode",
+        default="full",
+        choices=("full", "focused"),
+        help=(
+            "panel mode the round actually ran (default: full, the "
+            "historical five-worker shape)"
+        ),
+    )
+    parser.add_argument(
+        "--selection-reason",
+        default=None,
+        help=(
+            "why the focused panel was selected (required with "
+            "--panel-mode focused, refused with full)"
+        ),
+    )
+    parser.add_argument(
+        "--worker",
+        dest="workers",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "a worker that actually ran (repeatable; required with "
+            "--panel-mode focused, refused with full; lenses and coverage "
+            "derive from the named workers' canonical lens sets)"
+        ),
+    )
+    parser.add_argument(
         "--prior-findings-filter",
         default="no",
         help="whether prior findings were supplied as filter: yes or no (default no)",
+    )
+    egress_group = parser.add_mutually_exclusive_group()
+    egress_group.add_argument(
+        "--egress-digest",
+        default=None,
+        metavar="SHA256",
+        help=(
+            "archive-egress digest to place into the minted record pair "
+            "(64-character lowercase hex; the archived bytes' sha256 the "
+            "reverse-squash guard's evidence leg greps)"
+        ),
+    )
+    egress_group.add_argument(
+        "--egress-path",
+        default=None,
+        help=(
+            "archive-destination path digested at mint time (its bytes' "
+            "sha256 is placed into the minted record pair; the file must "
+            "exist, typically inside the run worktree pre-landing)"
+        ),
     )
     args = parser.parse_args(argv)
     try:

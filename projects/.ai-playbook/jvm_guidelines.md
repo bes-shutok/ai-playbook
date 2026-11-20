@@ -707,3 +707,22 @@ documents `afterCompletion(int)` after transaction completion, and the
 documents thread-bound synchronization management and registration. These
 references support the callback lifecycle example; they do not assert which
 Spring version a consumer project uses.
+
+## 29. Mapper wiring with a mapper-generation library
+
+The build sets the component model once. Mappers are injected container beans,
+and the generation library's factory method stays out of production code
+(tests may use it).
+
+A per-file component-model attribute must not restate the build-wide default.
+An explicit restatement is flagged because it silently overrides the build and
+un-beans the mappers.
+
+A helper referenced through the library's declared mechanism is an injected
+bean, so a utility-annotated helper must declare every method explicitly
+static, or generated code calls an unmanaged instance (the trap the origin's
+first fix hit in a context test).
+
+Shared conversion logic belongs in a referenced helper or a declarative
+mapping, not a default method on the mapper.
+

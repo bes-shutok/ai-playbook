@@ -12,6 +12,8 @@ repo root, so no network and no real repo state are involved.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -161,9 +163,11 @@ class PlanOriginsClosedTest(unittest.TestCase):
         proc = self._run("--plan", str(plan))
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn(f"straggler: {BETA}", proc.stdout)
-        # The closed sibling origin is never listed; the gate names the
-        # stragglers of the plan under test only.
-        self.assertNotIn(ALPHA, proc.stdout)
+        # The closed sibling origin is never listed as a straggler; the
+        # gate names the stragglers of the plan under test only. (Its
+        # completed-directory posture warning is the posture branch's
+        # own concern, never a straggler row.)
+        self.assertNotIn(f"straggler: {ALPHA}", proc.stdout)
         # --warn downgrades the same verdict to warn-and-exit-0.
         warned = self._run("--plan", str(plan), "--warn")
         self.assertEqual(warned.returncode, 0, warned.stdout + warned.stderr)
@@ -219,9 +223,11 @@ class PlanOriginsClosedTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn(f"straggler: {GAMMA}", proc.stdout)
         # The rejected origin is never named: it left the top level
-        # through the documented rejected archive.
+        # through the documented rejected archive. The completed/
+        # sibling never appears as a straggler either (its posture
+        # warning is not a straggler row).
         self.assertNotIn(BETA, proc.stdout)
-        self.assertNotIn(ALPHA, proc.stdout)
+        self.assertNotIn(f"straggler: {ALPHA}", proc.stdout)
         rejected_only = self._plan(
             "2026-09-22-fixture-rejected-only.md",
             [f"docs/history/backlog/{BETA}"],
@@ -653,6 +659,95 @@ class PlanOriginsClosedTest(unittest.TestCase):
         corpus = self._run()
         self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
         self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    # ------------------------------------------------------------------
+    # Completed-directory posture (plan 2026-11-08-backlog-completed-dir-
+    # regrowth Task 1): a parked row is a warning-only posture defect in
+    # strict mode until a true catch promotes the constant.
+    # ------------------------------------------------------------------
+
+    def test_completed_dir_row_warns_in_strict_mode_and_exits_zero(self) -> None:
+        self._archived(ALPHA)
+        plan = self._plan(
+            "2026-11-09-fixture-completed-posture.md",
+            [f"docs/history/backlog/{ALPHA}"],
+        )
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("archived against the fold-then-delete rule", proc.stdout)
+        self.assertIn(ALPHA, proc.stdout)
+        self.assertNotIn("straggler:", proc.stdout)
+
+    def test_missing_and_rejected_postures_unchanged(self) -> None:
+        # Byte-identical pin: the posture branch must not disturb the
+        # missing = straggler fail-closed line or the rejected pass state.
+        plan = self._plan(
+            "2026-11-09-fixture-missing-posture.md",
+            [f"docs/history/backlog/{ALPHA}"],
+        )
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(
+            f"straggler: {ALPHA} (not found under the backlog directory)",
+            proc.stdout,
+        )
+        self._rejected_top(BETA)
+        rejected_plan = self._plan(
+            "2026-11-09-fixture-rejected-posture.md",
+            [f"docs/history/backlog/{BETA}"],
+        )
+        rejected = self._run("--plan", str(rejected_plan))
+        self.assertEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+        self.assertNotIn("straggler", rejected.stdout)
+        self.assertNotIn("fold-then-delete rule", rejected.stdout)
+
+    def test_corpus_mode_completed_row_stays_resolved(self) -> None:
+        # Corpus non-regression pin: the same completed/ fixture stays
+        # resolved (no unresolved-origin warning) in corpus mode while the
+        # strict posture warning fires on it.
+        self._archived(ALPHA)
+        self._plan(
+            "2026-11-09-fixture-corpus-completed.md",
+            [f"docs/history/backlog/{ALPHA}"],
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stderr)
+        self.assertNotIn(f"{ALPHA} unresolved", corpus.stdout)
+        strict_plan = self.plans_dir / "2026-11-09-fixture-corpus-completed.md"
+        strict = self._run("--plan", str(strict_plan))
+        self.assertEqual(strict.returncode, 0, strict.stdout + strict.stderr)
+        self.assertIn("archived against the fold-then-delete rule", strict.stdout)
+
+    def test_refusing_posture_routes_completed_into_fail_set(self) -> None:
+        self._archived(ALPHA)
+        plan = self._plan(
+            "2026-11-09-fixture-refusing-posture.md",
+            [f"docs/history/backlog/{ALPHA}"],
+        )
+        sys.path.insert(0, str(SCRIPT_PATH.parent))
+        import check_plan_origins_closed as gate
+
+        original = gate.COMPLETED_DIR_POSTURE
+        gate.COMPLETED_DIR_POSTURE = "refusing"
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                rc = gate.run_plan_mode(
+                    plan,
+                    self.backlog,
+                    self.completed,
+                    self.root / "docs" / "history" / "plans",
+                    self.plans_dir,
+                    warn_only=False,
+                )
+            out = buffer.getvalue()
+        finally:
+            gate.COMPLETED_DIR_POSTURE = original
+        self.assertEqual(rc, 1, out)
+        self.assertIn(
+            f"straggler: {ALPHA} (archived against the fold-then-delete rule",
+            out,
+        )
 
 
 

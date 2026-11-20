@@ -225,3 +225,8 @@ Primary class anchors:
 - [ ] Delete the completed origin backlog row; remove its reference from the `Skill/step` field of `2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md` and from the `Cluster:` field of `2026-10-09-primary-class-anchors-grammar-drift.md`, preserving their other references; name this plan as the witness in the commit message. [class: IMPLEMENTATION_REQUIRED]
 - [ ] Commit: `test: cover plural origin parsing and undercount audit (plan-origins-coverage-parse)` [class: REPOSITORY_TEST]
 
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

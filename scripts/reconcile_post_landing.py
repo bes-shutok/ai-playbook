@@ -35,14 +35,30 @@ the restore so a mid-window change re-classifies; a path whose bytes match no
 ancestor blob in either state is a genuine modification and a block row,
 never restored, and a landing-deleted path whose index carries a blob
 matching no ancestor (a peer's staged edit) is a block row naming the staged
-state; a landing-deleted path that is index-absent (nothing staged) has its
-worktree orphan removed directly with ``os.remove`` because the restore
-cannot express removing an index-absent path, and a failed removal degrades
-to the same ``restore-refused`` block row. In the checkout holding the
+state. The landing-deleted leg is the removal class in both invocation modes:
+a landing-deleted path whose checkout bytes are pure ancestor blobs (the
+index entry or the worktree bytes matching the pre-landing tip's blob or any
+older ancestor) is removed, never restored — a landing-deleted path that is
+index-absent (nothing staged) has its worktree orphan removed directly with
+``os.remove`` because the restore cannot express removing an index-absent
+path, and a landing-deleted path whose index carries an ancestor blob (the
+staged-residue removal) is removed through the single-path restore from the
+post tip, which drops both the index entry and the worktree file, the receipt
+using the ``removed`` verb. A failed removal degrades to the same
+``restore-refused`` block row. The re-classed removals are exempt from the
+primary fresh-mtime bound in both modes: pure ancestor bytes on a
+landing-deleted path carry no peer edit content, so the landing's own restage
+residue is removed rather than left standing. In the checkout holding the
 common git dir (the primary), an
 ancestor-blob match whose worktree file mtime postdates the pre-landing tip's
 commit time is a block row instead of an auto-restore; other resolved live
-checkouts auto-restore freely.
+checkouts auto-restore freely. A ``--landing-tail`` invocation (the landing
+flow's own reconcile gate, run under the merge landing lock) lifts that bound
+for the pure stale witness only (the index and worktree bytes both
+byte-identical to pre-landing ancestor blobs): ancestor-identical bytes carry
+no peer edit content, so the landing's own restage residue is restored rather
+than left staged; the wholesale-residue witness stays bound, and
+standalone invocations keep the bound unlifted.
 
 Output one line per row: ``restored <checkout> <path>``,
 ``removed <checkout> <path>``,
@@ -64,9 +80,9 @@ Read-only primary freshness sweep (between landings):
 
     python3 scripts/reconcile_post_landing.py --check-primary [--repo ROOT]
 
-``--check-primary`` is mutually exclusive with ``--base``, ``--pre-tip``, and
-``--post-tip`` (a combined invocation is a usage error exiting 2 with zero
-writes). The mode classifies the primary checkout (the first
+``--check-primary`` is mutually exclusive with ``--base``, ``--pre-tip``,
+``--post-tip``, and ``--landing-tail`` (a combined invocation is a usage error
+exiting 2 with zero writes). The mode classifies the primary checkout (the first
 ``git worktree list --porcelain`` block) per the stale-checkout
 discriminator over its own status entries, printing one
 ``stale <path> <matching-commit> <arm>`` row per stale witness (the worktree
@@ -91,11 +107,12 @@ class ToolFailure(Exception):
 class Invocation(object):
     """The resolved reconciliation arguments."""
 
-    def __init__(self, base, pre_tip, post_tip, repo=None):
+    def __init__(self, base, pre_tip, post_tip, repo=None, landing_tail=False):
         self.base = base
         self.pre_tip = pre_tip
         self.post_tip = post_tip
         self.repo = repo or os.getcwd()
+        self.landing_tail = landing_tail
 
 
 class Result(object):
@@ -267,18 +284,33 @@ def classify(pre_blob, post_blob, idx_blob, wt_blob, ancestors):
     if pre_blob is None and not in_checkout:
         # The landing added the path and the checkout never saw it: materialize.
         return (RESTORE, "added")
-    if post_blob is None and wt_blob == pre_blob:
-        # The landing deleted the path and the checkout still carries the
-        # pre-landing bytes. When the index carries no blob (nothing staged,
-        # the path index-absent), ``git restore`` cannot express removing an
-        # index-absent path, so the worktree file is removed directly; when
-        # the index blob is an ancestor blob the single-path restore removes
-        # it. A staged non-ancestor blob is a peer's edit: block, never
-        # restore.
+    if post_blob is None and in_checkout:
+        # The landing-deleted leg (the removal class): the landing deleted the
+        # path and the checkout still carries pure ancestor bytes (the
+        # pre-landing tip's blob or any older ancestor). The re-classed
+        # removals are exempt from the primary fresh-mtime bound in both
+        # invocation modes: ancestor-identical bytes carry no peer edit
+        # content, so the landing's own restage residue is removed rather
+        # than left standing (the witnessed 2026-11-14 stale-restore
+        # regression). Pure ancestor orphan: the index entry is absent and
+        # the worktree bytes equal an ancestor blob, removed directly with
+        # ``os.remove`` (``git restore`` cannot express removing an
+        # index-absent path). Staged-residue removal: the index carries an
+        # ancestor blob (staged-looking only because HEAD moved under the
+        # checkout) with the worktree bytes absent or ancestor, removed
+        # through the single-path restore from the post tip, which drops both
+        # the index entry and the worktree file, the receipt using the
+        # ``removed`` verb. A staged non-ancestor index blob is a peer's
+        # edit: block as staged-peer-edit. Worktree bytes matching no
+        # ancestor blob are a genuine modification: block, never restored.
         if idx_blob is None:
-            return (REMOVE, "deleted")
+            if wt_blob in ancestors:
+                return (REMOVE, "deleted")
+            return (BLOCK, "genuine-modification")
         if idx_blob in ancestors:
-            return (RESTORE, "deleted")
+            if wt_blob is None or wt_blob in ancestors:
+                return (RESTORE, "deleted")
+            return (BLOCK, "genuine-modification")
         return (BLOCK, "staged-peer-edit")
     if pre_blob is not None and post_blob is not None:
         if idx_blob in ancestors and wt_blob in ancestors:
@@ -291,13 +323,21 @@ def classify(pre_blob, post_blob, idx_blob, wt_blob, ancestors):
 
 
 # The ancestor-blob restore arms: the only verdicts the primary fresh-mtime
-# bound gates.
+# bound gates. The ``deleted`` witness stays in the tuple as the containment
+# note's stale-witness family, but its removal-class verdicts are bound-exempt
+# (mtime_gated below): the landing-deleted leg's re-classed removals apply in
+# both invocation modes regardless of the primary fresh-mtime bound.
 FRESH_MTIME_WITNESSES = ("stale", "deleted", "wholesale-residue")
 
 
 def mtime_gated(action, witness):
     """True when the verdict restores or removes worktree bytes that are an
-    ancestor blob, the only shape the primary fresh-mtime bound gates."""
+    ancestor blob, the only shape the primary fresh-mtime bound gates. The
+    landing-deleted leg's re-classed removals (witness ``deleted``) are
+    exempt in both modes: pure ancestor bytes on a landing-deleted path carry
+    no peer edit content."""
+    if witness == "deleted":
+        return False
     return (
         action in (RESTORE, RESTORE_WORKTREE, REMOVE)
         and witness in FRESH_MTIME_WITNESSES
@@ -395,11 +435,20 @@ def classify_checkout(inv, block, primary, paths, pre_time):
         if mtime_gated(action, witness):
             # The worktree bytes equal an ancestor blob: at the primary, a
             # fresh mtime means a peer touched the path after the landing.
-            if wt == primary and worktree_mtime_postdates(wt, path, pre_time):
+            # The landing-tail invocation lifts the bound for the pure stale
+            # witness only (index and worktree both byte-identical to
+            # pre-landing ancestor blobs): the tail runs under the merge
+            # landing lock and ancestor-identical bytes carry no peer edit
+            # content, so the residue the landing's own restage cycle
+            # produced is restored instead of left as a sanctioned block
+            # (witnessed 2026-11-12: the landing completed with two primary
+            # paths staged at pre-landing bytes, fresh-mtime blocked).
+            lifted = inv.landing_tail and witness == "stale"
+            if wt == primary and worktree_mtime_postdates(wt, path, pre_time) and not lifted:
                 entry["action"] = BLOCK
                 entry["witness"] = "fresh-mtime"
             else:
-                entry["mtime_bound"] = True
+                entry["mtime_bound"] = not lifted
         checkout["entries"].append(entry)
     return checkout
 
@@ -473,7 +522,9 @@ def apply_entry(inv, wt, entry, primary, pre_time, containment_base=None):
             wt_blob,
             entry["ancestors"],
         )
-        mtime_bound = mtime_gated(action, witness)
+        mtime_bound = mtime_gated(action, witness) and not (
+            inv.landing_tail and witness == "stale"
+        )
     if action == BLOCK:
         return "block %s %s %s" % (wt, entry["path"], witness)
     if action == SYNCED:
@@ -504,7 +555,11 @@ def apply_entry(inv, wt, entry, primary, pre_time, containment_base=None):
             # failure; classification and other tool failures inside the
             # entry keep their exit-2 ToolFailure semantics.
             return "block %s %s restore-refused" % (wt, entry["path"])
-        row = "restored %s %s" % (wt, entry["path"])
+        # The staged-residue removal of the landing-deleted leg rides the
+        # single-path restore (which drops both the index entry and the
+        # worktree file) but prints the removal verb per the removal class.
+        row_verb = "removed" if witness == "deleted" else "restored"
+        row = "%s %s %s" % (row_verb, wt, entry["path"])
     # The stale-witness restore verdicts (the stale, deleted, and
     # wholesale-residue rows) name the containment delta whenever the
     # checkout branch's merge base with the landed post-tip differs from
@@ -711,14 +766,18 @@ def main(argv=None):
     parser.add_argument("--post-tip", dest="post_tip", default=None, help="the post-landing tip")
     parser.add_argument("--check-primary", dest="check_primary", action="store_true",
                         help="read-only primary freshness sweep; mutually exclusive "
-                             "with --base/--pre-tip/--post-tip")
+                             "with --base/--pre-tip/--post-tip/--landing-tail")
+    parser.add_argument("--landing-tail", dest="landing_tail", action="store_true",
+                        help="invoked from the landing flow's own reconcile gate "
+                             "(under the merge landing lock): lifts the primary "
+                             "fresh-mtime bound for the pure stale witness only")
     parser.add_argument("--repo", default=None, help="repository root (default: cwd)")
     args = parser.parse_args(argv)
     if args.check_primary:
-        if args.base or args.pre_tip or args.post_tip:
+        if args.base or args.pre_tip or args.post_tip or args.landing_tail:
             parser.error(
                 "--check-primary is mutually exclusive with --base, --pre-tip, "
-                "and --post-tip"
+                "--post-tip, and --landing-tail"
             )
         try:
             return sweep_primary(args.repo or os.getcwd())
@@ -727,7 +786,8 @@ def main(argv=None):
             return 2
     if not args.base or not args.pre_tip or not args.post_tip:
         parser.error("--base, --pre-tip, and --post-tip are required without --check-primary")
-    inv = Invocation(args.base, args.pre_tip, args.post_tip, args.repo)
+    inv = Invocation(args.base, args.pre_tip, args.post_tip, args.repo,
+                     landing_tail=args.landing_tail)
     if not resolve_invocation_or_exit2(inv):
         return 2
     try:

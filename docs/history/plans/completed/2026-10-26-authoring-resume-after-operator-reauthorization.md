@@ -153,3 +153,8 @@ Files:
 - [x] If a specific handoff gap remains, add one concise clarification at its owning skill, delete equivalent bytes in that same change, and preserve every digest, mint, budget, round, and recurrence boundary. (Not fired: no gap proven.) [class: IMPLEMENTATION_REQUIRED]
 - [x] Move the origin row to `docs/history/backlog/completed/` with `Status: covered (<completed plan path>)` and `Covered by:` naming this plan; retain the archived row and make no other row or catalog edits. The existing origin gate recognizes a matching completed-archive row. (Already executed by peer commit 893566f95 before this run; verified present and correct, no edit made.) [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: close reauthorization authoring stop origin` (the peer landing 893566f95 is the origin-closure commit of record; this run adds no second closure edit) [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-25-authoring-stopped-after-reauthorization.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

@@ -167,3 +167,5 @@ Primary class anchors:
 ## Disposition of migrated backlog items
 
 - `docs/history/backlog/2026-10-20-served-origin-deletion-leaves-prompt-entries-live.md` (Status: covered by this plan): deleted in the landing change per the covered-row rule; the delivered stale-check served class and the collateral sibling-log sweep are this plan's Tasks 1-2, review-certified through r3 (plan-review) and r2 (code review). Residual follow-up from execution: `docs/history/backlog/2026-10-24-collateral-served-nul-origin-uncaught-valueerror.md` (NUL-bearing origin tokens still crash `--collateral-served`, pre-existing, out of this plan's scope).
+
+- `docs/history/backlog/completed/2026-10-22-prune-audit-landing-token-never-resolves.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

@@ -1,6 +1,6 @@
 # Java Maven Test Runner
 
-Use these instructions for Java projects built with Maven. The shared [SKILL.md](SKILL.md) owns request-scope classification and reporting; this reference owns Maven lifecycle, selector, and JDK details.
+Use these instructions for Java projects built with Maven. The shared [SKILL.md](SKILL.md) owns request-scope classification and reporting; this reference owns Maven lifecycle, selector, and JDK details, plus the Maven execution environment's failure handoffs (private image and test-service authentication among them).
 
 ## Determine the JDK
 
@@ -33,6 +33,10 @@ For an integration-only request, replace the Surefire-skip placeholder with the 
 | `-pl <module-name>` | Limit the reactor to the relevant module and required projects | When a module is known |
 
 For behavior-broad selection, state how changed behavior maps to the chosen classes. If relevant tests cannot be found, or none exist, report the gap instead of silently narrowing scope.
+
+## Private image and service authentication
+
+When authentication prevents a test from pulling a configured private image or reaching a required test service, check the target repository's test or container configuration to find the image or service source. Do not assume a generic registry default. Before asking for credentials, explain what access the run needs and why. Check documented or already-authorized alternatives, such as a local image, a configured mirror, or an existing credential helper, and report the attempt. The target repository owns its image-source policy. Do not substitute a public registry or add a required authentication preflight. For blocker recovery beyond these steps, follow the self-heal skill.
 
 ## Examples
 

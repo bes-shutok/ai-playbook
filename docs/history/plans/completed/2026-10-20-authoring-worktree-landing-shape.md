@@ -137,3 +137,10 @@ Primary class anchors:
 - [x] Record the root cause as a missed helper handoff while preserving that the squash contract already existed; do not add a blocker or rewrite `main`. [class: IMPLEMENTATION_REQUIRED]
 - [x] Dispose of both remaining origin rows, prune the plan's prompt entry with its witness receipt, and tidy pointers in the same landing. [class: IMPLEMENTATION_REQUIRED]
 - [x] Validate the text against worktree creation, successful squash landing, refused landing, artifact-migration refusal, branch retention, claim ownership change, and primary-placement cases. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-14-authoring-worktree-create-path.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-20-authoring-worktree-landing-shape.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

@@ -1,5 +1,7 @@
 # Backlog: iudgw certification residuals (2026-10-18)
 
+Cluster: docs/history/backlog/2026-10-18-prsh-certification-residuals.md (same class of post-certification polish residuals; separate plans and findings)
+
 - **Filed:** 2026-10-18, certification closeout of docs/history/plans/2026-10-17-investigate-user-directed-gate-workaround.md
 - **Status:** open
 - **Workflow:** backlog

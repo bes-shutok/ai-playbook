@@ -1,5 +1,7 @@
 # validation-authoring-rules.md rule 29: stale "until a sanctioned route lands"
 
+Cluster: docs/history/backlog/2026-10-21-corrections-contract-doc-residues.md (same operator-ack documentation change; this row owns stale authorization-route wording)
+
 - **Filed:** 2026-10-20, at the Task 4 boundary of `corrections-chain-operator-ack-end-to-end`
 - **Status:** open
 - **Workflow:** backlog

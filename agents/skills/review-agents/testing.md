@@ -47,6 +47,16 @@ When building or reviewing a mutator / failure-mode matrix (or equivalent covera
 4. For changed mapping, fallback, identifier, sensitive-data transformation, or serialization behavior, list each contract-relevant input and accepted runtime representation, including blank, absent, and accepted non-string forms; a happy-path value alone proves no partition.
 5. For every claimed partition, cite a named test and its assertion using the Evidence requirement below, or mark it uncovered. Compare assertions against the contract; an assertion expecting recognized PII to pass unprotected or another contract-violating outcome is unsafe and cannot count as evidence.
 
+## Upstream outcome matrix
+
+For a task that adds or changes an external call boundary, write the partition table before accepting a documented error matrix, per operation, read versus write:
+
+1. Success shapes: valid, empty, malformed, wrong type, wrong content type.
+2. Error statuses: each documented one, every other 4xx including throttling, 5xx, timeout.
+3. Mark each cell tested, documented, or intentionally out of scope; cell evidence follows the Coverage Claim Audit rules above, so a happy-path value alone proves no partition.
+
+Pattern: `testing#upstream-outcome-matrix`
+
 ## Plan gate-needle discrimination (doc/skill-only plans)
 
 When the artifact under review is a plan whose tasks carry grep-style gate needles (`grep -q "<span>" file || fail`), verify both discrimination directions by measurement, never by reading the plan's own provenance claims:

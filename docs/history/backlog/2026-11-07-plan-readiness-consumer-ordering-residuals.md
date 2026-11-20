@@ -2,6 +2,8 @@
 
 Backlog origin: execution residual of docs/history/plans/2026-11-06-plan-readiness-planned-path-lifecycle.md (exec review r1, ready=yes zero blocking, digest 9ecf0c6a).
 
+Cluster: docs/history/backlog/EXEC-PROMPTS.md (same gate surface; the fail-one-violation-per-run reporting shape was repaired 2026-11-13 and its receipt lives in the EXEC-PROMPTS-PRUNE receipt at the top of that log, this row owns the consumer-ordering and docs residuals).
+
 Driving force: correctness
 
 - Clause (b) consumer-before-owner orders by document position, so unpadded-filename directory assembly can judge cross-task checklist references by assembly order rather than heading ordinal; clause (c) got ordinal ordering in the executed plan, clause (b) did not (pre-existing, left untouched by scope).

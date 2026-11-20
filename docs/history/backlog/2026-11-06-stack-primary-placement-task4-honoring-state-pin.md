@@ -1,4 +1,6 @@
 Status: open
+
+Cluster: docs/history/backlog/2026-11-06-stack-task-adoption-byte-identical-phrasing.md (same stack primary-placement plan and test suite; this row owns missing Task 4 pins, the sibling owns adoption wording and its pin)
 Priority: low
 Class: fix-class
 Origin class: review-intermediate

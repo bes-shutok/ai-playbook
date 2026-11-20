@@ -9,6 +9,7 @@
 - **Driving force:** simplicity (five residuals routed to one durable row: the two Low residuals priced out of the certified bytes, plus three Medium residuals captured from the redundant parallel panel's stand-down report)
 - **Cluster:** docs/history/plans/completed/2026-10-18-closeout-gate-series-token-infix.md (same class: certification residuals routed to a durable row)
 - **Cluster:** docs/history/backlog/2026-10-17-archive-ceremony-writer-side-binding-text.md (same surface: residuals tracked against the landed archive-ceremony plan)
+- **Cluster:** docs/history/backlog/2026-11-07-archive-ceremony-exec-review-record-gap.md (same gate surface; that covered row, with its covering plan docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md, owns the 2026-11-07 missing-record witnesses, the 2026-11-12/13 recurrence and its repair receipt live in the EXEC-PROMPTS-PRUNE receipt at the top of docs/history/backlog/EXEC-PROMPTS.md, this row owns certification-test residuals)
 
 ## Residuals
 

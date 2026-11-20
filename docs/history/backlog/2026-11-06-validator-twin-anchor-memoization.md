@@ -1,4 +1,5 @@
 # Backlog: Memoize the coverage archive-twin anchor and plans-layout resolution
+- **Cluster:** docs/history/backlog/2026-11-06-twin-battery-anchor-determinism.md
 
 Driving force: efficiency
 

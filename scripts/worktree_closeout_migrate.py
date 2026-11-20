@@ -2060,7 +2060,21 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        # The lessons-#142 guard (family G, fail-closed state readers catch
+        # decode errors beside I/O errors): a malformed baseline's
+        # JSONDecodeError and undecodable bytes' UnicodeDecodeError are both
+        # ValueError subclasses, and a read OSError between the existence
+        # check and the read lands in the same arm; the refusal is the
+        # script's named exit-2 shape with nothing copied (plan
+        # 2026-11-15-malformed-closeout-baseline-json-refusal Task 1).
+        try:
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(
+                f"ERROR: baseline unreadable or not valid JSON: {baseline_path} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
         dirs = baseline.get("dirs")
         if not dirs:
             print(
@@ -3404,7 +3418,12 @@ def _add_gate_removal_arguments(parser: argparse.ArgumentParser) -> None:
         "--plan",
         required=True,
         help="The executing plan's file; owned citations come from its "
-        "Plan review record:/Plan review: label lines only.",
+        "Plan review record:/Plan review: label lines only. Ad-hoc shape "
+        "(the closing run has no plan): pass a label-less review record "
+        "as --plan beside --claims listing the run's review-record paths, "
+        "and expect the two-mode invocation (worktree mode for the "
+        "sanctioned removal, then branch-only with an explicit "
+        "--migration-manifest for the branch record).",
     )
     parser.add_argument(
         "--target",
@@ -3412,14 +3431,15 @@ def _add_gate_removal_arguments(parser: argparse.ArgumentParser) -> None:
         help="Primary checkout root whose facts-resolved reviews home must "
         "hold every owned record.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--worktree",
         default=None,
         help="The worktree the sanctioned removal command removes; "
         "omit in branch-only mode (an explicit --branch with "
         "--migration-manifest adjudicates a ref with no linked worktree).",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--branch",
         default=None,
         help="Branch-only mode: the ref to account for, with an explicit "
@@ -3578,7 +3598,10 @@ def build_gate_removal_parser() -> argparse.ArgumentParser:
         prog="worktree_closeout_migrate.py gate-removal",
         description=(
             "Gate a worktree removal on the plan's owned review records "
-            "being present under the primary reviews home."
+            "being present under the primary reviews home. For an ad-hoc "
+            "maintenance landing with no closing plan, pass a label-less "
+            "review record as --plan beside --claims (the ad-hoc "
+            "invocation shape documented on the --plan help line)."
         ),
     )
     _add_gate_removal_arguments(parser)
@@ -4359,15 +4382,6 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     branch_only = bool(getattr(args, "branch", None))
     explicit_manifest = getattr(args, "migration_manifest", None)
     authoring_claim = getattr(args, "authoring_claim", None)
-    if branch_only and args.worktree:
-        print(
-            "gate-removal: --branch and --worktree are mutually exclusive: "
-            "branch-only accounting adjudicates a ref with no linked "
-            "worktree",
-            file=sys.stderr,
-        )
-        print("OUTCOME: tool_error")
-        return 3
     if branch_only and not explicit_manifest:
         print(
             "gate-removal: branch-only accounting requires an explicit "
@@ -4712,6 +4726,43 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
     )
     if disposition is not None:
         print(_branch_disposition_line(disposition))
+    # The branch-only terminal-state recording (plan
+    # 2026-11-08-branch-only-closeout-gate-report-retention Task 4): an
+    # accounted disposition appends exactly one terminal completion receipt
+    # into the manifest's dedicated top-level receipts section; every other
+    # adjudicated disposition stamps the section present and empty
+    # (authorization is not completion). The receipt never lands in the
+    # ``branch`` list, so no branch record or run-attribution stamp shifts.
+    # Worktree-mode passes run no recording at all: their output bytes and
+    # manifest handling are unchanged. A failed read, append, or stamp
+    # refuses the branch-only pass with preservation: the refused line
+    # prints below and the completion claim never does - the pass never
+    # reports completion without the receipt on disk.
+    terminal_receipt_error: str | None = None
+    terminal_receipt_line: str | None = None
+    if branch_only and disposition is not None:
+        receipt_manifest, _receipt_explicit = _closeout_manifest_candidate(
+            target, plan_path, explicit_manifest
+        )
+        if receipt_manifest is None:
+            terminal_receipt_error = (
+                "the terminal completion receipt could not be recorded: the "
+                f"migration manifest at {explicit_manifest} is gone at "
+                "recording time; the branch stays retained: restore the "
+                "manifest, then re-run gate-removal"
+            )
+        elif disposition.get("status") in _ACCOUNTED_DISPOSITIONS:
+            (
+                terminal_receipt_error,
+                terminal_receipt_line,
+            ) = _record_terminal_completion_receipt(receipt_manifest, disposition)
+        else:
+            terminal_receipt_error = _stamp_terminal_completion_section(
+                receipt_manifest
+            )
+        if terminal_receipt_error is not None:
+            print(f"refused: {terminal_receipt_error}")
+            print(_GATE_REMEDY_LINE)
     if refusal is not None:
         print(f"refused: {refusal}")
         print(_GATE_REMEDY_LINE)
@@ -4743,6 +4794,14 @@ def cmd_gate_removal(args: argparse.Namespace) -> int:
         if disposition.get("status") == "retained":
             print("OUTCOME: fail")
             return 1
+        if terminal_receipt_error is not None:
+            # The safety witness (plan Task 4): never report completion
+            # without the receipt on disk; the refused line above names
+            # the failure and the branch stays retained for re-run.
+            print("OUTCOME: fail")
+            return 1
+        if terminal_receipt_line is not None:
+            print(terminal_receipt_line)
         print("OUTCOME: pass")
         return 0
     if disposition is not None and disposition.get("removal_blocked"):
@@ -5091,6 +5150,166 @@ def _row_attributed_to_adjudicated(row: dict, records: list) -> bool:
     return index == len(records) - 1
 
 
+# The terminal completion receipts section (plan
+# 2026-11-08-branch-only-closeout-gate-report-retention Terms): the
+# receipt's only home, a dedicated top-level manifest list - never the
+# ``branch`` list, whose append would be adjudicated as the latest branch
+# record and would shift the run-attribution index binding.
+_TERMINAL_COMPLETION_RECEIPTS_KEY = "terminal_completion_receipts"
+
+# The accounted disposition verdicts (plan Terms): the only statuses whose
+# branch-only pass writes a receipt; every other adjudicated disposition
+# stamps the section present and empty instead.
+_ACCOUNTED_DISPOSITIONS = ("ancestry-accounted", "exact-tree-accounted")
+
+
+def _terminal_completion_receipt_timestamp() -> str:
+    """The receipt's ``recorded_at`` timestamp (plan Task 4): the UTC
+    instant the adjudication is recorded, in this file's captured-at
+    convention (second-precision UTC ISO-8601); a non-empty timestamp
+    string is the reader-side validation contract."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _read_manifest_object(manifest_path: Path) -> tuple[dict | None, str | None]:
+    """Read one migration manifest as a JSON object for the terminal-state
+    writer. Returns (payload, error); error is None exactly when payload is
+    a parsed dictionary."""
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, str(exc)
+    if not isinstance(payload, dict):
+        return None, "manifest root is not a JSON object"
+    return payload, None
+
+
+def _write_manifest_object(manifest_path: Path, payload: dict) -> str | None:
+    """Atomically install one rewritten migration manifest (the same
+    temp-plus-replace convention as ``_append_manifest``), returning None
+    on success, else the error text; a failed write leaves the prior bytes
+    intact. The ``branch`` list is whatever the payload carries: the
+    terminal-state writers touch only the receipts section, so no branch
+    record or run-attribution stamp ever shifts."""
+    temp = manifest_path.with_name(manifest_path.name + f".tmp-{os.getpid()}")
+    bump = 2
+    while temp.exists() or temp.is_symlink():
+        temp = manifest_path.with_name(
+            manifest_path.name + f".tmp-{os.getpid()}-{bump}"
+        )
+        bump += 1
+    try:
+        temp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(temp, manifest_path)
+    except (OSError, ValueError) as exc:
+        _remove_quietly(temp)
+        return str(exc)
+    except BaseException:
+        _remove_quietly(temp)
+        raise
+    return None
+
+
+def _record_terminal_completion_receipt(
+    manifest_path: Path, disposition: dict
+) -> tuple[str | None, str]:
+    """The accounted branch-only pass's terminal completion receipt (plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 4): exactly
+    one receipt bound to the recorded branch, the proven tip OID captured
+    at adjudication time, the verdict, and the ``recorded_at`` timestamp,
+    held in the manifest's dedicated top-level
+    ``terminal_completion_receipts`` section - never the ``branch`` list.
+    Idempotent on re-run: an existing entry bound to the same branch is
+    replaced by the refreshed receipt (refresh, never duplicate), while
+    entries bound to other branches and unrecognized entry shapes are
+    preserved untouched. A non-list section value present in the manifest
+    refuses the write rather than overwriting operator-visible malformed
+    bytes. Returns (error, output_line); error is None exactly when the
+    receipt is on disk, and the caller prints output_line only then - the
+    pass never reports completion without the receipt persisted."""
+    payload, read_err = _read_manifest_object(manifest_path)
+    if read_err is not None:
+        return (
+            "the terminal completion receipt could not be recorded: the "
+            f"migration manifest {manifest_path} is unreadable ({read_err}); "
+            "the branch stays retained: repair the manifest, then re-run "
+            "gate-removal",
+            "",
+        )
+    section = payload.get(_TERMINAL_COMPLETION_RECEIPTS_KEY)
+    if section is not None and not isinstance(section, list):
+        return (
+            "the terminal completion receipt could not be recorded: the "
+            f"migration manifest {manifest_path} carries a non-list "
+            f"{_TERMINAL_COMPLETION_RECEIPTS_KEY} value; the branch stays "
+            "retained: repair the section, then re-run gate-removal",
+            "",
+        )
+    recorded_branch = disposition["branch"]
+    kept = [
+        entry
+        for entry in (section or [])
+        if not (isinstance(entry, dict) and entry.get("branch") == recorded_branch)
+    ]
+    recorded_at = _terminal_completion_receipt_timestamp()
+    receipt = {
+        "branch": recorded_branch,
+        "oid": disposition.get("oid"),
+        "verdict": disposition["status"],
+        "recorded_at": recorded_at,
+    }
+    payload[_TERMINAL_COMPLETION_RECEIPTS_KEY] = kept + [receipt]
+    write_err = _write_manifest_object(manifest_path, payload)
+    if write_err is not None:
+        return (
+            "the terminal completion receipt could not be appended to the "
+            f"migration manifest {manifest_path} ({write_err}); the branch "
+            "stays retained: repair the manifest home, then re-run "
+            "gate-removal",
+            "",
+        )
+    line = (
+        "terminal completion receipt: "
+        f"branch={recorded_branch} "
+        f"oid={disposition.get('oid') or 'unknown'} "
+        f"verdict={disposition['status']} "
+        f"recorded_at={recorded_at} appended to {manifest_path}"
+    )
+    return None, line
+
+
+def _stamp_terminal_completion_section(manifest_path: Path) -> str | None:
+    """The unresolved branch-only pass's section stamp (plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 4): ensure
+    the top-level ``terminal_completion_receipts`` key exists (an empty
+    list when it holds no entry) and append NO entry - authorization is
+    not completion. An already-present section is left byte-untouched (its
+    entries, when any, are a prior accounted pass's receipts and are never
+    this leg's input). Returns None on success, else the refusal text."""
+    payload, read_err = _read_manifest_object(manifest_path)
+    if read_err is not None:
+        return (
+            "the terminal completion receipts section could not be "
+            f"stamped: the migration manifest {manifest_path} is unreadable "
+            f"({read_err}); the branch stays retained: repair the manifest, "
+            "then re-run gate-removal"
+        )
+    if _TERMINAL_COMPLETION_RECEIPTS_KEY in payload:
+        return None
+    payload[_TERMINAL_COMPLETION_RECEIPTS_KEY] = []
+    write_err = _write_manifest_object(manifest_path, payload)
+    if write_err is not None:
+        return (
+            "the terminal completion receipts section could not be stamped "
+            f"into the migration manifest {manifest_path} ({write_err}); "
+            "the branch stays retained: repair the manifest home, then "
+            "re-run gate-removal"
+        )
+    return None
+
+
 def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
     """The consumer-usable closeout reference state behind the gate's
     exact-branch adjudication, refactored out of the gate's inline logic
@@ -5145,6 +5364,16 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
       guard-check point (after identity binding), preserving the inline
       ordering, and the sweep treats the shape as reference-less.
 
+    - ``has_receipt_section``: True when the top-level
+      ``terminal_completion_receipts`` key is present (the branch-only
+      section marker, plan
+      2026-11-08-branch-only-closeout-gate-report-retention Terms), else
+      False; additive only, no existing consumer reads it.
+    - ``receipt_section``: the raw section value verbatim (any JSON type,
+      never normalized), else None; the retention consumer owns the
+      malformed decision, and the key's presence alone is never a branch
+      record. Additive only.
+
     No shape is normalized and no refusal class is added: malformed parsed
     shapes resolve to no references while the gate's shape-specific skip,
     refusal, and tool-error outcomes stay byte-identical."""
@@ -5160,6 +5389,8 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         "prevented_rows": [],
         "failure_rows": [],
         "destinations_error": None,
+        "has_receipt_section": False,
+        "receipt_section": None,
     }
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -5177,6 +5408,15 @@ def _resolve_closeout_reference_state(manifest_path: Path) -> dict:
         if isinstance(last, dict):
             state["record"] = last
     state["recorded"] = state["record"].get("branch")
+    # The terminal completion receipts marker and its raw value (plan
+    # 2026-11-08-branch-only-closeout-gate-report-retention Terms): surfaced
+    # verbatim and additively - the key's presence is the only signal telling
+    # a branch-only manifest from a worktree-completed one, no existing
+    # consumer parses it as a branch record, and a non-list value stays the
+    # retention consumer's malformed-decision input.
+    if _TERMINAL_COMPLETION_RECEIPTS_KEY in manifest:
+        state["has_receipt_section"] = True
+        state["receipt_section"] = manifest[_TERMINAL_COMPLETION_RECEIPTS_KEY]
     try:
         for section in ("migrated", "renamed"):
             for entry in manifest.get(section, []):
@@ -5429,7 +5669,7 @@ def _gate_branch_closeout(
         attributed = _row_attributed_to_adjudicated(row, records)
         if attributed and _is_done_session_gate_report(destination):
             # Swept-artifact classification (the 2026-10-31 closeout-gates
-            # trio, landed 52750a1fe; shared-slug second witness): inside
+            # trio, landed 843cc9709; shared-slug second witness): inside
             # the attributed scope too, a missing verified destination
             # under the done-session gate-reports home is a bounded gate
             # report the sanctioned docs/tmp sweep legitimately expires -
@@ -5687,6 +5927,34 @@ def _gate_branch_closeout(
             "branch: preserve " + recorded
             + " and report it in the closeout record; delete only the worktree"
         )
+        # The failed-content-proof pointer (plan
+        # 2026-11-06-self-heal-closeout-workaround-must-preserve-landed-tree
+        # Task 2): a reason naming the failed ancestry/exact-tree proof that
+        # is NOT the legacy changed-path-scope accounting note marks content
+        # the gate could not prove landed. Emitted here, inside the
+        # adjudication, so every output path reporting this retained
+        # population (the gate-removal held block, the pass fall-through,
+        # and the branch-only path) inherits the line without per-path
+        # duplication; the guard-held and legacy-evidence retentions (and
+        # the no-charter arm's always content-proven population) exclude it.
+        # Report-only: the line changes no exit code, no refusal class, no
+        # disposition value, and no existing line's bytes.
+        if any(
+            reason.startswith("no ancestry or exact-tree proof")
+            and reason
+            != (
+                "no ancestry or exact-tree proof; the legacy changed-path "
+                "scope is accounting evidence only and never permits "
+                "deleting a non-ancestor branch"
+            )
+            for reason in reasons
+        ):
+            lines.append(
+                "branch-closeout: retained branch holds unproven content; "
+                "the sanctioned next action is the transfer-or-land route "
+                "of the done skill's Operator branch closeout; never "
+                "manufacture a landing commit to satisfy removal"
+            )
         disposition = _disposition("retained", proven_oid, reasons)
         disposition["removal_blocked"] = guard_failed
         return None, lines + foreign_notes + prevented_notes + failure_notes, disposition

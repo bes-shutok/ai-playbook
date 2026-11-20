@@ -65,10 +65,12 @@ At task start: read only the facts keys or sections needed from **`user_facts_pa
 
 ## Hard rules (keep inline; high frequency)
 
+- **Clear technical English:** Use [ASD-STE100 Simplified Technical English, Issue 9](https://www.asd-ste100.org/) for authored English prose in instructions, skills, plans, reviews, summaries, and user responses when it applies. The official standard is the authority. Preserve technical meaning. Keep code, commands, identifiers, schemas, API names, proper names, exact quotations, user-provided text, and text in other languages unchanged unless asked to edit them. Use approved words only when they preserve meaning; retain subject-specific technical nouns and verbs when Issue 9 permits them. Use project-defined terms from their canonical source and use them consistently. A term absent from the general dictionary is not an error by itself. Use facts, conditions, actions, and outcomes as a private method for thinking. Do not disclose private chain-of-thought; give a concise rationale when needed. Do not claim formal certification. A dedicated skill is out of scope unless the work identifies unique, repeatable workflow logic that the shared instructions and authoring skill cannot own.
 - **Git push:** never push without explicit user instruction; never force-push without approval.
 - **Slack outbound:** draft-only. Never send, post, schedule, edit, delete, or react in Slack, even when a request's phrasing could imply it. Create drafts only. Change this hard rule only if the user explicitly asks to do so; a request to "answer," "reply," or "write" means create a draft, not send it.
 - **Slack source access:** Always use Slack MCP for Slack searches, reads, and message evidence when it is available; do not ask the user to sign in to Slack in a browser first.
 - **Execute-plan:** per-task `done` commits authorized for that run only; push still requires explicit instruction. See `execute-plan` skill.
+- **Plans checkpoints:** plans `wip:` checkpoint commits on the authoring run's recorded branch (the worktree authoring branch, or the primary-placement current or recorded task branch) are authorized for the authoring run only; push still requires explicit instruction. See `plans` skill.
 - **Co-authored-by:** never add `Co-authored-by:` / `Co-Authored-By:` trailers; no `git commit --trailer` attribution. Disable Cursor Agent Attribution.
 - **Formatting-only commits:** before commit, inspect full per-file diff; `git diff -w` is insufficient. See `agent_workflow_guidelines.md` #6.
 - **Em dashes:** never use the em dash character (U+2014) in generated text; see `agent_workflow_guidelines.md` §39. Before commit, run `check-no-em-dash.sh` (the done landing sweep's em-dash-scan gate; default `~/.ai-playbook/scripts/check-no-em-dash.sh`).
@@ -96,7 +98,7 @@ Biases toward caution over speed; for trivial tasks, use judgment. Full detail: 
 
 ## Skill maintenance (summary)
 
-Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48. Harness-scoped rule families declare a supported set and skip outside it (`agent_workflow_guidelines.md` §14.3). Before committing changed files under `agents/skills/`, have the focused panel selected by the existing panel-selection policy (`agents/skills/review-agents/review-panel-selection.md`) review the exact working diff of those skill files (staged and unstaged together); the review gates the commit only — other files' review stays governed by that policy, and no review is required before canonical writes.
+Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48. Harness-scoped rule families declare a supported set and skip outside it (`agent_workflow_guidelines.md` §14.3). Before committing changed files under `agents/skills/`, have the focused panel selected by the existing panel-selection policy (`agents/skills/review-agents/review-panel-selection.md`) review the exact working diff of those skill files (staged and unstaged together); the review gates the commit only; other files' review stays governed by that policy, and no review is required before canonical writes.
 
 ## Plans and temporary artifacts (summary)
 
@@ -115,7 +117,7 @@ Verify `git check-ignore` before staging. Never `git stash clear` when docs-bran
 | `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging, #12 prefer imports over FQNs, #14 selected Failsafe after install, #15 optional empty JSON columns, #16 no nested Awaitility await inside `untilAsserted`, #17 retarget migration-resource tests when DDL moves across versions, #21 PostgreSQL data-modifying CTE statement snapshot, #22 capacity IT discriminating witnesses, #25 fail-closed Tomcat Micrometer gauges need usable values, #26 bind standard temporal config types directly) |
 | `kotlin_guidelines.md` | Kotlin-specific (e.g. #16 `CancellationException`, #22 prefer imports → jvm #12) |
 | `java_guidelines.md` | Java-specific (e.g. #15 prefer imports → jvm #12, #26 bound scarce-resource concurrency with semaphores for virtual-thread tasks) |
-| `python_guidelines.md` | Python-specific (including numeric target-representation checks in #41) |
+| `python_guidelines.md` | Python-specific (including numeric target-representation checks in #41 and transition-aware local scheduling in #42) |
 
 **Agent workflow lessons:** do not restate §1–§49 here; consult the matching section when the trigger matches (false-positive review, scope discipline, merge verification, telemetry, GitOps, PR template, plain language, facts vs skills §50, etc.).
 

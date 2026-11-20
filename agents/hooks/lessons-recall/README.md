@@ -7,10 +7,11 @@ recall`), derives the session id via the shared
 `session_channel.py` subprocess, and builds the agent's specific envelope via
 `json.dumps` dict construction.
 
-## Boundary vs pr-skill-reminder.sh
+## Boundary vs pr-skill-reminder
 
 These are INDEPENDENT hooks:
-- `pr-skill-reminder.sh` injects the PR-skill reminder (a workflow nudge).
+- `agents/hooks/pr-skill-reminder/` (the versioned home of
+  `pr-skill-reminder.sh`) injects the PR-skill reminder (a workflow nudge).
 - `lessons-recall` injects family-tagged lessons from the development-lessons
   corpus (proactive recall keyed on prompt INTENT).
 
@@ -321,18 +322,21 @@ The runtime paths (`~/.ai-playbook/runtime/lessons-recall/`,
 
 ## Capability probe (steady state)
 
-The probe has two related views. The legacy hook rows below validate each
+The probe has three related views. The legacy hook rows below validate each
 installed hook adapter and its host registration. It also emits one
 registry-derived `final_response` row for every canonical runtime and every
 explicitly deferred runtime in
 `projects/.ai-playbook/execute-plan-runtime-inventory.toml`. The registry owns
-the expected tier and fallback. Lifecycle states and result fields are defined
+the expected tier and fallback. The third view reports each repository-versioned
+hook script under `agents/hooks/*/` and asserts the skill names it emits resolve
+under an installed skills root. Lifecycle states and result fields are defined
 once in `agents/skills/execute-plan/runtime-contract.md`; this document keeps
 only the hook-specific probe behavior.
 
-For every view, the diagnostics remain separate: `missing adapter`, `missing
-registration`, `unsupported event`, `malformed adapter`, and `degraded
-fallback`. The normative hook capability boundary rule lives in
+For the two registry views, the diagnostics remain separate: `missing adapter`,
+`missing registration`, `unsupported event`, `malformed adapter`, and `degraded
+fallback`; the versioned-hook view reports `missing skill name(s)` and
+`unreadable hook script`. The normative hook capability boundary rule lives in
 `agents/skills/execute-plan/runtime-contract.md` (Hook capability boundary);
 this document does not restate it. Missing registration and malformed adapter
 data fail closed and never produce `PASS`.

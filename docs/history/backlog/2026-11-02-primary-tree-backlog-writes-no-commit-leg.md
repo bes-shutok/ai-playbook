@@ -13,6 +13,8 @@
 - **Review date:** 2026-12-02
 - **Dedup probe:** searched open backlog for landing path / stranded / durable-record coverage. Worktree sessions get claims and stranded-run drain machinery; `docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md` covers stub rows, not record files. No row covers records written directly into the primary tree (learn/investigate backlog filing) whose writing session terminated before its commit leg, leaving unattributed dirt.
 - **Cluster:** `docs/history/backlog/2026-11-02-agent-resource-cleanup-disposition.md` (both own cross-session resource/record disposition; that row owns user-requested cleanup scope, this row owns the write-then-die commit-leg gap)
+- **Cluster:** docs/history/backlog/2026-11-19-stale-capture-record-commit-peer-clobber.md (same family; that row owns the commit-side consequence: a later record commit sweeping a dead writer's stranded staged delta into history)
+- **Cluster:** docs/history/backlog/2026-11-20-learn-corpus-writes-stranded-uncommitted-primary.md (same family, the tracked-corpus-edit sibling: the writer kept committing other paths and skipped only the corpus leg, so the stranded bytes are unstaged hunks, not untracked files)
 
 ## Problem
 

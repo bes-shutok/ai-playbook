@@ -492,6 +492,13 @@
           "evidence": "scripts/execution_claim.sh",
           "time_lost_minutes": null,
           "note": "user-directed-override:execution-claim-gateway; fresh-foreign refusal encountered in interactive execution; claim matched current run plan and branch; origin run setup turn complete; no peer execution on target; override followed per maintenance guards"
+        },
+        {
+          "kind": "incident",
+          "date": "2026-11-09",
+          "evidence": "docs/history/plans/completed/2026-11-10-exec-dispatch-claim-recheck.md (the covering plan's completed twin this plan's completion pass creates; origin row docs/history/backlog/2026-11-10-duplicate-exec-carrier-same-task.md)",
+          "time_lost_minutes": 18,
+          "note": "duplicate-execution class: a same-lineage dispatch ran under its own preserved claim while the worker re-verified completed work mid-flight, about 18 minutes and roughly 3.3M subagent tokens; the dispatch-time claim re-check arm is the admission (see the script:execution_claim.sh registry row)"
         }
       ]
     },
@@ -900,6 +907,17 @@
           "evidence": "docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md",
           "time_lost_minutes": null,
           "note": "warning-only check reported the witnessed codex-vs-zcode mismatch before setup"
+        }
+      ]
+    },
+    "execution-claim-resume": {
+      "notes": "",
+      "rows": [
+        {
+          "kind": "override",
+          "date": "2026-11-19",
+          "evidence": "session-status provider unconfigured; user explicitly directed resumption",
+          "time_lost_minutes": null
         }
       ]
     }

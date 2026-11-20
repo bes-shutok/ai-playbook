@@ -88,6 +88,7 @@ Run from the repository root:
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -118,6 +119,7 @@ def _load_from_path(module_name: str):
 producer = _load_from_path("produce_exec_review_record")
 vrs = _load_from_path("validate_review_staging")
 corrections_record = _load_from_path("corrections_record")
+guard = _load_from_path("reverse_squash_guard")
 
 RUN_ID = "0123456789abcdef0123456789abcdef"
 STARTED_MS = 1792669591737
@@ -586,6 +588,147 @@ class ProduceExecReviewRecordTest(unittest.TestCase):
             "no telemetry file may land in the producer's output directory",
         )
 
+    # -- focused-panel inputs (codex-plan-review-producer-focused-panel) --
+
+    def _focused_argv(self, findings_json, out_dir, workers, reason=None):
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "producer demo session",
+            "--plan", str(self.plan_path),
+            "--findings-json", str(findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+            "--panel-mode", "focused",
+        ]
+        for worker in workers:
+            argv.extend(["--worker", worker])
+        if reason is not None:
+            argv.extend(["--selection-reason", reason])
+        return argv
+
+    def test_focused_pair_passes_validator_hard_mode(self):
+        """A focused mint emits panel rows, worker counts, and coverage
+        lenses only for the workers that ran, carries the sidecar
+        panel_mode/selection_reason pair, and passes hard mode."""
+        findings_json = self._write_findings_json(VARIED_FINDINGS, name="focused.json")
+        out_dir = self.root / "focused"
+        code, out, err = self._run_main(
+            self._focused_argv(
+                findings_json,
+                out_dir,
+                ["correctness-completeness", "testing"],
+                "docs-only normative plan; focused contract-docs plus "
+                "correctness-completeness panel per the selection policy",
+            )
+        )
+        self.assertEqual(code, 0, err + out)
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        payload = json.loads(record.with_suffix(".stats.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["panel_mode"], "focused")
+        self.assertIn("selection policy", payload["selection_reason"])
+        self.assertEqual(payload["counts"]["workers_launched"], 2)
+        self.assertEqual(
+            [row["worker"] for row in payload["panel"]],
+            ["correctness-completeness", "testing"],
+        )
+        expected_lenses = sorted(
+            {lens for lens in vrs.REQUIRED_PANEL_LENSES["correctness-completeness"]}
+            | set(vrs.REQUIRED_PANEL_LENSES["testing"])
+        )
+        self.assertEqual(payload["coverage"]["material_lens_set"], expected_lenses)
+        self.assertEqual(payload["coverage"]["completed"], expected_lenses)
+        markdown = record.read_text(encoding="utf-8")
+        self.assertIn("- Panel mode: focused", markdown)
+        self.assertIn("- Selection reason:", markdown)
+        self.assertIn("- Workers launched: 2", markdown)
+        self.assertNotIn("| contract-docs |", markdown)
+        code, out, err = self._run_validator(["--hard", str(record)])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+
+    def test_duplicate_worker_flags_dedupe_to_one_launch(self):
+        """A repeated --worker names one launch: the worker appears once
+        in the panel rows and workers_launched counts distinct workers,
+        so the pair stays consistent pre-write."""
+        findings_json = self._write_findings_json(VARIED_FINDINGS, name="dup.json")
+        out_dir = self.root / "dup"
+        code, out, err = self._run_main(
+            self._focused_argv(
+                findings_json, out_dir, ["testing", "testing"], "single-worker round"
+            )
+        )
+        self.assertEqual(code, 0, err + out)
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        payload = json.loads(record.with_suffix(".stats.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["counts"]["workers_launched"], 1)
+        self.assertEqual([row["worker"] for row in payload["panel"]], ["testing"])
+        code, out, err = self._run_validator(["--hard", str(record)])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+
+    def test_full_panel_defaults_unchanged_without_the_new_flags(self):
+        """A mint without the new flags keeps the historical full shape:
+        panel_mode full, null selection_reason, five launched workers."""
+        findings_json = self._write_findings_json(VARIED_FINDINGS, name="full.json")
+        out_dir = self.root / "full"
+        code, _out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 0, err)
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        payload = json.loads(record.with_suffix(".stats.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["panel_mode"], "full")
+        self.assertIsNone(payload["selection_reason"])
+        self.assertEqual(payload["counts"]["workers_launched"], 5)
+        self.assertEqual(len(payload["panel"]), 5)
+
+    def test_focused_input_refusal_arms(self):
+        """Each malformed focused/full flag pairing is a named pre-write
+        refusal (exit 1, no pair written)."""
+        findings_json = self._write_findings_json(VARIED_FINDINGS, name="ref.json")
+        arms = [
+            ("no workers", self._focused_argv(findings_json, self.root / "r1", [], "reason")),
+            (
+                "no reason",
+                self._focused_argv(
+                    findings_json, self.root / "r2", ["correctness-completeness"], None
+                ),
+            ),
+            (
+                "unknown worker",
+                self._focused_argv(
+                    findings_json, self.root / "r3", ["correctness-completeness", "ghost"], "reason"
+                ),
+            ),
+            (
+                "reason with full",
+                self._argv(findings_json, self.root / "r4", selection_reason="reason"),
+            ),
+            (
+                "worker with full",
+                self._argv(findings_json, self.root / "r5", worker="testing"),
+            ),
+            (
+                "newline-bearing reason",
+                self._focused_argv(
+                    findings_json,
+                    self.root / "r6",
+                    ["testing"],
+                    "line one\nline two",
+                ),
+            ),
+            (
+                "whitespace-only reason",
+                self._focused_argv(findings_json, self.root / "r7", ["testing"], "   "),
+            ),
+        ]
+        for label, argv in arms:
+            with self.subTest(arm=label):
+                code, out, err = self._run_main(argv)
+                self.assertEqual(code, 1, f"{label}: {out}{err}")
+                self.assertIn("REFUSED", out)
+                self.assertEqual(list(self.root.glob("r[0-9]")), [])
+
 
 class RangeArmTest(unittest.TestCase):
     """Task 1 range arm: `--range base...head` emits the code-family pair.
@@ -709,6 +852,31 @@ class RangeArmTest(unittest.TestCase):
         record = out_dir / f"{DATE}-{SLUG}-code-review-r1.md"
         self.assertTrue(record.is_file(), out)
         return record, out
+
+    def test_focused_range_mode_mint_passes_hard_mode(self):
+        """The focused selection applies to a range (code-family) mint the
+        same way: rows, launch count, and coverage lenses derive from the
+        named workers, and the pair passes hard mode."""
+        out_dir = self.out_dir / "focused-range"
+        argv = [
+            *self._argv(out_dir),
+            "--panel-mode", "focused",
+            "--worker", "testing",
+            "--selection-reason", "focused follow-up over a two-commit range",
+        ]
+        code, out, err = self._run_main(argv)
+        self.assertEqual(code, 0, err + out)
+        record = out_dir / f"{DATE}-{SLUG}-code-review-r1.md"
+        payload = json.loads(record.with_suffix(".stats.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["panel_mode"], "focused")
+        self.assertEqual(payload["counts"]["workers_launched"], 1)
+        self.assertEqual(
+            payload["coverage"]["material_lens_set"],
+            sorted(vrs.REQUIRED_PANEL_LENSES["testing"]),
+        )
+        code, out, err = self._run_validator_hard(record)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
 
     def _no_scope_calls(self):
         """Patch reviewed_scope_bytes to record any call; returns the calls
@@ -1106,8 +1274,10 @@ class FlagSurfaceAndLensSingleHomingTest(unittest.TestCase):
         return record, record.with_suffix(".stats.json")
 
     def _namespace(self, out_dir, findings_json, **overrides):
-        """The argparse namespace build_context reads, mirroring the CLI's
-        parsed flags (the producer's parser is not module-exposed)."""
+        """The argparse namespace build_context reads (the producer's
+        parser is not module-exposed). Omits the newer focused-panel
+        fields; build_context's getattr fallbacks keep such hand-built
+        namespaces mintable as the historical full shape."""
         values = {
             "out_dir": str(out_dir),
             "session": "producer demo session",
@@ -1377,8 +1547,10 @@ class SeamRewiringTest(unittest.TestCase):
         return argv
 
     def _namespace(self, out_dir, findings_json, **overrides):
-        """The argparse namespace build_context reads, mirroring the CLI's
-        parsed flags (the producer's parser is not module-exposed)."""
+        """The argparse namespace build_context reads (the producer's
+        parser is not module-exposed). Omits the newer focused-panel
+        fields; build_context's getattr fallbacks keep such hand-built
+        namespaces mintable as the historical full shape."""
         values = {
             "out_dir": str(out_dir),
             "session": "producer demo session",
@@ -1544,6 +1716,801 @@ class SeamRewiringTest(unittest.TestCase):
             "date '2026-02-30' must be a calendar-valid YYYY-MM-DD date", err
         )
         self.assertEqual(list(out_dir.glob("*")), [])
+
+
+class OverflowInputAndExecCompletionArmTest(unittest.TestCase):
+    """Exec-review record producer gaps (EXEC-PROMPTS entry
+    exec-review-record-producer-gaps): the ``overflow`` array in the
+    findings JSON renders both surfaces at mint time (no post-production
+    hand patch), the canonical overflow placement shapes refuse at the
+    input boundary, and the ``--kind exec-completion`` arm mints the
+    ``*-plan-review-<slug>-exec-r<N>`` completion receipt pair with
+    ``extensions.certified_range`` resolved from ``--certified-range``.
+    The clean verification-only round keeps its documented mapping at the
+    freshness gate's error text; the contradiction guard itself is never
+    duplicated (the existing pin above holds)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="produce-overflow-arm-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.metrics_home = self.root / "metrics"
+        if vrs.invocation_telemetry is not None:
+            patcher = mock.patch.object(
+                vrs.invocation_telemetry,
+                "resolve_metrics_home",
+                lambda: self.metrics_home,
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.plan_path = self.root / "sample-plan.md"
+        self.plan_path.write_text(PLAN_BODY, encoding="utf-8")
+        self.findings = [
+            {
+                "id": 1,
+                "title": "Medium finding",
+                "severity": "Medium",
+                "blocking": False,
+                "note": "The medium consequence.",
+                "workers": ["correctness-completeness"],
+            },
+            {
+                "id": 2,
+                "title": "Low finding",
+                "severity": "Low",
+                "blocking": False,
+                "note": "The low consequence.",
+                "workers": ["contract-docs"],
+            },
+        ]
+
+    def _write_findings_json(self, payload, name="findings.json"):
+        path = self.root / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def _argv(self, findings_json, out_dir, **overrides):
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "overflow arm session",
+            "--plan", str(self.plan_path),
+            "--findings-json", str(findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+        ]
+        for key, value in overrides.items():
+            argv.extend(["--" + key.replace("_", "-"), str(value)])
+        return argv
+
+    def _run_main(self, argv):
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            try:
+                code = producer.main(argv)
+            except SystemExit as exc:  # argparse usage-error channel
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def _final_outcomes(self, text):
+        return [
+            row.strip()
+            for row in text.splitlines()
+            if row.strip().startswith("OUTCOME:")
+        ]
+
+    # -- overflow input arm ------------------------------------------------
+
+    def test_overflow_array_renders_both_surfaces_at_mint_time(self):
+        """An ``overflow`` array in the findings JSON renders the Markdown
+        overflow manifest bullets and the sidecar ``overflow`` list and
+        ``counts.overflow`` in one minted pair the validator accepts in
+        hard mode; no post-production hand edit exists."""
+        payload = {
+            "plan": str(self.plan_path),
+            "findings": self.findings,
+            "overflow": [
+                {
+                    "title": "Credible overflow candidate",
+                    "note": "The candidate beyond the per-worker Low budget.",
+                    "severity": "Low",
+                    "workers": ["risk"],
+                }
+            ],
+        }
+        findings_json = self._write_findings_json(payload)
+        out_dir = self.root / "overflow-pair"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        markdown = record.read_text(encoding="utf-8")
+        self.assertIn("### Overflow manifest", markdown)
+        self.assertIn("**Credible overflow candidate** (Low, non-blocking)", markdown)
+        self.assertIn("The candidate beyond the per-worker Low budget.", markdown)
+        self.assertIn("- Overflow: 1", markdown)
+
+    def test_overflow_row_location_renders_in_the_manifest(self):
+        """An overflow row's ``file``/``line`` anchor renders as the
+        manifest bullet's location (the ride-along convention findings
+        rows follow), so an anchored overflow candidate's location
+        survives mint time."""
+        payload = {
+            "findings": self.findings,
+            "overflow": [
+                {
+                    "title": "Anchored overflow candidate",
+                    "note": "The candidate with a location anchor.",
+                    "file": "scripts/demo.py",
+                    "line": 7,
+                }
+            ],
+        }
+        findings_json = self._write_findings_json(payload, name="anchored-ov.json")
+        out_dir = self.root / "anchored-ov"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 0, err + out)
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-r1.md"
+        markdown = record.read_text(encoding="utf-8")
+        self.assertIn("**Anchored overflow candidate** (Low, non-blocking)", markdown)
+        self.assertIn("location: `scripts/demo.py:7`", markdown)
+
+    def test_critical_overflow_row_refuses_at_the_input_boundary(self):
+        """A Critical overflow row refuses pre-write as the tool error
+        naming the validator's canonical overflow placement gate; no pair
+        is written."""
+        payload = {
+            "findings": self.findings,
+            "overflow": [{"title": "T", "note": "N", "severity": "Critical"}],
+        }
+        findings_json = self._write_findings_json(payload, name="critical-ov.json")
+        out_dir = self.root / "critical-ov"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("Critical findings in", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_blocking_overflow_row_refuses_at_the_input_boundary(self):
+        """A blocking overflow row refuses pre-write as the tool error
+        naming the validator's canonical overflow placement gate; no pair
+        is written."""
+        payload = {
+            "findings": self.findings,
+            "overflow": [
+                {"title": "T", "note": "N", "severity": "Low", "blocking": True}
+            ],
+        }
+        findings_json = self._write_findings_json(payload, name="blocking-ov.json")
+        out_dir = self.root / "blocking-ov"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("blocking findings in", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_overflow_without_findings_mints_a_clean_certifying_pair(self):
+        """Two non-blocking residuals in overflow with no staged findings
+        mint verdict yes and pass the validator in hard mode, with no hand
+        patch (the certification round's terminal record shape)."""
+        payload = {
+            "findings": [],
+            "overflow": [
+                {"title": "T1", "note": "N1"},
+                {"title": "T2", "note": "N2"},
+            ],
+        }
+        findings_json = self._write_findings_json(payload, name="clean-ov.json")
+        out_dir = self.root / "clean-ov"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+        sidecar = next(out_dir.glob("*.stats.json"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["overflow"]), 2)
+        self.assertEqual(data["verdict"], "yes")
+        self.assertIn("### Overflow manifest", next(out_dir.glob("*.md")).read_text(encoding="utf-8"))
+
+    def test_malformed_overflow_row_refuses_with_the_row_index(self):
+        """An overflow row missing its required ``note`` refuses as the
+        tool error naming the row index; no pair is written."""
+        payload = {
+            "findings": self.findings,
+            "overflow": [{"title": "Only a title"}],
+        }
+        findings_json = self._write_findings_json(payload, name="malformed-ov.json")
+        out_dir = self.root / "malformed-ov"
+        code, out, err = self._run_main(self._argv(findings_json, out_dir))
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("overflow row at index 0", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_freshness_gate_error_text_carries_the_round_shape_mapping(self):
+        """The clean verification-only mapping lives at the helper's error
+        text: the freshness gate's refusal names the fresh-adversarial
+        with --last-fix-commit spelling and the validator's post-write
+        refusal sentence; the producer adds no new mode-vs-clean
+        guard."""
+        findings_json = self._write_findings_json(
+            {"findings": []}, name="mapping.json"
+        )
+        code, out, err = self._run_main(
+            self._argv(
+                findings_json,
+                self.root / "mapping",
+                review_mode="targeted",
+                last_fix_commit="abc123def",
+            )
+        )
+        self.assertEqual(code, 3)
+        self.assertIn("Round-shape mapping:", err)
+        self.assertIn("--last-fix-commit <sha>", err)
+        self.assertIn("the validator refuses it post-write", err)
+
+
+class ExecCompletionArmTest(unittest.TestCase):
+    """The ``--kind exec-completion`` completion receipt mint: the
+    ``*-plan-review-<slug>-exec-r<N>`` series filename the reverse-squash
+    guard and done sweep gate grammars pin, with
+    ``extensions.certified_range`` populated from ``--certified-range``.
+    Every fixture is a hermetic scratch git repo (the
+    corrections_record.build_scratch_repo pattern) so the certified range
+    resolves without ambient state."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="produce-exec-completion-")
+        self.addCleanup(tmp.cleanup)
+        self.workspace = Path(tmp.name)
+        self._original_cwd = os.getcwd()
+        os.chdir(self.workspace)
+        self.addCleanup(os.chdir, self._original_cwd)
+        self.metrics_home = self.workspace / "metrics"
+        if vrs.invocation_telemetry is not None:
+            patcher = mock.patch.object(
+                vrs.invocation_telemetry,
+                "resolve_metrics_home",
+                lambda: self.metrics_home,
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.repo, self.base_sha, self.head_sha = self._build_range_repo()
+        self.plan_path = self.workspace / "sample-plan.md"
+        self.plan_path.write_text(PLAN_BODY, encoding="utf-8")
+        self.findings_json = self.workspace / "findings.json"
+        self.findings_json.write_text(
+            json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": 1,
+                            "title": "Exec completion finding",
+                            "severity": "Low",
+                            "blocking": False,
+                            "note": "The residual the completion certifies.",
+                            "workers": ["correctness-completeness"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.out_dir = self.repo.root / "out"
+
+    def _build_range_repo(self):
+        repo = corrections_record.build_scratch_repo(self, name="exec-completion-repo")
+        base = repo.commit_file("src/alpha.py", "def alpha():\n    return 1\n", "seed alpha")
+        head = repo.commit_file("src/beta.py", "def beta():\n    return 2\n", "feature beta")
+        return repo, base, head
+
+    def _argv(self, out_dir, **overrides):
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "exec completion session",
+            "--plan", str(self.plan_path),
+            "--findings-json", str(self.findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+        ]
+        for key, value in overrides.items():
+            argv.extend(["--" + key.replace("_", "-"), str(value)])
+        return argv
+
+    def _run_main(self, argv):
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            try:
+                code = producer.main(argv)
+            except SystemExit as exc:  # argparse usage-error channel
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def _final_outcomes(self, text):
+        return [
+            row.strip()
+            for row in text.splitlines()
+            if row.strip().startswith("OUTCOME:")
+        ]
+
+    def test_exec_completion_mints_the_series_filename_pair(self):
+        """``--kind exec-completion --certified-range`` writes the
+        ``{date}-plan-review-{slug}-exec-r<N>.md`` pair the series
+        grammars pin, with sidecar ``extensions.certified_range``
+        recording the resolved base and head, and the validator accepts
+        the pair in hard mode."""
+        argv = self._argv(
+            self.out_dir,
+            kind="exec-completion",
+            certified_range=f"{self.base_sha}...{self.head_sha}",
+        )
+        code, out, err = self._run_main(argv)
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+        record = self.out_dir / f"{DATE}-plan-review-{SLUG}-exec-r1.md"
+        self.assertTrue(record.is_file(), out)
+        side = json.loads(
+            record.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(side["extensions"]["certified_range"]["base"], self.base_sha)
+        self.assertEqual(side["extensions"]["certified_range"]["head"], self.head_sha)
+        self.assertEqual(side["artifact_slug"], f"{SLUG}-exec")
+
+    def test_exec_completion_requires_the_certified_range(self):
+        """``--kind exec-completion`` without ``--certified-range``
+        refuses as the tool error naming the required input; no pair is
+        written."""
+        out_dir = self.repo.root / "out-no-range"
+        code, out, err = self._run_main(
+            self._argv(out_dir, kind="exec-completion")
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("--kind exec-completion requires --certified-range", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_exec_completion_slug_already_carrying_the_token_refuses(self):
+        """A slug already ending in ``-exec`` refuses under
+        ``--kind exec-completion`` (the series token appends once, never
+        twice)."""
+        out_dir = self.repo.root / "out-double"
+        code, out, err = self._run_main(
+            self._argv(
+                out_dir,
+                kind="exec-completion",
+                certified_range=f"{self.base_sha}...{self.head_sha}",
+                artifact_slug=f"{SLUG}-exec",
+            )
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("already carries the -exec", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_certified_range_with_range_is_a_usage_tool_error(self):
+        """``--certified-range`` and ``--range`` are mutually exclusive:
+        the certified range annotates a plan-family record, never a
+        code-family record that already certifies its own range. The
+        invocation omits ``--plan`` so the producer's own exclusion guard
+        in ``build_context`` is the enforcement point under test (the
+        argparse ``--plan``/``--range`` group must not fire first)."""
+        out_dir = self.repo.root / "out-both"
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "exec completion session",
+            f"--range={self.base_sha}...{self.head_sha}",
+            "--findings-json", str(self.findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+            "--certified-range", f"{self.base_sha}...{self.head_sha}",
+        ]
+        code, out, err = self._run_main(argv)
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("--certified-range and --range are mutually exclusive", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_certified_range_under_the_default_kind_refuses(self):
+        """``--certified-range`` with the default ``--kind plan-review``
+        refuses: the certified range is the completion receipt's
+        annotation, never a free-standing option on the default arm."""
+        out_dir = self.repo.root / "out-default-kind"
+        code, out, err = self._run_main(
+            self._argv(
+                out_dir,
+                certified_range=f"{self.base_sha}...{self.head_sha}",
+            )
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("--certified-range requires --kind exec-completion", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_certified_range_unresolvable_half_refuses(self):
+        """An unresolvable ``--certified-range`` half refuses through the
+        shared range source rules; no pair is written."""
+        out_dir = self.repo.root / "out-badref"
+        code, out, err = self._run_main(
+            self._argv(
+                out_dir,
+                kind="exec-completion",
+                certified_range=f"{self.base_sha}...does-not-exist",
+            )
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("does not resolve to a commit", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+
+class EgressDigestMintTest(ExecCompletionArmTest):
+    """The mint-time archive-egress digest arms (the
+    producer-egress-digest-mint gap): ``--egress-digest``/``--egress-path``
+    place the archived bytes' sha256 into the minted completion receipt on
+    both surfaces at mint, and the minted pair satisfies the reverse-squash
+    guard's ``find_evidence_record`` evidence leg unchanged (no hand
+    ``cat >>`` backfill after the completion pass)."""
+
+    def _mint_completion(self, out_dir, **overrides):
+        return self._run_main(
+            self._argv(
+                out_dir,
+                kind="exec-completion",
+                certified_range=f"{self.base_sha}...{self.head_sha}",
+                **overrides,
+            )
+        )
+
+    def test_egress_digest_renders_on_both_surfaces(self):
+        """``--egress-digest`` places the hex into the Metadata line and
+        the sidecar's free-form ``extensions.archive_egress_digest``; the
+        run's final ``OUTCOME: pass`` carries the validator hard-mode
+        acceptance (the producer validates before reporting pass)."""
+        out_dir = self.repo.root / "out-egress-digest"
+        digest = "a" * 64
+        code, out, err = self._mint_completion(
+            out_dir, egress_digest=digest
+        )
+        self.assertEqual(code, 0, err + out)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-exec-r1.md"
+        self.assertTrue(record.is_file(), out)
+        self.assertIn(f"- Archive-egress digest: {digest}", record.read_text())
+        side = json.loads(
+            record.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(side["extensions"]["archive_egress_digest"], digest)
+
+    def test_egress_path_digests_the_archived_bytes_at_mint(self):
+        """``--egress-path`` digests the named file's bytes at mint time
+        and renders the same sha256 on both surfaces."""
+        out_dir = self.repo.root / "out-egress-path"
+        archived = self.workspace / "archived-plan.md"
+        archived_bytes = b"# archived plan bytes\n\nthe egress body\n"
+        archived.write_bytes(archived_bytes)
+        expected = hashlib.sha256(archived_bytes).hexdigest()
+        code, out, err = self._mint_completion(
+            out_dir, egress_path=str(archived)
+        )
+        self.assertEqual(code, 0, err + out)
+        record = out_dir / f"{DATE}-plan-review-{SLUG}-exec-r1.md"
+        self.assertIn(
+            f"- Archive-egress digest: {expected}", record.read_text()
+        )
+        side = json.loads(
+            record.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(side["extensions"]["archive_egress_digest"], expected)
+
+    def test_minted_pair_satisfies_find_evidence_record(self):
+        """The scope pin: a receipt minted under a reviews home satisfies
+        ``find_evidence_record`` unchanged - the anchored slug-and-digest
+        leg finds the record without any post-mint edit."""
+        out_dir = self.repo.root / ".ai-playbook" / "reviews"
+        digest = "b" * 64
+        code, out, err = self._mint_completion(
+            out_dir, egress_digest=digest
+        )
+        self.assertEqual(code, 0, err + out)
+        found = guard.find_evidence_record(self.repo.root, SLUG, digest)
+        self.assertIsNotNone(found)
+        self.assertTrue(found.endswith(f"{DATE}-plan-review-{SLUG}-exec-r1.md"))
+
+    def test_malformed_egress_digest_refuses_as_tool_error(self):
+        """A digest that is not 64 lowercase hex hex characters refuses at
+        the input boundary; no pair is written."""
+        out_dir = self.repo.root / "out-bad-digest"
+        code, out, err = self._mint_completion(
+            out_dir, egress_digest="XYZ" * 21
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("must be a 64-character lowercase hex", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_missing_egress_path_refuses_as_tool_error(self):
+        """A nonexistent ``--egress-path`` refuses at the input boundary
+        (the producer digests existing bytes once, never re-reads); no
+        pair is written."""
+        out_dir = self.repo.root / "out-missing-path"
+        code, out, err = self._mint_completion(
+            out_dir, egress_path=str(self.workspace / "no-such-file.md")
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("egress path not found", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_egress_flags_with_range_are_a_plan_family_refusal(self):
+        """The egress flags are plan-family options: a range-mode record
+        (the code family) refuses them as a tool error instead of minting
+        an annotation no evidence leg reads."""
+        out_dir = self.repo.root / "out-range-egress"
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "code family session",
+            f"--range={self.base_sha}...{self.head_sha}",
+            "--findings-json", str(self.findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+            "--artifact-slug", SLUG,
+            "--egress-digest", "c" * 64,
+        ]
+        code, out, err = self._run_main(argv)
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("are plan-family options", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_both_egress_flags_are_a_usage_error(self):
+        """``--egress-digest`` and ``--egress-path`` are mutually
+        exclusive at the argparse layer (one digest source, never two);
+        the OutcomeArgumentParser usage idiom ends exit 3 with a final
+        ``OUTCOME: tool_error`` line."""
+        out_dir = self.repo.root / "out-both-egress"
+        code, out, err = self._mint_completion(
+            out_dir,
+            egress_digest="d" * 64,
+            egress_path=str(self.plan_path),
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(err + out), ["OUTCOME: tool_error"])
+        self.assertIn("not allowed with argument", err + out)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+    def test_egress_flags_on_the_default_kind_refuse(self):
+        """The egress flags on the plain ``--kind plan-review`` arm refuse
+        as a tool error (the r1 panel's converged Low): a round record's
+        filename never matches the guard's anchored ``-exec-r<N>``
+        grammar, so the digest would be dead evidence there."""
+        out_dir = self.repo.root / "out-round-egress"
+        code, out, err = self._run_main(
+            self._argv(out_dir, egress_digest="e" * 64)
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: tool_error"])
+        self.assertIn("require --kind exec-completion", err)
+        self.assertEqual(list(out_dir.glob("*")), [])
+
+
+class MintTimeExecRecordWarningTest(unittest.TestCase):
+    """The mint-time exec-record warning arm (producer-exec-record-grammar
+    plan, Tasks 1-2): a range-mode (code-family) mint whose
+    ``--artifact-slug`` equals an executed or active plan's canonical slug
+    prints one stderr warning naming the archive-ceremony gate, the repair
+    producer, and the exec-series grammar. Warning-only: the exit code, the
+    stdout outcome grammar, and the produced pair's bytes are unaffected;
+    the slug-match probe is fail-open. Plan-family mints stay warning-free
+    on a matching slug (the slug-conditioned-probe regression catcher).
+
+    Fixtures are hermetic scratch git repos (the corrections_record
+    build_scratch_repo pattern) carrying fixture plans under the plans
+    roots; the process cwd is pinned to a non-repository workspace so the
+    probe and the range resolution anchor only on the out-dir."""
+
+    GATE_TOKEN = "scripts/done_sweep_gates_lib.py"
+    REPAIR_TOKEN = "scripts/produce_exec_review_record.py"
+    SERIES_TOKEN = "-exec-r"
+    COMPLETED_SLUG = "fixture-completed-plan"
+    LIVING_SLUG = "fixture-living-plan"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="produce-warning-arm-")
+        self.addCleanup(tmp.cleanup)
+        self.workspace = Path(tmp.name)
+        self._original_cwd = os.getcwd()
+        os.chdir(self.workspace)
+        self.addCleanup(os.chdir, self._original_cwd)
+        self._original_git_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.startswith("GIT_")
+        }
+        for key in self._original_git_env:
+            del os.environ[key]
+        self.addCleanup(self._restore_git_env)
+        self.metrics_home = self.workspace / "metrics"
+        if vrs.invocation_telemetry is not None:
+            patcher = mock.patch.object(
+                vrs.invocation_telemetry,
+                "resolve_metrics_home",
+                lambda: self.metrics_home,
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.findings_json = self.workspace / "warning-findings.json"
+        self.findings_json.write_text(
+            json.dumps({"findings": [
+                {
+                    "id": 1,
+                    "title": "Warning arm finding",
+                    "severity": "Low",
+                    "blocking": False,
+                    "note": "The mint-time warning arm finding fixture.",
+                }
+            ]}),
+            encoding="utf-8",
+        )
+
+    def _restore_git_env(self):
+        for key, value in self._original_git_env.items():
+            os.environ[key] = value
+
+    def _repo(self, name):
+        """Scratch repo seeded with the reviewed range delta."""
+        repo = corrections_record.build_scratch_repo(self, name=name)
+        self.base_sha = repo.commit_file(
+            "src/alpha.py", "def alpha():\n    return 1\n", "seed alpha")
+        self.head_sha = repo.commit_file(
+            "src/beta.py", "def beta():\n    return 2\n", "feature beta")
+        return repo
+
+    def _seed_plans(self, repo):
+        """Fixture plans under both plans roots, untracked (the probe reads
+        the filesystem, never git)."""
+        repo.write_file(
+            "docs/history/plans/completed/2026-01-01-%s.md" % self.COMPLETED_SLUG,
+            "# Archived fixture plan\n\nArchived plan body.\n",
+        )
+        repo.write_file(
+            "docs/history/plans/2026-01-01-%s.md" % self.LIVING_SLUG,
+            "# Living fixture plan\n\nLiving plan body.\n",
+        )
+
+    def _argv(self, out_dir, slug, plan=None):
+        argv = [
+            "--out-dir", str(out_dir),
+            "--session", "warning arm session",
+            "--findings-json", str(self.findings_json),
+            "--review-run-id", RUN_ID,
+            "--review-started-at-ms", str(STARTED_MS),
+            "--date", DATE,
+        ]
+        if plan is not None:
+            argv.extend(["--plan", str(plan)])
+        else:
+            argv.append("--range=%s...%s" % (self.base_sha, self.head_sha))
+        argv.extend(["--artifact-slug", slug])
+        return argv
+
+    def _run_main(self, argv):
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            try:
+                code = producer.main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    def _final_outcomes(self, text):
+        return [
+            row.strip()
+            for row in text.splitlines()
+            if row.strip().startswith("OUTCOME:")
+        ]
+
+    def _assert_no_warning(self, out, err):
+        self.assertNotIn(self.GATE_TOKEN, err)
+        self.assertNotIn(self.GATE_TOKEN, out)
+
+    def _mint(self, repo, out_name, slug, plan=None):
+        out_dir = repo.root / out_name
+        code, out, err = self._run_main(self._argv(out_dir, slug, plan=plan))
+        self.assertEqual(code, 0, err + out)
+        return out_dir, out, err
+
+    # -- the matching classes ---------------------------------------------
+
+    def test_completed_root_slug_match_warns(self):
+        """A range-mode mint whose artifact slug equals an archived
+        fixture plan's canonical slug under the completed root prints the
+        stderr warning naming the gate file, the repair producer, and the
+        exec-series token."""
+        repo = self._repo("warn-completed")
+        self._seed_plans(repo)
+        out_dir, out, err = self._mint(repo, "out", self.COMPLETED_SLUG)
+        self.assertIn(self.GATE_TOKEN, err)
+        self.assertIn(self.REPAIR_TOKEN, err)
+        self.assertIn(self.SERIES_TOKEN, err)
+        self.assertTrue(
+            (out_dir / ("%s-%s-code-review-r1.md" % (DATE, self.COMPLETED_SLUG))).is_file()
+        )
+
+    def test_living_root_slug_match_warns(self):
+        """The active-plan firing window: a matching slug under the living
+        plans root warns the same way (a Phase 3 mint names a plan still
+        living at mint time)."""
+        repo = self._repo("warn-living")
+        self._seed_plans(repo)
+        out_dir, out, err = self._mint(repo, "out", self.LIVING_SLUG)
+        self.assertIn(self.GATE_TOKEN, err)
+        self.assertIn(self.REPAIR_TOKEN, err)
+        self.assertIn(self.SERIES_TOKEN, err)
+        self.assertTrue(
+            (out_dir / ("%s-%s-code-review-r1.md" % (DATE, self.LIVING_SLUG))).is_file()
+        )
+
+    # -- the non-matching and probe-failure classes ------------------------
+
+    def test_non_matching_slug_prints_no_warning(self):
+        """A range-mode mint whose artifact slug matches no plan under the
+        plans roots prints no warning line on either channel."""
+        repo = self._repo("warn-none")
+        self._seed_plans(repo)
+        _out_dir, out, err = self._mint(repo, "out", SLUG)
+        self._assert_no_warning(out, err)
+
+    def test_plan_family_mint_with_matching_slug_prints_no_warning(self):
+        """The slug-conditioned-probe regression catcher: a plan-family
+        mint whose --artifact-slug deliberately names a plan slug under
+        the plans roots prints no warning on either channel."""
+        repo = self._repo("warn-plan-family")
+        self._seed_plans(repo)
+        plan = repo.root / ("docs/history/plans/2026-01-01-%s.md" % self.LIVING_SLUG)
+        _out_dir, out, err = self._mint(
+            repo, "out", self.LIVING_SLUG, plan=plan)
+        self._assert_no_warning(out, err)
+
+    def test_unresolvable_probe_fails_open(self):
+        """A slug-match probe that cannot resolve (no plans roots
+        reachable in the minting repository) fails open: the mint
+        succeeds with no warning and an unchanged final OUTCOME line."""
+        repo = self._repo("warn-fail-open")
+        out_dir, out, err = self._mint(repo, "out", self.COMPLETED_SLUG)
+        self._assert_no_warning(out, err)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+
+    # -- the warning-only posture -----------------------------------------
+
+    def test_warning_leaves_outcome_and_pair_bytes_unaffected(self):
+        """The pinned warning scenario: exit code 0, the final OUTCOME:
+        pass line unchanged, and the produced record and sidecar bytes
+        byte-identical to an identical mint under the same inputs with no
+        matching plan present (the warning rides stderr only)."""
+        repo = self._repo("warn-bytes")
+        self._seed_plans(repo)
+        warned_dir, out, err = self._mint(repo, "out-warned", self.COMPLETED_SLUG)
+        self.assertEqual(self._final_outcomes(out), ["OUTCOME: pass"])
+        self.assertIn(self.GATE_TOKEN, err)
+        # Remove the fixture plans (untracked) so the same mint no longer
+        # matches; same repo, same range shas, same inputs.
+        import shutil
+        shutil.rmtree(repo.root / "docs/history/plans")
+        clean_dir, clean_out, clean_err = self._mint(
+            repo, "out-clean", self.COMPLETED_SLUG)
+        self._assert_no_warning(clean_out, clean_err)
+        for name in (
+            "%s-%s-code-review-r1.md" % (DATE, self.COMPLETED_SLUG),
+            "%s-%s-code-review-r1.stats.json" % (DATE, self.COMPLETED_SLUG),
+        ):
+            warned = (warned_dir / name).read_bytes()
+            clean = (clean_dir / name).read_bytes()
+            self.assertEqual(warned, clean)
 
 
 if __name__ == "__main__":

@@ -71,6 +71,7 @@ Does this look good, or any changes?
 - **Hyperlinks (draft-save, required).** When saving via the Slack draft-save tool, use standard Markdown link syntax: `[link label](https://example.com/path)`. Do **not** convert links to Slack mrkdwn `<https://example.com/path|link label>` unless the active Slack tool explicitly requires mrkdwn for drafts.
 - **Hyperlinks (chat preview).** Show the same Markdown link syntax inside the preview fence so copy-paste and draft-save stay aligned. Wrong in draft body for the current Slack draft tool: `<https://example.com/users/usr_002|mockup UI>`. Right: `[mockup UI](https://example.com/users/usr_002)`.
 - **Preserve user link labels.** When the user provides link text (for example `mockup UI`, `CRM MVP Data Points`), keep their label; only fix the wrapper syntax before draft-save.
+- **Preserve the user-supplied destination.** When the user provides an explicit URL, use that exact destination; do not replace it with inferred or component links unless the user asks for another destination or the supplied link is verified unusable (explain any such substitution before saving).
 
 ## Wording rules
 

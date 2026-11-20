@@ -135,6 +135,12 @@ Duplicate "what" comments are not neutral: they are an **extra failure point** (
 
 Long blocks get deeper scrutiny, but **length is not a gate**. A single line that restates the next line of code is in scope.
 
+### Claims census (phase 2)
+
+Beyond per-line comment review, every behavioral claim the change set adds or changes (PR description, API contract text, docs table cell, code comment, plan checkbox) answers to the second-source-of-truth rule above: name the code path and the test that witness it. Flag enumerations narrower or wider than the code's partitions (a documented status list admitting fewer or more outcomes than the code branches on). A statement copied from another instruction file is verified against code, not carried over.
+
+Pattern: `documentation#prose-claims-census`
+
 ### Scan scope (code review)
 
 1. Run `git diff <base>...<head>` and collect **every added or modified comment/doc line** in changed hunks: `//`, `#`, `/* */`, `/** */`, `""" """`, `#` markdown headings/body, YAML `#` comments, OpenAPI `description:` prose.

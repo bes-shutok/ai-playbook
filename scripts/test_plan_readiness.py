@@ -14,6 +14,7 @@ Run from the repository root:
 """
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -2095,6 +2096,121 @@ class ReadinessViolationAggregationTest(unittest.TestCase):
         self.assertEqual(rc, 1, (out, err))
         self._assert_all_probe_failures(err)
         self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
+
+
+class ReadinessSidecarPlusProbesAggregationTest(unittest.TestCase):
+    """A sidecar-gate violation no longer ends the pass before the
+    verdict and plan-text probes evaluate (plan-readiness-fail-many-
+    reporting row): a fixture whose sidecar digest is stale and whose
+    plan text trips the gated probes reports every independent violation
+    (stale digest plus four probe families) in one aggregated nonzero
+    run, with every finding message byte-stable."""
+
+    PLAN = (
+        "# P\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: pending unresolved choice.\n\n"
+        "## Tasks\n\n"
+        "### Task 1: Implement the missing module\n\n"
+        "Files:\n- `scripts/missing.py`\n\n"
+        "- [ ] Implement the module.\n\n"
+        "## Review Scope\n\n"
+        "**Documentation:**\n- scripts/missing.py\n"
+    )
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="readiness-fail-many-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        # Violation 1 (sidecar family): digest_override corrupts the
+        # sidecar's declared digest against the plan bytes. Violations 2-5
+        # (plan-text probes): the plan text fails the decision-points
+        # trailer, Review Scope, Files:-path, and classification-tag
+        # probes under the gated sidecar date.
+        self.plan, _ = plan_readiness._write_clean_state(
+            self.plans,
+            self.reviews,
+            plan_text=self.PLAN,
+            digest_override="a" * 64,
+            date=_GATED_SIDECAR_DATE,
+            slug="fail-many-probes",
+        )
+
+    def test_one_aggregated_nonzero_run_reports_all_three(self):
+        ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        # All three violation families surface in one pass (the plan text
+        # additionally trips the Files:-path and classification-tag probes,
+        # so the fixture reports five independent violations in one run).
+        self.assertIn("sidecar source_digest is stale", reason)
+        self.assertIn("unresolved decision-points trailer", reason)
+        self.assertIn("Review Scope lists scripts/missing.py", reason)
+        self.assertIn("Files: path scripts/missing.py", reason)
+        self.assertIn("carries no [class: ...] classification tag", reason)
+        # The aggregated reason is the one multi-violation shape.
+        self.assertTrue(reason.startswith("multiple readiness violations"))
+        self.assertGreaterEqual(reason.count("\n- "), 3)
+
+    def test_cli_reports_all_three_and_keeps_failure_outcome_tail(self):
+        rc, out, err = PlanReadinessFenceBalanceTest._run_main(
+            self, [str(self.plan)]
+        )
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("sidecar source_digest is stale", err)
+        self.assertIn("unresolved decision-points trailer", err)
+        self.assertIn("Review Scope lists scripts/missing.py", err)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
+        # Exit contract and finding-message stability: one refusal header
+        # carrying the one aggregated block (the block's findings appear
+        # once inside it; the FAILED line wraps the same block).
+        self.assertEqual(err.count("readiness FAILED:"), 1)
+        self.assertEqual(err.count("multiple readiness violations"), 1)
+
+    def test_undecodable_plan_with_sidecar_violation_still_refuses(self):
+        """Regression cell (r1 panel fold): the extraction-rule undecodable
+        pass arm must not swallow the seeded sidecar problems: a
+        date-exempt round over non-UTF-8 plan bytes with a stale sidecar
+        digest refuses with the digest finding, never the pinned clean
+        pass. The fixture is date-exempt (before the gated-probe dates),
+        so the gated decode above never fires and the step-9 arm is the
+        one reached."""
+        import subprocess
+
+        root = Path(tempfile.mkdtemp(prefix="readiness-undecodable-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / ".ai-playbook").mkdir()
+        (root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        plans = root / "plans"
+        reviews = root / "reviews"
+        plans.mkdir()
+        reviews.mkdir()
+        plan, _ = plan_readiness._write_clean_state(
+            plans,
+            reviews,
+            plan_text="# P\n\nBody.\n",
+            digest_override="a" * 64,
+            date="2026-09-01",
+            slug="undecodable-exempt",
+        )
+        plan.write_bytes(b"# P\n\n\xff\xfe binary bytes\n")
+        ok, reason = evaluate_readiness(plan, plans, reviews)
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self.assertIn("sidecar source_digest is stale", reason)
 
 
 class _SidecarRepairFixture:
@@ -4678,8 +4794,17 @@ class PlanReadinessGradedTest(unittest.TestCase):
             Path(plan_readiness.__file__).resolve().parent.parent
             / "agents" / "skills"
         )
-        for skill_name in ("plans/SKILL.md", "review-plan/SKILL.md",
-                           "execute-plan/SKILL.md"):
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Tasks 3-4): both skills split load-on-dispatch, so their stale-clause absence legs sweep the router plus every module beside it (lesson 432: a single-file leg on a split skill is vacuous).
+        _skills_base = skills_root
+        _split_legs = (
+            [str(p.relative_to(_skills_base)) for p in sorted((_skills_base / "plans").glob("*.md"))]
+            + [str(p.relative_to(_skills_base)) for p in sorted((_skills_base / "execute-plan").glob("*.md"))]
+        )
+        # Loud-fail guard (lesson 432): a missing, renamed, or emptied
+        # directory must never read as a vacuous skip.
+        assert "plans/SKILL.md" in _split_legs and "execute-plan/SKILL.md" in _split_legs
+        assert len(_split_legs) > 2
+        for skill_name in ("review-plan/SKILL.md",) + tuple(_split_legs):
             skill_path = skills_root / skill_name
             try:
                 text = skill_path.read_text(encoding="utf-8")
@@ -5056,6 +5181,95 @@ class PlanReadinessOperatorAckTest(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 # --print-artifact-slug: the read-only slug SOT flag (CLI level).
 # --------------------------------------------------------------------------- #
+
+class FactsFailureNamesCheckoutTest(unittest.TestCase):
+    """The facts-resolution failure names the invoking checkout, its
+    linked-worktree fact, and both remedies; input anchoring itself does
+    not move (plan 2026-11-13-machinery-cli-operand-self-description
+    Task 3)."""
+
+    def _run_in(self, cwd: Path, plan: Path):
+        script = Path(__file__).resolve().parent / "plan_readiness.py"
+        return subprocess.run(
+            [sys.executable, str(script), str(plan)],
+            capture_output=True, text=True, timeout=60, cwd=str(cwd),
+        )
+
+    def test_facts_failure_names_checkout_and_remedies(self):
+        root = Path(tempfile.mkdtemp(prefix="facts-failure-fixture-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / ".gitignore").write_text(".ai-playbook/\n", encoding="utf-8")
+        (root / "README.md").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.email=t@t", "-c",
+             "user.name=t", "commit", "-qm", "init"],
+            check=True,
+        )
+        # The invoking checkout is a linked worktree of that repo.
+        worktree = root.parent / (root.name + "-wt")
+        subprocess.run(
+            ["git", "-C", str(root), "worktree", "add", "-q", str(worktree)],
+            check=True,
+        )
+        self.addCleanup(shutil.rmtree, worktree, True)
+        plan = worktree / "2026-01-01-demo-plan.md"
+        plan.write_text("# Plan: demo\n", encoding="utf-8")
+        proc = self._run_in(worktree, plan)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        # The verbatim lead line survives (the selftest#cli/missing_facts pin).
+        self.assertIn("cannot resolve plans_dir/reviews_dir", proc.stderr)
+        self.assertIn(str(worktree), proc.stderr)
+        self.assertIn("linked worktree", proc.stderr)
+        self.assertIn("transfer-in", proc.stderr)
+        self.assertIn("invoke from the checkout holding them", proc.stderr)
+
+    def test_anchoring_unchanged_when_inputs_present(self):
+        # The plan's named scenario: the gate invoked from a LINKED
+        # worktree whose facts and reviews are present resolves and runs
+        # from that worktree. The parent repo carries no facts of its own,
+        # so a silent primary-checkout fallback mutant loses the facts
+        # resolution and prints the cannot-resolve refusal; this fixture
+        # fails on exactly that move.
+        root = Path(tempfile.mkdtemp(prefix="facts-present-fixture-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / "README.md").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.email=t@t", "-c",
+             "user.name=t", "commit", "-qm", "init"],
+            check=True,
+        )
+        worktree = root.parent / (root.name + "-wt")
+        subprocess.run(
+            ["git", "-C", str(root), "worktree", "add", "-q", str(worktree)],
+            check=True,
+        )
+        self.addCleanup(shutil.rmtree, worktree, True)
+        # Gitignored inputs live ONLY in the worktree (the transfer-in shape).
+        (worktree / ".ai-playbook").mkdir()
+        (worktree / ".ai-playbook" / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        (worktree / ".ai-playbook" / "reviews").mkdir()
+        (worktree / "docs/history/plans").mkdir(parents=True)
+        plan = worktree / "docs/history/plans" / "2026-01-01-demo-plan.md"
+        plan.write_text("# Plan: demo\n", encoding="utf-8")
+        proc = self._run_in(worktree, plan)
+        # The facts resolution succeeds at the worktree (the failure, when
+        # it comes, is about the plan's own gates, never the facts block).
+        self.assertNotIn("cannot resolve plans_dir/reviews_dir", proc.stderr)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertTrue(
+            proc.stdout.rstrip().endswith("OUTCOME: fail"), proc.stdout
+        )
+
 
 class TestPrintArtifactSlug(unittest.TestCase):
     """The read-only slug print answers the canonical artifact slug."""
@@ -5571,8 +5785,16 @@ class ReviewTrajectoryPolicyFixtureTest(unittest.TestCase):
         self.assertIn("falling blocker count", fixture)
         self.assertIn("| H1, r5 | No progress; independent operator pause coincides", fixture)
         self.assertIn("| H2, r4 | No progress; independent operator pause before any checkpoint", fixture)
-        execute_plan = Path(__file__).resolve().parents[1] / "agents/skills/execute-plan/SKILL.md"
-        policy = execute_plan.read_text(encoding="utf-8")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the execute-plan skill split load-on-dispatch, so the presence witnesses read the router plus its modules.
+        execute_plan = "\n".join(
+            (Path(__file__).resolve().parents[1] / "agents/skills/execute-plan" / name).read_text(encoding="utf-8")
+            for name in (
+                "SKILL.md", "invocation-and-orchestration.md", "run-setup.md",
+                "implementation-loop.md", "phase-3-review.md", "archive-and-cleanup.md",
+                "launch-rules-and-gates.md", "recovery-and-integration.md",
+            )
+        )
+        policy = execute_plan
         self.assertIn("At every configured `max_review_rounds` or `max_full_panel_rounds` interval", policy)
         self.assertIn("record the reflection before deciding whether to continue", policy)
         self.assertIn("launches one host-native implementation worker at a time, in plan order", policy)
@@ -5595,9 +5817,25 @@ class ReviewTrajectoryPolicyFixtureTest(unittest.TestCase):
         self.assertIn("| Positive blocker counts are checked across two consecutive rounds | 2 to 1 decreases | 2 to 2 stays positive and flat | 2 to 1 does not trigger; 2 to 2 triggers reconciliation |", fixture)
         root = Path(__file__).resolve().parents[1]
         review_plan = (root / "agents/skills/review-plan/SKILL.md").read_text(encoding="utf-8")
-        plans = (root / "agents/skills/plans/SKILL.md").read_text(encoding="utf-8")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 3): the plans skill is the router plus its modules after the load-on-dispatch split, so the presence and absence witnesses read the whole corpus.
+        plans = "\n".join(
+            (root / "agents/skills/plans" / name).read_text(encoding="utf-8")
+            for name in (
+                "SKILL.md", "phase-0-placement.md", "phase-1-requirements.md", "plan-format.md",
+                "budget-gate.md", "plan-quality-gate.md", "task-design.md", "plan-lifecycle.md",
+                "universal-patterns.md", "handoff-and-done.md", "integration-points.md",
+            )
+        )
         review_loop = (root / "agents/skills/review-loop/SKILL.md").read_text(encoding="utf-8")
-        execute_plan = (root / "agents/skills/execute-plan/SKILL.md").read_text(encoding="utf-8")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the execute-plan skill split load-on-dispatch, so this witness reads the whole corpus (router plus modules).
+        execute_plan = "\n".join(
+            (root / "agents/skills/execute-plan" / name).read_text(encoding="utf-8")
+            for name in (
+                "SKILL.md", "invocation-and-orchestration.md", "run-setup.md",
+                "implementation-loop.md", "phase-3-review.md", "archive-and-cleanup.md",
+                "launch-rules-and-gates.md", "recovery-and-integration.md",
+            )
+        )
         receiving_review = (root / "agents/skills/receiving-review/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("When no prior blocker count exists, continue one review round to establish the trajectory baseline", review_plan)
         self.assertIn("at most one concrete simplification or refactor attempt", review_plan)
@@ -5628,7 +5866,8 @@ class PlanLaunchTemplateRecordContractWitnessTest(unittest.TestCase):
     clean on the first pass while a missing required field is rejected."""
 
     def test_launch_template_carries_validator_contract(self):
-        plans = (Path(__file__).resolve().parents[1] / "agents/skills/plans/SKILL.md").read_text(encoding="utf-8")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 3): the Plan Quality Gate section moved byte-verbatim to plan-quality-gate.md.
+        plans = (Path(__file__).resolve().parents[1] / "agents/skills/plans/plan-quality-gate.md").read_text(encoding="utf-8")
         self.assertIn("review_usage_capture.py mint", plans)
         self.assertIn("- review-run-id:", plans)
         self.assertIn("- review-started-at-ms:", plans)
@@ -6882,6 +7121,365 @@ class PlanFilesDeletionMarkerTest(unittest.TestCase):
         self.assertIsNone(
             plan_readiness.plan_ownership_problem(plan, self.root)
         )
+
+
+# --------------------------------------------------------------------------- #
+# Citation-series warning arm (machinery registry row
+# script:plan-readiness-citation-series-arm): the warning-only pre-round
+# probe naming a header citation token the closeout matcher expands to
+# zero members, driven through the CLI entries.
+# --------------------------------------------------------------------------- #
+
+
+def _citation_plan_text(record_line: str | None) -> str:
+    """Plan text with an optional `Plan review record:` line in the header
+    region (between the title and the first `## ` heading) that passes
+    every structural probe."""
+    header = "# P\n\n"
+    if record_line is not None:
+        header += f"{record_line}\n\n"
+    return (
+        f"{header}"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: none remain.\n\n"
+        "## Tasks\n\n"
+        "### Task 1: Do the thing\n\n"
+        "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+    )
+
+
+_WILDCARD_RECORD = (
+    "Plan review record: the staging series "
+    ".ai-playbook/reviews/*plan-review-myslug*-r*.md "
+    "(the highest rN for this source-plan path is authoritative)"
+)
+_TEMPLATE_RECORD = (
+    "Plan review record: the staging series "
+    ".ai-playbook/reviews/YYYY-MM-DD-plan-review-myslug-r*.md "
+    "(the highest rN for this source-plan path is authoritative)"
+)
+_CONCRETE_RECORD = (
+    "Plan review record: the staging series "
+    ".ai-playbook/reviews/2026-11-14-plan-review-myslug-r*.md "
+    "(the highest rN for this source-plan path is authoritative)"
+)
+
+
+def _citation_series_lines(text: str) -> list:
+    return [
+        line
+        for line in text.splitlines()
+        if "PRE-ROUND WARNING:" in line and "-r*.md" in line
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoint-anchor warning probe (machinery registry row
+# script:plan-checkpoint-anchor-arm): the warning-only report naming an
+# untracked plan (arm 1, naming the `wip:` checkpoint duty) or a tracked
+# plan whose history carries no round-start anchor (arm 2), driven through
+# BOTH CLI entries (the pre-round gate and the full gate's main pass path)
+# over scratch git repos, with unchanged exits.
+# --------------------------------------------------------------------------- #
+
+
+class PlanCheckpointAnchorWarningsTest(
+    _GitOverrideIsolationMixin, unittest.TestCase
+):
+    """The checkpoint-anchor arm at the CLI boundary: an untracked plan
+    warns once naming the untracked state and the `wip:` checkpoint duty
+    (arm 1); a tracked plan whose touching history carries no
+    `wip:`-prefixed commit and whose newest touching commit is not
+    landing-shaped warns once naming the missing round-start anchor
+    (arm 2); a `wip:` commit or an `execute-plan: land `-prefixed newest
+    subject stays silent; every failure path prints zero anchor lines and
+    every exit code is unchanged; the git consultation is keyed to the
+    PASSED repo root, never the process cwd."""
+
+    def setUp(self) -> None:
+        self._isolate_git_overrides()
+        self.repo = cr.build_scratch_repo(
+            self, name="checkpoint-anchor-fixture"
+        )
+        self.root = self.repo.root
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_fixture(self, plan_text: str) -> Path:
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=plan_text,
+            date="2026-09-26",
+            slug="checkpoint-anchor",
+        )
+        return plan
+
+    @staticmethod
+    def _anchor_lines(text: str) -> list:
+        return [
+            line
+            for line in text.splitlines()
+            if line.startswith("readiness CHECKPOINT-ANCHOR WARNING:")
+        ]
+
+    def test_untracked_plan_warns_on_both_entries(self):
+        # Arm 1: the plan file exists in the working tree but git
+        # ls-files over the fixture repo does not track it: one warning
+        # naming the untracked state and the `wip:` checkpoint duty, on
+        # both entries, exits unchanged.
+        plan = self._write_fixture(BALANCED_PLAN)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        lines = self._anchor_lines(err)
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("untracked", lines[0])
+        self.assertIn("`wip:`", lines[0])
+        self.assertIn("readiness PRE-ROUND OK", out)
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        lines = self._anchor_lines(err)
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("untracked", lines[0])
+        self.assertIn("`wip:`", lines[0])
+        self.assertIn("readiness OK", out)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+        self.assertNotIn("CHECKPOINT-ANCHOR", out)
+
+    def test_tracked_plan_with_wip_commit_silent_on_both_entries(self):
+        # The checkpoint duty ran: the plan path is tracked and its
+        # touching history carries a `wip:`-prefixed subject: both arms
+        # stay silent on both entries, stderr empty, exits unchanged.
+        plan = self._write_fixture(BALANCED_PLAN)
+        self.repo.commit_all("wip: checkpoint the plan draft")
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            self.assertEqual(err, "", (argv, err))
+            self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_tracked_plan_without_wip_warns_on_both_entries(self):
+        # Arm 2: the plan path is tracked but no `wip:`-prefixed commit
+        # touches it through HEAD and the newest touching subject is not
+        # landing-shaped: one warning naming the missing round-start
+        # anchor, on both entries, exits unchanged; the line never claims
+        # the untracked state.
+        plan = self._write_fixture(BALANCED_PLAN)
+        self.repo.commit_all("seed the plan draft")
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            lines = self._anchor_lines(err)
+            self.assertEqual(len(lines), 1, (argv, err))
+            self.assertIn("round-start anchor", lines[0])
+            self.assertIn("`wip:`", lines[0])
+            self.assertNotIn("untracked", lines[0])
+            self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_landing_shaped_newest_commit_silent_on_both_entries(self):
+        # The landed state: the newest touching commit's subject starts
+        # with `execute-plan: land ` (the squash absorbed the checkpoint
+        # history): arm 2 stays silent on both entries, stderr empty.
+        plan = self._write_fixture(BALANCED_PLAN)
+        self.repo.commit_all(
+            "execute-plan: land plans-authoring-checkpoint (detail)"
+        )
+        for argv in (["--pre-round", str(plan)], [str(plan)]):
+            rc, out, err = self._run_main(argv)
+            self.assertEqual(rc, 0, (out, err))
+            self.assertEqual(err, "", (argv, err))
+            self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_pre_round_failure_path_zero_anchor_warnings(self):
+        # A structural probe failure keeps the unchanged FAILED exit and
+        # prints zero anchor lines.
+        plan_text = BALANCED_PLAN.replace(
+            "Decision points requiring a grill: none remain.",
+            "Some high-confidence assumption with its basis.",
+        )
+        plan = self._write_fixture(plan_text)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness PRE-ROUND FAILED:", err)
+        self.assertEqual(self._anchor_lines(err), [], err)
+
+    def test_full_gate_failure_path_zero_anchor_warnings(self):
+        # A full-gate failure (staged review verdict no) keeps the
+        # unchanged FAILED exit and prints zero anchor lines, mirroring
+        # the files-coverage precedent's full-gate failure canary.
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=BALANCED_PLAN,
+            verdict="no",
+            date="2026-09-26",
+            slug="checkpoint-anchor-fail",
+        )
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness FAILED:", err)
+        self.assertEqual(self._anchor_lines(err), [], err)
+
+    def test_git_consults_the_passed_root_not_the_cwd(self):
+        # The probe's git consultation is keyed to the PASSED repo root
+        # (the classifier precedent of resolving plumbing from the
+        # operand): a tracked, landing-shaped plan in repo A stays
+        # silent while the process cwd sits inside an unrelated repo B
+        # (a cwd-keyed consultation would miss the path in B's index and
+        # warn on both arms).
+        plan = self._write_fixture(BALANCED_PLAN)
+        self.repo.commit_all(
+            "execute-plan: land plans-authoring-checkpoint (detail)"
+        )
+        other = cr.build_scratch_repo(self, name="unrelated-cwd-repo")
+        other.commit_file("README.md", b"seed\n", "seed readme")
+        prev = os.getcwd()
+        os.chdir(other.root)
+        try:
+            warnings = plan_readiness.plan_checkpoint_anchor_warnings(
+                plan, plan_readiness.repo_root(plan.parent)
+            )
+        finally:
+            os.chdir(prev)
+        self.assertEqual(warnings, [])
+
+
+class PlanCitationSeriesWarningsTest(_GitOverrideIsolationMixin, unittest.TestCase):
+    """The citation-series arm at the CLI boundary: a zero-member header
+    citation token warns once naming the token; live-series template and
+    concrete-date forms, prose-only tokens, an absent reviews home, and a
+    plan with no tokens stay silent; every failure path prints zero
+    citation lines with unchanged exits."""
+
+    def setUp(self) -> None:
+        self._isolate_git_overrides()
+        self.root = Path(tempfile.mkdtemp(prefix="citation-series-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_plan(self, plan_text: str) -> Path:
+        plan = self.root / "plans" / "2026-11-14-myslug.md"
+        plan.write_text(plan_text, encoding="utf-8")
+        return plan
+
+    def _plant_member(self, name: str) -> None:
+        (self.root / "reviews" / name).write_text("record\n", encoding="utf-8")
+
+    def test_zero_member_wildcard_warns_once(self):
+        plan = self._write_plan(_citation_plan_text(_WILDCARD_RECORD))
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        lines = _citation_series_lines(err)
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("*plan-review-myslug*-r*.md", lines[0])
+        self.assertIn("readiness PRE-ROUND OK", out)
+        self.assertNotIn("PRE-ROUND WARNING", out)
+
+    def test_live_series_template_and_concrete_silent(self):
+        self._plant_member("2026-11-14-plan-review-myslug-r1.md")
+        for record in (_TEMPLATE_RECORD, _CONCRETE_RECORD):
+            with self.subTest(record=record):
+                plan = self._write_plan(_citation_plan_text(record))
+                rc, out, err = self._run_main(["--pre-round", str(plan)])
+                self.assertEqual(rc, 0, (out, err))
+                self.assertEqual(_citation_series_lines(err), [], err)
+                self.assertIn("readiness PRE-ROUND OK", out)
+
+    def test_prose_only_tokens_silent(self):
+        # The scan surface equals the consumer's: a `-r*.md` token outside
+        # a header label line (a task item here) never warns.
+        self._plant_member("2026-11-14-plan-review-other-r1.md")
+        plan = self._write_plan(
+            "# P\n\n"
+            "## Assumptions\n\n"
+            "Decision points requiring a grill: none remain.\n\n"
+            "## Tasks\n\n"
+            "### Task 1: Do the thing\n\n"
+            "- [ ] Check `.ai-playbook/reviews/*plan-review-myslug*-r*.md` "
+            "prose. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_citation_series_lines(err), [], err)
+
+    def test_absent_reviews_home_silent(self):
+        (self.root / "reviews").rmdir()
+        plan = self._write_plan(_citation_plan_text(_WILDCARD_RECORD))
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_citation_series_lines(err), [], err)
+        self.assertIn("readiness PRE-ROUND OK", out)
+
+    def test_no_tokens_silent(self):
+        plan = self._write_plan(_citation_plan_text(None))
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_citation_series_lines(err), [], err)
+
+    def test_full_gate_pass_path_silent(self):
+        # The second wiring entry: the full gate's main pass path prints
+        # the same arm lines on stderr; a resolving header citation stays
+        # silent there (a zero-member series cannot reach this pass path —
+        # the full gate itself refuses it as a missing review artifact —
+        # which is why the loud direction targets the pre-round entry).
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=_citation_plan_text(_TEMPLATE_RECORD),
+            date="2026-11-19",
+            slug="myslug",
+        )
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_citation_series_lines(err), [], err)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+
+    def test_failure_path_zero_warnings(self):
+        # Force a structural probe failure: zero citation lines and the
+        # unchanged FAILED exit contract.
+        self._plant_member("2026-11-14-plan-review-myslug-r1.md")
+        plan = self._write_plan(
+            _citation_plan_text(_WILDCARD_RECORD).replace(
+                "Decision points requiring a grill: none remain.",
+                "Some high-confidence assumption with its basis.",
+            )
+        )
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("readiness PRE-ROUND FAILED:", err)
+        self.assertEqual(_citation_series_lines(err), [], err)
 
 
 if __name__ == "__main__":

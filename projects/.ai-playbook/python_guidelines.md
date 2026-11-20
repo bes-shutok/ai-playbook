@@ -967,3 +967,13 @@ This adds the missing Python-specific home for numeric representability: existin
 **Principle:** Family H (verify the real thing, not the abstraction; see `coding_guidelines.md` #25).
 
 Python numeric types and `math.isfinite()` do not prove a value is safe for downstream arithmetic or conversion. An oversized integer can overflow during float conversion, and a finite epoch can exceed the platform's datetime range. Before using external or persisted numbers in comparisons, ordering, arithmetic, or datetime conversion, validate the value against the actual operation's supported range and catch its conversion errors. For epoch values, exercise the real platform conversion (such as `datetime.fromtimestamp`) before using them for freshness or ordering decisions.
+
+## 42. Preserve Timezone Transitions for Future Local Occurrences
+
+Existing #41 covers numeric representability, and lesson #255 covers reading time-varying values at use time; neither preserves transition rules for future local occurrences.
+
+When computing a future local calendar occurrence, use a transition-aware `ZoneInfo` loaded from the system's IANA timezone data. Do not treat the `tzinfo` returned by `datetime.now().astimezone()` or `datetime.fromtimestamp(...).astimezone()` as the zone rule: Python may return a fixed-offset timezone for that instant, which cannot distinguish repeated daylight-saving minutes or model a future offset change. Use the same transition-aware zone to construct candidates and verify the next occurrence. If the system timezone rules cannot be loaded, fail closed when uniqueness depends on them.
+
+## 43. Decode Free-Form Subprocess Output with `errors="replace"`
+
+A `subprocess.run(..., text=True)` on output you do not control (commit subjects, log lines, user-authored file content surfaced by a VCS command) uses strict UTF-8 decoding and raises `UnicodeDecodeError` — a `ValueError` most error handlers do not catch — on any non-UTF-8 byte. Capture `bytes` and decode explicitly with `errors="replace"` when the text is advisory input to checks, warnings, or logs, so a malformed byte degrades one line instead of crashing the caller. Reserve strict decoding for output whose byte-identity is load-bearing.

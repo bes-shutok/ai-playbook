@@ -112,5 +112,5 @@ The files, primary class or type anchors, and documentation owned by one task an
 _Avoid_: overlapping task ownership
 
 **Independent task branch**:
-A branch containing its predecessor chain and current task, with later tasks absent, that passes task-specific validation and the repository-standard suite.
+A branch containing its predecessor chain and current task, with later tasks absent, that passes task-specific validation.
 _Avoid_: branch that needs a descendant task to build or pass validation

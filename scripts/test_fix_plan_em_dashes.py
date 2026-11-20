@@ -14,6 +14,7 @@ the backtick fence, tilde fence, inline code span, indented code block,
 and link destination arms place the character inside the region itself.
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -23,16 +24,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fix_plan_em_dashes  # noqa: F401  the module must exist to import
+import reconcile_execute_plan_handoff as recon
 
 FIXER = Path(__file__).resolve().parent / "fix_plan_em_dashes.py"
 
 EM = b"\xe2\x80\x94"
 
 
+def clean_python_environment():
+    env = os.environ.copy()
+    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE"):
+        env.pop(name, None)
+    return env
+
+
 def run_cli(*args):
     return subprocess.run(
         [sys.executable, str(FIXER)] + list(args),
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=clean_python_environment())
 
 
 class FixerTest(unittest.TestCase):
@@ -224,6 +233,103 @@ class FixerTest(unittest.TestCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertIn("total: 0 substitutions", proc.stdout)
         self.assertEqual(proc.stdout.splitlines()[-1], "OUTCOME: pass")
+
+    def test_preserve_tasks_keeps_checked_and_unchecked_sections_byte_identical(self):
+        checked = b"### Task 1: checked\r\n- [x] done %s here\r\n" % EM
+        unchecked = b"### Task 2: unchecked\n- [ ] do %s this\n" % EM
+        doc = (b"intro %s text\n\n" % EM + checked + b"\n## Notes\nbody %s\n\n" % EM
+               + unchecked + b"\n## Validation Commands\nrun %s\n" % EM)
+        expected = (b"intro, text\n\n" + checked + b"\n## Notes\nbody, \n\n"
+                    + unchecked + b"\n## Validation Commands\nrun, \n")
+        path = self.write("preserve.md", doc)
+        proc = run_cli("--preserve-tasks", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(proc.stdout.splitlines()[-1], "OUTCOME: pass")
+
+    def test_preserve_tasks_ends_at_non_task_level_three_heading(self):
+        task = b"### Task 1: checked\n- [x] keep %s here\n" % EM
+        notes = b"### Acceptance Criteria\nformat %s here\n" % EM
+        next_task = b"### Task 2: unchecked\n- [ ] keep %s here\n" % EM
+        path = self.write("non-task-heading.md", task + notes + next_task)
+        proc = run_cli("--preserve-tasks", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            path.read_bytes(),
+            task + b"### Acceptance Criteria\nformat, here\n" + next_task,
+        )
+        self.assertEqual(proc.stdout.splitlines()[-1], "OUTCOME: pass")
+
+    def test_preserve_tasks_keeps_indented_heading_inside_digest_scope(self):
+        task = b"### Task 1: checked\n- [x] keep %s here\n" % EM
+        indented = b"  ### Acceptance Criteria\nkeep %s here\n" % EM
+        next_task = b"### Task 2: unchecked\n- [ ] keep %s here\n" % EM
+        path = self.write("indented-heading.md", task + indented + next_task)
+        proc = run_cli("--preserve-tasks", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(path.read_bytes(), task + indented + next_task)
+
+    def test_preserve_tasks_ends_at_fenced_digest_heading(self):
+        task = b"### Task 1: checked\n- [x] keep %s here\n" % EM
+        fenced = b"```markdown\n### Example Heading\n````\n"
+        outside = b"format %s here\n" % EM
+        next_task = b"### Task 2: unchecked\n- [ ] keep %s here\n" % EM
+        path = self.write("fenced-heading.md", task + fenced + outside + next_task)
+        proc = run_cli("--preserve-tasks", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            path.read_bytes(), task + fenced + b"format, here\n" + next_task,
+        )
+
+    def test_preserve_spans_match_task_scope_digest_extractor(self):
+        cases = (
+            b"### Task 1: first\nkeep %s\n### Acceptance Criteria\nformat %s\n"
+            b"### Task 2: second\nkeep %s\n",
+            b"### Task 1: first\nkeep %s\n  ### Acceptance Criteria\nkeep %s\n"
+            b"### Task 2: second\nkeep %s\n",
+            b"### Task 1: first\nkeep %s\n```md\n### Example\n```\n"
+            b"format %s\n### Task 2: second\nkeep %s\n",
+        )
+        for index, template in enumerate(cases):
+            with self.subTest(case=index):
+                original = template % ((EM,) * 3)
+                path = self.write("digest-parity-%d.md" % index, original)
+                proc = run_cli("--preserve-tasks", str(path))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                updated = path.read_bytes().decode("utf-8")
+                original_text = original.decode("utf-8")
+                for task in (1, 2):
+                    self.assertEqual(
+                        recon._extract_task_section(updated, task),
+                        recon._extract_task_section(original_text, task),
+                    )
+
+    def test_default_mode_still_formats_inside_task_sections(self):
+        doc = b"### Task 1: checked\n- [x] done %s here\n" % EM
+        path = self.write("full-mode.md", doc)
+        proc = run_cli(str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(path.read_bytes(), b"### Task 1: checked\n- [x] done, here\n")
+
+    def test_preserve_tasks_rejects_malformed_or_ambiguous_heading_before_write(self):
+        for name, doc, message in (
+                ("malformed.md", b"outside %s\n### Task one: bad\n" % EM,
+                 "malformed task heading"),
+                ("indented.md", b"outside %s\n  ### Task one: bad\n" % EM,
+                 "malformed task heading"),
+                ("lowercase.md", b"outside %s\n### task 1: bad\n" % EM,
+                 "malformed task heading"),
+                ("control.md", b"outside %s\n### Task \x1b[2Jbad\n" % EM,
+                 "malformed task heading"),
+                ("duplicate.md", b"### Task 1: first\n\n### Task 1: second\n",
+                 "ambiguous task heading")):
+            with self.subTest(name=name):
+                path = self.write(name, doc)
+                proc = run_cli("--preserve-tasks", str(path))
+                self.assertEqual(proc.returncode, 3)
+                self.assertIn(message, proc.stderr)
+                self.assertNotIn("\x1b", proc.stderr)
+                self.assertEqual(path.read_bytes(), doc)
 
 
 if __name__ == "__main__":

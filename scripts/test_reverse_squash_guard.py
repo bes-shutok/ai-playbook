@@ -2434,6 +2434,32 @@ class SingleCommitSweepTest(unittest.TestCase):
                          "execution")
         self.assertIsNone(rsg.anchor_kind("wip: unrelated work"))
 
+    def test_adhoc_landing_anchors_with_execution_kind(self):
+        # The planless ad-hoc landing prefix anchors the sweep with the
+        # execution kind: the subject classifies as a landing claim, a
+        # slug-linked closeout follow-up flags (an execution-only class),
+        # and the anchor is never refused as not a landing-claiming
+        # commit.
+        tmp = tempfile.mkdtemp()
+        repo = ScratchRepo(tmp)
+        repo.commit_all("base")
+        repo.write("l.txt", "l\n")
+        landing = repo.commit_all(
+            "adhoc: land witnessed-plan (the ad-hoc landing)")
+        repo.write("a.txt", "a\n")
+        hit = repo.commit_all("done: archive witnessed-plan to completed")
+        self.assertTrue(rsg.is_landing_claim(
+            "adhoc: land witnessed-plan (the ad-hoc landing)"))
+        self.assertEqual(rsg.anchor_kind("adhoc: land witnessed-plan"),
+                         "execution")
+        proc = run_guard("check-single-commit", "--rev", landing,
+                         "--repo", str(repo.root))
+        self.assertEqual(proc.returncode, 1, proc.stdout.decode())
+        out = proc.stdout.decode()
+        self.assertIn("[archive]", out)
+        self.assertIn(hit[:12], out)
+        self.assertNotIn("not a landing-claiming commit", out)
+
     def test_execute_plan_landing_anchors_with_execution_kind(self):
         # The witnessed execute-plan landing subject anchors the sweep with
         # the execution kind: a slug-linked closeout follow-up flags (an

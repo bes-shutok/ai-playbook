@@ -96,3 +96,7 @@ python3 -m py_compile scripts/friction_audit_quant.py
 ```
 
 During implementation, select and run the repository's focused behavioral validation for `_message_class`; keep supporting test paths and exact test commands in the execution record, not this plan.
+
+## Disposition of migrated backlog items
+
+Origin row docs/history/backlog/2026-10-09-friction-audit-quant-message-class-normalization.md: completed by this plan's own implementation - the message-class normalization landed in scripts/friction_audit_quant.py (the `_message_class` helper and the 1302/1308 provider-code literals are present on disk, re-derived 2026-11-11 by the coverage-gate corpus pass executing docs/history/plans/2026-11-08-coverage-gate-scope-row-and-pick-time-probe.md), so the row folds here and is deleted from the backlog top level.

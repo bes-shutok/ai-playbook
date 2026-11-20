@@ -242,7 +242,7 @@ Read [`SKILL.md`](SKILL.md) first. Use [`references/mvp-agent-blueprint.md`](ref
 
 ## About Agent Skills
 
-Agent Skills package reusable domain knowledge so compatible agents can discover, load, and apply a workflow only when it is relevant. This repository uses the portable `SKILL.md` entrypoint and works as a Codex skill, a Claude Code skill, or a skill for other Agent-Skill-aware runtimes.
+Agent Skills package reusable domain knowledge. Compatible agents can find, load, and apply a workflow when it is relevant. This repository uses the portable `SKILL.md` entrypoint. It works with Codex, Claude Code, and other runtimes that support Agent Skills.
 
 ## Sources
 

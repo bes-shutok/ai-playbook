@@ -63,7 +63,6 @@ Placeholders:
 | `<TASK_BODY>` | Full markdown for this `### Task N:` section |
 | `<VALIDATION_COMMANDS>` | Contents of `## Validation Commands` fenced block |
 | `<REVIEW_SCOPE>` | Contents of `## Review Scope` section |
-| `<PLAN_SLUG>` | Short slug for review filenames |
 | `<REVIEW_ROUND>` | Integer, starting at 1 |
 | `<REVIEW_DOC_PATH>` | Output path for this review round |
 | `<COMMIT_HINT>` | Plan commit line or derived message |
@@ -72,7 +71,7 @@ Placeholders:
 | `<IMPLEMENT_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
 | `<INTER_REVIEW_WORKER>` | Lens id of one Step 1.2b intermediate review worker (e.g. `correctness-completeness`); maps to its Required lenses in review-panel-selection.md |
 | `<TASK_FILES>` | The task's canonical `Files:` list; also the path restriction of the Step 1.2b changed-context diff |
-| `<TASK_VALIDATION_OUTPUT>` | Fresh output of the task's validation commands, passed from the Step 1.2 implement result |
+| `<TASK_VALIDATION_OUTPUT>` | Fresh output of the task's validation commands, passed from the Step 1.2 implement result; when the implement return carries precedent receipts, the parent quotes them beside this output, and the worker spot-checks at most one receipt against its cited sibling file |
 | `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | `<BRIEFING_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/briefing.md`; the orchestrator-maintained run briefing (SKILL.md Step 0.4) every worker prompt cites as run context beside the plan |
@@ -87,7 +86,7 @@ Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). I
 
 ## Stack-task execution (parent routing)
 
-When invoked with `--stack-task <plan-path> --task <N>`, the parent first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task Inclusion Hard Gate. Adopt the caller's registered worktree, exact task branch, and run context; never reset to base or create a conflicting claim. For an existing stack run, require the caller's verified `stack_branch_transition:` row and matching claim and manifest branch fields before treating the branch as adopted. Run the worker and required intermediate review for only task N. Resolve and record task-specific checks, scope-intersecting plan commands, and the complete repository-standard command set from authoritative guidance and inventory. Record both validation sets before commit; after the parent-owned light boundary, bind the evidence to its commit SHA and branch head in the return. Any failure, unavailable command, or incomplete inventory blocks; after repair rerun both sets. This mode exits after one boundary under the explicit-mode exception to full-plan continuation and terminal gates. No later task, full-plan phase, archive, or PR action. `execute-plan-stack` may consume the interface but is not required.
+When invoked with `--stack-task <plan-path> --task <N>`, the parent first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task Inclusion Hard Gate. Adopt the caller's registered worktree, exact task branch, and run context; never reset to base or create a conflicting claim. For an existing stack run, require the caller's verified `stack_branch_transition:` row and matching claim and manifest branch fields before treating the branch as adopted. Run the worker and required intermediate review for only task N. Resolve and record the validation the target's suite policy requires for this boundary: task-specific checks and scope-intersecting plan commands, never a universal complete-suite run; at the run's final stack-task boundary under `full-before-final`, the policy's final-boundary obligation additionally records the complete-suite run. Record the boundary's validation set before commit; after the parent-owned light boundary, bind the evidence to its commit SHA and branch head in the return. Any failure or unavailable command blocks; after repair rerun the boundary's validation set. This mode exits after one boundary under the explicit-mode exception to full-plan continuation and terminal gates. No later task, full-plan phase, archive, or PR action. `execute-plan-stack` may consume the interface but is not required.
 
 ## Implement Task
 
@@ -146,6 +145,7 @@ success | blocked
 - Selected test identities: which tests the commands selected
 - Changed paths: every path changed against the pre-task baseline
 - Plan-criterion coverage: which task criteria each changed path satisfies; map every acceptance criterion the implement step owns, and an implement-owned criterion this return cannot satisfy routes the return to `status=blocked` with a Blockers entry naming the criterion, never a silent omission
+- Precedent receipts (optional; new patterns only): one line per new class kind, library use, or annotation attribute, in the form `<pattern>: <sibling path>: match | diverges (<one-line reason>) | none found`; an absent receipt never blocks this return
 
 ### Implemented clauses
 - (list each `- [ ]` item you completed)
@@ -172,6 +172,7 @@ Use from the execute-plan **parent** during Step 1.2b, after Step 1.2 verificati
 You are one intermediate task review worker for an execute-plan Step 1.2b pass.
 
 Worker lens: <INTER_REVIEW_WORKER>
+Log: the emit-early path the parent names in this prompt (a per-worker path, never the Phase 3 review log); append verified-so-far findings to it before each deep verification pass, so a cut-off leg leaves recoverable output
 Plan: <PLAN_PATH>
 Run briefing: <BRIEFING_PATH> (read for run context: decisions, folds, conventions; the Changed context section below remains the complete review scope)
 Task: ### Task <TASK_NUM>: <TASK_TITLE>
@@ -195,13 +196,13 @@ Read and apply ~/.agents/skills/review-agents/severity-calibration.md and the le
 3. Every finding carries a calibrated severity, an independent blocking flag (blocking is a severity-independent decision), and a plan-related yes/no answer.
 4. Do not fix code, do not edit the plan, do not commit. This pass creates no staging doc and no `.stats.json` sidecar; those remain Phase 3 obligations. The checked-out working tree is read-only for the whole pass, temporary apply-and-revert edits included: a mutation or discrimination check that needs an edited file runs on a scratch copy of the repository (plain copy or separate worktree; prefer the plain directory copy, and when a separate `git worktree add` is genuinely needed create it under the session's tmp directory so the run's own closeout sweep removes it, never under an untracked /tmp path the run has no record of), and a worker without a scratch copy reasons about the mutation instead of applying it.
 5. Never write `task-<N>-review.log.md`; the orchestrator owns that log path. Return findings only.
-6. Valid findings inside the changed context that are not plan-related are never fixed in-task and never silently dropped: return each as a backlog candidate with a suggested driving force from the Backlog driving-force taxonomy in ~/.agents/skills/receiving-review/SKILL.md. The parent captures them per receiving-review **Backlog capture**; you never write the backlog.
+6. Valid findings inside the changed context that are not plan-related are never fixed in-task and never silently dropped: return each as a backlog candidate with a suggested driving force from the Backlog driving-force taxonomy in ~/.agents/skills/receiving-review/SKILL.md. The parent captures them per receiving-review **Backlog capture**; you never write the backlog. The one exit is the in-diff carve-out: a non-blocking finding about text or code this task's own diff adds or changes, whose own fix fits within the cap of Step 1.2b's in-diff carve-out, is returned plan-related yes with causal link "in-diff carve-out" so the parent fixes it in-task, the parent enforcing the cap's summed count at application.
 
 ## Return
 
 ### Verdict
 clean | blocking | backlogged-candidates
-(clean = no valid findings; blocking = at least one unresolved blocking finding; backlogged-candidates = valid findings present, none blocking; plan-related non-blocking findings are recorded in the pass record and left for the mandatory Phase 3 pass, off-plan candidates await parent capture)
+(clean = no valid findings; blocking = at least one unresolved blocking finding; backlogged-candidates = valid findings present, none blocking; plan-related non-blocking findings are recorded in the pass record and left for the mandatory Phase 3 pass, or for the stack-final fresh review in stack-task mode, except findings carrying the in-diff carve-out link, which the parent fixes in-task; off-plan candidates await parent capture)
 
 ### Findings
 One self-contained entry per finding:
@@ -209,6 +210,10 @@ One self-contained entry per finding:
 - Evidence: quoted diff or validation lines and the concrete consequence
 - For plan-related: no (backlog candidate): suggested driving force from the Backlog driving-force taxonomy (primary force, plus a secondary force when one exists) and a one-line concern statement
 - For plan-related: yes: the causal link to the task or plan
+
+### Unverified runtime claims
+`unverified-runtime: <claim>; <claim> | none`
+Populated only when the pass ran static only: list each runtime-dependent claim the round could not exercise (for example a response-class or retry behavior only a live call could witness); `none` otherwise.
 
 ### Validation
 - Re-ran the task's validation commands, or trusted the passed fresh output (state which)
@@ -358,6 +363,7 @@ Plan: <PLAN_PATH>
 Run briefing: <BRIEFING_PATH> (read for run context: decisions, folds, conventions; the Scope section remains the review scope)
 Scope summary: <SCOPE_SUMMARY> (the parent-assembled must-fix versus out-of-scope list for this round; each deferred capability names its owning backlog reference; report a finding whose subject the summary marks out of scope as out-of-scope-adjudicated, naming the owning backlog reference and the residual risk, rather than as blocking for this execution)
 Base: <BASE_BRANCH>
+Log: the emit-early path the parent names in this prompt (a per-worker path, never the Phase 3 review log); append verified-so-far findings to it before each deep verification pass, so a cut-off leg leaves recoverable output
 Head: HEAD
 Diff: git diff <BASE_BRANCH>...HEAD
 

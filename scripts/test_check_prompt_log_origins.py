@@ -11,13 +11,18 @@ with its ``Origins:`` list. Origins are cited in the corpus style
 the fixture log, exercising the checker's basename resolution. Every
 fixture git and checker subprocess runs under the shared sanitized
 environment (``fixture_env``): inherited ``GIT_*`` variables stripped
-and system/global git configuration disabled.
+and system/global git configuration disabled. The fixture-only
+subprocess contract scopes to the origin, prune-audit, receipt-repair,
+and collateral classes; ``TestPromptLogStandingRulesPreamble`` reads
+committed repository log bytes directly (a conscious widening that
+accepts red on checkouts without the preamble relocation).
 """
 
 from __future__ import annotations
 
 import io
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -3797,3 +3802,572 @@ class TestTipRecognition:
         assert "REMOVED-WITHOUT-WITNESS: solo-prune" in proc.stdout
         assert "(tip receipt)" not in proc.stdout
         assert self.final_line(proc) == "OUTCOME: fail"
+
+
+class TestPromptLogStandingRulesPreamble:
+    """The Standing rules preamble placement invariants over the real
+    committed prompt log.
+
+    The real-repo reads in this class are a conscious widening of the
+    module's fixture-only subprocess contract (which scopes to the
+    origin, prune-audit, receipt-repair, and collateral classes): this
+    class reads the committed repository log bytes directly through
+    ``git show HEAD:<path>`` and accepts red on checkouts without the
+    preamble relocation. The repo root resolves as the suite file's
+    grandparent directory and is passed explicitly to git (never
+    cwd-resolved); the read runs under the suite's shared sanitized
+    environment (``fixture_env``); the class never writes to the real
+    repository (mutated copies live in scratch fixtures only).
+    """
+
+    LABELS = (
+        "Order:",
+        "Prune rule:",
+        "Coverage and removal rule:",
+        "Freeze rule:",
+        "Not a backlog item:",
+        "Writes are targeted section edits",
+        "Before every write",
+        "Every log write is committed",
+        "Write boundary rule:",
+        "Entries carry repo-relative paths",
+        "An entry is a prompt",
+        "Receipt vocabulary",
+    )
+    ORIENTATION_MARKER = "outside every entry range"
+    BLOCK_HEADER = "Standing rules:"
+    RECEIPT_PREFIX = "PLAN-PROMPTS-PRUNE:"
+
+    def committed_log(self) -> str:
+        """The real committed log bytes at HEAD, read through the suite
+        file's grandparent repo root under the sanitized environment."""
+        repo_root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "show", f"HEAD:{LOG_REL}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert proc.returncode == 0, proc.stderr
+        return proc.stdout
+
+    def block_span(self, lines: list[str]) -> tuple[int, int]:
+        """The Standing rules block's line span: the header line plus
+        its contiguous bullet lines (blank lines between bullets
+        included)."""
+        start = next(
+            i for i, line in enumerate(lines) if line.strip() == self.BLOCK_HEADER
+        )
+        end = start + 1
+        while end < len(lines):
+            line = lines[end]
+            if line.startswith("- ") or (line.strip() == "" and end + 1 < len(lines) and lines[end + 1].startswith("- ")):
+                end += 1
+                continue
+            break
+        return start, end
+
+    def preamble_bounds(self, lines: list[str]) -> tuple[int, int]:
+        """The preamble region: after the title line, before the first
+        ``## `` entry heading."""
+        first_heading = next(
+            i for i, line in enumerate(lines) if line.startswith("## ")
+        )
+        return 1, first_heading
+
+    def test_placement_exactly_one_block_in_preamble(self):
+        lines = self.committed_log().splitlines()
+        header_lines = [
+            i for i, line in enumerate(lines) if line.strip() == self.BLOCK_HEADER
+        ]
+        assert len(header_lines) == 1, f"expected one block, found {len(header_lines)}"
+        start, _ = self.block_span(lines)
+        lo, hi = self.preamble_bounds(lines)
+        assert lo <= start < hi, (
+            f"Standing rules block at line {start} is not in the preamble "
+            f"region (lines {lo}..{hi})"
+        )
+        first_heading = hi
+        after = [line for line in lines[first_heading:]]
+        assert not any(line.lstrip().startswith("- Order:") for line in after), (
+            "Order bullet bytes appear after the first entry heading"
+        )
+
+    def test_label_set_in_preamble_block(self):
+        lines = self.committed_log().splitlines()
+        start, end = self.block_span(lines)
+        block = "\n".join(lines[start:end])
+        for label in self.LABELS:
+            assert any(
+                line.lstrip().startswith("- " + label) for line in lines[start:end]
+            ), f"missing rule bullet: {label}"
+        assert block.strip() != ""
+
+    def test_hermeticity_pins(self):
+        source = Path(__file__).read_text(encoding="utf-8")
+        assert "Path(__file__).resolve().parent.parent" in source, (
+            "repo root must resolve as the suite file's grandparent directory"
+        )
+        assert '"git", "-C", str(repo_root), "show"' in source, (
+            "git must receive the repo root explicitly, never cwd-resolve it"
+        )
+        cls_start = source.index("class TestPromptLogStandingRulesPreamble")
+        cls_source = source[cls_start:]
+        assert "fixture_env()" in cls_source, (
+            "real-repo reads must run under the sanitized environment helper"
+        )
+        writes = [
+            line
+            for line in cls_source.splitlines()
+            if re.match(r"\s*\S+\.write_(text|bytes)\(", line)
+        ]
+        for line in writes:
+            assert "repo /" in line or "log_path" in line or "path" in line, (
+                f"unexpected real-repo write in the preamble class: {line}"
+            )
+
+    def _scratch_repo(self, tmp_path: Path, log_text_value: str) -> tuple[Path, str]:
+        repo = tmp_path
+        git = lambda *args: subprocess.run(  # noqa: E731
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        assert git("-c", "init.defaultBranch=main", "init").returncode == 0
+        path = repo / LOG_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(log_text_value, encoding="utf-8")
+        git("add", "-A")
+        assert git(
+            "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "-m", "base: pristine committed log bytes",
+        ).returncode == 0
+        base = git("rev-parse", "HEAD").stdout.strip()
+        return repo, base
+
+    def _commit_file(self, repo: Path, rel: str, text: str, message: str) -> None:
+        (repo / rel).write_text(text, encoding="utf-8")
+        git = lambda *args: subprocess.run(  # noqa: E731
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=fixture_env(),
+        )
+        git("add", "-A")
+        assert git(
+            "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "-m", message,
+        ).returncode == 0
+
+    def _first_entry_range(self, lines: list[str]) -> tuple[int, int]:
+        first_heading = next(
+            i for i, line in enumerate(lines) if line.startswith("## ")
+        )
+        nxt = next(
+            (i for i, line in enumerate(lines[first_heading + 1:], first_heading + 1)
+             if line.startswith("## ")),
+            len(lines),
+        )
+        return first_heading, nxt
+
+    def _simulated_prune(self, text: str, slug: str, witness: str) -> tuple[str, list[str]]:
+        """Remove the first entry's heading range, relocating every
+        receipt line byte-for-byte in original order outside the removed
+        span and adding the removal receipt."""
+        lines = text.splitlines(keepends=True)
+        start, end = self._first_entry_range(lines)
+        receipts = [
+            line for line in lines[start:end] if line.startswith(self.RECEIPT_PREFIX)
+        ]
+        removal_receipt = f"{self.RECEIPT_PREFIX} {slug} -> {witness}\n"
+        kept = lines[:start] + receipts + [removal_receipt] + lines[end:]
+        return "".join(kept), receipts
+
+    def test_prune_survival_and_nonvacuous(self, tmp_path):
+        pristine = self.committed_log()
+        pristine_lines = pristine.splitlines()
+        start, end = self.block_span(pristine_lines)
+        block_before = "".join(pristine_lines[start:end])
+        # Non-vacuous: the preamble block is asserted present and
+        # non-empty before the mutation, so the survival assertion fails
+        # at RED rather than passing over an absent block.
+        assert block_before.strip() != ""
+        # The removed entry needs a covered witness in the scratch tree
+        # for the prune audit to accept the removal.
+        entry_lines = pristine_lines
+        fstart, fend = self._first_entry_range(entry_lines)
+        slug = entry_lines[fstart][len("## "):].strip()
+        origins = [
+            line.strip().lstrip("- ").strip()
+            for line in entry_lines[fstart:fend]
+            if line.strip().startswith("- docs/history/backlog/")
+        ]
+        plan_rel = f"docs/history/plans/2026-01-01-{slug}.md"
+        plan_text = (
+            "# fixture covering plan\n\nBacklog origin:\n"
+            + "".join(f"- {origin}\n" for origin in origins)
+        )
+        repo, base = self._scratch_repo(tmp_path, pristine)
+        (repo / plan_rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / plan_rel).write_text(plan_text, encoding="utf-8")
+        self._commit_file(
+            repo, plan_rel, plan_text, "add the covering plan file"
+        )
+        mutated, receipts = self._simulated_prune(pristine, slug, plan_rel)
+        self._commit_file(repo, LOG_REL, mutated, f"prune the first entry ({slug})")
+        mutated_lines = mutated.splitlines()
+        mstart, mend = self.block_span(mutated_lines)
+        block_after = "".join(mutated_lines[mstart:mend])
+        assert block_after == block_before, "preamble Standing rules bytes changed"
+        # Receipt-preservation witness: every pre-existing receipt line
+        # relocated byte-for-byte and in original order outside the
+        # removed span, with the removal receipt added.
+        first_remaining = next(
+            i for i, line in enumerate(mutated_lines) if line.startswith("## ")
+        )
+        preamble_receipts = [
+            line for line in mutated_lines[1:first_remaining]
+            if line.startswith(self.RECEIPT_PREFIX)
+        ]
+        assert preamble_receipts[: len(receipts)] == receipts, (
+            "pre-existing receipts not preserved byte-for-byte in order"
+        )
+        assert preamble_receipts[-1].startswith(
+            f"{self.RECEIPT_PREFIX} {slug} -> "
+        ), "the removal receipt is missing"
+
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--prune-audit", "--base", base,
+             str(repo / LOG_REL)],
+            capture_output=True, text=True, timeout=60, env=fixture_env(),
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert slug in proc.stdout
+        assert "OUTCOME: pass" in proc.stdout
+
+    def test_anti_shape_block_inside_first_entry_range(self, tmp_path):
+        inside_block = (
+            "Standing rules:\n\n"
+            "- Order: fixture order rule\n"
+            "- Prune rule: fixture prune rule\n\n"
+        )
+        first_entry = (
+            "## first-entry\n\n"
+            "Added: fixture\n\n"
+            "Origins:\n- docs/history/backlog/2026-01-01-anti-shape-origin.md\n\n"
+            f"{inside_block}"
+            "Prompt: fixture\n\n"
+        )
+        second_entry = (
+            "## second-entry\n\n"
+            "Added: fixture\n\n"
+            "Origins:\n- docs/history/backlog/2026-01-01-anti-shape-origin.md\n\n"
+            "Prompt: fixture\n\n"
+        )
+        text = "Tracked rolling log fixture.\n\n" + first_entry + second_entry
+        lines = text.splitlines()
+        start, end = self.block_span(lines)
+        block_bytes = "".join(lines[start:end])
+        assert block_bytes.strip() != ""
+        stripped, _ = self._simulated_prune(
+            text, "first-entry", "docs/history/plans/fixture.md"
+        )
+        assert "- Order: fixture order rule" not in stripped, (
+            "the anti-shape must lose the block bytes with the entry range"
+        )
+
+    def test_orientation_line_pin(self):
+        lines = self.committed_log().splitlines()
+        start, _ = self.block_span(lines)
+        assert start >= 1
+        above = lines[start - 1]
+        assert self.ORIENTATION_MARKER in above, (
+            f"the line above the block must name the canonical home "
+            f"'{self.ORIENTATION_MARKER}'; got: {above!r}"
+        )
+
+
+class TestPruneAuditHeadlessBodyDetector:
+    """The warning-only headless-body arms over one commit's log pre-
+    and post-images (the 2026-11-15 prompt-log-prune-audit-headless-body-
+    detector row): a body-form line moved outside any entry region, and
+    a removed heading whose section body survives. Warning-only: the
+    lines never change the prune-audit exit code.
+
+    Helper-surface widening: unlike the CLI-driven classes above, most
+    cells here import the module and call ``headless_body_warnings``
+    directly, because the arms are pure pre-/post-image functions; one
+    cell still drives the real ``--prune-audit`` CLI end to end to pin
+    the warning line's passage and the unchanged exit code."""
+
+    def glued_prune_text(self) -> tuple[str, str]:
+        """The witnessed shape: the slice removes the heading while
+        keeping the body, gluing it under the receipt/header region."""
+        before = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"]), entry("beta-entry", ["2026-11-02-beta.md"])])
+        body = [
+            "Added: fixture provenance",
+            "",
+            "Origins:",
+            "- docs/history/backlog/2026-11-02-beta.md",
+            "",
+            "Urgency: fixture",
+            "",
+            "Prompt: fixture payload",
+            "",
+        ]
+        after = (
+            log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+            + "".join(f"{line}\n" for line in body)
+        )
+        return before, after
+
+    def test_witnessed_headless_prune_warns_section_arm(self):
+        before, after = self.glued_prune_text()
+        import check_prompt_log_origins as m
+        messages = m.headless_body_warnings(before, after)
+        joined = "\n".join(messages)
+        assert (
+            "HEADLESS-BODY-SECTION: entry body survives without its "
+            "heading: beta-entry" in joined
+        ), joined
+        # Only the removed entry's own bytes warn, never alpha's body
+        # or header prose or receipt lines.
+        for message in messages:
+            assert "2026-11-01-alpha" not in message, message
+
+    def test_body_line_moved_outside_entry_warns_outside_arm(self):
+        entry_text = entry("alpha-entry", ["2026-11-01-alpha.md"])
+        before = log_text([entry_text, entry("beta-entry", ["2026-11-02-beta.md"])])
+        # A genuine relocation: beta's unique body line leaves beta's
+        # section and reappears in the header region (the splice
+        # shape's relocation half).
+        moved = "- docs/history/backlog/2026-11-02-beta.md"
+        assert before.count(moved) == 1
+        after = before.replace(moved + "\n", "", 1)
+        after = after.replace(
+            "Tracked rolling log fixture.\n\n",
+            "Tracked rolling log fixture.\n\n" + moved + "\n\n",
+            1,
+        )
+        import check_prompt_log_origins as m
+        messages = m.headless_body_warnings(before, after)
+        assert any("HEADLESS-BODY-OUTSIDE-ENTRY" in m for m in messages), messages
+
+    def test_clean_whole_section_prune_warns_nothing(self):
+        before = log_text(
+            [
+                entry("alpha-entry", ["2026-11-01-alpha.md"]),
+                entry("beta-entry", ["2026-11-02-beta.md"]),
+            ]
+        )
+        after = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+        import check_prompt_log_origins as m
+        assert m.headless_body_warnings(before, after) == []
+
+    def test_superseded_merge_and_header_prose_exempt(self):
+        # The editorial merge shape: two entries removed while one added
+        # entry carries both removed entries' origin lines (net heading
+        # decrease with an added heading), plus fresh header prose:
+        # all exempt.
+        before = log_text(
+            [
+                entry("alpha-entry", ["2026-11-01-alpha.md"]),
+                entry("beta-entry", ["2026-11-02-beta.md"]),
+            ]
+        )
+        merged = entry(
+            "gamma-entry",
+            ["2026-11-01-alpha.md", "2026-11-02-beta.md"],
+        )
+        after = log_text([merged])
+        after = after.replace(
+            "Tracked rolling log fixture.\n\n",
+            "Tracked rolling log fixture.\n\nFresh header note.\n\n",
+            1,
+        )
+        import check_prompt_log_origins as m
+        assert m.headless_body_warnings(before, after) == []
+
+    def test_receipt_line_in_header_region_never_warns(self):
+        before = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+        # A newly added receipt ledger line in the header region is the
+        # sanctioned receipt-block growth shape: exempt.
+        after = before.replace(
+            "Tracked rolling log fixture.\n\n",
+            "Tracked rolling log fixture.\n\n"
+            "EXEC-PROMPTS-PRUNE: gamma-entry -> landing\n\n",
+            1,
+        )
+        import check_prompt_log_origins as m
+        assert m.headless_body_warnings(before, after) == []
+
+    def test_template_fence_headings_are_not_entries(self):
+        # The entry-template fence carries a `## ` line; the detector's
+        # fence-aware bounds must never treat it as an entry heading.
+        text = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+        import check_prompt_log_origins as m
+        assert m.headless_body_warnings(text, text) == []
+        first, count = m.entry_region_bounds(text.splitlines())
+        fence_heading_index = next(
+            i for i, line in enumerate(text.splitlines()) if line.strip() == "## <short-slug>"
+        )
+        # The fence heading sits before the first real entry heading
+        # and the bounds count exactly one entry heading.
+        assert fence_heading_index < first, (first, fence_heading_index)
+        assert count == 1, count
+
+    def test_prune_audit_exit_unchanged_with_warning_line(self, tmp_path):
+        repo = tmp_path
+        subprocess.run(
+            ["git", "-c", "init.defaultBranch=main", "init", str(repo)],
+            check=True, capture_output=True, env=fixture_env(),
+        )
+        log_path = repo / LOG_REL
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        before, after = self.glued_prune_text()
+        log_path.write_text(before, encoding="utf-8")
+        env = fixture_env()
+
+        def commit(message: str) -> str:
+            subprocess.run(
+                ["git", "add", "-A"], cwd=repo, check=True,
+                capture_output=True, env=env,
+            )
+            subprocess.run(
+                ["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.test", "commit", "-m", message],
+                cwd=repo, check=True, capture_output=True, env=env,
+            )
+            return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+        base = commit("seed the log")
+        _before, glued_after = self.glued_prune_text()
+        log_path.write_text(
+            glued_after + "EXEC-PROMPTS-PRUNE: beta-entry -> landing\n",
+            encoding="utf-8",
+        )
+        commit("glue beta body under the header")
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--prune-audit", "--base", base, str(log_path)],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        lines = proc.stdout.rstrip().splitlines()
+        assert lines[-1] == "OUTCOME: pass", proc.stdout + proc.stderr
+        assert any("HEADLESS-BODY-SECTION" in line for line in lines), proc.stdout
+        assert any("warning(s)" in line for line in lines), proc.stdout
+
+
+class TestPruneAuditCollateralReceiptDetector:
+    """The warning-only collateral-receipt arm over one commit's log
+    pre- and post-images (the 2026-11-17
+    prune-audit-collateral-sibling-receipt-deletion-undetected row): a
+    commit pruning an entry must not silently eat sibling durable
+    receipt lines naming other slugs. Warning-only: never an exit-code
+    input. Pure pre-/post-image cells like the headless-body class."""
+
+    @staticmethod
+    def _witnessed_pair() -> tuple[str, str]:
+        """The witnessed splice shape: the inventory-count entry's
+        section (with two sibling receipts for other slugs sitting
+        between its body and the next heading) is replaced by one
+        in-commit receipt for the removed entry itself."""
+        before = log_text_with_ledger(
+            [
+                entry("alpha-entry", ["2026-11-01-alpha.md"]),
+                entry("inventory-count-reconciliation", ["2026-10-30-inventory.md"]),
+                entry("beta-entry", ["2026-11-02-beta.md"]),
+            ],
+            [
+                "EXEC-PROMPTS-PRUNE: execute-plan-dispatch-blocked-panel"
+                "-fallback-arm -> landing in this commit (ad-hoc)",
+                "EXEC-PROMPTS-PRUNE: machinery-inventory-baseline-red"
+                "-repair -> landing in this commit (ad-hoc)",
+            ],
+        )
+        after = log_text_with_ledger(
+            [
+                entry("alpha-entry", ["2026-11-01-alpha.md"]),
+                entry("beta-entry", ["2026-11-02-beta.md"]),
+            ],
+            [
+                "EXEC-PROMPTS-PRUNE: execute-plan-dispatch-blocked-panel"
+                "-fallback-arm -> landing in this commit (ad-hoc)",
+                "EXEC-PROMPTS-PRUNE: machinery-inventory-baseline-red"
+                "-repair -> landing in this commit (ad-hoc)",
+                "EXEC-PROMPTS-PRUNE: inventory-count-reconciliation"
+                " -> landing in this commit (ad-hoc completion)",
+            ],
+        )
+        # Simulate the splice: drop the two sibling receipts from the
+        # post-image (they sat inside the removed entry's section).
+        after = "\n".join(
+            line
+            for line in after.splitlines()
+            if "execute-plan-dispatch-blocked-panel-fallback-arm" not in line
+            and "machinery-inventory-baseline-red-repair" not in line
+        ) + "\n"
+        return before, after
+
+    def test_witnessed_splice_warns_collateral_receipts(self):
+        import check_prompt_log_origins as m
+        before, after = self._witnessed_pair()
+        messages = m.collateral_receipt_removal_warnings(before, after)
+        joined = "\n".join(messages)
+        assert "COLLATERAL-RECEIPT-REMOVAL" in joined, joined
+        assert "execute-plan-dispatch-blocked-panel-fallback-arm" in joined
+        assert "machinery-inventory-baseline-red-repair" in joined
+        # The removed entry's own receipt is never collateral.
+        assert (
+            sum("COLLATERAL-RECEIPT-REMOVAL" in m for m in messages) == 2
+        ), messages
+
+    def test_own_slug_receipt_removal_is_exempt(self):
+        import check_prompt_log_origins as m
+        before = log_text_with_ledger(
+            [
+                entry("alpha-entry", ["2026-11-01-alpha.md"]),
+                entry("beta-entry", ["2026-11-02-beta.md"]),
+            ],
+            ["EXEC-PROMPTS-PRUNE: beta-entry -> 1234567 (landing)"],
+        )
+        after = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+        assert m.collateral_receipt_removal_warnings(before, after) == []
+
+    def test_receipt_only_cleanup_without_entry_removal_is_exempt(self):
+        import check_prompt_log_origins as m
+        receipts = ["EXEC-PROMPTS-PRUNE: old-entry -> 1234567 (landing)"]
+        before = log_text_with_ledger(
+            [entry("alpha-entry", ["2026-11-01-alpha.md"])], receipts
+        )
+        after = log_text([entry("alpha-entry", ["2026-11-01-alpha.md"])])
+        assert m.collateral_receipt_removal_warnings(before, after) == []
+
+    def test_same_commit_readd_is_exempt(self):
+        import check_prompt_log_origins as m
+        before, after = self._witnessed_pair()
+        # A same-commit byte-verbatim restoration of one sibling keeps
+        # the counter balanced; only the other sibling warns.
+        restored = after.replace(
+            "EXEC-PROMPTS-PRUNE: inventory-count-reconciliation",
+            "EXEC-PROMPTS-PRUNE: machinery-inventory-baseline-red-repair"
+            " -> landing in this commit (ad-hoc)\n"
+            "EXEC-PROMPTS-PRUNE: inventory-count-reconciliation",
+            1,
+        )
+        messages = m.collateral_receipt_removal_warnings(before, restored)
+        joined = "\n".join(messages)
+        assert "machinery-inventory-baseline-red-repair" not in joined, joined
+        assert "execute-plan-dispatch-blocked-panel-fallback-arm" in joined
+
+    def test_identical_images_warn_nothing(self):
+        import check_prompt_log_origins as m
+        text = log_text_with_ledger(
+            [entry("alpha-entry", ["2026-11-01-alpha.md"])],
+            ["EXEC-PROMPTS-PRUNE: old-entry -> 1234567 (landing)"],
+        )
+        assert m.collateral_receipt_removal_warnings(text, text) == []

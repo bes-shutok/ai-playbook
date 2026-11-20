@@ -3,4 +3,5 @@
 RUNTIME_SOURCES = {
     "codex": "codex-app-server/account/rateLimits/read",
     "zcode": "zcode-quota-endpoint",
+    "claude": "claude-code-get-usage",
 }

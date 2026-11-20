@@ -1,4 +1,5 @@
 # Backlog: dispatch admission conservative verdict over manifest-less outstanding runs globally blocks the exec lane
+- **Cluster:** docs/history/backlog/2026-11-07-admission-conservative-block-certification-residuals.md; docs/history/backlog/2026-11-09-execution-claim-scan-foreign-manifest-less-worktree.md
 
 - filed: 2026-11-07
 - driving force: efficiency

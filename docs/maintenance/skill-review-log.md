@@ -90,7 +90,7 @@ Clean units (no findings): pdf, plan-stack, premortem, release, review-reconcili
 | docs/history/backlog/2026-10-13-covered-stub-rows-pending-disposal.md | 2026-10-27 | covered stub rows remain open | keep open (housekeeping row; its own subject is stub disposal, self-owning) |
 | docs/history/backlog/2026-10-18-done-lock-from-holder-generation-binding.md | 2026-10-27 | bind from-holder release to lock generation | keep open (machinery hardening with a real race window; needs a plan) |
 | docs/history/backlog/2026-10-18-plan-delta-classifier-scope-fold.md | 2026-10-27 | classify plan-scope corrections inside authored boundary | keep open (classifier behavior question, still unresolved) |
-| docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md | 2026-10-27 | deployed runtime home carries 25 real files beside symlinks | keep open (real drift; bounded sync fix) |
+| docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md | 2026-10-27 | deployed runtime home carries 25 real files beside symlinks | resolved 2026-11-16: the reconcile landing closed the row covered (0 real files + 0 dangling links hold) |
 | docs/history/backlog/2026-10-21-landing-diagnostic-selects-foreign-plan.md | 2026-10-27 | landing diagnostic selects foreign plan/worktree | keep open (witnessed twice; plan-worthy) |
 | docs/history/backlog/2026-10-21-plan-review-validation-block-check-pinned-mirror.md | 2026-10-27 | validation-block check needs pinned-mirror note | reject (the pinned-mirror wording landed in the interim; verify-then-reject) |
 | docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md | 2026-10-27 | runtime verifier naming/remedy gaps | keep open (cluster with the other 2026-10-21 runtime rows) |

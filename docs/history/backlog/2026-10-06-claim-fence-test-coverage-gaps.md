@@ -1,5 +1,7 @@
 # Backlog: claim-fence test coverage gaps (from Step 1.2b, live-claim-plan-deletion-fence)
 
+Cluster: docs/history/backlog/2026-10-07-claim-fence-stem-case-drift.md; docs/history/backlog/2026-10-07-execution-claims-dir-resolution-drift.md (same claim-fence surface; this row owns test coverage while siblings own witnessed contract and path defects)
+
 - **Filed:** 2026-10-06, the Step 1.2b intermediate review of the live-claim-plan-deletion-fence execution
 - **Status:** open
 - **Workflow:** backlog

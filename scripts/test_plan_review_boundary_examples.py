@@ -40,7 +40,6 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 REVIEW_PLAN_SKILL = REPO_ROOT / "agents" / "skills" / "review-plan" / "SKILL.md"
-PLANS_SKILL = REPO_ROOT / "agents" / "skills" / "plans" / "SKILL.md"
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -269,7 +268,10 @@ class PlanReviewBoundaryExamplesTest(unittest.TestCase):
         )
 
     def test_plans_skill_carries_the_boundary_rules(self):
-        plans_text = PLANS_SKILL.read_text(encoding="utf-8")
+        plans_text = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted((REPO_ROOT / "agents" / "skills" / "plans").glob("*.md"))
+        )
         self.assertIn("No guessed implementation inventory", plans_text)
         self.assertIn(
             "review-plan's readiness boundary examples", plans_text

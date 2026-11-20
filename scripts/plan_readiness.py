@@ -34,12 +34,15 @@ behavior.
 
 Prerequisite ordering inside ``evaluate_readiness`` is deliberate: local
 readability checks and the shared sidecar gate run before dependent checks;
-if a prerequisite fails, its reason names the suppressed probes. After the
-prerequisites pass, verdict, review readiness, and independently gated
-plan-text probes accumulate their problems in gate order. A graded
-indeterminate result stays the sole reason and exit 2. Several local
-readability steps re-state checks the shared gate would also make; they exist
-for reason classification, not duplication.
+if a prerequisite dependency fails (unreadable inputs, malformed sidecar,
+legacy schema, fence imbalance), its reason names the suppressed probes.
+Sidecar-gate violations (schema, kind, digest findings) are not dependency
+stops: they seed the accumulated problem list, and verdict, review
+readiness, and independently gated plan-text probes append their own
+problems in gate order, so one pass reports every independently evaluable
+violation. A graded indeterminate result stays the sole reason and exit 2.
+Several local readability steps re-state checks the shared gate would also
+make; they exist for reason classification, not duplication.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ import facts_paths
 import plan_shape
 import runtime_capabilities
 import validate_review_staging as vrs
+import worktree_closeout_migrate
 from review_plan_identity import (
     identity_token as plan_identity_token,
     normalize_plan_path,
@@ -1414,6 +1418,151 @@ def plan_files_coverage_warnings(plan_text: str) -> list[str]:
     return warnings
 
 
+def plan_citation_series_warnings(plan_text: str, reviews_home: Path | None) -> list[str]:
+    """Warning-only citation-series arm (machinery registry row
+    ``script:plan-readiness-citation-series-arm``): one line per distinct
+    ``-r*.md`` series token extracted from the plan's header citation
+    label lines that the closeout matcher expands to zero members under
+    the reviews home, so a citation token the teardown gate cannot parse
+    is named at fold time instead of at teardown.
+
+    The scan surface equals the teardown consumer's (the consumer-surface
+    rule): the tokens are extracted exactly as ``worktree_closeout_migrate``
+    extracts them, through its own ``_review_label_rest`` (header label
+    lines only, the body and its fenced blocks unscanned) and
+    ``_extract_citations`` helpers imported read-only, then expanded
+    through its ``_series_members`` matcher. No parallel citation grammar
+    grows here.
+
+    The arm performs zero-member detection only: ``_series_members`` is
+    called without ``plan_identity`` and without a sink, so it emits no
+    ``series-identity:`` diagnostics; identity diagnostics stay the
+    closeout's job.
+
+    Pure function of the plan text and the home: silent when the home is
+    ``None``/absent (the tolerated no-review-home class; the pre-round
+    gate never opened the reviews home before this arm) or the plan
+    carries no ``-r*.md`` tokens, and a token quoted in prose (outside a
+    header label line) never warns. The callers own the shared
+    warning-surface contract: stderr after all probes pass, zero lines on
+    every failure path, exit codes unchanged."""
+    warnings: list[str] = []
+    if reviews_home is None or not reviews_home.is_dir():
+        return warnings
+    series_tokens, _exact = worktree_closeout_migrate._extract_citations(
+        worktree_closeout_migrate._review_label_rest(plan_text)
+    )
+    reported: set[str] = set()
+    for token in series_tokens:
+        if token in reported:
+            continue
+        reported.add(token)
+        if not worktree_closeout_migrate._series_members(reviews_home, token):
+            warnings.append(
+                "readiness PRE-ROUND WARNING: header citation series "
+                f"resolves to zero members: {token}"
+            )
+    return warnings
+
+
+# The authoring checkpoint duty's commit marker (keyed by subject prefix
+# per the duty convention) and the landed-state squash subject prefix the
+# anchor arm reads past (the checkpoint history is absorbed, so
+# execution-time gate runs never see the missing-anchor warning).
+_AUTHORING_WIP_SUBJECT_PREFIX = "wip:"
+_LANDED_SUBJECT_PREFIX = "execute-plan: land "
+
+
+def _git_text_at(repo_root_path: Path, *args: str) -> str | None:
+    """git plumbing stdout run with ``-C`` at the GIVEN repository root,
+    or ``None`` on any failure; the callers treat ``None`` as the
+    tolerated unresolved-lookup class and stay silent (a plumbing failure
+    is never a finding)."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root_path), *args],
+            capture_output=True,
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+def plan_checkpoint_anchor_warnings(
+    plan_path: Path, repo_root_path: Path
+) -> list[str]:
+    """Warning-only checkpoint-anchor arm (machinery registry row
+    ``script:plan-checkpoint-anchor-arm``) on the ``plan_files_coverage_warnings``
+    pattern: the shared check surface both gate paths call. The
+    pre-round gate (``run_pre_round``) prints the lines on stderr after
+    all probes pass and the full gate's main path prints them on stderr
+    before its summary and OUTCOME lines, on its pass path only; the arm
+    never changes an exit code, adds no schema field, and prints nothing
+    on failure paths.
+
+    Arm 1 (untracked): ``git ls-files`` run against the PASSED repo
+    root (never the process cwd, the classifier precedent of resolving
+    plumbing from the operand) misses the plan path: one line naming the
+    untracked state and the ``wip:`` checkpoint duty. Arm 2 (missing
+    round-start anchor): the plan path is tracked AND no
+    ``wip:``-prefixed commit touches the plan path through HEAD: one
+    line naming the missing anchor; the arm is silent when a ``wip:``
+    commit exists and silent when the plan path's newest touching
+    commit's subject starts with ``execute-plan: land `` (the landed
+    state: the squash absorbed the checkpoint history). Arm 2 is skipped
+    entirely when arm 1 fired (an untracked plan has no commit history
+    to inspect). Every git plumbing failure keeps the arm silent: an
+    unresolved lookup is never a finding.
+    """
+    warnings: list[str] = []
+    try:
+        resolved = plan_path.resolve()
+        root = repo_root_path.resolve()
+        rel = os.path.relpath(str(resolved), str(root))
+    except (OSError, ValueError):
+        return warnings
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return warnings
+    # Arm 1 (untracked), keyed to the passed root.
+    listing = _git_text_at(root, "ls-files", "--", rel)
+    if listing is None:
+        return warnings
+    tracked = {line.strip() for line in listing.splitlines() if line.strip()}
+    if rel not in tracked:
+        warnings.append(
+            f"readiness CHECKPOINT-ANCHOR WARNING: plan file `{rel}` is "
+            f"untracked in git (no commit history protects its bytes); "
+            f"the authoring checkpoint duty commits the plan under the "
+            f"`wip:` marker at every authored plan write"
+        )
+        return warnings
+    # Arm 2 (missing round-start anchor), skipped entirely when arm 1
+    # fired: an untracked plan has no commit history to inspect.
+    subjects = _git_text_at(
+        root, "log", "--format=%s", "--diff-merges=first-parent", "--", rel
+    )
+    if subjects is None:
+        return warnings
+    lines = [line.strip() for line in subjects.splitlines() if line.strip()]
+    if any(
+        line.startswith(_AUTHORING_WIP_SUBJECT_PREFIX) for line in lines
+    ):
+        return warnings
+    if lines and lines[0].startswith(_LANDED_SUBJECT_PREFIX):
+        return warnings
+    warnings.append(
+        f"readiness CHECKPOINT-ANCHOR WARNING: plan file `{rel}` has no "
+        f"round-start anchor: no `wip:`-prefixed commit touches it "
+        f"through HEAD and its newest touching commit is not "
+        f"landing-shaped; the authoring checkpoint duty owes the "
+        f"`wip:` checkpoint commits the round-start anchor binds to"
+    )
+    return warnings
+
+
 def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
     """Reason when the plan's task ownership structure is inconsistent.
 
@@ -2197,16 +2346,27 @@ def evaluate_readiness(
         _first_gate_error_reason(error, payload, round_no)
         for error in staging_result.errors
     )
-    if sidecar_problems:
-        return False, _format_readiness_problems(sidecar_problems)
+    # Fail-many reporting (plan-readiness-fail-many-reporting row): a
+    # sidecar-gate violation no longer ends the pass before the verdict and
+    # plan-text probes evaluate. The sidecar findings seed the accumulated
+    # problem list below; the independently evaluable probes (4 through 9)
+    # append their own violations, and the final aggregated return reports
+    # every current violation in one run while the exit contract and each
+    # finding message stay byte-stable. The prerequisite classifications
+    # above (missing/malformed sidecar, legacy schema, unreadable inputs,
+    # fence imbalance) keep their early returns with their skipped-probes
+    # vocabulary: those are dependency stops, not independent violations.
+    problems: list[str] = list(sidecar_problems)
 
     # 4. Verdict: sidecar ``verdict`` field is DECISIVE when conforming
     # ("yes"/"no" via the single-owner ``sidecar_verdict`` predicate); for
     # ANY other value (absent, or a non-conforming legacy value such as a
     # dict or a non-yes/no string) the legacy Summary total rule runs
     # UNCHANGED (any line with a word-bounded ready=yes/no token; last
-    # occurrence wins). Version-1 records with non-conforming values never
-    # reach this step (the schema gate rejects them earlier); versionless
+    # occurrence wins). Version-1 records with non-conforming values are
+    # refused by the schema gate earlier, but with fail-many accumulation
+    # their findings ride the seeded problem list while this step still
+    # runs its probes over them; versionless
     # legacy records keep today's tolerance (r2 F1 fold: the live corpus
     # carries legacy ``verdict`` keys, so a rejecting consumer would newly
     # fail artifacts that pass today).
@@ -2218,7 +2378,6 @@ def evaluate_readiness(
     # conjunct passes (whatever the verdict value), and a probe reason
     # returns the dedicated terminal-state reason. Without the
     # declaration, today's verdict behavior is unchanged.
-    problems: list[str] = []
     verdict_field = sidecar_verdict(payload)
     if cap_closure_declared:
         findings = payload.get("findings")
@@ -2341,10 +2500,15 @@ def evaluate_readiness(
         # round). An undecodable plan KEEPS TODAY'S PASS here (the pinned
         # r2 F2 shape: its own reason family, no extraction-rule refusal) -
         # the create boundary refuses undecodable plans at discovery before
-        # seeding anyway, so no false parity is claimed.
+        # seeding anyway, so no false parity is claimed. Fail-many guard:
+        # the seeded sidecar problems (and any verdict-family problem) are
+        # real violations, so an undecodable plan reports them instead of
+        # the pass; a clean sidecar keeps the pinned byte-stable pass.
         try:
             plan_text = plan_bytes.decode("utf-8")
         except UnicodeDecodeError:
+            if problems:
+                return False, _format_readiness_problems(problems)
             return True, None
     # The derived-task loops live in the module-level
     # extraction_rule_executability_problem helper, which the pre-round
@@ -2714,7 +2878,10 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     bytes) with NO
     sidecar-date gating and NO review-record consultation: the tolerated
     no-review-artifact/missing-sidecar class is respected by construction
-    (this function never opens ``reviews_dir`` or any sidecar). All clean
+    (this function never opens ``reviews_dir`` or any sidecar for record
+    consultation; the citation-series arm below opens the reviews home
+    read-only for header-citation series expansion, never reading any
+    review record). All clean
     prints the OK line and exits 0; every independently computable failing
     condition prints under one ``readiness PRE-ROUND FAILED:`` prefix and
     exits 1. A prerequisite failure stops dependent probes and names them
@@ -2729,7 +2896,17 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     Files:-coverage arm (``plan_files_coverage_warnings``, machinery row
     ``script:plan-files-coverage-arm``) prints on the same channel under
     the same contract: its lines go to stderr after all probes pass and
-    the failure paths above emit zero warning lines. Warnings never
+    the failure paths above emit zero warning lines. The warning-only
+    citation-series arm (``plan_citation_series_warnings``, machinery row
+    ``script:plan-readiness-citation-series-arm``) prints on the same
+    channel under the same contract, expanding the plan's header citation
+    label-line series tokens through the closeout matcher's own helpers
+    over the facts-resolved reviews home (silent when the home is absent
+    or unresolvable). The warning-only checkpoint-anchor arm
+    (``plan_checkpoint_anchor_warnings``, machinery row
+    ``script:plan-checkpoint-anchor-arm``) prints on the same channel
+    under the same contract, keyed to the plan operand's own repository
+    root (silent when the git plumbing does not resolve). Warnings never
     change the OK line, the exit code, or the failure path (a probe
     failure emits zero warning lines).
 
@@ -2855,7 +3032,16 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
         print(warning, file=sys.stderr)
     for warning in plan_files_coverage_warnings(plan_text):
         print(warning, file=sys.stderr)
+    citation_reviews_home = facts_paths.resolve_toml_key(
+        plans_dir.parent, "reviews_dir"
+    )
+    for warning in plan_citation_series_warnings(plan_text, citation_reviews_home):
+        print(warning, file=sys.stderr)
     for warning in plan_review_identity_warnings(resolved, plans_dir):
+        print(warning, file=sys.stderr)
+    for warning in plan_checkpoint_anchor_warnings(
+        resolved, repo_root(resolved.parent)
+    ):
         print(warning, file=sys.stderr)
 
     print(
@@ -3241,9 +3427,36 @@ def _main(argv: list[str] | None = None) -> int:
         parser.error("plan_path is required (or pass --selftest / --sweep)")
 
     if plans_dir is None or reviews_dir is None:
+        invoking = Path.cwd().resolve()
+        try:
+            git_dir = subprocess.run(
+                ["git", "-C", str(invoking), "rev-parse", "--git-dir"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            common_dir = subprocess.run(
+                ["git", "-C", str(invoking), "rev-parse", "--git-common-dir"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            linked_worktree = bool(
+                git_dir and common_dir
+                and Path(git_dir).resolve() != Path(common_dir).resolve()
+            )
+        except (subprocess.SubprocessError, OSError):
+            linked_worktree = False
         print(
             "readiness FAILED: cannot resolve plans_dir/reviews_dir from the "
             "facts TOML block",
+            file=sys.stderr,
+        )
+        print(
+            "invoking checkout: %s%s"
+            % (invoking, " (a linked worktree)" if linked_worktree else ""),
+            file=sys.stderr,
+        )
+        print(
+            "remedies: transfer the gitignored inputs into this checkout "
+            "(transfer-in, the Worktree-first step), or invoke from the "
+            "checkout holding them",
             file=sys.stderr,
         )
         print("OUTCOME: %s" % OUTCOME_LABELS[1])
@@ -3349,6 +3562,21 @@ def _main(argv: list[str] | None = None) -> int:
             coverage_plan_text = None
         if coverage_plan_text is not None:
             for warning in plan_files_coverage_warnings(coverage_plan_text):
+                print(warning, file=sys.stderr)
+            # Warning-only citation-series arm (machinery row
+            # script:plan-readiness-citation-series-arm): same channel and
+            # ordering as the coverage arm, on this pass path only.
+            for warning in plan_citation_series_warnings(
+                coverage_plan_text, reviews_dir
+            ):
+                print(warning, file=sys.stderr)
+            # Warning-only checkpoint-anchor arm (machinery row
+            # script:plan-checkpoint-anchor-arm): same channel, keyed to
+            # the plan operand's own repository root (never the process
+            # cwd), on this pass path only.
+            for warning in plan_checkpoint_anchor_warnings(
+                plan_operand, repo_root(plan_operand.parent)
+            ):
                 print(warning, file=sys.stderr)
         if advisories:
             print("review advisory: " + "; ".join(advisories), file=sys.stderr)
@@ -7454,8 +7682,15 @@ def _selftest_anchors_single_home(check) -> None:
     # anchors block and fixture entries join the scanned set (the
     # assignment discriminator accepts prose, so a definition smuggled
     # into a tracked skill is still caught).
-    for rel in (
-        "agents/skills/plans/SKILL.md",
+    for rel in tuple(
+        # the plans router plus every module beside it after the
+        # load-on-dispatch split (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md
+        # Task 3; lesson 432: a single-file leg on a split skill is vacuous;
+        # the router must be present or the sweep would skip silently)
+        str(p.relative_to(repo_root))
+        for p in sorted((repo_root / "agents" / "skills" / "plans").glob("*.md"))
+        if (repo_root / "agents" / "skills" / "plans" / "SKILL.md").is_file()
+    ) + (
         "agents/skills/review-plan/SKILL.md",
     ):
         skill = repo_root / rel
@@ -7520,7 +7755,9 @@ def _selftest_anchors_single_home(check) -> None:
     # the module file path (never the process cwd).
     skill_path = (
         _Path(__file__).resolve().parent.parent
-        / "agents/skills/plans/SKILL.md"
+        # the corrected shape sentence moved to the plan-format module beside
+        # the router (load-on-dispatch split, Task 3 of the read-budget plan)
+        / "agents/skills/plans/plan-format.md"
     )
     skill_text = skill_path.read_text(encoding="utf-8")
     owner_marker = "**Primary class anchors; required:**"

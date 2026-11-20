@@ -77,6 +77,7 @@ Keep SKILL.md focused:
 - **Essentials only** in main file
 - **Details** in references/
 - **Examples** in assets/
+- Follow the shared ASD-STE100 Issue 9 policy in [docs/AGENTS.md](../../../docs/AGENTS.md); keep the full policy there.
 - **Domain gates only:** do not add lengthy tool-choice, retry-loop, or verification guardrails to compensate for default agent behavior (wrong tool, unverified edits, confirmation loops). State format, scope, and workflow gates; keep procedural "how to edit" rules to one short paragraph when needed.
 
 ### 3. Model-Invoked Design
@@ -422,7 +423,7 @@ description: Generate technical documentation from code. Use when user mentions 
 
 **Problem**: Skill not discovered because it's in the wrong directory.
 
-**Solution:** resolve paths from `user_facts_path` (`skills_repo_path`, local agent mirrors); do not hardcode one vendor directory as canonical in skill text:
+**Solution:** resolve paths from `user_facts_path` (`skills_repo_path`, local agent mirrors); do not hardcode installation-specific values (mirror and install paths that differ per machine or agent) as canonical in skill text; cross-project conventions, path patterns, and verification caveats stay documented in this section:
 
 - **Shared catalog:** `skills_repo_path` → `agents/skills/<name>/` (canonical source to edit first)
 - **Local mirrors:** sync to agent-specific install paths (Cursor, Claude Code, Codex, etc.) after editing the catalog

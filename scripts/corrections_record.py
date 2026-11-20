@@ -39,6 +39,14 @@ code, setext underlines, thematic breaks, table delimiter rows, link
 destinations); and the hermetic scratch-repo fixture builder shared by the
 classifier selftests.
 
+The evidence_commit binding (the corrections-chain field semantics, stated
+once here because only the per-hop validator body pinned it before): a
+plan-family row's ``evidence_commit`` names the AFTER-BYTES commit - the
+commit whose artifact blob hashes to the row's ``after_digest``, re-derived
+and compared at validation time - never the before-state pin and never
+generic "evidence"; a row minted with a commit whose blob hashes to the
+before digest refuses at the gate's binding leg.
+
 Retirement record (2026-10-11 seal-home re-point): the committed-history
 seal witness is retired. The former ``committed_seal_text`` git read and
 ``entry_introduce_commit`` walk carried edited-entry detection and the
@@ -1747,12 +1755,59 @@ _ANCHOR_COMMIT_LABELS = {
     "round_close_commit": "round-close commit",
 }
 
+# Diagnostics phrases (seal-leg diagnostics separation plan, Task 1):
+# message-only naming inside the existing refusal classes; neither phrase
+# adds a refusal class or changes any verdict.
+UNRESOLVABLE_ANCHOR_PHRASE = "does not resolve in this repository"
+BYTE_RESOLVED_SUBSTITUTE_PHRASE = "byte-resolved substitute"
+
+
+def _anchor_diagnostics_note(declared_missing, substitute_commit):
+    """The parenthetical diagnostics suffix naming the failure world:
+    each declared anchor sha that has no commit object, plus the
+    byte-resolved substitute commit when one is in play. Empty when the
+    seal resolved through its declared anchors as recorded."""
+    notes = []
+    for label, sha in declared_missing:
+        notes.append("the declared %s %s %s"
+                     % (label, sha, UNRESOLVABLE_ANCHOR_PHRASE))
+    if substitute_commit is not None:
+        notes.append("the %s %s is in play"
+                     % (BYTE_RESOLVED_SUBSTITUTE_PHRASE,
+                        substitute_commit))
+    if not notes:
+        return ""
+    return " (%s)" % "; ".join(notes)
+
 
 def verify_corrections(repo, artifact_path, family, round_number,
                        source_digest, rows, current_bytes=None,
                        certified_range=None, head="HEAD", classify=None,
                        witness_path=None, slug=None, seal_repo=None,
                        record_declared=False, primary_checkout=None):
+    """Diagnostics wrapper over _verify_corrections_body: when the seal's
+    anchors were resolved through the unresolvable-anchor or
+    byte-resolved-substitute worlds, every refusal the body emits after
+    the anchor legs carries the substitution naming, so the firing leg
+    and its failure world are readable from the refusal text alone."""
+    diagnostics = {}
+    ok, msg = _verify_corrections_body(
+        repo, artifact_path, family, round_number, source_digest, rows,
+        current_bytes=current_bytes, certified_range=certified_range,
+        head=head, classify=classify, witness_path=witness_path,
+        slug=slug, seal_repo=seal_repo, record_declared=record_declared,
+        primary_checkout=primary_checkout, diagnostics=diagnostics)
+    if not ok and diagnostics.get("note"):
+        msg = msg + diagnostics["note"]
+    return ok, msg
+
+
+def _verify_corrections_body(repo, artifact_path, family, round_number,
+                             source_digest, rows, current_bytes=None,
+                             certified_range=None, head="HEAD",
+                             classify=None, witness_path=None, slug=None,
+                             seal_repo=None, record_declared=False,
+                             primary_checkout=None, diagnostics=None):
     """Run every verification leg over a declared corrections record.
     Returns (True, success message) or (False, prefixed refusal reason).
     The ``head`` argument resolves once at entry into the verification
@@ -1826,6 +1881,8 @@ def verify_corrections(repo, artifact_path, family, round_number,
     anchors = dict((key, entry.fields[key])
                    for key in ("round_close_commit", "round_start_commit"))
     landed_anchor = None
+    declared_missing = []
+    substitute_commit = None
     for key in ("round_close_commit", "round_start_commit"):
         object_state = commit_object_status(srepo, anchors[key])
         if object_state == "error":
@@ -1854,12 +1911,28 @@ def verify_corrections(repo, artifact_path, family, round_number,
             if scan_error is not None:
                 return False, leg_reason("anchor", scan_error)
             if landed_anchor is None:
-                return False, leg_reason(
-                    "anchor", "the seal entry's %s is not an ancestor of HEAD "
-                    "and no first-parent ancestor carries the sealed "
-                    "round-start bytes at %s"
-                    % (_ANCHOR_COMMIT_LABELS[key], artifact_path))
+                # Diagnostics (seal-leg diagnostics separation plan,
+                # Task 1): a declared sha with no commit object is named
+                # as unresolvable, so a transcription error reads as
+                # transcription and not as anchor forensics; the
+                # verdict and the byte-identity refusal are unchanged.
+                detail = ("the seal entry's %s is not an ancestor of HEAD "
+                          "and no first-parent ancestor carries the sealed "
+                          "round-start bytes at %s"
+                          % (_ANCHOR_COMMIT_LABELS[key], artifact_path))
+                if object_state == "missing":
+                    detail = ("the declared %s %s %s; %s"
+                              % (_ANCHOR_COMMIT_LABELS[key], anchors[key],
+                                 UNRESOLVABLE_ANCHOR_PHRASE, detail))
+                return False, leg_reason("anchor", detail)
+            if object_state == "missing":
+                declared_missing.append(
+                    (_ANCHOR_COMMIT_LABELS[key], anchors[key]))
             anchors[key] = landed_anchor
+            substitute_commit = landed_anchor
+    if diagnostics is not None:
+        diagnostics["note"] = _anchor_diagnostics_note(
+            declared_missing, substitute_commit)
     start_commit = anchors["round_start_commit"]
     if family == FAMILY_PLAN:
         start_bytes = blob_bytes(srepo, start_commit, artifact_path)

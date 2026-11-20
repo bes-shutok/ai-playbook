@@ -165,3 +165,8 @@ Primary class anchors:
 - [x] Given lesson 107, expect its rule to name Step 3.5's selected Phase 4 exit as the receipt production point while retaining its observed refusal as evidence. [class: IMPLEMENTATION_REQUIRED]
 - [x] Given the existing egress guard and landing sweep, expect their commands, inputs, and refusal behavior to remain unchanged. [class: REPOSITORY_TEST]
 - [x] Commit: `docs: produce execution receipt at review round close` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-20-exec-review-records-produced-at-round-close.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

@@ -388,9 +388,9 @@ def consult(state_path, now=None, runtime=None, source=None):
     inputs = pressure.get("inputs")
     if inputs is not None and not isinstance(inputs, dict):
         return _unknown_report("cached quota evidence has malformed numeric inputs", runtime, expected_source)
-    if runtime == "codex" and pressure.get("class", "unknown") != "unknown":
+    if runtime in ("codex", "claude") and pressure.get("class", "unknown") != "unknown":
         if not isinstance(inputs, dict) or inputs.get("primary_used_percent") is None:
-            return _unknown_report("cached Codex quota class lacks primary usage evidence",
+            return _unknown_report("cached quota class lacks primary usage evidence",
                                    runtime, expected_source)
     if isinstance(inputs, dict) and inputs.get("primary_used_percent") is not None:
         used = _finite_float(inputs.get("primary_used_percent"))
@@ -485,7 +485,7 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
             except Exception as exc:  # transport/detection failures fail open
                 runtime = None
                 unusable = "runtime detection failed: {}".format(type(exc).__name__)
-        if runtime not in ("codex", "zcode"):
+        if runtime not in ("codex", "zcode", "claude"):
             unusable = unusable or "runtime detection degraded ({}); refresh unknown".format(runtime)
             probe_report = None
         else:
@@ -501,7 +501,7 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
             except Exception as exc:  # detection failures fail open
                 runtime = None
                 unusable = "runtime detection failed: {}".format(type(exc).__name__)
-        if runtime not in ("codex", "zcode"):
+        if runtime not in ("codex", "zcode", "claude"):
             probe_report = None
             unusable = unusable or "runtime detection degraded ({}); refresh unknown".format(runtime)
         elif probe_report.get("runtime") != runtime:
@@ -664,7 +664,8 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
 
 def _default_updated_by():
     runtime_id = None
-    for key in ("ZCODE_SESSION_ID", "CODEX_SESSION_ID", "SESSION_ID"):
+    for key in ("ZCODE_SESSION_ID", "CODEX_SESSION_ID", "SESSION_ID",
+                "CLAUDE_CODE_SESSION_ID"):
         value = os.environ.get(key)
         if value:
             runtime_id = value
@@ -681,7 +682,7 @@ def main(argv=None):
     parser.add_argument("--log-dir", default=DEFAULT_LOG_DIR)
     parser.add_argument("--updated-by", default=None)
     parser.add_argument("--runtime", default=None,
-                        help="canonical active runtime identity (codex or zcode)")
+                        help="canonical active runtime identity (codex, zcode or claude)")
     args = parser.parse_args(argv)
     state_path = os.path.expanduser(args.state_path)
     if args.refresh:

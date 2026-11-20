@@ -110,8 +110,24 @@ classifies ``PRUNE-OK`` through the tip restoration when the tip
 image carries that line's exact committed bytes, consumed one draw
 per occurrence by full-line identity across the walk. The slug-token
 disjunct never clears an eaten-line flag, and a fresh
-non-byte-identical line never restores one. The audit classifies
-mechanically; the
+non-byte-identical line never restores one. Warning-only structural
+arms (added 2026-11-15, the prompt-log-prune-audit-headless-body-detector
+row; never an exit-code input): per log-touching commit, the
+headless-body detector reports a body-form line sitting outside any
+``## ``-headed entry region whose identical line sat inside one in the
+pre-image, and a removed entry heading whose section body lines
+survive in the post-image; receipt-region prose, the Standing rules
+block, and grandfathered header content stay exempt, and a commit that
+also adds an entry heading (the SUPERSEDED-IN-COMMIT editorial merge
+shape) exempts the headless-section arm's removals wholesale. The
+collateral-receipt arm (added 2026-11-17, the
+prune-audit-collateral-sibling-receipt-deletion-undetected row) warns
+when a commit removes an entry together with a receipt-ledger line
+whose slug matches none of that commit's removed entry slugs and the
+line is not re-added by the same commit (the witnessed splice shape:
+each deleted sibling receipt named a different slug, so no removal
+class fired). The
+audit classifies mechanically; the
 consultative leg adjudicates: ranges are expected to start after the
 pNNN-to-dispatch-log transition, and the landing leg never spans the
 pre-plan-era wave commits. An optional ``--head <commit>`` pins the
@@ -605,6 +621,220 @@ def fence_state_before(lines: list[str], start_line: int) -> bool:
     return toggles % 2 == 1
 
 
+def entry_heading_spans(lines: list[str]) -> list[tuple[int, str]]:
+    """(index, slug) of every fence-aware entry heading, in file
+    order; the canonical ``heading_slug`` grammar decides heading
+    shape and ``fence_state_before`` excludes entry-template fence
+    content."""
+    spans: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        if fence_state_before(lines, i + 1):
+            continue
+        slug = heading_slug(line)
+        if slug is not None:
+            spans.append((i, slug))
+    return spans
+
+
+def entry_region_bounds(lines: list[str]) -> tuple[int, int]:
+    """(first_entry_heading_index, heading_count) over the image's
+    entry headings, fence-aware: headings inside the entry-template
+    fence are not entries. When no entry heading exists the first
+    index is ``len(lines)`` (everything is pre-entry header) and the
+    count is 0."""
+    spans = entry_heading_spans(lines)
+    if not spans:
+        return len(lines), 0
+    return spans[0][0], len(spans)
+
+
+def headless_body_warnings(old_text: str, new_text: str) -> list[str]:
+    """The warning-only headless-body detector's message lines for one
+    commit's pre- and post-images of one log (never an exit-code
+    input). Two arms, both scoped so receipt-region prose, the Standing
+    rules block, and grandfathered header content stay exempt:
+
+    - body-outside-entry: a non-blank, non-receipt, non-fence line
+      sitting outside any entry region in the post-image whose
+      identical line sat inside an entry region in the pre-image and
+      not in the pre-image's header region (a glued body slice; the
+      2026-10-24 splice shape).
+    - headless-section: a removed entry heading whose section body's
+      non-blank lines survive verbatim in the post-image (a heading
+      deleted while the entry's body stays; the 2026-11-15 prune
+      shape). A commit that also adds an entry heading (the
+      SUPERSEDED-IN-COMMIT editorial merge shape) exempts the
+      headless-section arm's removals wholesale.
+    """
+    messages: list[str] = []
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    old_first, old_count = entry_region_bounds(old_lines)
+    new_first, new_count = entry_region_bounds(new_lines)
+    old_entry_lines = set(old_lines[old_first:])
+    old_header_lines = set(old_lines[:old_first])
+    # Arm 1: body-form lines sitting in the pre-heading region whose
+    # identical line sat inside an entry region in the pre-image (the
+    # moved-body shape). Header prose new to this commit is never a
+    # warning, entry-template fence lines and fence delimiters are
+    # never a warning, and lines the pre-image's header region also
+    # carried stay grandfathered: only entry-region bytes can move out.
+    for i, line in enumerate(new_lines[:new_first]):
+        if fence_state_before(new_lines, i + 1):
+            continue
+        if FENCE_LINE_RE.match(line):
+            continue
+        if not line.strip():
+            continue
+        if RECEIPT_FULL_LINE_RE.match(line):
+            continue
+        if line not in old_entry_lines:
+            continue
+        if line in old_header_lines:
+            continue
+        preview = line.strip()
+        if len(preview) > 70:
+            preview = preview[:67] + "..."
+        messages.append(
+            "HEADLESS-BODY-OUTSIDE-ENTRY: body-form line outside any "
+            f"entry region: {preview!r}"
+        )
+    # Arm 2: heading-count decrease whose removed sections left
+    # surviving body lines. A per-slug heading-count increase marks the
+    # editorial merge shape and exempts the commit's removals wholesale.
+    # Boilerplate a surviving section also carries is not a survivor:
+    # the survivor set excludes the remaining sections' own body lines.
+    if new_count < old_count:
+        old_counts = _heading_slug_counts(old_lines)
+        new_counts = _heading_slug_counts(new_lines)
+        added_slugs = {
+            slug for slug, count in new_counts.items()
+            if count > old_counts.get(slug, 0)
+        }
+        removed_slugs = {
+            slug for slug, count in old_counts.items()
+            if slug not in new_counts
+        }
+        if not added_slugs and removed_slugs:
+            fenced_new = {
+                i
+                for i in range(len(new_lines))
+                if fence_state_before(new_lines, i + 1)
+            }
+            new_body_lines = {
+                line
+                for i, line in enumerate(new_lines)
+                if i not in fenced_new
+                and not FENCE_LINE_RE.match(line)
+                and line.strip()
+                and not RECEIPT_FULL_LINE_RE.match(line)
+            }
+            sections = _entry_sections(old_lines)
+            remaining_bodies: set[str] = set()
+            for slug, body in sections.items():
+                if slug in removed_slugs:
+                    continue
+                remaining_bodies.update(body)
+            for slug in sorted(removed_slugs):
+                body = sections.get(slug, [])
+                survivors = [
+                    line
+                    for line in body
+                    if line.strip()
+                    and not RECEIPT_FULL_LINE_RE.match(line)
+                    and line in new_body_lines
+                    and line not in remaining_bodies
+                ]
+                if survivors:
+                    messages.append(
+                        "HEADLESS-BODY-SECTION: entry body survives without "
+                        f"its heading: {slug} ({len(survivors)} surviving line(s))"
+                    )
+    return messages
+
+
+def collateral_receipt_removal_warnings(old_text: str, new_text: str) -> list[str]:
+    """The warning-only collateral-receipt detector's message lines for
+    one commit's log pre- and post-images (the 2026-11-17
+    prune-audit-collateral-sibling-receipt-deletion-undetected row;
+    never an exit-code input). The witnessed shape: a section splice
+    removed an entry section together with two sibling durable receipt
+    lines naming other slugs; because each deleted line was itself a
+    ledger receipt, no removal class fired and the loss surfaced only
+    through the review panel. The arm fires when the commit removes at
+    least one entry heading and a receipt-ledger line whose extracted
+    slug matches none of the commit's removed entry slugs is neither in
+    the post-image nor re-added by it (full-line identity, count-aware,
+    so one removal of two committed copies with one re-add still
+    warns). A receipt naming the removed entry's own slug is the
+    sanctioned entry-plus-receipt prune shape; a receipt-line cleanup
+    commit that removes no entry heading stays outside the arm.
+    """
+    old_counts = _heading_slug_counts(old_text.splitlines())
+    new_counts = _heading_slug_counts(new_text.splitlines())
+    removed_entry_slugs = {
+        slug for slug, count in old_counts.items() if slug not in new_counts
+    }
+    if not removed_entry_slugs:
+        return []
+    old_receipts = Counter(RECEIPT_FULL_LINE_RE.findall(old_text))
+    new_receipts = Counter(RECEIPT_FULL_LINE_RE.findall(new_text))
+    removed_lines = old_receipts - new_receipts
+    readded = new_receipts - old_receipts
+    messages: list[str] = []
+    for line, _count in sorted(removed_lines.items()):
+        if readded[line]:
+            continue
+        match = LEDGER_RECEIPT_LINE_RE.match(line)
+        slug = match.group(1) if match else None
+        if slug is None:
+            # A line matching the loose full-line grammar but not the
+            # ledger grammar (no ``slug -> token`` pair) carries no
+            # extractable slug; the arm silently skips it (disclosed
+            # limitation: a splice that also mangles line grammar
+            # evades this warning-only arm).
+            continue
+        if receipt_compare_slug(slug) in {
+            receipt_compare_slug(removed) for removed in removed_entry_slugs
+        }:
+            continue
+        messages.append(
+            "COLLATERAL-RECEIPT-REMOVAL: receipt line for "
+            f"{slug} removed while pruning entry(ies) "
+            f"{', '.join(sorted(removed_entry_slugs))} without a "
+            "same-commit re-add"
+        )
+    return messages
+
+
+def _heading_slug_counts(lines: list[str]) -> dict[str, int]:
+    """Slug -> heading count over the whole image's fence-aware entry
+    headings (``entry_heading_spans`` is the single primitive; the
+    counts feed the editorial-merge exemption's per-slug comparison)."""
+    counts: dict[str, int] = {}
+    for _i, slug in entry_heading_spans(lines):
+        counts[slug] = counts.get(slug, 0) + 1
+    return counts
+
+
+def _entry_sections(lines: list[str]) -> dict[str, list[str]]:
+    """Map each fence-aware entry slug to its section's body lines (the
+    heading's line through the line before the next entry heading)."""
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for i, line in enumerate(lines):
+        if fence_state_before(lines, i + 1):
+            continue
+        slug = heading_slug(line)
+        if slug is not None:
+            current = slug
+            sections[current] = [line]
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return sections
+
+
 def parse_patch_removals(
     patch: str, old_text: str, new_text: str
 ) -> tuple[list[str], list[str]]:
@@ -1053,6 +1283,23 @@ def walk_audit_commits(
             if newly_added_receipt_pairs(old_text, post_text) and not removed:
                 warnings += 1
                 out.write(f"RECEIPT-WITHOUT-REMOVAL: {short} {log_rel}\n")
+        # The headless-body warning class (warning-only, the 2026-11-15
+        # prompt-log-prune-audit-headless-body-detector row): the
+        # structural arms over each log's pre- and post-images (a
+        # body-form line moved outside any entry region; a removed
+        # heading whose section body survives), reported without
+        # changing any exit code.
+        for log_rel, (_removed, _added, post_text, old_text) in zip(
+            log_rels, per_log
+        ):
+            for message in headless_body_warnings(old_text, post_text):
+                warnings += 1
+                out.write(f"{message} (commit {short} {log_rel})\n")
+            for message in collateral_receipt_removal_warnings(
+                old_text, post_text
+            ):
+                warnings += 1
+                out.write(f"{message} (commit {short} {log_rel})\n")
         any_removed = any(removed for removed, _, _, _ in per_log)
         candidates = witness_candidates(repo_root, sha) if any_removed else []
         for log_rel, (removed, added, post_text, old_text) in zip(

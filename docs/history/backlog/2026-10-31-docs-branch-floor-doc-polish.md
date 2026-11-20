@@ -1,5 +1,7 @@
 # docs-branch floor: doc polish residuals (code-review r1 F3/F4)
 
+Cluster: docs/history/backlog/2026-10-31-docs-branch-floor-review-residuals.md (same docs-branch floor change; source and preflight review residuals remain separately scoped)
+
 - Class: IMPLEMENTATION_REQUIRED
 - Driving force: simplicity
 - Origin: execute-plan Phase 3 code-review r1 (non-blocking Low), plan docs/history/plans/2026-10-28-docs-branch-supported-python-runtime.md

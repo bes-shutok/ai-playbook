@@ -132,3 +132,8 @@ Primary class anchors:
 - [x] Preserve ordinary feature, staged/worktree, and stale archived-deliverable behavior [class: REPOSITORY_TEST]
 - [x] Run the validation commands; the new regression is red before the candidate filter and green after it [class: REPOSITORY_TEST]
 - [x] Commit: `done-sweep: filter rebased upstream archives from run attribution` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-10-worktree-rebase-feature-start-boundary.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

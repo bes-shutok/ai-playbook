@@ -1471,8 +1471,11 @@ def cmd_check_claim_fence(args):
 # LANDING_CLAIM_PREFIXES and the rename-boundary split below per plan
 # docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
 # Task 1: "plans: file " and "author: land " are authoring lane events, a
-# "plans: land " subject classifies per the rename-boundary split, and one
-# starting with "done: execute " is an execution lane event. Every lane event lands exactly one main commit; closeout riders land
+# "plans: land " subject classifies per the rename-boundary split, and
+# "done: execute " and "execute-plan: land " are execution lane events.
+# "adhoc: land " is the planless ad-hoc landing prefix, an execution lane
+# event: every ad-hoc (planless) landing uses it so the subject anchors the
+# residue sweep. Every lane event lands exactly one main commit; closeout riders land
 # as commits on the landing branch before the critical section, so any
 # follow-up commit on main after a landing is residue this sweep flags.
 
@@ -1492,6 +1495,7 @@ LANDING_CLAIM_PREFIXES = (
     ("done: execute ", "execution"),
     ("execute-plan: land ", "execution"),
     ("author: land ", "authoring"),
+    ("adhoc: land ", "execution"),
 )
 FLIP_CLASS_PREFIX = "done: mark"
 PRUNE_CLASS_PREFIX = "plans: prune"

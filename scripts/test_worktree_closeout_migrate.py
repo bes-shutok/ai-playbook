@@ -162,6 +162,27 @@ def _migrate(source: Path, target: Path, baseline: Path, manifest: Path, suffix:
     )
 
 
+def _assert_baseline_unreadable_refusal(
+    test: unittest.TestCase, stderr_text: str, baseline: Path
+) -> None:
+    """The named closeout baseline refusal shape (plan 2026-11-15-malformed-
+    closeout-baseline-json-refusal Task 1): exactly one ERROR stderr line,
+    the `baseline unreadable or not valid JSON:` prefix naming the baseline
+    path with the parenthesized exception detail, and no traceback."""
+    error_lines = [
+        line for line in stderr_text.splitlines() if line.startswith("ERROR:")
+    ]
+    test.assertEqual(
+        len(error_lines),
+        1,
+        f"expected exactly one ERROR line, got: {error_lines!r}",
+    )
+    test.assertIn("ERROR: baseline unreadable or not valid JSON:", error_lines[0])
+    test.assertIn(str(baseline), error_lines[0])
+    test.assertIn("(", error_lines[0])
+    test.assertNotIn("traceback", stderr_text.lower())
+
+
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -808,6 +829,94 @@ class WorktreeCloseoutTest(unittest.TestCase):
             )
             self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
 
+    def test_migrate_malformed_baseline_json_named_refusal(self):
+        """A baseline file holding malformed JSON text refuses through the
+        named exit-2 refusal (plan 2026-11-15-malformed-closeout-baseline-
+        json-refusal Task 1): never the raw JSONDecodeError traceback the
+        unguarded parse produced, and nothing is copied to the target."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / ".ai-playbook/reviews/only.md", b"content\n")
+            baseline = root / "baseline.json"
+            baseline.write_text("{invalid json", encoding="utf-8")
+            manifest = root / "manifest.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 2)
+            _assert_baseline_unreadable_refusal(self, stderr.getvalue(), baseline)
+            self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
+
+    def test_migrate_undecodable_baseline_bytes_named_refusal(self):
+        """A baseline file whose bytes are invalid UTF-8 refuses through the
+        same named refusal (plan 2026-11-15-malformed-closeout-baseline-json-
+        refusal Task 1): the read raises UnicodeDecodeError, a ValueError
+        subclass the read guard must catch beside OSError, and nothing is
+        copied to the target."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / ".ai-playbook/reviews/only.md", b"content\n")
+            baseline = root / "baseline.json"
+            _write(baseline, b"\xff\xfe\x01bad")
+            manifest = root / "manifest.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 2)
+            _assert_baseline_unreadable_refusal(self, stderr.getvalue(), baseline)
+            self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
+
+    def test_malformed_baseline_refusal_stands_over_valid_skip_sibling(self):
+        """A present malformed baseline refuses even when a valid
+        closeout-baseline-skip.json sibling exists beside it (plan
+        2026-11-15-malformed-closeout-baseline-json-refusal Task 1 safety
+        witness): present-baseline precedence holds, the sibling never
+        substitutes for the unreadable baseline, and nothing is copied."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / ".ai-playbook/reviews/only.md", b"content\n")
+            run_dir = root / "docs/tmp/execute-plan/slug"
+            baseline = run_dir / "closeout-baseline.json"
+            _write(baseline, b"{invalid json")
+            skip = run_dir / "closeout-baseline-skip.json"
+            _write(skip, json.dumps({"skip": True, "reason": "capture failed"}).encode("utf-8"))
+            manifest = root / "manifest.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 2)
+            _assert_baseline_unreadable_refusal(self, stderr.getvalue(), baseline)
+            self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "chmod-based unreadability does not bind for root")
+    def test_migrate_unreadable_baseline_oserror_named_refusal(self):
+        """A baseline that turns unreadable after the existence check (a
+        permission change between is_file() and the read) lands in the same
+        named refusal (plan 2026-11-15-malformed-closeout-baseline-json-
+        refusal Task 1): the OSError arm of the lessons-#142 guard tuple
+        catches the PermissionError the read raises, and nothing is copied."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / ".ai-playbook/reviews/only.md", b"content\n")
+            baseline = root / "baseline.json"
+            baseline.write_text(json.dumps({"dirs": [".ai-playbook/reviews/"], "files": {}}), encoding="utf-8")
+            baseline.chmod(0o000)
+            manifest = root / "manifest.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 2)
+            _assert_baseline_unreadable_refusal(self, stderr.getvalue(), baseline)
+            self.assertFalse((target / ".ai-playbook/reviews/only.md").exists())
+
     def test_migrate_markdown_manifest_fails_loud_before_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1232,6 +1341,142 @@ class WorktreeCloseoutTest(unittest.TestCase):
             self.assertIn("zero-delta report", text)
             self.assertIn("predates the baseline capture", text)
             self.assertIn(extra_rel, text)
+
+    def _zero_delta_report_stderr(self, source, dirs, baseline, baseline_path):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            MODULE._print_zero_delta_report(source, dirs, baseline, baseline_path)
+        return stderr.getvalue()
+
+    def test_zero_delta_report_non_string_captured_at_takes_unknown_arm(self):
+        """[class: REPOSITORY_TEST] A baseline whose captured_at is present
+        but not a string (null, a number) takes the unknown capture-time
+        arm like an absent key: the report names the newest file mtime, no
+        comparison verdict runs, and the helper never raises (origin row
+        2026-10-31-closeout-zero-delta-report-arm-coverage, defensive arm
+        a)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/r1.md"
+            _write(source / rel, b"review\n")
+            old = time.time() - 120
+            os.utime(source / rel, (old, old))
+            baseline_path = root / "closeout-baseline.json"
+            cases = [None, 42, ["2026-01-01T00:00:00+00:00"]]
+            for captured_at in cases:
+                baseline = {"captured_at": captured_at}
+                text = self._zero_delta_report_stderr(
+                    source, [".ai-playbook/reviews"], baseline, baseline_path
+                )
+                self.assertIn("zero-delta report", text)
+                self.assertIn("capture time unknown", text)
+                self.assertIn(rel, text)
+                self.assertNotIn("predates the baseline capture", text)
+                self.assertNotIn("postdates the baseline capture", text)
+
+    def test_zero_delta_report_naive_captured_at_reads_as_utc(self):
+        """[class: REPOSITORY_TEST] A naive (timezone-less) captured_at,
+        never written by capture but possible in a hand-edited legacy
+        baseline, reads as UTC: a naive instant older than the newest file
+        mtime takes the postdates arm with the naive string printed as the
+        capture time (origin row 2026-10-31-closeout-zero-delta-report-arm-
+        coverage, defensive arm b)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/r1.md"
+            _write(source / rel, b"review\n")
+            old = time.time() - 120
+            os.utime(source / rel, (old, old))
+            naive = "2000-01-01T00:00:00"
+            baseline = {"captured_at": naive}
+            text = self._zero_delta_report_stderr(
+                source, [".ai-playbook/reviews"], baseline, root / "b.json"
+            )
+            self.assertIn("postdates the baseline capture", text)
+            self.assertIn(naive, text)
+            self.assertIn(rel, text)
+
+    def _resolve_poison(self, poisoned_names):
+        """Patch Path.resolve so the named basenames raise OSError and every
+        other path resolves normally (the defensive-OSError drive for the
+        two exclusion-fallback arms)."""
+        original = Path.resolve
+
+        def side_effect(path_self, *args, **kwargs):
+            if path_self.name in poisoned_names:
+                raise OSError("poisoned resolve fixture")
+            return original(path_self, *args, **kwargs)
+
+        return mock.patch.object(Path, "resolve", autospec=True, side_effect=side_effect)
+
+    def test_zero_delta_report_baseline_resolve_oserror_drops_exclusion(self):
+        """[class: REPOSITORY_TEST] When the baseline file's own resolve()
+        raises OSError, the exclusion falls back to None (no file is
+        excluded), so a baseline sitting under a configured dir with the
+        newest mtime is named as the newest artifact and the report still
+        completes (origin row 2026-10-31-closeout-zero-delta-report-arm-
+        coverage, defensive arm c1; the fixture cannot distinguish the
+        None fallback from a keep-raw-path fallback at this seam, so the
+        pinned claim is the behavior-level one: the poisoned baseline
+        resolve leaves the baseline named as the newest artifact)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir(parents=True)
+            rel = ".ai-playbook/reviews/earlier-r1.md"
+            _write(source / rel, b"earlier\n")
+            old = time.time() - 120
+            os.utime(source / rel, (old, old))
+            baseline_path = source / "docs/tmp/closeout-baseline.json"
+            _write(baseline_path, b'{"captured_at": "2000-01-01T00:00:00+00:00"}\n')
+            future = time.time() + 120
+            os.utime(baseline_path, (future, future))
+            baseline = {"captured_at": "2000-01-01T00:00:00+00:00"}
+            with self._resolve_poison({"closeout-baseline.json"}):
+                text = self._zero_delta_report_stderr(
+                    source,
+                    [".ai-playbook/reviews", "docs/tmp"],
+                    baseline,
+                    baseline_path,
+                )
+            self.assertIn("postdates the baseline capture", text)
+            # The broken exclusion names the baseline file as the newest
+            # artifact, proving the OSError fallback dropped the exclusion.
+            self.assertIn("closeout-baseline.json", text)
+
+    def test_zero_delta_report_file_resolve_oserror_stays_in_newest_walk(self):
+        """[class: REPOSITORY_TEST] When a configured file's resolve()
+        raises OSError mid-walk, the exclusion probe falls back to
+        is_baseline=False, so the offending path stays in the newest-mtime
+        walk (named when newest) and the report completes without raising
+        (origin row 2026-10-31-closeout-zero-delta-report-arm-coverage,
+        defensive arm c2)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir(parents=True)
+            older_rel = ".ai-playbook/reviews/earlier-r1.md"
+            _write(source / older_rel, b"earlier\n")
+            old = time.time() - 120
+            os.utime(source / older_rel, (old, old))
+            poison_rel = ".ai-playbook/reviews/poison.md"
+            _write(source / poison_rel, b"poison\n")
+            future = time.time() + 120
+            os.utime(source / poison_rel, (future, future))
+            baseline_path = root / "closeout-baseline.json"
+            baseline = {"captured_at": "2000-01-01T00:00:00+00:00"}
+            with self._resolve_poison({"poison.md"}):
+                text = self._zero_delta_report_stderr(
+                    source, [".ai-playbook/reviews"], baseline, baseline_path
+                )
+            self.assertIn("postdates the baseline capture", text)
+            # The report names the newest artifact only; the poisoned path
+            # staying in the walk is proven by it being the named newest.
+            self.assertIn(poison_rel, text)
 
     def test_migrate_rename_only_delta_prints_no_zero_delta_report(self):
         """[class: REPOSITORY_TEST] A migration whose only delta is one
@@ -6521,7 +6766,7 @@ class GateRemovalBranchCloseoutTest(_BranchCloseoutFixture, unittest.TestCase):
 
     def test_expired_gate_report_destination_reports_only_and_passes(self):
         # The cross-run swept-artifact shape (the 2026-10-31 closeout-gates
-        # trio, landed 52750a1fe; shared-slug second witness): a verified destination under the done-session
+        # trio, landed 843cc9709; shared-slug second witness): a verified destination under the done-session
         # gate-reports home expired by the sanctioned docs/tmp sweep is the
         # owning run's disposition - report-only, never a hold on this
         # run's branch or worktree removal.
@@ -7581,7 +7826,24 @@ class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
         )
         self.assertEqual(code, 3)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
-        self.assertIn("mutually exclusive", err)
+        self.assertIn("not allowed with argument", err)
+        # The usage line declares the alternative so the constraint is
+        # visible before any invocation.
+        code, out, err = _run_cli("gate-removal", "--help", cwd=self.primary)
+        self.assertIn(
+            "[--worktree WORKTREE | --branch BRANCH]",
+            " ".join(out.split()),
+        )
+        # Degenerate empty-string --branch beside --worktree: the group
+        # fires on operand presence, value ignored (plan
+        # 2026-11-13-machinery-cli-operand-self-description Gate delta).
+        code, out, err = _run_cli(
+            "gate-removal", "--plan", "plan.md", "--target", str(self.primary),
+            "--branch", "", "--worktree", "somewhere", cwd=self.primary,
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("not allowed with argument", err)
         # Neither --branch nor --worktree.
         code, out, err = _run_cli(
             "gate-removal", "--plan", "plan.md", "--target", str(self.primary),
@@ -7663,6 +7925,220 @@ class BranchOnlyGateTest(_BranchCloseoutFixture, unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
         self.assertIn(f"branch-closeout: branch {branch} exact-tree-accounted at {snap}", out)
+
+
+class TerminalCompletionReceiptTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Branch-only terminal completion receipts
+    (plan 2026-11-08-branch-only-closeout-gate-report-retention Task 2):
+    the adjudicating branch-only pass records the completion itself in the
+    migration manifest's dedicated top-level ``terminal_completion_receipts``
+    section - an accounted disposition (ancestry-accounted,
+    exact-tree-accounted) appends exactly one receipt bound to the recorded
+    branch, the proven tip OID, the verdict, and a timestamp, named in the
+    pass output; every unresolved adjudication (unknown-ref, retained)
+    stamps the section present and empty with no receipt entry
+    (authorization is not completion); a repeated accounted pass never
+    duplicates the receipt. The receipt never lands in the ``branch`` list
+    (an append there would be adjudicated as the latest branch record and
+    would shift the run-attribution index binding)."""
+
+    def _seed_records(self) -> None:
+        reviews = self.primary / ".ai-playbook/reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        _write(
+            reviews / "2026-10-08-plan-review-x-exec-r1.md",
+            b"r1\n",
+        )
+        plan_rel = "docs/history/plans/2026-10-08-x.md"
+        _write(
+            self.primary / plan_rel,
+            b"# Plan\n\nPlan review record: .ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n",
+        )
+        self._commit_all(self.primary, "plan: seed the plan and its record")
+        self.branch_only_plan = self.primary / plan_rel
+
+    def _manifest_for(self, branch: str, slug: str = "branch-only") -> Path:
+        manifest_dir = self.primary / "docs/tmp/execute-plan" / slug
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        path = manifest_dir / "closeout-migration.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": (
+                                ".ai-playbook/reviews/"
+                                "2026-10-08-plan-review-x-exec-r1.md"
+                            ),
+                            "destination": (
+                                ".ai-playbook/reviews/"
+                                "2026-10-08-plan-review-x-exec-r1.md"
+                            ),
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [{"branch": branch, "source": "branch-only"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._seed_records()
+
+    def _assert_single_receipt(
+        self, manifest_path: Path, branch: str, proven: str, verdict: str
+    ) -> None:
+        # The receipt contract for one accounted pass (plan Terms): exactly
+        # one entry in the dedicated top-level section, bound to the
+        # recorded branch, the proven tip OID, the verdict, and a timestamp
+        # (``recorded_at``, the receipt-timestamp convention the proof
+        # family's pre-archive receipt already validates); the branch list
+        # carries no receipt append.
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipts = manifest.get("terminal_completion_receipts")
+        self.assertIsNotNone(
+            receipts,
+            "the accounted branch-only pass wrote no "
+            "terminal_completion_receipts section (no record written)",
+        )
+        self.assertIsInstance(receipts, list)
+        self.assertEqual(len(receipts), 1, receipts)
+        receipt = receipts[0]
+        self.assertEqual(receipt.get("branch"), branch)
+        self.assertEqual(receipt.get("oid"), proven)
+        self.assertEqual(receipt.get("verdict"), verdict)
+        self.assertIsInstance(receipt.get("recorded_at"), str)
+        self.assertTrue(receipt["recorded_at"].strip())
+        self.assertEqual(
+            len(manifest["branch"]),
+            1,
+            "a receipt was appended to the branch list",
+        )
+
+    def test_accounted_pass_appends_one_terminal_completion_receipt(self):
+        # RED leg 1 (fails today: no record is written): an accounted
+        # branch-only pass appends exactly one terminal completion receipt
+        # into the manifest's dedicated section and the pass output names
+        # the receipt. Both accounted verdicts are exercised: the
+        # ancestry-accounted shape (branch tip at destination history) and
+        # the exact-tree-accounted shape (a snapshot commit whose tree
+        # equals a destination-history tree).
+        branch = "wt-receipt-ancestry"
+        self._git(self.primary, "branch", branch, "HEAD")
+        proven = self._branch_oid(branch)
+        manifest_path = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest_path)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(
+            f"branch-disposition: branch={branch} "
+            f"disposition=ancestry-accounted oid={proven}",
+            out,
+        )
+        self.assertIn("terminal completion receipt", out)
+        self._assert_single_receipt(manifest_path, branch, proven, "ancestry-accounted")
+        # The exact-tree-accounted shape receipts the same way, bound to
+        # its own snapshot OID and verdict.
+        tree = self._git(self.primary, "rev-parse", "HEAD^{tree}").stdout.strip()
+        root = self._git(self.primary, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        snap = self._git(
+            self.primary, "commit-tree", tree, "-p", root, "-m", "receipt snapshot vintage"
+        ).stdout.strip()
+        snap_branch = "wt-receipt-exact-tree"
+        self._git(self.primary, "branch", snap_branch, snap)
+        snap_manifest = self._manifest_for(snap_branch, slug="branch-only-exact-tree")
+        code, out, _err = self._run_gate_branch_only(snap_branch, snap_manifest)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("terminal completion receipt", out)
+        self._assert_single_receipt(
+            snap_manifest, snap_branch, snap, "exact-tree-accounted"
+        )
+
+    def test_unresolved_pass_stamps_empty_receipts_section(self):
+        # RED leg 2 (fails today on the stamp leg: no section is written):
+        # an unresolved branch-only adjudication stamps the
+        # terminal_completion_receipts section present and EMPTY with no
+        # receipt entry - authorization is not completion. Both unresolved
+        # dispositions are exercised: the unknown-ref shape (the ref is
+        # deleted before the pass) and the retained shape (unlanded work
+        # proven through a removed scratch worktree).
+        branch = "wt-receipt-gone"
+        self._git(self.primary, "branch", branch, "HEAD")
+        manifest_path = self._manifest_for(branch)
+        self._git(self.primary, "branch", "-D", branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest_path)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=unknown-ref",
+            out,
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertIn(
+            "terminal_completion_receipts",
+            manifest,
+            "the unknown-ref branch-only pass stamped no "
+            "terminal_completion_receipts section",
+        )
+        self.assertEqual(manifest["terminal_completion_receipts"], [])
+        self.assertEqual(len(manifest["branch"]), 1)
+        branch = "wt-receipt-unproven"
+        self._git(self.primary, "branch", branch, "HEAD")
+        scratch = self.root / "proj-wt-scratch-receipt"
+        self._git(self.primary, "worktree", "add", "-q", str(scratch), branch)
+        _write(scratch / "unlanded.txt", b"never landed\n")
+        self._commit_all(scratch, "work: unlanded everywhere")
+        self._git(self.primary, "worktree", "remove", "--force", str(scratch))
+        manifest_path = self._manifest_for(branch, slug="branch-only-retained")
+        code, out, _err = self._run_gate_branch_only(branch, manifest_path)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=retained oid=",
+            out,
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertIn(
+            "terminal_completion_receipts",
+            manifest,
+            "the retained branch-only pass stamped no "
+            "terminal_completion_receipts section",
+        )
+        self.assertEqual(manifest["terminal_completion_receipts"], [])
+        self.assertEqual(len(manifest["branch"]), 1)
+
+    def test_repeated_accounted_pass_does_not_duplicate_receipt(self):
+        # Leg 3, green at RED via today's absence (no receipt is written at
+        # all, so none can duplicate) and exact-count green after Task 4:
+        # the accounted branch-only pass run twice still leaves at most one
+        # receipt for the recorded adjudication - a repeated pass refreshes,
+        # never duplicates (when Task 4 lands, the count here is exactly
+        # one; today it is zero and this pin stays green).
+        branch = "wt-receipt-idempotent"
+        self._git(self.primary, "branch", branch, "HEAD")
+        proven = self._branch_oid(branch)
+        manifest_path = self._manifest_for(branch)
+        code, out, _err = self._run_gate_branch_only(branch, manifest_path)
+        self.assertEqual(code, 0, out)
+        code, out, _err = self._run_gate_branch_only(branch, manifest_path)
+        self.assertEqual(code, 0, out)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipts = [
+            receipt
+            for receipt in (manifest.get("terminal_completion_receipts") or [])
+            if isinstance(receipt, dict) and receipt.get("branch") == branch
+        ]
+        self.assertLessEqual(len(receipts), 1, receipts)
+        for receipt in receipts:
+            self.assertEqual(receipt.get("oid"), proven)
+            self.assertEqual(receipt.get("verdict"), "ancestry-accounted")
 
 
 class CloseoutReferenceStateTest(unittest.TestCase):
@@ -8958,7 +9434,8 @@ class SkillSlugContractTest(unittest.TestCase):
         return (self.REPO_ROOT / rel).read_text(encoding="utf-8")
 
     def test_execute_plan_defines_canonical_slug_rule(self):
-        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the canonical session-slug rule moved byte-verbatim to run-setup.md (Step 0.4).
+        skill = self._read("agents/skills/execute-plan/run-setup.md")
         # Dated-file arm: strip the leading date and the .md extension.
         self.assertIn("strip the leading date and the `.md` extension", skill)
         # Dated-directory arm: the PLAN.md charter, date-stripped directory.
@@ -8970,7 +9447,8 @@ class SkillSlugContractTest(unittest.TestCase):
         self.assertIn("legacy skip", skill)
 
     def test_execute_plan_bootstrap_and_done_invocation_agree(self):
-        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the bootstrap invocation and charter resolution moved byte-verbatim to run-setup.md.
+        skill = self._read("agents/skills/execute-plan/run-setup.md")
         done_text = self._read("agents/skills/done/SKILL.md")
         # Both surfaces carry the prescribed gate invocation operand shape
         # and the charter-file resolution for a dated directory plan.
@@ -9011,7 +9489,8 @@ class SkillSlugContractTest(unittest.TestCase):
         self.assertIn("expected-OID compare", done_text)
         self.assertIn("branch-only", done_text)
         self.assertIn("retains the worktree and the ref", done_text)
-        skill = self._read("agents/skills/execute-plan/SKILL.md")
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the retained-branch reporting duty moved byte-verbatim to archive-and-cleanup.md (Phase 5).
+        skill = self._read("agents/skills/execute-plan/archive-and-cleanup.md")
         self.assertIn("Retained-branch reporting", skill)
         self.assertIn("branch-disposition", skill)
 
@@ -14801,6 +15280,248 @@ class MultiResourceDispositionRehearsalTest(_BranchCloseoutFixture, unittest.Tes
             b"foreign active work\n",
         )
         self.assertTrue(self.foreign_claim.is_file())
+
+
+_UNPROVEN_CONTENT_POINTER_LINE = (
+    "branch-closeout: retained branch holds unproven content; the "
+    "sanctioned next action is the transfer-or-land route of the done "
+    "skill's Operator branch closeout; never manufacture a landing commit "
+    "to satisfy removal"
+)
+
+
+class RetainedUnprovenContentPointerTest(_BranchCloseoutFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] The retained-adjudication pointer line (plan
+    2026-11-06-self-heal-closeout-workaround-must-preserve-landed-tree
+    Task 2): a retained disposition whose reasons carry the failed
+    ancestry/exact-tree content proof (and not the legacy changed-path-scope
+    accounting note) prints one report-only pointer line naming the
+    transfer-or-land route on every output path - the branch-only path, the
+    gate-removal pass fall-through, and the ordinary held arm - while the
+    content-proven retentions (guard-held, legacy-evidence) print none. The
+    line changes no exit code, no refusal class, and no disposition value."""
+
+    def test_branch_only_retained_unproven_content_prints_pointer(self):
+        # Task 2 positive, the branch-only path: an adjudicated ref whose
+        # content proof fails retains with the pointer printed before its
+        # outcome line, and the run still ends OUTCOME: fail with exit 1.
+        branch = "wt-unproven-pointer"
+        self._git(self.primary, "branch", branch, "HEAD")
+        scratch = self.root / "proj-wt-scratch-pointer"
+        self._git(self.primary, "worktree", "add", "-q", str(scratch), branch)
+        _write(scratch / "unlanded.txt", b"never landed\n")
+        self._commit_all(scratch, "work: unlanded everywhere")
+        self._git(self.primary, "worktree", "remove", "--force", str(scratch))
+        reviews = self.primary / ".ai-playbook/reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        _write(reviews / "2026-10-08-plan-review-x-exec-r1.md", b"r1\n")
+        plan_rel = "docs/history/plans/2026-10-08-x.md"
+        _write(
+            self.primary / plan_rel,
+            b"# Plan\n\nPlan review record: "
+            b".ai-playbook/reviews/2026-10-08-plan-review-x-exec-r1.md\n",
+        )
+        self._commit_all(self.primary, "plan: seed the plan and its record")
+        self.branch_only_plan = self.primary / plan_rel
+        manifest_dir = self.primary / "docs/tmp/execute-plan/branch-only-pointer"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "closeout-migration.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": (
+                                ".ai-playbook/reviews/"
+                                "2026-10-08-plan-review-x-exec-r1.md"
+                            ),
+                            "destination": (
+                                ".ai-playbook/reviews/"
+                                "2026-10-08-plan-review-x-exec-r1.md"
+                            ),
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [{"branch": branch, "source": "branch-only"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate_branch_only(branch, manifest)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
+        self.assertLess(
+            out.index(_UNPROVEN_CONTENT_POINTER_LINE),
+            out.index("OUTCOME: fail"),
+        )
+        self.assertIn(
+            f"branch-disposition: branch={branch} disposition=retained oid=",
+            out,
+        )
+
+    def test_gate_removal_unproven_content_clean_guards_prints_pointer(self):
+        # Task 2 positive, the gate-removal pass fall-through: unproven
+        # content with clean guards retains the branch but still authorizes
+        # the removal - the pointer prints and the run still ends
+        # OUTCOME: pass with exit 0.
+        self._seed_migration_manifest(landed=True)
+        _write(self.worktree / "unlanded.txt", b"not landed\n")
+        self._commit_all(self.worktree, "work: not landed anywhere")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
+        self.assertLess(
+            out.index(_UNPROVEN_CONTENT_POINTER_LINE),
+            out.index("OUTCOME: pass"),
+        )
+        self.assertIn(
+            "branch-disposition: branch=wt-run disposition=retained oid=",
+            out,
+        )
+
+    def test_gate_removal_held_unproven_content_pointer_before_held(self):
+        # Task 2 positive, the ordinary held arm: unproven content plus a
+        # failed guard - the pointer prints before the held: line and the
+        # run ends OUTCOME: fail with exit 1.
+        manifest_path = self._seed_migration_manifest(landed=True)
+        _write(self.worktree / "unlanded.txt", b"not landed\n")
+        self._commit_all(self.worktree, "work: not landed anywhere")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["migrated"].append(
+            {
+                "source": ".ai-playbook/reviews/2026-10-08-pointer-vanished.md",
+                "destination": (
+                    ".ai-playbook/reviews/2026-10-08-pointer-vanished.md"
+                ),
+                "verified": True,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
+        self.assertLess(
+            out.index(_UNPROVEN_CONTENT_POINTER_LINE),
+            out.index("held: the branch disposition above names a failed guard"),
+        )
+
+    def test_guard_held_proven_content_prints_no_pointer(self):
+        # Task 2 negative, the guard-only retention: the content proof
+        # passed through the legacy changed-path scope and only the
+        # missing-artifact guard failed - no pointer line prints.
+        manifest_path = self._seed_migration_manifest(landed=True)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["migrated"].append(
+            {
+                "source": ".ai-playbook/reviews/2026-10-08-guard-vanished.md",
+                "destination": (
+                    ".ai-playbook/reviews/2026-10-08-guard-vanished.md"
+                ),
+                "verified": True,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("held: the branch disposition above names a failed guard", out)
+        self.assertIn(
+            "changed-path scope: content landed inside the landing's file set",
+            out,
+        )
+        self.assertNotIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
+
+    def test_legacy_evidence_retention_prints_no_pointer(self):
+        # Task 2 negative, the legacy-evidence retention: the changed-path
+        # scope proved the content landed, so the retention's reason is the
+        # legacy accounting note alone and no pointer line prints.
+        self._seed_migration_manifest(landed=True)
+        code, out, _err = self._run_gate()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: pass")
+        self.assertIn("never permits deleting a non-ancestor branch", out)
+        self.assertNotIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
+
+
+class NoCharterRetainedPointerExclusionTest(NoCharterFixture, unittest.TestCase):
+    """[class: REPOSITORY_TEST] Task 2's no-charter exclusion arm (plan
+    2026-11-06-self-heal-closeout-workaround-must-preserve-landed-tree
+    Task 2): the authoring stand-down pass structurally inherits the shared
+    pointer emission, but its retained population is always content-proven
+    through the identity row's recorded landing, so a held run prints no
+    pointer."""
+
+    def test_no_charter_held_identity_proven_content_prints_no_pointer(self):
+        self._seed_clean()
+        # The destination history is rewritten past the branch tip (an
+        # amended root commit whose tree differs), so the ancestry and
+        # destination-tree proofs cannot fire and the identity row's
+        # recorded landing is the content proof - exactly the no-charter
+        # retained population the pointer must never fire on.
+        _write(self.primary / "amended.txt", b"destination rewrite\n")
+        self._git(self.primary, "add", "amended.txt")
+        self._git(self.primary, "commit", "-q", "--amend", "--no-edit")
+        self.assertNotEqual(
+            self._git(
+                self.primary,
+                "merge-base", "--is-ancestor", self.branch, "HEAD",
+                check=False,
+            ).returncode,
+            0,
+            "fixture precondition: the branch tip must be a non-ancestor",
+        )
+        # The strand's own migration manifest: the identity row (the shape
+        # _append_authoring_strand_identity_row appends) beside one verified
+        # migrated row whose destination is missing, so the guard holds the
+        # removal while the identity row proves the content.
+        manifest_dir = self.worktree / "docs/tmp/execute-plan" / self.SLUG
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = manifest_dir / "closeout-migration.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "migrated": [
+                        {
+                            "source": ".ai-playbook/reviews/vanished-no-charter.md",
+                            "destination": (
+                                ".ai-playbook/reviews/vanished-no-charter.md"
+                            ),
+                            "verified": True,
+                        }
+                    ],
+                    "renamed": [],
+                    "skipped": [],
+                    "failed": [],
+                    "branch": [
+                        {
+                            "branch": self.branch,
+                            "source": str(self.worktree),
+                            "start_commit": self.start_commit,
+                            "landing_commit": self.start_commit,
+                            "landing_touched": [],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, out, _err = self._run_gate("--migration-manifest", str(manifest))
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.strip().splitlines()[-1], "OUTCOME: fail")
+        self.assertIn("held: the branch disposition above names a failed guard", out)
+        self.assertIn(
+            f"branch-disposition: branch={self.branch} disposition=retained oid=",
+            out,
+        )
+        self.assertIn("migrated artifact(s) missing under the target", out)
+        self.assertNotIn("no ancestry or exact-tree proof", out)
+        self.assertNotIn(_UNPROVEN_CONTENT_POINTER_LINE, out)
 
 
 if __name__ == "__main__":

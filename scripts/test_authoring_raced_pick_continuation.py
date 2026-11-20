@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BLUEPRINT = (ROOT / "agents/skills/maintenance/template-authoring.md").read_text(encoding="utf-8")
 OVERLAY = (ROOT / "agents/skills/maintenance/zcode.md").read_text(encoding="utf-8")
+OVERLAY_DISPATCH_LADDER = (ROOT / "agents/skills/maintenance/zcode-dispatch-ladder.md").read_text(encoding="utf-8")
 
 GATE_PREFIX = "Before writing anything: verify no merge or rebase is in progress"
 CLAIM_REFUSAL_SENTENCE = (
@@ -49,7 +50,7 @@ def payload_claim_duty_segment(text: str) -> str:
 
 PREWORK_GATE = paragraph(BLUEPRINT, GATE_PREFIX)
 CLAIM_SEGMENT = payload_claim_duty_segment(BLUEPRINT)
-DISPATCH_SECTION = section(OVERLAY, "## Interactive dispatch template")
+DISPATCH_SECTION = section(OVERLAY_DISPATCH_LADDER, "## Interactive dispatch template")
 
 
 class RacedPickContinuationContractTest(unittest.TestCase):
@@ -76,7 +77,7 @@ class RacedPickContinuationContractTest(unittest.TestCase):
         self.assertIn("User-directed override", PREWORK_GATE)
 
     def test_prework_gate_paragraph_preserves_fresh_foreign_claim_refusal(self) -> None:
-        self.assertIn("refuse to start: stand down and write nothing", PREWORK_GATE)
+        self.assertIn("refuses the start: stand down and write nothing", PREWORK_GATE)
         self.assertIn("within one cadence period, 2 hours", PREWORK_GATE)
         self.assertIn("a second writer must never clobber the first writer's witness", PREWORK_GATE)
         self.assertIn("Stale-foreign-claim takeover", PREWORK_GATE)

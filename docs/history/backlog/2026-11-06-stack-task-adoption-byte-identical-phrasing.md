@@ -1,4 +1,6 @@
 Status: open
+
+Cluster: docs/history/backlog/2026-11-06-stack-primary-placement-task4-honoring-state-pin.md (same stack primary-placement plan and test suite; this row owns adoption wording and its pin, the sibling owns missing Task 4 pins)
 Priority: low
 Class: fix-class
 Origin class: review-phase3

@@ -196,18 +196,42 @@ def entry_id(entry):
 # --------------------------------------------------------------------------- #
 # Listing input.
 # --------------------------------------------------------------------------- #
+_NOT_JSON_LITERAL = object()
+
+
 def load_listing(listing_arg):
-    """Read --listing-json (<path> or '-' for stdin). Returns (entries, used)."""
+    """Read --listing-json (an inline JSON object or array literal, a path
+    to a listing file, or '-' for stdin). Returns (entries, used).
+
+    Detection attempts the JSON parse of the literal before the path read,
+    so a readable file whose bare name parses as a JSON scalar takes the
+    shape refusal; such names stay reachable as files via an absolute or
+    ./-prefixed path."""
     if listing_arg is None:
         return None, False
     if listing_arg == "-":
         raw = sys.stdin.read()
     else:
         try:
+            doc = json.loads(listing_arg)
+        except ValueError:
+            doc = _NOT_JSON_LITERAL
+        if isinstance(doc, (list, dict)):
+            return extract_entries(doc), True
+        if doc is not _NOT_JSON_LITERAL:
+            # Parsed but wrong shape (a JSON scalar literal): the shape
+            # refusal, even when a same-named file exists.
+            raise RearmError(
+                "listing input is neither an array nor an object with a known array field"
+            )
+        try:
             with open(listing_arg, "r", encoding="utf-8") as handle:
                 raw = handle.read()
         except OSError as exc:
-            raise RearmError("listing input unreadable: %s" % exc)
+            raise RearmError(
+                "listing input unreadable: %s; pass an inline JSON object "
+                "or array, a path to a listing file, or - for stdin" % exc
+            )
     try:
         doc = json.loads(raw)
     except ValueError as exc:
@@ -237,9 +261,26 @@ def field_pattern(field):
     return re.compile(r'("%s"\s*:\s*)(null|"(?:[^"\\]|\\.)*")' % re.escape(field))
 
 
+def insert_field(text, field, new_json):
+    """Atomic structural insert of one BOOKKEEPING_FIELDS key into an
+    existing state-file text: the new key lands immediately before the
+    closing brace, byte-preserving every other byte of the file (the
+    pre-field state file self-heals on its next touch instead of ending
+    every observation in the same refusal). A memberless object refuses
+    (fail-closed: the splice grammar assumes an existing last member)."""
+    idx = text.rindex("}")
+    if text[:idx].rstrip().endswith("{"):
+        raise RearmError("state file is an empty JSON object; refusing an insert")
+    return text[:idx] + ',\n  "%s": %s\n' % (field, new_json) + text[idx:]
+
+
 def apply_bookkeeping(state_path, updates):
-    """Apply the named-field edits atomically. Returns the applied-edits dict
-    ({} when nothing changed). Raises RearmError on structural surprises."""
+    """Apply the named-field edits atomically. A missing field inside
+    BOOKKEEPING_FIELDS is inserted atomically in this same loop (the
+    witnessed pre-field-file refusal is retired); a missing field outside
+    the tool's own tuple still refuses a structural insert. Returns the
+    applied-edits dict ({} when nothing changed). Raises RearmError on
+    structural surprises."""
     if not updates:
         return {}
     for _attempt in range(2):
@@ -256,9 +297,19 @@ def apply_bookkeeping(state_path, updates):
             new_json = json.dumps(value)
             match = field_pattern(field).search(text)
             if not match:
-                raise RearmError(
-                    "state file has no %s field; refusing a structural insert" % field
-                )
+                if field not in BOOKKEEPING_FIELDS:
+                    raise RearmError(
+                        "state file has no %s field; refusing a structural insert"
+                        % field
+                    )
+                if field in before:
+                    raise RearmError(
+                        "state file has a %s value the field pattern cannot "
+                        "match; refusing a structural insert" % field
+                    )
+                text = insert_field(text, field, new_json)
+                applied[field] = {"from": "(inserted)", "to": value}
+                continue
             if match.group(2) == new_json:
                 continue
             text = field_pattern(field).sub(
@@ -375,8 +426,10 @@ def classify_with_listing(state, state_path, entries, repo_root, now, stale, not
                      "duplicate-parent tripwire")
     if matches:
         # Armed again: an ENABLED recognition match clears the absence clock
-        # and the rearm_note.
-        if absent_since_raw is not None:
+        # and the rearm_note. The clear also covers the pre-field file: a
+        # missing parent_absent_since key yields the same canonical null via
+        # the atomic structural insert instead of skipping the edit.
+        if absent_since_raw is not None or "parent_absent_since" not in state:
             updates["parent_absent_since"] = None
         if state.get("rearm_note") is not None:
             updates["rearm_note"] = None
@@ -451,7 +504,8 @@ def parse_args(argv):
                         help="scheduler state file (default: <repo-root>/"
                              + STATE_REL_PATH + ")")
     parser.add_argument("--listing-json", default=None,
-                        help="path to a fetched automation listing JSON, or - "
+                        help="an inline automation listing JSON object or "
+                             "array, a path to a listing JSON file, or - "
                              "for stdin; decision input only")
     return parser.parse_args(argv)
 

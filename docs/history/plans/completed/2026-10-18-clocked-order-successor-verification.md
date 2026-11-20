@@ -205,3 +205,8 @@ Primary class anchors:
 - [x] Pre-register the machinery-registry pair for the new consult arm in `scripts/machinery_registry.json`, mirroring the `duty:primary-freshness-sweep` precedent's two-row shape: an entries-array admission entry (disposition keep, witness class incident referencing the 2026-10-18 silent-strand row) plus a removals row carrying the admission's criteria (promotion rides the launchd promotion review, sunset in any case by 2027-01-18) [class: IMPLEMENTATION_REQUIRED]
 - [x] The removals row's single witness ref points at this plan's completed twin with the second witnessed incident named in its note, and the landing carries the re-point duty for the admission entry's ref if the referenced backlog row is deleted in the landing range; after writing the pair, parse `scripts/machinery_registry.json` as JSON before the commit [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: classify the flagged discharged order as a stall in the re-arm hygiene` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-18-clocked-order-discharged-order-silent-strand.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

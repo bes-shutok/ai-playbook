@@ -225,6 +225,29 @@ class ReconcilePostLandingTest(unittest.TestCase):
             base=base, pre_tip=pre_tip, post_tip=post_tip, repo=self.repo.root
         )
 
+    def run_script_landing_tail(self, pre_tip, post_tip, base="main", repo=None):
+        """The landing flow's own reconcile-gate invocation shape: the same
+        landing arguments plus --landing-tail."""
+        proc = subprocess.run(
+            [
+                sys.executable,
+                RECONCILE_SCRIPT,
+                "--repo",
+                repo or self.repo.root,
+                "--base",
+                base,
+                "--pre-tip",
+                pre_tip,
+                "--post-tip",
+                post_tip,
+                "--landing-tail",
+            ],
+            capture_output=True,
+            text=True,
+            env=HERMETIC_ENV,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
     # -- 1 -----------------------------------------------------------------
 
     def test_stale_primary_restored_and_recorded(self):
@@ -274,7 +297,9 @@ class ReconcilePostLandingTest(unittest.TestCase):
     def test_landing_deleted_path_removed(self):
         """Given a landing deleting one path still present with pre-landing bytes
         in the primary (mtime backdated to predate the pre-landing tip's commit
-        time), expects exit 0 and the path removed."""
+        time), expects exit 0 and the path removed with the removal verb: the
+        index-present staged-residue shape prints `removed` (not `restored`)
+        per the landing-deleted leg's re-class."""
         r = self.repo
         r.write("skill.md", "v1\n")
         r.write("gone.md", "bye\n")
@@ -284,7 +309,8 @@ class ReconcilePostLandingTest(unittest.TestCase):
         r.backdate("gone.md", pre_time - 100000)
         rc, out, _ = self.run_script(pre, post)
         self.assertEqual(rc, 0, out)
-        self.assertIn("restored %s gone.md" % r.root, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertNotIn("restored %s gone.md" % r.root, out)
         self.assertFalse(r.exists("gone.md"))
         self.assertEqual(r.status(), "")
 
@@ -649,6 +675,64 @@ class ReconcilePostLandingTest(unittest.TestCase):
         self.assertEqual(r.read("skill.md"), "v1\n")
         self.assertEqual(r.index_blob("skill.md"), r.blob_at(pre, "skill.md"))
 
+    # -- 19b (witnessed 2026-11-12 shape: the two-file staged
+    # reverse-of-landing residue) ------------------------------------------
+
+    def test_primary_staged_reverse_stage_fresh_mtime_two_files_blocked_standalone(self):
+        """Given a landing changing two files while the primary holds both
+        files' pre-landing bytes staged and their mtimes freshened past the
+        pre-landing commit time, the standalone invocation expects fresh-mtime
+        block rows and exit 1 (the sanctioned partial state the witnessed
+        landing completed under)."""
+        r = self.repo
+        r.write("a.md", "a1\n")
+        r.write("b.md", "b1\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"a.md": "a2\n", "b.md": "b2\n"})
+        pre_time = r.commit_time(pre)
+        r.write("a.md", "a1\n")
+        r.git("add", "a.md")
+        r.write("b.md", "b1\n")
+        r.git("add", "b.md")
+        r.freshen("a.md", pre_time + 100000)
+        r.freshen("b.md", pre_time + 100000)
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 1)
+        self.assertIn("block %s a.md fresh-mtime" % r.root, out)
+        self.assertIn("block %s b.md fresh-mtime" % r.root, out)
+        self.assertEqual(r.read("a.md"), "a1\n")
+        self.assertEqual(r.read("b.md"), "b1\n")
+        self.assertEqual(r.index_blob("a.md"), r.blob_at(pre, "a.md"))
+        self.assertEqual(r.index_blob("b.md"), r.blob_at(pre, "b.md"))
+
+    def test_primary_staged_reverse_stage_fresh_mtime_restored_landing_tail(self):
+        """The same fixture under the landing-tail invocation: the pure stale
+        witness (index and worktree both byte-identical to pre-landing
+        ancestor blobs) is restored regardless of the fresh mtime, exit 0, the
+        primary holding the landing bytes unstaged - never a silent stray
+        stage."""
+        r = self.repo
+        r.write("a.md", "a1\n")
+        r.write("b.md", "b1\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"a.md": "a2\n", "b.md": "b2\n"})
+        pre_time = r.commit_time(pre)
+        r.write("a.md", "a1\n")
+        r.git("add", "a.md")
+        r.write("b.md", "b1\n")
+        r.git("add", "b.md")
+        r.freshen("a.md", pre_time + 100000)
+        r.freshen("b.md", pre_time + 100000)
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0)
+        self.assertIn("restored %s a.md" % r.root, out)
+        self.assertIn("restored %s b.md" % r.root, out)
+        self.assertNotIn("fresh-mtime", out)
+        self.assertEqual(r.read("a.md"), "a2\n")
+        self.assertEqual(r.read("b.md"), "b2\n")
+        self.assertEqual(r.index_blob("a.md"), r.blob_at(post, "a.md"))
+        self.assertEqual(r.index_blob("b.md"), r.blob_at(post, "b.md"))
+
     # -- 20 (in-process) ---------------------------------------------------
 
     def test_midwindow_change_reclassifies(self):
@@ -770,6 +854,222 @@ class ReconcilePostLandingTest(unittest.TestCase):
             if line.startswith("synced %s skill.md" % peer)
         ][0]
         self.assertNotIn("containment-delta", peer_row)
+
+    # -- deleted_reclass ---------------------------------------------------
+
+    def deleted_fixture(self):
+        """Fold-and-delete landing: one deleted path (gone.md, v1 bytes), one
+        surviving path. Returns (r, pre, post)."""
+        r = self.repo
+        r.write("gone.md", "bye\n")
+        r.write("keep.md", "k\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"gone.md": None})
+        return r, pre, post
+
+    def test_deleted_reclass_witnessed_shape_landing_tail(self):
+        """deleted_reclass canary: the witnessed stale-restore shape (fold-and-
+        delete landing, primary HEAD at post tip, index and worktree holding
+        pre bytes, fresh mtime) under --landing-tail expects exit 0, a
+        `removed` row, no resurrected paths, the file absent, and clean
+        status."""
+        r, pre, post = self.deleted_fixture()
+        pre_time = r.commit_time(pre)
+        r.freshen("gone.md", pre_time + 100000)
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertNotIn("fresh-mtime", out)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_index_absent_orphan_standalone(self):
+        """deleted_reclass: a landing-deleted path whose index entry is absent
+        and whose worktree bytes equal the pre-landing blob (fresh mtime) is
+        removed with os.remove and a `removed` row, the fresh mtime no longer
+        blocking (standalone mode)."""
+        r, pre, post = self.deleted_fixture()
+        # The index-absent shape: drop the index entry (the ref-level landing
+        # leaves the primary index holding the pre-landing blob), keep the
+        # worktree file with its fresh mtime.
+        r.git("update-index", "--force-remove", "gone.md")
+        pre_time = r.commit_time(pre)
+        r.freshen("gone.md", pre_time + 100000)
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_index_absent_orphan_landing_tail(self):
+        """deleted_reclass: the index-absent orphan shape under --landing-tail
+        expects the same removal with a `removed` row, exit 0."""
+        r, pre, post = self.deleted_fixture()
+        r.git("update-index", "--force-remove", "gone.md")
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_staged_residue_worktree_absent_standalone(self):
+        """deleted_reclass staged-residue removal: the index carries the
+        pre-landing blob (staged-looking only because HEAD moved under the
+        checkout) with the worktree bytes absent; expects the single-path
+        restore removal with a `removed` row (not `restored`), exit 0
+        (standalone)."""
+        r, pre, post = self.deleted_fixture()
+        r.git("add", "gone.md")
+        os.remove(os.path.join(r.root, "gone.md"))
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertNotIn("restored %s gone.md" % r.root, out)
+        self.assertEqual(r.index_blob("gone.md"), None)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_staged_residue_worktree_ancestor_landing_tail(self):
+        """deleted_reclass staged-residue removal under --landing-tail: the
+        index carries the pre-landing blob with fresh worktree bytes matching
+        the pre-landing blob; expects the restore removal with a `removed`
+        row, exit 0, no fresh-mtime block."""
+        r, pre, post = self.deleted_fixture()
+        pre_time = r.commit_time(pre)
+        r.git("add", "gone.md")
+        r.freshen("gone.md", pre_time + 100000)
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertNotIn("fresh-mtime", out)
+        self.assertEqual(r.index_blob("gone.md"), None)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_landing_tail_lift_is_stale_only_fresh_mtime_removed_deleted_reclass(
+        self,
+    ):
+        """deleted_reclass (renamed from
+        test_landing_tail_lift_is_stale_only_fresh_mtime_deleted_still_blocked):
+        the landing-tail lift stays stale-only for the surviving-path
+        witnesses, but the landing-deleted leg is now the removal class: the
+        same fixture (staged ancestor index blob, fresh mtime) is removed,
+        never fresh-mtime blocked, because a landing-deleted path's pure
+        ancestor bytes carry no peer edit content and the landing must not
+        strand its own restage residue."""
+        r, pre, post = self.deleted_fixture()
+        pre_time = r.commit_time(pre)
+        r.git("add", "gone.md")
+        r.freshen("gone.md", pre_time + 100000)
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertNotIn("fresh-mtime", out)
+        self.assertFalse(r.exists("gone.md"))
+
+    def test_deleted_reclass_older_ancestor_orphan_standalone(self):
+        """deleted_reclass older-ancestor deletion (index-absent orphan
+        variant, standalone): a landing-deleted path whose worktree bytes
+        match an ancestor blob older than the pre-landing tip (not equal to
+        it) expects the same removal class."""
+        r = self.repo
+        r.write("gone.md", "v0\n")
+        r.write("keep.md", "k\n")
+        r.commit_all("v0")
+        r.write("gone.md", "bye\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"gone.md": None})
+        older_blob = r.blob_at(r.rev(pre + "~"), "gone.md")
+        self.assertNotEqual(older_blob, r.blob_at(pre, "gone.md"))
+        r.write("gone.md", "v0\n")
+        r.git("update-index", "--force-remove", "gone.md")
+        pre_time = r.commit_time(pre)
+        r.freshen("gone.md", pre_time + 100000)
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_older_ancestor_staged_residue_landing_tail(self):
+        """deleted_reclass older-ancestor deletion (staged-residue variant,
+        landing-tail): the index carries an ancestor blob older than the
+        pre-landing tip with the worktree bytes absent; expects the restore
+        removal with a `removed` row."""
+        r = self.repo
+        r.write("gone.md", "v0\n")
+        r.write("keep.md", "k\n")
+        r.commit_all("v0")
+        r.write("gone.md", "bye\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"gone.md": None})
+        older_blob = r.blob_at(r.rev(pre + "~"), "gone.md")
+        self.assertNotEqual(older_blob, r.blob_at(pre, "gone.md"))
+        r.write("gone.md", "v0\n")
+        r.git("add", "gone.md")
+        os.remove(os.path.join(r.root, "gone.md"))
+        rc, out, _ = self.run_script_landing_tail(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
+        self.assertEqual(r.index_blob("gone.md"), None)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_deleted_reclass_staged_peer_edit_blocked_both_modes(self):
+        """deleted_reclass block-unchanged: a landing-deleted path whose index
+        carries a staged non-ancestor blob (a peer's edit) still blocks as
+        staged-peer-edit in both modes, byte-unchanged."""
+        for driver in (self.run_script, self.run_script_landing_tail):
+            r, pre, post = self.deleted_fixture()
+            r.write("gone.md", "staged deletion override\n")
+            r.git("add", "gone.md")
+            r.write("gone.md", "bye\n")
+            rc, out, _ = driver(pre, post)
+            self.assertEqual(rc, 1)
+            self.assertIn("block %s gone.md" % r.root, out)
+            self.assertIn("staged-peer-edit", out)
+            self.assertTrue(r.exists("gone.md"))
+            staged_blob = r.git(
+                "hash-object", "--stdin", stdin="staged deletion override\n"
+            ).stdout.strip()
+            self.assertEqual(r.index_blob("gone.md"), staged_blob)
+
+    def test_deleted_reclass_genuine_modification_blocked_both_modes(self):
+        """deleted_reclass block-unchanged: a landing-deleted path whose
+        worktree bytes match no ancestor blob still blocks as
+        genuine-modification in both modes, byte-unchanged."""
+        for driver in (self.run_script, self.run_script_landing_tail):
+            r, pre, post = self.deleted_fixture()
+            r.write("gone.md", "peer rewrite\n")
+            rc, out, _ = driver(pre, post)
+            self.assertEqual(rc, 1)
+            self.assertIn("block %s gone.md genuine-modification" % r.root, out)
+            self.assertEqual(r.read("gone.md"), "peer rewrite\n")
+
+    def test_deleted_reclass_staged_index_ancestor_worktree_peer_blocked(self):
+        """deleted_reclass block-unchanged: a landing-deleted path whose index
+        carries an ancestor blob while the worktree bytes match no ancestor is
+        a genuine modification, never a removal (the staged-residue removal
+        requires absent or ancestor worktree bytes)."""
+        r, pre, post = self.deleted_fixture()
+        r.git("add", "gone.md")
+        r.write("gone.md", "peer rewrite over staged ancestor\n")
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 1)
+        self.assertIn("block %s gone.md genuine-modification" % r.root, out)
+        self.assertEqual(r.read("gone.md"), "peer rewrite over staged ancestor\n")
+
+    def test_deleted_reclass_clean_checkout_synced_noop(self):
+        """deleted_reclass synced no-op: a landing-deleted path absent from
+        both index and worktree (the clean-checkout shape) expects the
+        `synced` row and exit 0."""
+        r, pre, post = self.deleted_fixture()
+        r.git("update-index", "--force-remove", "gone.md")
+        os.remove(os.path.join(r.root, "gone.md"))
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("synced %s gone.md" % r.root, out)
+        self.assertEqual(r.status(), "")
 
 
 if __name__ == "__main__":
@@ -1028,6 +1328,13 @@ class CheckPrimarySweepTest(ReconcilePostLandingTest):
         rc, out, err = self.run_sweep(extra=["--base", "main"])
         self.assertEqual(rc, 2)
         self.assertNotIn("stale ", out)
+
+    def test_landing_tail_check_primary_mutually_exclusive(self):
+        """Given --check-primary combined with --landing-tail, expects a usage
+        error exiting 2."""
+        rc, out, err = self.run_sweep(extra=["--landing-tail"])
+        self.assertEqual(rc, 2)
+        self.assertNotIn("restored ", out)
 
     def test_clean_primary_exits_zero(self):
         """Given a clean primary at HEAD, expects exit 0 and no rows."""

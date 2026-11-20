@@ -112,6 +112,10 @@ trap cleanup EXIT
 #   RELEASE_HYGIENE_SCANNER      repo-relative scanner path (default:
 #                                scripts/scan-public-hygiene.sh), resolved
 #                                against the PRIMARY checkout
+#   RELEASE_PUBLISH_SCOPE_CHECKER repo-relative publish-scope checker path
+#                                (default:
+#                                scripts/release_publish_scope_check.sh),
+#                                resolved against the PRIMARY checkout
 
 # Argument parsing: the ordinary one-positional contract is unchanged; the
 # recovery mode is selected by the two flags appearing TOGETHER, each at most
@@ -221,6 +225,52 @@ for pat in release-push-* release-hygiene-* release-run-* release-wt-* release-a
 done
 git for-each-ref --format='  leftover temp branch: %(refname)' 'refs/heads/release-rewrite-tmp-*' >&2 || true
 git worktree list --porcelain 2>/dev/null | grep '^worktree ' | grep 'release-wt-' | sed 's/^/  leftover rewrite worktree: /' >&2 || true
+
+# 4b. Publish-scope check (warning-only machinery; plan
+#     docs/history/plans/2026-11-08-release-publish-scope-hygiene-check.md
+#     Task 2): the publish delta's file list is piped through the repo-side
+#     checker; findings are echoed to stderr under the PUBLISH SCOPE banner
+#     and never abort the run (this step's stdout stays the push-script
+#     path). A configured-but-missing checker prints one skip line; a
+#     checker tool failure prints one warning line; both continue. Ordinary
+#     and recovery paths each enumerate their own publish-delta range
+#     (deletions excluded).
+checker_rel="${RELEASE_PUBLISH_SCOPE_CHECKER:-scripts/release_publish_scope_check.sh}"
+checker_src="$top/$checker_rel"
+if [ ! -f "$checker_src" ]; then
+  printf 'release-rewrite: publish-scope checker not found, skipping: %s\n' "$checker_src" >&2
+else
+  if [ "$recovery_mode" -eq 1 ]; then
+    scope_range="${sel_base}..refs/heads/main"
+  else
+    scope_range="$upstream..refs/heads/main"
+  fi
+  scope_rc=0
+  # core.quotepath=off: the delta list arrives as raw bytes (non-ASCII paths
+  # verbatim), matching the checker's own -z enumeration; quoted paths would
+  # silently miss the class-1 intersection. The enumeration failure is
+  # distinguished from a checker tool failure: each warning names its own
+  # side.
+  # -z + tr: raw bytes end to end (core.quotepath=off alone still C-quotes
+  # quote/backslash/control-character paths), mirroring the checker's own
+  # ls-files -z enumeration side.
+  if ! scope_files="$(git -c core.quotepath=off diff --name-only -z --diff-filter=d "$scope_range" 2>/dev/null | tr '\0' '\n')"; then
+    printf 'release-rewrite: warning: publish-scope delta enumeration (git diff over %s) failed; the publish-scope report is unavailable for this run\n' "$scope_range" >&2
+    scope_files=""
+    scope_files_ok=0
+  else
+    scope_files_ok=1
+  fi
+  if [ "$scope_files_ok" -eq 1 ]; then
+    scope_report="$(printf '%s\n' "$scope_files" | "$checker_src" 2>/dev/null)" || scope_rc=$?
+    if [ "$scope_rc" -ne 0 ]; then
+      printf 'release-rewrite: warning: publish-scope checker %s exited %s; the publish-scope report is unavailable for this run\n' "$checker_rel" "$scope_rc" >&2
+    elif [ -n "$scope_report" ]; then
+      printf 'PUBLISH SCOPE: the publish delta carries out-of-scope paths (warning-only, not blocking):\n' >&2
+      printf '%s\n' "$scope_report" >&2
+    fi
+  fi
+fi
 
 # 5. Create the backup ref at the pre-rewrite tip BEFORE any mutation:
 #    create-only via the zero-OID expected-old update-ref form, retrying the

@@ -8,7 +8,7 @@
 - **Driving force:** correctness
 - **Origin plan:** docs/history/plans/2026-11-07-review-staging-soften-table-header-convention-undocumented.md (r2 record, overflow row 1)
 - **Skill/step:** the plan's Terms counting-rule wording and its three in-plan mirrors; `scripts/validate_review_staging.py` `validate_soften_watchlist_agreement` (lines 5300-5311)
-- **Cluster:** docs/history/backlog/2026-10-31-review-staging-soften-table-header-convention-undocumented.md (same validator arm; that row owns the missing convention documentation this plan lands, this row owns the residual wording corner the certification routed to overflow)
+- **Cluster:** docs/history/plans/completed/2026-11-07-review-staging-soften-table-header-convention-undocumented.md (same validator arm; that completed plan owns the missing convention documentation its execution lands, this row owns the residual wording corner the certification routed to overflow)
 
 ## Problem
 

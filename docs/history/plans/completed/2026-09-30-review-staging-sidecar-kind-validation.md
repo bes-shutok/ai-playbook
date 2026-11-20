@@ -3,6 +3,7 @@
 [github: https://github.com/admitriev/ai-playbook] Origin: docs/history/backlog/2026-09-30-done-sweep-gates-review-staging-sidecar-markdown-validation.md
 
 Plan review: docs/reviews/2026-09-30-plan-review-review-staging-sidecar-kind-validation-r1.md (r1 verdict ready=yes, zero blocking)
+> Witness disposition (2026-11-15 reconstruction sweep): this cited record is lost before durability mirroring; verified absent from every checkout, worktree, and reachable history (working-tree glob plus git object-history probe) on 2026-11-15; the loss is witnessed and accepted, record content never fabricated.
 Missing-record note (2026-10-23): the cited review record was never committed (the reviews corpus is a gitignored run-artifact surface) and no surviving source was found in git history, branch refs, or sibling checkouts (restore-or-annotate reconciliation, restore-or-annotate reconciliation, landing commit appended the same day); treat the recorded verdict as unverifiable from the corpus.
 
 ## Gist TLDR

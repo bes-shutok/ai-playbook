@@ -14,7 +14,7 @@ Use this skill when the user wants one plan to drive a linear series of pull req
 3. Budget each slice against the effective target resolved by `github-pr-workflow`'s PR-size policy. Split over-target slices when clean boundaries exist; otherwise record why the slice cannot be split and carry that rationale to the PR's Notes for reviewers. Do not copy policy values or lookup rules here.
 4. Allow one optional documentation-only task as the first or last PR, with disjoint file ownership and honest intended/current-state descriptions.
 5. Order tasks linearly: Task 1 uses the configured base; each later task depends on its immediate predecessor and uses that branch as base.
-6. Give each task an independent witness: ancestors plus current task, later tasks absent, pass task-specific checks and the repository-standard suite. Name the observable output or assertion.
+6. Give each task an independent witness: ancestors plus current task, later tasks absent, pass task-specific checks plus whatever the target's suite policy adds at a task boundary, never an unconditional suite pass. Name the observable output or assertion.
 7. Use the standard single-file plan format and lifecycle from `plans`; keep stack terms and constraints in Terms and Standing constraints, without duplicating `execute-plan` or GitHub procedures.
 
 When separate repository plans split one agreed cross-repository stack, apply this task shape in every plan; a repository contributing one PR still uses one Task 1 with `Depends on: none` and that repository's configured `Base`.
@@ -26,7 +26,7 @@ Each task includes:
 - `PR slice`: code class or type, or `N/A` with owned docs for a docs-only task.
 - `Depends on` and `Base`: none and configured base for Task 1; otherwise the immediate predecessor and its branch.
 - One disjoint `Files:` list.
-- Acceptance checks for task-specific and repository-standard validation without descendants, plus an observable witness.
+- Acceptance checks for task-specific validation and the target suite policy's per-task requirement, without descendants, plus an observable witness.
 - A commit subject.
 
 Child branches include ancestors and no later tasks; each file belongs to one task. Keep implementation acceptance separate from human-owned release conditions in `Ship when` prose.

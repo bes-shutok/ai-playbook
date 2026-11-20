@@ -106,3 +106,8 @@ Primary class anchors:
 - [x] A same-log receipt-only commit still emits `RECEIPT-WITHOUT-REMOVAL` and exits 0; existing plan-file, resolvable ledger, commit-message receipt, and cross-log cases retain their results. [class: REPOSITORY_TEST]
 - [x] Update the checker docstring and CLI help to list the in-commit receipt alongside the existing witness classes. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run the focused integration suite and the plan readiness pre-round gate. [class: REPOSITORY_TEST]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-22-prune-audit-landing-token-never-resolves.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

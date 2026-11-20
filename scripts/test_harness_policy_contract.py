@@ -51,6 +51,14 @@ REPO_SKILL_SURFACES = [
     "agents/skills/slack-message/SKILL.md",
     "agents/skills/done/SKILL.md",
     "agents/skills/execute-plan/SKILL.md",
+    # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the execute-plan skill split load-on-dispatch, so the inventory names the router plus each module file beside it and the absence sweeps keep governing the whole skill text.
+    "agents/skills/execute-plan/invocation-and-orchestration.md",
+    "agents/skills/execute-plan/run-setup.md",
+    "agents/skills/execute-plan/implementation-loop.md",
+    "agents/skills/execute-plan/phase-3-review.md",
+    "agents/skills/execute-plan/archive-and-cleanup.md",
+    "agents/skills/execute-plan/launch-rules-and-gates.md",
+    "agents/skills/execute-plan/recovery-and-integration.md",
     "agents/skills/review-plan/SKILL.md",
     "agents/skills/review-agents/review-panel-selection.md",
     "agents/skills/review-staging/SKILL.md",
@@ -297,7 +305,8 @@ class HarnessPolicyContractTest(unittest.TestCase):
                 f"shared contract lost the authorization gate for {action}",
             )
         # The active execute-plan adapter restates the push boundary.
-        execute_plan = _read(_repo_file("agents/skills/execute-plan/SKILL.md"))
+        # Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the Commit authorization paragraph moved byte-verbatim to invocation-and-orchestration.md.
+        execute_plan = _read(_repo_file("agents/skills/execute-plan/invocation-and-orchestration.md"))
         self.assertIn(
             "still requires explicit user instruction",
             execute_plan,

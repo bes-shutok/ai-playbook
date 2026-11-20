@@ -25,8 +25,11 @@ present store with no retained rows still reads empty.
 
 Error classes come only from the structured ``lastError.attribution``
 fields (``exceptionKind``, ``reason``, ``retryable``) of the linked task
-row; raw ``message``/``detail``/request id/payload values are never returned
-or persisted.
+row, plus the structured ``dispatch_status``/``attempts`` columns for
+dispatch-terminal rows (a final ``failed_to_dispatch`` or ``skipped``
+verdict whose payload never ran, classified by
+:func:`dispatch_terminal_class`); raw ``message``/``detail``/request
+id/payload values and the raw error column are never returned or persisted.
 """
 
 from __future__ import annotations
@@ -43,6 +46,16 @@ from pathlib import Path
 NOTE_PREFIX = "one-shot-fire-outcome|"
 CORRECTION_PREFIX = "fire-outcome-correction|"
 TERMINAL_OUTCOMES = frozenset({"succeeded", "failed"})
+# Dispatch-terminal verdicts (plan
+# docs/history/plans/2026-11-18-fire-outcome-dispatch-failure-skip-blind-spot.md):
+# final per-fire dispatch verdicts whose payload never ran (outcome empty).
+# This mapping is the single owner of the dispatch vocabulary; every
+# classing path reads it through dispatch_terminal_class and never carries
+# its own dispatch literal.
+DISPATCH_CLASS_TOKENS = {
+    "failed_to_dispatch": "dispatch-failed",
+    "skipped": "asleep-skip",
+}
 CORRECTION_STATUSES = ("pending", "done", "ambiguous")
 RETENTION_CAP = 30
 UNKNOWN = "unknown"
@@ -62,6 +75,7 @@ REQUIRED_RUN_COLUMNS = frozenset(
         "scheduled_at",
         "dispatch_status",
         "outcome",
+        "attempts",
         "session_id",
         "created_at",
         "updated_at",
@@ -69,6 +83,16 @@ REQUIRED_RUN_COLUMNS = frozenset(
 )
 REQUIRED_TASK_COLUMNS = frozenset({"workspace_key", "task_id", "meta_json"})
 REQUIRED_AUTOMATION_COLUMNS = frozenset({"automation_id", "workspace_key", "prompt"})
+# The automations columns the census predicate reads. The recurring column
+# appeared on no recorded schema surface before the 2026-11-14 read-only
+# probe receipt (plan
+# docs/history/plans/2026-11-14-post-fire-verification-arm-zero-executions.md
+# Assumptions), so the census query references only probed columns; the
+# execution-time re-probe receipt lives in census_members' docstring and
+# the run's task log.
+REQUIRED_CENSUS_AUTOMATION_COLUMNS = frozenset(
+    {"automation_id", "workspace_key", "recurring"}
+)
 
 # The only lastError.attribution members the adapter may extract. Everything
 # else in the task row (message, detail, request ids, provider payload) is
@@ -133,6 +157,22 @@ def _unknown(reason, **extra):
     return result
 
 
+def dispatch_terminal_class(dispatch_status, attempts):
+    """Map a final dispatch verdict to its terminal non-success class, or
+    None when the verdict is not dispatch-terminal. The compound error
+    value mirrors the existing exceptionKind/reason slash form; a null
+    attempts value renders ``attempts=unknown``. Only the structured
+    columns feed the value: the row's raw error message is never read."""
+    token = DISPATCH_CLASS_TOKENS.get(dispatch_status)
+    if token is None:
+        return None
+    attempts_token = UNKNOWN if attempts is None else str(int(attempts))
+    return {
+        "outcome": "failed",
+        "error_class": "%s/attempts=%s" % (token, attempts_token),
+    }
+
+
 class SourceUnavailable(Exception):
     """Raised by :func:`read_workspace_runs` when the task-index source is
     unavailable (missing database file, sqlite error, missing table, or
@@ -158,7 +198,11 @@ def read_fire_outcome(db_path, automation_id, scheduled_at_ms, workspace_key):
     """Read one terminal fire outcome keyed by automation id, fire time, and
     workspace key. Require exactly one terminal row at the expected
     ``scheduled_at``; missing database/schema or absent, ambiguous, or
-    nonterminal rows yield unknown. Read-only over the whole database."""
+    nonterminal rows yield unknown. A final ``failed_to_dispatch`` or
+    ``skipped`` dispatch verdict reads terminal failed through
+    :func:`dispatch_terminal_class` even with an empty outcome, and the
+    session-attribution branch runs only for genuinely executed failed
+    rows. Read-only over the whole database."""
     try:
         conn = _connect_ro(db_path)
     except FileNotFoundError:
@@ -176,7 +220,8 @@ def read_fire_outcome(db_path, automation_id, scheduled_at_ms, workspace_key):
             missing = sorted(REQUIRED_RUN_COLUMNS - columns)
             return _unknown("missing-columns", table=_RUNS_TABLE, missing=missing)
         cur = conn.execute(
-            "SELECT run_id, outcome, session_id, dispatch_status, updated_at"
+            "SELECT run_id, outcome, session_id, dispatch_status, attempts,"
+            " updated_at"
             " FROM %s WHERE automation_id = ? AND workspace_key = ?"
             " AND scheduled_at = ?" % _RUNS_TABLE,
             (automation_id, workspace_key, int(scheduled_at_ms)),
@@ -188,7 +233,25 @@ def read_fire_outcome(db_path, automation_id, scheduled_at_ms, workspace_key):
         return _unknown("missing-event")
     if len(rows) > 1:
         return _unknown("ambiguous", matched_run_ids=[r[0] for r in rows])
-    run_id, outcome, session_id, dispatch_status, updated_at = rows[0]
+    run_id, outcome, session_id, dispatch_status, attempts, updated_at = rows[0]
+    dispatch_class = dispatch_terminal_class(dispatch_status, attempts)
+    if dispatch_class is not None:
+        # a final dispatch verdict is terminal non-success evidence on its
+        # own: no session attribution is consulted for a row whose payload
+        # never ran
+        return {
+            "status": "terminal",
+            "reason": "ok",
+            "outcome": dispatch_class["outcome"],
+            "run_id": run_id,
+            "automation_id": automation_id,
+            "scheduled_at": int(scheduled_at_ms),
+            "workspace_key": workspace_key,
+            "session_id": session_id or UNKNOWN,
+            "updated_at": updated_at,
+            "error_class": dispatch_class["error_class"],
+            "retryable": None,
+        }
     if outcome not in TERMINAL_OUTCOMES:
         return _unknown(
             "nonterminal",
@@ -310,13 +373,14 @@ def read_workspace_runs(db_path, workspace_key, since_ms):
                 prompts = {row[0]: row[1] for row in cur.fetchall()}
             cur = conn.execute(
                 "SELECT run_id, automation_id, scheduled_at, outcome, session_id,"
-                " dispatch_status, updated_at FROM %s"
+                " dispatch_status, attempts, updated_at FROM %s"
                 " WHERE workspace_key = ? AND scheduled_at >= ?"
                 " ORDER BY scheduled_at ASC, run_id ASC" % _RUNS_TABLE,
                 (workspace_key, int(since_ms)),
             )
             for row in cur.fetchall():
-                run_id, automation_id, scheduled_at, outcome, session_id, dispatch_status, updated_at = row
+                run_id, automation_id, scheduled_at, outcome, session_id, \
+                    dispatch_status, attempts, updated_at = row
                 runs.append(
                     {
                         "run_id": run_id,
@@ -325,6 +389,7 @@ def read_workspace_runs(db_path, workspace_key, since_ms):
                         "outcome": outcome,
                         "session_id": session_id,
                         "dispatch_status": dispatch_status,
+                        "attempts": attempts,
                         "updated_at": updated_at,
                         "prompt": prompts.get(automation_id),
                     }
@@ -345,13 +410,19 @@ def normalize_prompt(prompt):
 def find_overlaps(runs):
     """Compare terminal-run intervals (``scheduled_at`` through terminal
     ``updated_at``) pairwise and report overlapping intervals as candidates
-    with both run ids. Compare normalized prompts only when both are
-    available, else report ``mandate_match: "unknown"``. Timing alone never
-    claims a duplicate mandate, and nothing here prevents, cancels, or
-    reschedules a carrier."""
+    with both run ids. A dispatch-terminal row (a final dispatch verdict
+    classified through :func:`dispatch_terminal_class`) is terminal
+    evidence too, so its interval is retained even with an empty outcome.
+    Compare normalized prompts only when both are available, else report
+    ``mandate_match: "unknown"``. Timing alone never claims a duplicate
+    mandate, and nothing here prevents, cancels, or reschedules a
+    carrier."""
     intervals = []
     for index, run in enumerate(runs):
-        if run.get("outcome") not in TERMINAL_OUTCOMES:
+        dispatch_class = dispatch_terminal_class(run.get("dispatch_status"),
+                                                 run.get("attempts"))
+        if run.get("outcome") not in TERMINAL_OUTCOMES \
+                and dispatch_class is None:
             continue
         start = run.get("scheduled_at")
         end = run.get("updated_at")
@@ -387,6 +458,268 @@ def find_overlaps(runs):
                 }
             )
     return candidates
+
+
+# ---------------------------------------------------------------------------
+# Census enumeration (the post-fire verification arm's survey-side member
+# census; read-only over the store, report-only, writes nothing)
+# ---------------------------------------------------------------------------
+
+
+def _census_unknown(reason, workspace_key, since_ms, now_ms, **extra):
+    """The census verdict for an unavailable source: a visible unknown
+    with an empty member set and an unknown unwired signal, never an
+    indistinguishable empty report."""
+    verdict = {
+        "status": UNKNOWN,
+        "reason": reason,
+        "workspace_key": workspace_key,
+        "since_ms": since_ms,
+        "now_ms": now_ms,
+        "members": [],
+        "eligible_count": 0,
+        "unwired": UNKNOWN,
+        "unwired_reason": "census-source-unavailable",
+        "trace_state_status": "unknown",
+        "trace_index_status": "unknown",
+    }
+    verdict.update(extra)
+    return verdict
+
+
+def _trace_state_surface(state_path):
+    """Read the scheduler state's outcome-note keys. Returns
+    ``(status, keys)`` with status ``ok``, ``unsupplied``, ``absent``, or
+    ``unreadable``. A supplied path whose file does not exist is absent,
+    and an unreadable surface never reads as empty, so the unwired signal
+    degrades to unknown instead of a false no-traces."""
+    if state_path is None:
+        return "unsupplied", set()
+    path = Path(state_path)
+    if not path.is_file():
+        return "absent", set()
+    try:
+        _, state = _load_state(path)
+    except (OSError, ValueError):
+        return "unreadable", set()
+    keys = set()
+    for entry in state.get("notes") or []:
+        key = outcome_note_key(entry.get("note") if isinstance(entry, dict) else None)
+        if key is not None:
+            keys.add(key)
+    return "ok", keys
+
+
+def _trace_index_surface(index_path):
+    """Read the memory index lines for correction-key matching. Same
+    surface-status vocabulary as :func:`_trace_state_surface`; the index
+    reader's empty-file behavior is never reachable for a supplied path,
+    because a missing file is absent."""
+    if index_path is None:
+        return "unsupplied", []
+    path = Path(index_path)
+    if not path.is_file():
+        return "absent", []
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "unreadable", []
+    return "ok", _split_lines(raw)
+
+
+def census_members(db_path, workspace_key, since_ms=None, now_ms=None,
+                   state_path=None, index_path=None):
+    """Enumerate the post-fire verification arm's member set from the
+    task-index fire ledger, runs-driven: each retained ``automation_runs``
+    row at ``scheduled_at`` inside the lookback window enumerates a
+    candidate member keyed ``(automation_id, scheduled_at)``, left-joined
+    to its automations record where present.
+
+    Classification: a record present with ``recurring = 1`` never becomes
+    a member at all (the census predicate reads ``recurring = 0`` only);
+    a run outcome that is neither terminal nor a dispatch-terminal verdict
+    (classified through :func:`dispatch_terminal_class`), or an aged-out
+    record (no joined automations row), lists its member in the unknown
+    class; only a record present with ``recurring = 0`` and a terminal
+    outcome or a dispatch-terminal verdict counts eligible. An aged-out
+    terminal member stays processable through the arm's existing writes
+    (they read only the run rows); its record-derived ``recurring`` field
+    is reported unknown and it never counts eligible.
+
+    The unwired signal is report-only arm health: true when eligible
+    members exist and zero traces (``one-shot-fire-outcome|`` notes or
+    ``fire-outcome-correction|`` entries) exist for any member, false when
+    a trace exists for at least one member, unknown when no eligible
+    member remains or an optional trace surface was not supplied, is
+    absent, or is unreadable. Unsupplied, absent, and unreadable surfaces
+    never produce a false unwired.
+
+    The lookback window defaults to 24 hours (``now - DEFAULT_WINDOW_MS``
+    through ``now``, so consecutive survey turns overlap the passed-fire
+    horizon); an explicit ``since_ms`` overrides the lower bound and
+    ``now_ms`` pins the clock for fixtures.
+
+    Read-only over the store (``mode=ro`` URI). A missing store file,
+    table, required column, or any sqlite error yields a status-unknown
+    verdict (the sibling unavailable-source shape) and never raises.
+
+    Schema receipt: referenced columns are exactly the execution-time
+    probed ones (2026-11-19 read-only ``PRAGMA table_info`` probe of the
+    live ``~/.zcode/v2/tasks-index.sqlite``, extending the 2026-11-14
+    authoring probe, plus the ``attempts`` column witnessed by the
+    2026-11-18 read-only ledger probe recorded in plan
+    docs/history/plans/2026-11-18-fire-outcome-dispatch-failure-skip-blind-spot.md):
+    automation_runs ``run_id``, ``automation_id``,
+    ``workspace_key``, ``scheduled_at``, ``outcome``, ``session_id``,
+    ``dispatch_status``, ``attempts``; automations ``automation_id``,
+    ``workspace_key``, ``recurring``."""
+    if now_ms is None:
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    now_ms = int(now_ms)
+    since_ms = now_ms - DEFAULT_WINDOW_MS if since_ms is None else int(since_ms)
+    try:
+        conn = _connect_ro(db_path)
+    except FileNotFoundError as exc:
+        return _census_unknown("missing-database", workspace_key, since_ms,
+                               now_ms, path=str(db_path))
+    except sqlite3.Error as exc:
+        return _census_unknown("db-error", workspace_key, since_ms, now_ms,
+                               detail=str(exc))
+    try:
+        try:
+            columns = _table_columns(conn, _RUNS_TABLE)
+            if columns is None:
+                return _census_unknown("missing-table", workspace_key,
+                                       since_ms, now_ms, table=_RUNS_TABLE)
+            if not REQUIRED_RUN_COLUMNS.issubset(columns):
+                return _census_unknown(
+                    "missing-columns", workspace_key, since_ms, now_ms,
+                    table=_RUNS_TABLE,
+                    missing=sorted(REQUIRED_RUN_COLUMNS - columns))
+            auto_columns = _table_columns(conn, _AUTOMATIONS_TABLE)
+            if auto_columns is None:
+                return _census_unknown("missing-table", workspace_key,
+                                       since_ms, now_ms,
+                                       table=_AUTOMATIONS_TABLE)
+            if not REQUIRED_CENSUS_AUTOMATION_COLUMNS.issubset(auto_columns):
+                return _census_unknown(
+                    "missing-columns", workspace_key, since_ms, now_ms,
+                    table=_AUTOMATIONS_TABLE,
+                    missing=sorted(REQUIRED_CENSUS_AUTOMATION_COLUMNS
+                                   - auto_columns))
+            cur = conn.execute(
+                "SELECT r.run_id, r.automation_id, r.scheduled_at, r.outcome,"
+                " r.session_id, r.dispatch_status, r.attempts, a.recurring"
+                " FROM %s r LEFT JOIN %s a"
+                " ON a.automation_id = r.automation_id"
+                " AND a.workspace_key = r.workspace_key"
+                " WHERE r.workspace_key = ? AND r.scheduled_at >= ?"
+                " AND r.scheduled_at <= ?"
+                " ORDER BY r.scheduled_at ASC, r.run_id ASC"
+                % (_RUNS_TABLE, _AUTOMATIONS_TABLE),
+                (workspace_key, since_ms, now_ms),
+            )
+            rows = cur.fetchall()
+        except sqlite3.Error as exc:
+            return _census_unknown("db-error", workspace_key, since_ms,
+                                   now_ms, detail=str(exc))
+    finally:
+        conn.close()
+
+    state_status, state_note_keys = _trace_state_surface(state_path)
+    index_status, index_lines = _trace_index_surface(index_path)
+    grouped = {}
+    for (run_id, automation_id, scheduled_at, outcome, session_id,
+         dispatch_status, attempts, recurring) in rows:
+        key = (automation_id, int(scheduled_at))
+        grouped.setdefault(key, []).append(
+            (run_id, outcome, session_id, dispatch_status, attempts,
+             recurring))
+    members = []
+    for (automation_id, scheduled_at) in sorted(grouped):
+        entries = grouped[(automation_id, scheduled_at)]
+        recurring = entries[0][5]
+        record_present = recurring is not None
+        if record_present and recurring != 0:
+            # the census predicate reads recurring = 0 only: a recurring
+            # record never becomes a member at all
+            continue
+        run_id, outcome, session_id, dispatch_status, attempts, _ = \
+            entries[0]
+        if len(entries) > 1:
+            unknown_reason = "ambiguous"
+        elif not record_present:
+            unknown_reason = "aged-out"
+        elif outcome not in TERMINAL_OUTCOMES and \
+                dispatch_terminal_class(dispatch_status, attempts) is None:
+            unknown_reason = "nonterminal"
+        else:
+            unknown_reason = None
+        if state_status == "ok":
+            note_state = ("present"
+                          if (automation_id, str(scheduled_at)) in state_note_keys
+                          else "absent")
+        else:
+            note_state = UNKNOWN
+        if index_status == "ok":
+            bodies = {line for line in index_lines
+                      if line.startswith(_correction_key(automation_id,
+                                                          scheduled_at))}
+            if len(bodies) > 1:
+                correction_state = "ambiguous"
+            else:
+                correction_state = "present" if bodies else "absent"
+        else:
+            correction_state = UNKNOWN
+        member = {
+            "automation_id": automation_id,
+            "scheduled_at": scheduled_at,
+            "outcome": outcome,
+            "session_id": session_id or UNKNOWN,
+            "run_id": run_id,
+            "dispatch_status": dispatch_status,
+            "record_present": record_present,
+            "recurring": recurring if record_present else UNKNOWN,
+            "eligible": unknown_reason is None,
+            "class": "eligible" if unknown_reason is None else "unknown",
+            "unknown_reason": unknown_reason,
+            "note_state": note_state,
+            "correction_state": correction_state,
+        }
+        if len(entries) > 1:
+            member["matched_run_ids"] = sorted(entry[0] for entry in entries)
+        members.append(member)
+    members.sort(key=lambda member: (member["scheduled_at"],
+                                     member["automation_id"]))
+    eligible_count = sum(1 for member in members if member["eligible"])
+    if eligible_count == 0:
+        unwired, unwired_reason = UNKNOWN, "no-eligible-member"
+    else:
+        unwired, unwired_reason = True, "no-traces"
+        for bad_status in ("unsupplied", "absent", "unreadable"):
+            if state_status == bad_status or index_status == bad_status:
+                unwired, unwired_reason = UNKNOWN, \
+                    "trace-surface-%s" % bad_status
+                break
+        else:
+            for member in members:
+                if member["note_state"] == "present" or \
+                        member["correction_state"] in ("present", "ambiguous"):
+                    unwired, unwired_reason = False, "traces-present"
+                    break
+    return {
+        "status": "ok",
+        "reason": "ok",
+        "workspace_key": workspace_key,
+        "since_ms": since_ms,
+        "now_ms": now_ms,
+        "members": members,
+        "eligible_count": eligible_count,
+        "unwired": unwired,
+        "unwired_reason": unwired_reason,
+        "trace_state_status": state_status,
+        "trace_index_status": index_status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -785,14 +1118,15 @@ def rederive_missing_corrections(db_path, index_path, workspace_key,
                                  automation_id=None, state_path=None,
                                  since_ms=None):
     """Re-derive missing corrections from terminal runtime rows still
-    retained for the workspace: for each terminal row's exact key, read the
-    index; an absent correction retries the append (coalescing with a
-    peer's identical entry), a conflicting body is reported ambiguous, and
-    a confirmed correction marks the outcome note resolved (correction=done)
-    only after the index confirms the exact derived body: a single
-    same-key entry whose body differs from the derived body is ambiguous,
-    keeps the note pending, and writes nothing to the index. Aged-out
-    state notes are re-derived
+    retained for the workspace (a dispatch-terminal row counts terminal
+    through :func:`dispatch_terminal_class`): for each terminal row's exact
+    key, read the index; an absent correction retries the append (coalescing
+    with a peer's identical entry), a conflicting body is reported
+    ambiguous, and a confirmed correction marks the outcome note resolved
+    (correction=done) only after the index confirms the exact derived body:
+    a single same-key entry whose body differs from the derived body is
+    ambiguous, keeps the note pending, and writes nothing to the index.
+    Aged-out state notes are re-derived
     from the retained runtime rows; a run row aged out or a source
     unavailable yields unknown and infers nothing. An unavailable source
     (missing database, db error, missing table, or missing required
@@ -813,7 +1147,9 @@ def rederive_missing_corrections(db_path, index_path, workspace_key,
     for run in runs:
         if automation_id is not None and run["automation_id"] != automation_id:
             continue
-        if run["outcome"] not in TERMINAL_OUTCOMES:
+        dispatch_class = dispatch_terminal_class(run.get("dispatch_status"),
+                                                 run.get("attempts"))
+        if run["outcome"] not in TERMINAL_OUTCOMES and dispatch_class is None:
             report.append({"automation_id": run["automation_id"],
                            "scheduled_at": run["scheduled_at"],
                            "status": "unknown", "reason": "nonterminal"})
@@ -907,6 +1243,19 @@ def main(argv=None):
     p_rederive.add_argument("--state", default=None)
     p_rederive.add_argument("--since-ms", type=int, default=0)
 
+    p_census = sub.add_parser(
+        "census", help="enumerate the post-fire verification arm's member set")
+    _add_common(p_census)
+    p_census.add_argument("--since-ms", type=int, default=None,
+                          help="lookback window lower bound, epoch ms"
+                               " (default: now-24h)")
+    p_census.add_argument("--state", default=None,
+                          help="explicit scheduler-state trace surface"
+                               " (optional; never defaulted)")
+    p_census.add_argument("--index", default=None,
+                          help="explicit memory-index trace surface"
+                               " (optional; never defaulted)")
+
     args = parser.parse_args(argv)
     db_path = resolve_db_path(args.db)
 
@@ -958,6 +1307,15 @@ def main(argv=None):
             db_path, args.index, args.workspace_key,
             state_path=args.state, since_ms=args.since_ms)
         print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "census":
+        # warning-only: every classified census verdict exits 0
+        verdict = census_members(db_path, args.workspace_key,
+                                 since_ms=args.since_ms,
+                                 state_path=args.state,
+                                 index_path=args.index)
+        print(json.dumps(verdict, indent=2, sort_keys=True))
         return 0
     return 2
 

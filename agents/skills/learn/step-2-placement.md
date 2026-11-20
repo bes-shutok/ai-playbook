@@ -139,7 +139,7 @@ After placing a lesson in the project-resolved development-lessons path (for exa
 
 **Why this matters:** The instruction files are always loaded during tasks, but `development_lessons.md`
 is loaded only when explicitly mentioned. Without cross-references, a lesson may exist in the corpus but never be
-consulted when it's most relevant. Cross-references bridge this gap.
+consulted when it's most relevant. Cross-references bridge this gap. When the instruction-file citation is not load-bearing, wire the lesson's discoverability corpus-side at placement time - a See-also from its family sibling, or a one-line disposition note recording why no surface citation fires - so the corpus never accumulates silent orphans (the 2026-11-15 orphan sweep is the standing witness).
 
 **Example:** Lesson #67 (Futures/Derivatives Liquidation Mechanics) should be referenced in the crypto capital gains
 constraints section because that's where agents work with derivatives reporting. Lesson #68 (Decision Point Flags)

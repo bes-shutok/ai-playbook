@@ -7,6 +7,7 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Agent / owner | Log path |
 |-------|----------|
 | Implement task N | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
+| Pre-acceptance recovery worker task N | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-recovery.log.md` |
 | Intermediate task review task N (Step 1.2b, parent-owned) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-review.log.md` |
 | Phase 3 review round R (parent default, or recovery orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
@@ -18,6 +19,8 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 A `task_boundary:` manifest row is the parent's record that the boundary completed (the Step 1.4 light boundary for every task, and the same boundary per review iteration at Step 3.4), naming the commit sha, the verification results, the created backlog paths, the learn and investigate commit receipts, and any changed paths outside the task's Files list (report-only); the per-task log handoff contract is unchanged and the implement log remains the per-task learn input.
 
 The run briefing is not a log: the orchestrator owns and rewrites it (workers read it and never edit it), it carries run-level context (digest, decisions and folds, conventions, base tip) for worker prompts, and citing it to any worker, the boundary's learn included, never widens the preceding-step-only log handoff defined below. The create-versus-append discipline of this file does not apply to the briefing.
+
+A pre-acceptance recovery worker uses the task recovery log above, never the original implement log. It records the verified original-worker termination evidence, exact restored plan digest, independently checked task-scope digest, existing changed paths, fresh validation identities/results, and its own result. It does not write a receipt into `runtime_state.json`; the parent accepts only this distinct worker's terminal evidence.
 
 The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent-executed Step 1.4 light boundary reads the path itself, required only when Step 1.2b ran for the task.
 
@@ -49,7 +52,7 @@ The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; incre
 
 This matters most for **address review** (`review-r<R>-receiving-review.log.md`): Step 3.3 may be relaunched within round R; a retry must append Pass 2+, not clobber Pass 1.
 
-Apply the same create/append rules to implement logs, the per-task intermediate review log (`task-<N>-review.log.md`), address-review logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). Lens workers do not own a log path.
+Apply the same create/append rules to implement logs, the per-task intermediate review log (`task-<N>-review.log.md`), address-review logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). Lens workers do not own a log path of their own; an emit-early path the parent names for the liveness duty (append verified-so-far findings before each deep verification pass) is the one exception.
 
 ## Heartbeat (Phase 3 review log)
 
@@ -91,7 +94,7 @@ When the owning step ends (workers returned, staging doc synthesized) and before
 
 ## Log file format (required)
 
-**Ownership:** implement and receiving-review workers update their assigned log before returning. Phase 3 lens workers have no log path and return findings only. Step 1.2b intermediate review workers likewise have no log path and return findings only; the parent appends their pass to `task-<N>-review.log.md`. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
+**Ownership:** implement and receiving-review workers update their assigned log before returning. Phase 3 lens workers and Step 1.2b intermediate review workers own no log path of their own and return findings only; an emit-early path the parent names for the liveness duty (append verified-so-far findings before each deep verification pass) is the one exception. The parent appends their pass to the per-task intermediate review log. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
 
 Workers that own a log path **update it before returning** (create or append per table above). Minimum sections per pass:
 
@@ -127,7 +130,7 @@ Workers that own a log path **update it before returning** (create or append per
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
-For a stack-task worker pass, record separate **Task-specific validation** and **Repository-standard suite** command/result lists, the authoritative guidance and inventory, and fresh output identities before the boundary. Missing commands, incomplete inventory, unavailable commands, or failures block; after repair rerun both sets. The parent owns the light-boundary commit and appends its SHA and branch-head binding to the post-boundary return; workers do not claim a future commit.
+For a stack-task worker pass, record the command/result lists the target's suite policy requires for this boundary: **Task-specific validation** and the scope-intersecting plan commands, with fresh output identities before the boundary; at the run's final stack-task boundary under `full-before-final`, the policy's final-boundary obligation adds the **complete-suite** command/result list. Missing commands, unavailable commands, or failures block; after repair rerun the boundary's validation set. The parent owns the light-boundary commit and appends its SHA and branch-head binding to the post-boundary return; workers do not claim a future commit.
 
 A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy; for the implement pass, the coverage must be complete across the task's acceptance criteria the implement step owns AND across every scope-intersecting plan validation command for the implement pass (a `## Validation Commands` entry whose subject paths intersect the task's declared file scope; every intersecting boundary accounts for the command per the Bound task rule, which decides only the green-run versus witnessed-deferral arm), with each such command's identity and exit status recorded in `Commands run`; an implement-owned criterion without a coverage mapping routes the return to blocked exactly as today, a scope-intersecting command with no recorded run routes the same way, and a scope-intersecting command recorded with a non-zero exit routes the same way unless a later re-run of the same command inside the task is recorded in `Commands run` with exit zero; a non-zero exit at a boundary whose later task's Files list intersects the command's subject paths is recorded as deferred with the owning task named in `Commands run` (the earliest such later task owns the green run), and the witnessed deferral is not a blocked route; review-iteration passes are unchanged by this clause. The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
 

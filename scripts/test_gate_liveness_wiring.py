@@ -16,7 +16,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRICTION_AUDIT = os.path.join(
     REPO_ROOT, "docs", "maintenance", "recurring-tasks", "friction-audit.md"
 )
-PLANS_SKILL = os.path.join(REPO_ROOT, "agents", "skills", "plans", "SKILL.md")
+PLANS_PLAN_FORMAT = os.path.join(REPO_ROOT, "agents", "skills", "plans", "plan-format.md")
 REVIEW_PLAN_SKILL = os.path.join(
     REPO_ROOT, "agents", "skills", "review-plan", "SKILL.md"
 )
@@ -40,7 +40,7 @@ class LivenessWiringDeclarationTest(unittest.TestCase):
             self.assertIn(span, body)
 
     def test_gate_delta_citation_declared(self):
-        body = read(PLANS_SKILL)
+        body = read(PLANS_PLAN_FORMAT)
         for span in (
             "Gate delta ledger citation",
             "gate_liveness_ledger.py show",
@@ -59,7 +59,7 @@ class LivenessWiringDeclarationTest(unittest.TestCase):
         friction_audit = read(FRICTION_AUDIT)
         self.assertIn("Filing rule", friction_audit)
         self.assertIn("Caps", friction_audit)
-        self.assertIn("scope_classification_problem", read(PLANS_SKILL))
+        self.assertIn("scope_classification_problem", read(PLANS_PLAN_FORMAT))
         self.assertIn("Declaration findings", read(REVIEW_PLAN_SKILL))
 
 

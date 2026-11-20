@@ -4490,20 +4490,21 @@ When the identical command behaves differently in the agent shell versus the use
 
 ## 212. Route Data-Decidable Choices to the Evidence, Not the User
 
-**Principle:** Family H (verify the real thing, not the abstraction). The real thing is the data evidence within reach; "needs the user's choice" is a process abstraction that can mask a question the evidence already settles.
+**Principle:** Family H (verify the real thing, not the abstraction). Data that decides a choice is stronger than a process label such as "user-owned" or "needs approval."
 
-**Trigger:** A workflow reaches a choice point (add a hardcoded constant, populate a registry, pick a data source, disposition a discrepancy cluster) and the agent prepares to ask the user which option to take, or a plan labels the step "user-owned"/"awaiting user approval".
+**Trigger:** A workflow reaches a choice point and the agent is about to ask the user to choose, defer the work, or wait for more evidence.
 
 **Rule:**
-1. Before asking the user to choose, check whether data in reach decides it: local artifacts, public endpoints, cross-source amount comparisons, contract-declared values. If it does, act on the evidence, record the evidence next to the decision, and report.
-2. Escalate only what evidence cannot settle: preference, genuine ambiguity, legal or tax judgment, or a standing invariant the user owns (a frozen design table, a flip gate). Arrive with a recommendation even then.
-3. When a standing rule (for example "flag hardcoded values before adding them") forces a formal ask for something the data already proved, record the relaxation at that rule's home so the formality is not repeated every time.
+1. Check whether available sources settle the choice. If they do, act on the evidence, record it, and report.
+2. Escalate only preferences, genuine ambiguity, legal judgment, or an invariant the user owns; bring a recommendation.
+3. If a standing rule forces an ask after evidence has settled the choice, record the needed relaxation at that rule's home.
+4. When a proposed threshold relies on an incident, compare the incident with that threshold. If it meets the evidence bar, treat it as sufficient and present a concrete repair with its costs; do not ask for another catch or default to warning-only.
 
-**Why:** Across one session the user three times rejected deferral of derivable work: a registry population framed as a user-owned manual action (all sources were public and agent-reachable), a ticker-identity alias submitted for approval when per-transaction amounts on both sides already proved the tokens identical, and disposition-by-disposition asks for clusters whose amounts agreed. Formal asks for decidable questions waste the owner's time and stall pipelines; the owner's words: show me only what genuinely needs additional input.
+**Why:** Repeated asks and deferrals waste time when evidence already decides the choice. A later plan discussion proposed waiting for another catch even though its source described an actual failure; the user pointed to that witness, and the plan moved to a concrete repair.
 
 **Shape:** An "awaiting user approval" item whose deciding evidence is one query away.
 
-**Example:** A validation harness needed a ticker alias (a token contract declaring a Unicode-glyph symbol while the baseline source and exchanges use the ASCII spelling; equal per-transaction amounts under both spellings). Framed as needing explicit approval under a no-hardcoded-values rule; the owner pointed out the data proved identity, delegated evidence-decisive decisions generally, and the alias landed with the evidence recorded and a delegation note at the rule's home.
+**Example:** A validation harness proposed a ticker alias for approval even though contract data and equal transaction amounts proved the two spellings referred to the same asset. The alias landed with its evidence recorded.
 
 **See also:** coding_guidelines.md #25 (Family H parent); skill-mandated confirmation gates remain binding (those are the owner's hard stops, not data questions); the project's decision-authority delegation record in its validation-harness maintenance doc.
 
@@ -5114,7 +5115,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Why:** a scheduling plan captured the machine's UTC+1 offset during a chat, then baked local-clock arithmetic into examples; the user corrected that the offset is not fixed (DST and travel change it), and the fix was to render via the system zone read at cycle time, keeping only the server-side +08 decode as a named constant.
 
-**See also:** #72 (verify plan-time claims before writing tasks), #246 (probe claims, not absence-greps).
+**See also:** #72 (verify plan-time claims before writing tasks), #246 (probe claims, not absence-greps), `python_guidelines.md` #42 (a fixed-offset `tzinfo` is not the system's future transition rule).
 
 ## 256. Output-language constraints bind every line, especially the low-attention ones
 
@@ -9105,3 +9106,64 @@ the edits per turn and reading spans would have cut both.
 **See also:** #254 (stop probe rounds after a clean verdict - the same
 economics in the review loop), #563 (name deliberately uncommitted state -
 the same run-report discipline family).
+
+## 565. Pin the Caller's Choice Between a Strict and a Lenient Sibling
+
+**Rule:** when a module offers a strict operation that rejects bad input and a lenient sibling that skips or returns empty, a fail-closed guarantee that rests on one caller using the strict variant needs a caller-level test that drives a rejected input through that caller. Otherwise a refactor that reuses the tolerant helper "by analogy" turns a rejection into a silent allow.
+
+**Principle:** Family B (error-policy propagation: the raise-versus-degrade policy belongs to each call site and must be carried over, not inherited from whichever helper is nearby).
+
+**Shape trigger:** a strict and a lenient variant of the same normalizer, parser or lookup live side by side, and a safety decision (suppression, authorization, deny list) relies on the strict one's exception.
+
+**Why:** witnessed 2026-11-15: a plan tightened a phone normalizer to reject unverifiable values. The decision path stayed fail-closed only because the strict variant's exception propagated uncaught, while the lenient variant used for reading stored values returned empty on the same input. Witnesses covered the normalizer and the lenient reader but not the decision caller. A reviewer showed that swapping in the lenient variant there answers "not suppressed". The fix pinned the caller (rejected input returns an error, never allow) and named the variant it must use.
+
+**See also:** #133 (propagate a discipline to every sibling call site), #81 (a fail-fast exception swallowed by a degrade wrapper).
+
+## 566. Derive Atomicity Claims From the Commit Sequence, Not the Request Shape
+
+**Rule:** before writing "all operations share one transaction" or "the whole update rolls back", read the orchestrator's own comments and its commit sequence: which stores commit separately, which step runs first, and what is written before the failing step. The observable outcome ("rejected before any write") is often right while the stated mechanism is wrong, and a wrong mechanism misleads the next reorder.
+
+**Principle:** Family H (verify the real thing, not the abstraction: the request looks atomic, the commits are not).
+
+**Shape trigger:** prose that explains why a multi-step request fails as a unit, written from the API shape.
+
+**Why:** witnessed 2026-11-15: a plan said a rejected input fails a whole external update "because all operations share one transaction". A review read the orchestrator's Javadoc (module commits are separate, no distributed rollback) and its ordering (identity steps run before the consent callback). The outcome held because validation ran before any write, not because anything rolled back. The test was reworded from "rolls back" to "rejected before any write, callback never runs", with a valid-input control.
+
+**See also:** #282 (probe the failure mechanism before pinning a fixture).
+
+## 567. A Reachability Probe Whose Exclusion Set Includes the Walked Subject Is Always Vacuous
+
+**Rule:** when computing what a ref (branch, tag, backup pointer) uniquely holds, enumerate every OTHER ref as an explicit exclusion (`git rev-list --count <ref> ^<other>...` per other ref); a `--not --all` or equivalent form includes the walked subject itself in the exclusion set and always returns zero, reading a sole holder as fully covered. Before trusting a zero uniqueness count, verify the exclusion set does not contain the walked subject; when a durable record pins the probe form, correct the record rather than re-running it.
+
+**Principle:** Family H (verify the real thing: the probe's set membership is the mechanism, and a self-including set silently certifies everything).
+
+**Shape trigger:** a uniqueness, orphan, or "what does only X hold" count over git refs or any graph query whose exclusion set is built from "everything", when that everything includes X.
+
+**Why:** witnessed 2026-11-16 (plans-authoring run): a backlog row prescribed `git rev-list --count <ref> --not --all` as the lineage-uniqueness probe; it read 0 for all three refs under disposition, including a sole holder carrying 9 commits reachable from no other ref, because `--all` includes the walked ref. The corrected exclusion probe read 0/0/9, and the vacuous zero was re-derived twice more (two independent review rounds confirmed the corrected form) before the correction entered the plan bytes. A deletion executed on the vacuous zero would have destroyed the lineage, the exact casualty class the row itself warned about.
+
+**See also:** #566 (derive mechanism claims from the real source, not the stated shape).
+
+## 568. Cite the Aggregate Line the Source Prints, Never a Hand-Summed Proxy
+
+**Rule:** when a record or report cites a count a tool publishes, the citation of record is the tool's own aggregate line read verbatim; a hand-built per-row sum (a regex over output rows) is a NEW claim that must be cross-checked against the printed total before it is cited, and a mismatch stops the write until resolved. When the aggregate line does not carry every cited figure, name where each figure lives (a per-row count, a column) instead of attributing all figures to one line.
+
+**Principle:** Family H (the printed total is the real thing; a hand sum over parsed rows is an abstraction that can double-count headers, metadata rows, and mirrored sections).
+
+**Shape trigger:** writing a citation sentence that quotes counts beside a tool's name, or summarizing tool output into a durable record.
+
+**Why:** witnessed 2026-11-16 (plans-authoring run): a plan's gate-delta citation summed a guard-liveness ledger through an awk per-row regex and recorded 43 guards / 60 catches / 98 incidents, while the script's own TOTAL line read 30 catches / 49 incidents over 42 guard rows; the discrepancy surfaced as a review finding, and the corrective fold's attribution wording ("the script's own TOTAL line") then carried a second imprecision (the TOTAL line holds no guards figure) that surfaced as the next round's residual. Two review rounds spent on one citation sentence.
+
+**See also:** #567 (a self-including probe is vacuous, the same verify-the-real-thing family), #566 (derive claims from the real source).
+
+
+## 569. A Heading-Bounded Splice Owns Only Its Own Section's Lines, Not the Whole Inter-Anchor Span
+
+**Rule:** before replacing or deleting a text span located between two structural anchors (entry headings, delimiter lines), verify every removed line belongs to the section being removed: other writers append records into the gap between sections, so a slice spanning from one anchor to the next deletes their interleaved content silently even though both anchors resolved correctly. Diff the removed span's first lines and last lines against the section's known body before writing the replacement, and after any section-anchored splice, grep the gap the section used to occupy for sibling records that should still be present.
+
+**Principle:** Family H (verify the real thing: the anchors bound the section, but ownership of the bytes between them is not implied by the anchors).
+
+**Shape trigger:** a scripted prune, receipt-replacement, or section removal in a rolling log or ledger where sibling receipts/records are appended between entry sections; strongest signal: the splice was derived from a heading listing (anchor names) rather than from reading the file's local structure.
+
+**Why:** witnessed 2026-11-17 (playbook repo, a maintenance exec run): replacing one EXEC-PROMPTS entry section with its prune receipt sliced from the entry heading to the next entry heading, deleting two sibling durable receipts that a parallel landing had appended between the entry body and the next heading; the landing receipt claimed no such deletion and the surface lost two records until the review panel caught it and they were restored byte-verbatim from the parent commit. A before/after size check would not have caught it (the receipt was close in size to the span); only reading what was actually removed did.
+
+**See also:** #567 (a self-including probe is vacuous - the same verify-set-membership family), #566 (derive mechanism claims from the real source).

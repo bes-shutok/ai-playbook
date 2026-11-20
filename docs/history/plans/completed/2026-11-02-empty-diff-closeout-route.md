@@ -2,7 +2,8 @@
 
 Backlog origins (scope of record):
 - docs/history/backlog/2026-10-31-plan-empty-diff-closeout-route.md
-- docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md
+
+Cluster: docs/history/backlog/2026-10-29-branch-only-closeout-terminal-state.md (sibling branch-only terminal-state design; not consumed by this plan and kept open by recorded decision, see Origins dispositions; moved here from the scope-of-record block 2026-11-08, backlog row docs/history/backlog/2026-11-08-coverage-gate-deliberately-open-scope-row.md)
 
 Required agent type: none (runtime-neutral)
 

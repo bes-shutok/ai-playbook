@@ -72,7 +72,7 @@ BOUNDARY_PARAGRAPH_SPAN = (
     "so docs-only focused panels stay valid; a living-documentation "
     "status claim on such a diff still requires the `doing-code-review` "
     "Step 2.5 guideline checks for the changed files' overlay, without "
-    "adding a `risk` worker. Within execute-plan Step 3.1 item 5, "
+    "adding a `risk` worker. Within execute-plan Step 3.1 item 6, "
     "doc/skill-only plans keep grep/hygiene commands as the `testing` "
     "worker's primary evidence."
 )

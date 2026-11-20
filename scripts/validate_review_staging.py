@@ -3725,8 +3725,12 @@ def _coverage_archive_twin(value: str) -> Path | None:
     if candidate.is_absolute():
         return None
     try:
-        cwd = Path.cwd()
-        anchor = repository_root(cwd) or cwd.resolve()
+        # The twin anchor follows the coverage resolution root (the --cwd
+        # coverage-link wiring fold): the wired root's checkout owns the
+        # plans layout the twin is derived from, the process cwd when the
+        # root is unwired (the embedded battery's in-process callers).
+        base = _coverage_root()
+        anchor = repository_root(base) or base.resolve()
         recorded = (anchor / candidate).resolve()
         recorded.relative_to(anchor)
         plans_dir, completed_dir = _coverage_plans_layout(anchor)
@@ -3743,9 +3747,25 @@ def _coverage_archive_twin(value: str) -> Path | None:
     return twin
 
 
+# The coverage-link resolution root (the --cwd coverage-link wiring): a
+# module-level override set from main()'s parsed ``--cwd`` value so a
+# validator invoked from another checkout resolves relative coverage links
+# against the flag's checkout; ``None`` keeps the historical process-cwd
+# root (the embedded battery's in-process callers).
+_coverage_resolution_root: Path | None = None
+
+
+def _coverage_root() -> Path:
+    """The active coverage-link resolution root: the ``--cwd`` value
+    resolved when main() wired it, else the process cwd."""
+    return _coverage_resolution_root if _coverage_resolution_root else Path.cwd()
+
+
 def _coverage_link_paths(value) -> list[Path]:
     """Resolve a coverage link value (artifact or sidecar path string)
-    against the process cwd and, when relative, also as recorded, then the
+    against the coverage resolution root (the wired ``--cwd`` value when
+    provided, the process cwd otherwise) and, when relative, also as
+    recorded, then the
     completed archive twin for an in-scope plans-layout path (appended
     last, unconditionally; see ``_coverage_archive_twin``). Returns the
     candidate paths for existence checks; consumers resolve the first
@@ -3756,7 +3776,17 @@ def _coverage_link_paths(value) -> list[Path]:
     candidate = Path(value)
     if candidate.is_absolute():
         return [candidate]
-    paths = [candidate, Path.cwd() / candidate]
+    root = _coverage_root()
+    if _coverage_resolution_root is None:
+        # Unwired: the historical pair (the bare candidate resolves
+        # against the process cwd, making the two entries duplicates the
+        # first-existing stop never distinguishes).
+        paths = [candidate, Path.cwd() / candidate]
+    else:
+        # Wired (--cwd): the flag's checkout is the only relative root; a
+        # bare process-cwd candidate here would let the invoking
+        # checkout's same-named file shadow the wired root's bytes.
+        paths = [root / candidate]
     twin = _coverage_archive_twin(value)
     if twin is not None:
         paths.append(twin)
@@ -3861,7 +3891,7 @@ def validate_replacement_links(
             result.add_error(
                 "coverage replacement entry for lens "
                 f"{lens!r} links a missing or unparseable original "
-                "artifact/sidecar pair"
+                f"artifact/sidecar pair (links resolve against {_coverage_root()})"
             )
             continue
         if not isinstance(linked, dict):
@@ -3915,7 +3945,7 @@ def validate_replacement_links(
             result.add_error(
                 "coverage inherited_coverage entry for lens "
                 f"{lens!r} links a missing or unparseable artifact/sidecar "
-                "pair"
+                f"pair (links resolve against {_coverage_root()})"
             )
             continue
         covered = False
@@ -4249,7 +4279,8 @@ def validate_coverage_contract(
                     f"{attempt.get('attempt_id')!r} may contribute "
                     "coverage only with prompt_scope and an existing "
                     "artifact/.stats.json sidecar pair whose sidecar "
-                    "parses (local-execution equivalence evidence)"
+                    "parses (local-execution equivalence evidence; "
+                    f"links resolve against {_coverage_root()})"
                 )
     # Verdict cross-field rules.
     verdict = payload.get("verdict")
@@ -5314,7 +5345,12 @@ def validate_soften_watchlist_agreement(
             "soften disagreement: Soften watchlist rows "
             f"{data_rows!r} != sidecar soften_watchlist {rows_count!r} "
             "(the soften record pair is the source of truth; render the "
-            "same rows)"
+            "same rows; a table row counts as data unless it is the "
+            "separator row, its first cell is empty, or its first cell "
+            "is `Round` in any letter case; render every sidecar row as "
+            "one data row under a header row that leads with `Round` as "
+            "in the skill's record-shape example, and render the section "
+            "as `None.` when the sidecar array is empty)"
         )
 
 
@@ -15551,7 +15587,10 @@ def _selftest_coverage_archive_twin(root: Path, check) -> None:
         f"docs/history/plans/../../../../{twin_only_name}",
     ]
 
+    global _coverage_resolution_root
     prior_cwd = os.getcwd()
+    prior_root = _coverage_resolution_root
+    _coverage_resolution_root = None
     try:
         os.chdir(fixture_root)
         expected_twin = twin_only_doc.resolve()
@@ -15662,6 +15701,148 @@ def _selftest_coverage_archive_twin(root: Path, check) -> None:
         )
     finally:
         os.chdir(prior_cwd)
+        _coverage_resolution_root = prior_root
+
+    # ---- --cwd coverage-link wiring (regression pin): a relative
+    # inherited-coverage link resolves under the wired resolution root
+    # while the process cwd sits elsewhere (the witnessed cross-checkout
+    # preflight failure), and the unresolvable-link error names the root
+    # actually used.
+    prior_cwd = os.getcwd()
+    prior_root = _coverage_resolution_root
+    try:
+        cwd_root = fixture_root / "cwd-link-root"
+        cwd_root.mkdir(parents=True, exist_ok=True)
+        link_name = f"{placeholder_stem}-cwd-link-r1.md"
+        link_round_coverage = {
+            "outcome": "clean",
+            "material_lens_set": ["testing"],
+            "completed": ["testing"],
+            "missing": [],
+            "attempts": [],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 15,
+                "per_worker_max": 2,
+            },
+        }
+        _write_staging(
+            cwd_root,
+            link_name,
+            _version1_markdown(),
+            _coverage_fixture_payload(
+                base, link_round_coverage, date="2026-09-16"
+            ),
+        )
+        link_artifact = link_name
+        link_sidecar = link_artifact[:-3] + ".stats.json"
+
+        def cwd_inherited_errors():
+            res = ValidationResult(Path("x"))
+            cov = {
+                "outcome": "clean",
+                "material_lens_set": ["testing"],
+                "completed": ["testing"],
+                "missing": [],
+                "attempts": [],
+                "retry_budget": {
+                    "per_attempt_timeout_minutes": 15,
+                    "per_worker_max": 2,
+                },
+                "inherited_coverage": [
+                    {
+                        "lens": "testing",
+                        "artifact": link_artifact,
+                        "sidecar": link_sidecar,
+                    }
+                ],
+            }
+            payload = _coverage_fixture_payload(base, cov)
+            validate_coverage_contract(payload, res, coverage_exempt=False)
+            return res.errors
+
+        def cwd_replacement_errors():
+            res = ValidationResult(Path("x"))
+            cov = {
+                "outcome": "replacement-covered",
+                "material_lens_set": ["testing"],
+                "completed": [],
+                "missing": ["testing"],
+                "attempts": [],
+                "retry_budget": {
+                    "per_attempt_timeout_minutes": 15,
+                    "per_worker_max": 2,
+                },
+                "replacement": [
+                    {
+                        "lens": "testing",
+                        "original_artifact": link_artifact,
+                        "original_sidecar": link_sidecar,
+                        "original_failure": "witnessed original failure",
+                    }
+                ],
+            }
+            payload = _coverage_fixture_payload(base, cov)
+            validate_coverage_contract(payload, res, coverage_exempt=False)
+            return res.errors
+
+        os.chdir(prior_cwd)
+        _coverage_resolution_root = None
+        unwired = cwd_inherited_errors()
+        empty_root = fixture_root / "cwd-link-empty"
+        empty_root.mkdir(parents=True, exist_ok=True)
+        _coverage_resolution_root = empty_root.resolve()
+        wired_miss = cwd_inherited_errors()
+        wired_miss_repl = cwd_replacement_errors()
+        _coverage_resolution_root = cwd_root.resolve()
+        wired = cwd_inherited_errors()
+        _coverage_resolution_root = prior_root
+        check(
+            "coverage --cwd wiring: an unwired root (process cwd outside "
+            "the link checkout) reports the inherited link missing",
+            any("missing or unparseable" in e for e in unwired),
+        )
+        check(
+            "coverage --cwd wiring: the unwired unresolvable-link error "
+            "names the resolution root it used",
+            any("links resolve against" in e for e in unwired),
+        )
+        check(
+            "coverage --cwd wiring: a wired miss names the wired root, "
+            "not the process cwd (an empty wired root is reported by its "
+            "own path)",
+            any(
+                "missing or unparseable" in e and str(empty_root) in e
+                for e in wired_miss
+            ),
+        )
+        check(
+            "coverage --cwd wiring: a wired replacement-entry miss names "
+            "the wired root on the replacement error site",
+            any(
+                "missing or unparseable original" in e
+                and str(empty_root) in e
+                for e in wired_miss_repl
+            ),
+        )
+        check(
+            "coverage --cwd wiring: a relative inherited-coverage link "
+            "resolves under the wired non-default root from a foreign cwd "
+            "end to end (the wired run is clean)",
+            wired == [],
+        )
+    finally:
+        os.chdir(prior_cwd)
+        _coverage_resolution_root = prior_root
+        check(
+            "coverage --cwd wiring: an unwired root (process cwd outside "
+            "the link checkout) reports the inherited link missing",
+            any("missing or unparseable" in e for e in unwired),
+        )
+        check(
+            "coverage --cwd wiring: the unwired unresolvable-link error "
+            "names the resolution root it used",
+            any("links resolve against" in e for e in unwired),
+        )
     check(
         "coverage archive twin: the cwd is restored after the fixture",
         os.getcwd() == prior_cwd,
@@ -15757,7 +15938,10 @@ def _selftest_source_flag_archive_twin(root: Path, check) -> None:
         "rec-kindrfc", fresh_bytes("kindrfc"), declared_kind="rfc"
     )
 
+    global _coverage_resolution_root
     prior_cwd = os.getcwd()
+    prior_root = _coverage_resolution_root
+    _coverage_resolution_root = None
     try:
         os.chdir(fixture_root)
         # ---- Source-flag-twin pin (RED): the operand names a missing
@@ -15834,6 +16018,7 @@ def _selftest_source_flag_archive_twin(root: Path, check) -> None:
         )
     finally:
         os.chdir(prior_cwd)
+        _coverage_resolution_root = prior_root
     check(
         "source-flag archive twin: the cwd is restored after the fixture",
         os.getcwd() == prior_cwd,
@@ -16950,6 +17135,59 @@ def _selftest_soften_parity(root: Path, check) -> None:
         and any(
             "soften disagreement" in e and "2" in e and "1" in e
             and "source of truth" in e
+            for e in res.errors
+        ),
+    )
+
+    # Undocumented-header shape: a Pattern-headed table's header row is
+    # counted as data (rounds-parity plan, Task 1 RED pin): the failure
+    # must name the counting rule, the Round-first header, and the None.
+    # empty form, so the producer fixes the shape without reading source.
+    pattern_rows = ["| Pattern | Status | Note |", "|---|---|---|", "| testing#weak-assertion | open | one-line note |"]
+    pattern_md = parity_md(None)
+    pattern_md = pattern_md.replace(
+        "### Soften watchlist\nNone.",
+        "### Soften watchlist\n" + "\n".join(pattern_rows),
+    )
+    pattern_head = stage(
+        "patternhead",
+        parity_payload([soften_row("weak-assertion")]),
+        pattern_md,
+    )
+    res = validate_staging_file(pattern_head, hard=True)
+    check(
+        "soften parity: a Pattern-headed header row counted as data fails naming Round and the None. empty form",
+        not res.ok
+        and any(
+            "soften disagreement" in e
+            and "Round" in e
+            and "None." in e
+            and "source of truth" in e
+            for e in res.errors
+        ),
+    )
+
+    # Direction-neutral rule statement: a Round-headed table with zero
+    # data rows beside a one-row array fails with the same rule statement
+    # and no too-many-rows-only advice.
+    zero_md = parity_md(None).replace(
+        "### Soften watchlist\nNone.",
+        "### Soften watchlist\n| Round | Pattern / finding | Anchor | Prior fix | Soften reason | Status |\n|-------|-------------------|--------|-----------|---------------|--------|",
+    )
+    zero_rows = stage(
+        "zerorows",
+        parity_payload([soften_row("weak-assertion")]),
+        zero_md,
+    )
+    res = validate_staging_file(zero_rows, hard=True)
+    check(
+        "soften parity: a Round-headed empty section beside a one-row array fails direction-neutrally (no too-many advice)",
+        not res.ok
+        and any(
+            "soften disagreement" in e
+            and "Round" in e
+            and "None." in e
+            and "too many" not in e.lower()
             for e in res.errors
         ),
     )
@@ -22110,12 +22348,19 @@ def main(argv: list[str] | None = None) -> int:
     errors, refusals); the writer's own failure never touches the exit
     status or either contract channel."""
     global _scaffold_telemetry_suppressed
+    global _coverage_resolution_root
     started = time.time()
     prior_scaffold_flag = _scaffold_telemetry_suppressed
+    prior_resolution_root = _coverage_resolution_root
     _scaffold_telemetry_suppressed = False
     try:
         return _main(argv)
     finally:
+        # The resolution root is per-invocation state (the --cwd
+        # coverage-link wiring): an in-process caller (the embedded
+        # battery families) gets the pre-call root back, so one CLI arm's
+        # --cwd never rewires a later battery family.
+        _coverage_resolution_root = prior_resolution_root
         if (
             invocation_telemetry is not None
             and not _selftest_telemetry_suppressed
@@ -22167,7 +22412,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cwd",
         default=".",
-        help="Repo cwd when using --newest-for-branch",
+        help="Repo checkout for --newest-for-branch and the relative coverage-link resolution root (defaults to the process cwd)",
     )
     parser.add_argument(
         "--selftest",
@@ -22275,6 +22520,13 @@ def _main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    # --cwd governs the coverage-link resolution root (the --cwd
+    # coverage-link wiring): relative coverage links resolve against the
+    # flag's checkout, not the process cwd, and the unresolvable-link
+    # errors name the root actually used.
+    global _coverage_resolution_root
+    _coverage_resolution_root = Path(args.cwd).expanduser().resolve()
 
     # r5 F9: an empty-string source-flag value must fail LOUDLY. The routing
     # below uses truthiness, so an empty expansion (e.g. a shell wrapper

@@ -1,0 +1,124 @@
+# Plan: Self-Heal Explicit User Override and Directed Recovery
+
+Backlog origins (scope of record):
+- docs/history/backlog/2026-11-19-self-heal-explicit-user-override.md
+- docs/history/backlog/2026-11-19-self-heal-directed-recovery-disposition.md
+
+Driving force: code-quality + efficiency
+Plan review record: .ai-playbook/reviews/2026-11-19-plan-review-self-heal-explicit-user-override-and-directed-recovery-p*.md
+Execution budget: 0.5h total, largest task 0.5h
+Executed: no
+Authoring claim: 2026-11-19-self-heal-explicit-user-override.md (session 01a1f00b-aa83-7302-beb4-04360f9747d5)
+
+## Terms
+
+- **Landing gate:** the owning closeout check that proves branch content reached the sanctioned destination.
+- **Preservation archive:** a verified full-history copy retained before an explicitly directed local resource removal.
+- **Exact-ref removal:** deleting a branch only when its current object id still matches the object id verified for removal.
+- **Worktree inventory:** the tracked, untracked, and ignored files present in a linked worktree, each with a verified destination before its removal.
+- **Quiesced owner:** the resource's owning run has reached its authorized closeout and every writer that could change the resource has stopped.
+
+## Why
+
+Self-heal currently preserves local workflow instructions as hard stops even when the user explicitly directs an in-scope recovery. Its cleanup outcomes also do not describe a user-directed removal when the landing gate correctly refuses and the resource can be safely preserved. The done closeout's branch-removal rule also needs a cross-reference to that separate outcome so the two skills do not conflict.
+
+## Gist & Examples
+
+TLDR: clarify user-direction precedence and separately report preserved cleanup across self-heal and done, improving code-quality while reducing avoidable recovery stops.
+
+When the user explicitly authorizes removal of a named local branch after a landing gate refuses, self-heal can remove that exact ref only after the owning run is closed, every writer is quiesced, its full history is preserved, and no linked worktree remains. Removing a linked worktree also requires the user's direction to cover that worktree and a verified destination for each tracked, untracked, and ignored item. It reports each removal separately from the still-failed landing gate. If authority, ownership, preservation, worktree inventory, linked-worktree state, or ref identity is unclear, it retains the resource and names the missing decision or evidence.
+
+## Outcome
+
+Self-heal and done follow explicit user directions that are within the user's authority and report each cleanup result without changing the status of a refused gate.
+
+- Recovery continues past conflicting lower-level local instructions when the user's current direction clearly covers the next action and no higher-priority constraint blocks it.
+- A named branch can be removed after the owning run is closed, writers are quiesced, its complete history is preserved, no linked worktree remains, and its exact ref identity is verified; the failed landing gate is reported as failed.
+- A worktree can be removed only when the user's direction covers it and every tracked, untracked, and ignored item has a verified destination; otherwise it stays in place.
+- Unclear authority, an active owner or writer, incomplete preservation, a linked worktree, or ref drift results in retention and a specific evidence request.
+
+Gate delta: no validators, gates, machinery, fields, or review-layer blocking duties are added or removed. The two incident-backed backlog origins document why a distinct non-landing cleanup disposition is needed; existing closeout ownership, writer-quiescence, preservation, and explicit-direction requirements bound it.
+
+## Assumptions
+
+- assume the current user's explicit instruction can override conflicting local workflow prose only within the user's authority; basis: the user directly authorized skipping local instructions to complete the recovery, while higher-priority instructions remain binding.
+- assume a separately reported user-directed removal is an acceptable disposition when the resource is named, complete history is verified, and exact-ref identity matches; basis: the second origin records that recoverable outcome and the first rejects false landing claims.
+- assume a linked worktree can be removed only when the user's direction covers it and the existing closeout has verified every item destination and quiesced its writers; basis: done's Operator branch closeout defines those protections and the second origin requires per-resource outcomes.
+- assume done needs a concise pointer to self-heal's separate disposition while its gate and normal closeout sequence remain unchanged; basis: done currently calls its sequence the only sanctioned branch deletion and self-heal's Integration Points make done authoritative for removal.
+- assume the change belongs in self-heal's Recovery and Resource cleanup disposition sections plus a done closeout cross-reference; basis: those are the two skills that own the recovery handoff, per-resource outcome, and branch deletion procedure.
+
+Decision points requiring a grill: none remain.
+
+## Evaluation Criteria
+
+**Quality dimensions:**
+- Correctness: the instruction precedence check applies only when the user direction clearly covers the action and does not override higher-priority requirements.
+- Integrity: branch removal requires verified full-history preservation and identity-checked ref deletion; worktree removal requires a destination for every tracked, untracked, and ignored item; the landing gate remains failed unless its own proof passes.
+- Clarity: the outcome names the removed resource, archive evidence, and failed gate separately; insufficient evidence yields a concrete retention reason.
+- Minimality: edits stay in the owning self-heal and done sections, with byte growth paid by equivalent deletion in each edited skill file.
+
+**Done when:**
+- The self-heal guidance distinguishes local-instruction precedence, protected higher-priority constraints, landing proof, and user-directed cleanup.
+- The done closeout points to the separately reported disposition without changing the normal gate or its result.
+- `python3 scripts/skill_text_budget.py --check` and the public hygiene scan pass.
+
+**Ship when:** none.
+
+## Documentation Impact Assessment
+
+- `agents/skills/self-heal/SKILL.md` owns recovery precedence and per-resource cleanup outcomes.
+- `agents/skills/done/SKILL.md` owns the normal branch closeout and needs one cross-reference to the separate self-heal disposition.
+- The backlog origins and frozen prompt entry remain the historical evidence; no gate or validator needs an update.
+
+## Review Scope
+
+**Explicit must-fix:** findings on these paths are always in scope (review and fix if valid):
+
+**Production code:**
+- `agents/skills/self-heal/SKILL.md` (Task 1)
+- `agents/skills/done/SKILL.md` (Task 1)
+
+**Tests:** none; this task changes workflow prose only.
+
+**Plan-related extension:** implementation and review may change files not listed above when causally related to a task or when required to correct this plan's changed contract. Otherwise out of scope.
+
+**Out of scope; reject unless plan-related:**
+- Gates, validators, landing helpers, or new machinery; reason: both origins document an instruction and disposition gap, and require existing landing proof to remain unchanged.
+- Other skills or general instruction-precedence policy; reason: only done's branch-closeout cross-reference is required to keep its owning procedure consistent.
+
+## Validation Commands
+
+```bash
+python3 scripts/skill_text_budget.py --check
+bash ~/.ai-playbook/scripts/scan-public-hygiene.sh
+python3 scripts/plan_readiness.py docs/history/plans/2026-11-19-self-heal-explicit-user-override-and-directed-recovery.md
+```
+
+Authoring preflight record (rule 29, 2026-11-19, placement root = the authoring worktree):
+- Pre-round structural gate: OUTCOME pass.
+- No-em-dash scan: 0 substitutions, OUTCOME pass.
+- Public hygiene scan: OUTCOME pass; three existing report paths were listed.
+- Skill-text budget: OUTCOME pass; 0 blocking ceiling breaches, with 3 advisory ratchet breaches and 10 advisory caps gaps.
+- Full readiness remains pending the review record.
+
+### Task 1: Clarify user-directed recovery and cleanup outcomes
+
+Context surface: the plan's Terms, this task, and `## Standing constraints` when present; referenced, never restated.
+
+Files:
+- `agents/skills/self-heal/SKILL.md`
+- `agents/skills/done/SKILL.md`
+
+Primary class anchors:
+- `Self-heal` in `agents/skills/self-heal/SKILL.md`
+- `Operator branch closeout` in `agents/skills/done/SKILL.md`
+
+- [ ] `Recovery` resolves a conflict with local workflow prose: given a current explicit user direction that covers a named authorized action, expects it to proceed unless a higher-priority requirement or action-specific safety condition blocks it, while the landing gate continues to govern only whether landing can be claimed. [class: IMPLEMENTATION_REQUIRED]
+- [ ] `Recovery` step 4 handles explicitly directed branch removal after landing refusal: given a named branch, a quiesced owning run and writers, verified full-history preservation, no remaining linked worktree, and an unchanged exact ref re-read immediately before compare-delete, expects separate removal reporting while the landing gate remains failed and no landing proof is claimed. [class: IMPLEMENTATION_REQUIRED]
+- [ ] `Resource cleanup disposition` handles linked worktrees: given a current user direction that covers the named worktree, a quiesced owner and writers, and a verified destination for every tracked, untracked, and ignored item, expects removal reporting; otherwise it retains the worktree and names the missing direction or evidence. [class: IMPLEMENTATION_REQUIRED]
+- [ ] `done` keeps its normal branch-closeout gate and sequence unchanged, and points explicit user-directed removal after a gate refusal to self-heal's separately reported disposition. [class: IMPLEMENTATION_REQUIRED]
+- [ ] The self-heal and done references agree on owner closeout, quiesced writers, complete worktree inventory, exact-ref checks, and the failed landing-gate report. [class: IMPLEMENTATION_REQUIRED]
+- [ ] Unclear authority, an active owner or writer, incomplete preservation, a linked worktree, or ref drift results in retention and a specific evidence request. [class: IMPLEMENTATION_REQUIRED]
+- [ ] Keep existing landing-proof requirements unchanged; do not claim landed or certified without the normal passing proof. [class: IMPLEMENTATION_REQUIRED]
+- [ ] Pay for every byte of skill-text growth by deleting equivalent bytes in the same file; run the skill-text budget and public hygiene validations. [class: REPOSITORY_TEST]
+- [ ] Commit: `docs: clarify self-heal directed recovery` [class: IMPLEMENTATION_REQUIRED]

@@ -22,7 +22,7 @@ If it fails, stop and tell the user to run `/graphify <path>` first.
 
 ### Step 0 - Constrained query expansion (REQUIRED before traversal)
 
-graphify's `query` CLI matches nodes via case-folded substring + IDF: there is **no stemming, no synonyms, no cross-language match** inside the binary, and the inline fallback below matches the same way. If the user's question uses different language or different domain vocabulary than the graph's labels (user says "обработчик" / graph says "handler"; user says "authentication" / graph says "Guardian"), the literal matcher returns 0 hits and the answer collapses to noise.
+graphify's `query` CLI matches nodes by case-folded substring and inverse document frequency (IDF). The CLI does **not stem words, use synonyms, or match across languages**. The inline fallback also matches by substring, but ranks nodes by query-term overlap rather than IDF. If the question uses different language or domain terms from the graph labels, the literal matcher returns 0 hits. For example, the user may say "обработчик" while the graph says "handler", or say "authentication" while the graph says "Guardian". The answer then has no useful results.
 
 Fix this **without inventing tokens** by expanding the query against the actual graph vocabulary first:
 

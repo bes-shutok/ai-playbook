@@ -229,7 +229,7 @@ Recommended capability mapping:
 | Background worker | `spawn_agent` | `Agent` | Post-MVP unless the single-agent loop has measured failures requiring decomposition. |
 | Stop background work | `stop_task` | `TaskStop` | Required if any tool can start long-running work. |
 
-Provider-neutral harnesses can keep the generic baseline names, but should still support a thin adapter layer that exposes the preferred profile for the selected model. For example, `Read` and `read_file` can call the same internal tool, but only one should be visible to a model in a given turn.
+Provider-neutral harnesses can keep generic baseline names. They should also support a thin adapter layer for the preferred profile of the selected model. For example, `Read` and `read_file` can call the same internal tool. Show only one name to a model in a given turn.
 
 Naming rules:
 
@@ -277,7 +277,7 @@ destructive-command denial
 structured result with exit code and truncated output refs
 ```
 
-Do not use approval-cache keys that are easy to bypass through wrapper spelling differences. Normalize equivalent forms such as explicit shell paths, shell `-c` or `-lc` wrappers, and platform-specific command wrappers before matching or saving approvals. If the command cannot be safely normalized, require one-time approval and avoid suggesting a persistent broad rule.
+Do not use approval-cache keys that wrapper spelling differences can bypass. Before matching or saving approvals, normalize equivalent forms. These include explicit shell paths, shell `-c` or `-lc` wrappers, and platform-specific command wrappers. If a command cannot be safely normalized, require one-time approval. Do not suggest a persistent broad rule.
 
 ## Implementation invariants
 

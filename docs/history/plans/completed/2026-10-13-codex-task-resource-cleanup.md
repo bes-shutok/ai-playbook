@@ -1,6 +1,8 @@
 # Plan: Codex Task Resource Cleanup
 
-Backlog origin: docs/history/backlog/2026-10-13-codex-task-resource-cleanup.md
+Backlog origin: none
+
+Cluster: docs/history/backlog/2026-10-13-codex-task-resource-cleanup.md (kept open by this plan's Ship-when OPERATIONS_FOLLOW_UP disposition, quoted basis: "leave the root-cause question open ... otherwise the documented gap remains"; moved here from the Backlog origin line 2026-11-11 per the authoring-time rule in agents/skills/plans/SKILL.md, executing docs/history/plans/2026-11-08-coverage-gate-scope-row-and-pick-time-probe.md)
 Driving force: efficiency
 Plan review record: .ai-playbook/reviews/2026-10-14-plan-review-codex-task-resource-cleanup-r*.md
 Execution budget: 2.0h total, largest task 1.5h

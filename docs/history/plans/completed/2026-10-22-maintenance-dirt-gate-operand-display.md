@@ -99,3 +99,8 @@ Acceptance:
 - [x] State that `--base` without path operands is a command-construction usage error. [class: IMPLEMENTATION_REQUIRED]
 - [x] Preserve the existing merge-base derivation and four-outcome handling. [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `maintenance: show dirt-gate operands` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-05-maintenance-templates-operand-free-dirt-display.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

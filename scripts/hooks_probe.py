@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent hook capability probe (read-only install diagnostic).
 
-Reports PASS / DEGRADED / UNSUPPORTED / FAIL per (agent, hook) by checking
+Reports PASS / DEGRADED / UNSUPPORTED / FAIL per (agent, hook) plus per repository-versioned hook script by checking
 adapter symlinks under ``~/`` agent dirs and config registration documented in
 ``agents/hooks/*/README.md``. Never PASS when the adapter symlink or required
 config registration is missing for a FULL-tier cell.
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ _CURSOR_BRIDGE_SYMLINK = "~/.cursor/hooks/cursor-session-bridge.sh"
 _LESSONS_RECALL_NEEDLE = "lessons-recall"
 _SKILL_GATE_NEEDLE = "skill-gate"
 _CURSOR_BRIDGE_NEEDLE = "cursor-session-bridge"
+_PR_SKILL_REMINDER_NEEDLE = "pr-skill-reminder"
 
 
 @dataclass(frozen=True)
@@ -398,6 +400,13 @@ def _assess_wiring(agent: str, hook: str, home: Path) -> Wiring:
             return "FULL"
         # Codex SessionStart, Cursor sessionStart, agy PreInvocation: degraded.
         return "DEGRADED"
+    # pr-skill-reminder: Claude-only prompt hook; no other host carries a row.
+    if hook == "pr-skill-reminder":
+        if agent != "Claude":
+            return "NONE"
+        if not _commands_reference(cmds, _PR_SKILL_REMINDER_NEEDLE, adapter):
+            return "NONE"
+        return "FULL"
     # skill-gate
     if not _commands_reference(cmds, _SKILL_GATE_NEEDLE, adapter):
         return "NONE"
@@ -495,12 +504,106 @@ def _probe_one(
     return ProbeResult(agent, hook, "DEGRADED", detail, expected)
 
 
-def probe_all(home: Path | None = None) -> list[ProbeResult]:
+def probe_all(home: Path | None = None) -> list[ProbeResult | SkillNameCheck]:
     hook_rows = [_probe_one(agent, hook, expected, home) for agent, hook, expected in probe_matrix(home)]
-    return hook_rows + runtime_profile_rows(home)
+    return hook_rows + runtime_profile_rows(home) + probe_skill_name_references(home=home)
 
 
-def _format_table(results: list[ProbeResult]) -> str:
+# ---------------------------------------------------------------------- #
+# Skill-name existence assertion over repository-versioned hook scripts.
+# The population is every script under agents/hooks/*/ — the rename-fan-out
+# surface the probe guards — not an installed (agent, hook) cell, so this
+# block adds its own report rows instead of a new probe_matrix cell.
+# ---------------------------------------------------------------------- #
+
+_SKILLS_ROOTS = ("~/.claude/skills", "~/.agents/skills")
+_HOOKS_SOURCE_DIR = "agents/hooks"
+_HOOK_SCRIPT_SUFFIXES = (".sh", ".py")
+_BACKTICK_SPAN = re.compile(r"`([^`\n]+)`")
+_SKILL_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]+")
+
+
+@dataclass(frozen=True)
+class SkillNameCheck:
+    """One versioned hook script's emitted-skill-name verdict.
+
+    Rendered as ``--all`` table rows beside the (agent, hook) cells;
+    ``agent`` is the literal ``repo`` because the population is the
+    repository's versioned hook scripts, and ``expected`` carries no
+    capability tier.
+    """
+
+    hook: str
+    status: Status
+    detail: str
+    agent: str = "repo"
+    expected: str = "-"
+
+
+def skill_name_references(text: str) -> list[str]:
+    """Backtick-quoted identifiers on lines that also mention a skill.
+
+    The pattern is fitted to the versioned hooks' real text: the only
+    skill-name emitter today is pr-skill-reminder's reminder line, which
+    quotes each skill name in backticks beside the word "skill". Spans that
+    are not bare identifiers (spaces, slashes) are not skill names and are
+    ignored.
+    """
+    names: list[str] = []
+    for line in text.splitlines():
+        if not re.search(r"skill", line, re.IGNORECASE):
+            continue
+        for span in _BACKTICK_SPAN.findall(line):
+            if not _SKILL_IDENTIFIER.fullmatch(span):
+                continue
+            if span not in names:
+                names.append(span)
+    return names
+
+
+def _versioned_hook_scripts(repo_root: Path) -> list[Path]:
+    hooks_dir = repo_root / _HOOKS_SOURCE_DIR
+    if not hooks_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in hooks_dir.glob("*/*")
+        if path.is_file() and path.suffix in _HOOK_SCRIPT_SUFFIXES
+    )
+
+
+def _skill_name_resolves(name: str, home: Path) -> bool:
+    return any(_expand(f"{root}/{name}", home).is_dir() for root in _SKILLS_ROOTS)
+
+
+def probe_skill_name_references(
+    repo_root: Path | None = None, home: Path | None = None
+) -> list[SkillNameCheck]:
+    """Assert every skill name a versioned hook emits resolves on this host."""
+
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[1]
+    host = home if home is not None else Path.home()
+    checks: list[SkillNameCheck] = []
+    for script in _versioned_hook_scripts(root):
+        rel = script.relative_to(root / _HOOKS_SOURCE_DIR).as_posix()
+        try:
+            names = skill_name_references(script.read_text(encoding="utf-8"))
+        except OSError as exc:
+            checks.append(SkillNameCheck(rel, "FAIL", f"unreadable hook script: {exc}"))
+            continue
+        missing = [name for name in names if not _skill_name_resolves(name, host)]
+        if missing:
+            quoted = ", ".join(f"`{name}`" for name in missing)
+            checks.append(SkillNameCheck(rel, "FAIL", f"missing skill name(s): {quoted}"))
+        elif names:
+            quoted = ", ".join(f"`{name}`" for name in names)
+            checks.append(SkillNameCheck(rel, "PASS", f"skill names resolve: {quoted}"))
+        else:
+            checks.append(SkillNameCheck(rel, "PASS", "no skill-name references"))
+    return checks
+
+
+def _format_table(results: list[ProbeResult | SkillNameCheck]) -> str:
     headers = ("Agent", "Hook", "Status", "Expected", "Detail")
     rows = [
         (r.agent, r.hook, r.status, r.expected, r.detail) for r in results
@@ -577,6 +680,11 @@ def selftest(argv: list[str] | None = None) -> int:
         expected_by_key.get(("Cursor", "skill-gate")) == "FULL",
         repr(expected_by_key.get(("Cursor", "skill-gate"))),
     )
+    check(
+        "frozen_agents_listed: Claude pr-skill-reminder expected FULL",
+        expected_by_key.get(("Claude", "pr-skill-reminder")) == "FULL",
+        repr(expected_by_key.get(("Claude", "pr-skill-reminder"))),
+    )
     plan_readiness_tiers = {
         a: tier for a, h, tier in matrix if h == "plan-readiness"
     }
@@ -590,8 +698,8 @@ def selftest(argv: list[str] | None = None) -> int:
         repr(sorted(plan_readiness_tiers.items())),
     )
     check(
-        "frozen_agents_listed: twelve (agent, hook) cells",
-        len(matrix) == 12,
+        "frozen_agents_listed: thirteen (agent, hook) cells",
+        len(matrix) == 13,
         str(len(matrix)),
     )
 

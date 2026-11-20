@@ -103,3 +103,8 @@ Files:
 - [x] Keep semantic naming in the existing quality naming section, leave simplification focused on structural complexity, and balance added bytes by condensing existing prose within each edited file; add no worker, round, validator, gate, or automated naming check. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run the Validation Commands and confirm sanitized positive, negative, and pre-deployment examples are represented without external identifiers. [class: REPOSITORY_TEST]
 - [x] Commit: `docs: review semantic naming across analogous types` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-15-semantic-naming-and-analogous-class-review.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

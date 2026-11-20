@@ -5,8 +5,11 @@
 - Driving force: correctness of operative text against repo state
 - Execution budget: 2h total, largest task 0.5h
 - Review round r1 folded: docs/history/reviews/2026-10-11-plan-review-review-certs-seal-home-untracked-r1.md (7 blocking findings; the fold also carries the one-line non-blocking closures F8-F18, F20 and overflow O1)
+> Witness disposition (2026-11-15 reconstruction sweep): this cited record is lost before durability mirroring; verified absent from every checkout, worktree, and reachable history (working-tree glob plus git object-history probe) on 2026-11-15; the loss is witnessed and accepted, record content never fabricated.
 - Review round r2 folded: docs/history/reviews/2026-10-11-plan-review-review-certs-seal-home-untracked-r2.md (4 blocking findings: dir-generic rider after a second tracked straggler landed, honest pinned-arm re-base per probe, fail-closed facts conjunction closed, import smoke path; plus Low closures F5, F9 and the O1-O3 rides)
+> Witness disposition (2026-11-15 reconstruction sweep): this cited record is lost before durability mirroring; verified absent from every checkout, worktree, and reachable history (working-tree glob plus git object-history probe) on 2026-11-15; the loss is witnessed and accepted, record content never fabricated.
 - Review round r3 folded: docs/history/reviews/2026-10-11-plan-review-review-certs-seal-home-untracked-r3.md (1 blocking: the closeout suite's three-key fixtures gain their own bullet; Low closures F2, F3 and the O1-O6 rides)
+> Witness disposition (2026-11-15 reconstruction sweep): this cited record is lost before durability mirroring; verified absent from every checkout, worktree, and reachable history (working-tree glob plus git object-history probe) on 2026-11-15; the loss is witnessed and accepted, record content never fabricated.
 
 ## Terminology
 

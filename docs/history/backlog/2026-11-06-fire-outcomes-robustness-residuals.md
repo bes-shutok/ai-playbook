@@ -3,6 +3,7 @@
 Driving force: reliability (residual code-quality findings from the 2026-11-06 automation-fire-time-failure-verification Task 1 intermediate review; all low, non-blocking, warning-only surface, so they do not block that plan's landing).
 
 Cluster: closeout-recovery, docs/history/backlog/2026-11-07-machinery-inventory-unregistered-fire-outcomes-script.md (same script, sibling defect class: this row owns its recorded findings, that row owns the registry admission)
+Cluster: docs/history/backlog/2026-11-17-fire-outcome-dispatch-failure-skip-blind-spot.md (same script, sibling defect class: that row owns the terminal-evidence vocabulary gap over failed_to_dispatch and skipped rows, this row the recorded robustness findings)
 
 Findings captured (evidence in the run's implement-task-1.log.md and review round records):
 

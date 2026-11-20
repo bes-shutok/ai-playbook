@@ -32,6 +32,7 @@ An execute-plan run record claiming backlog filings whose tree leaves them uncom
 - At most one optional sixth escalation worker may launch in an active review run. Record `escalation_reason`; a second escalation is prohibited until a new run begins.
 - The sixth worker requires an independent high-risk domain that cannot be covered credibly by `risk`, or an explicit user request. Do not use it for routine breadth.
 
+A worker death inside a round is a dead leg, not a panel failure: inventory the dead leg's partial disk effects (records written, commits made) before any relaunch, relaunch only the missing panel member, and never the whole panel; the declared-dead worker is not awaited, and a silent worker past the runtime's worker-inactivity window counts as dead at the next parent check. The recovery runs through the reserved-slot precedence's replacement-focused-round regime (an in-round retry proceeds only while more than one launch slot remains), never as a fresh arming of the whole panel; a relaunch names a fresh emit-early path, never the dead leg's.
 ## Focused panels
 
 A narrow review may launch fewer than five workers when the artifact and user request do not need a full panel. Record `panel_mode: focused` and `selection_reason`.
@@ -69,7 +70,7 @@ Before any focused selection is honored, derive risk signals from the plan's exp
 
 Precedence: when the floor is triggered, it overrides both the focused-round preference in the late-loop paragraph of `### Targeted follow-ups` and the `## Focused panels` section above; a focused panel is not valid for that round even when the fixes are narrowly scoped.
 
-Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`'s worker escalation, so docs-only focused panels stay valid; a living-documentation status claim on such a diff still requires the `doing-code-review` Step 2.5 guideline checks for the changed files' overlay, without adding a `risk` worker. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
+Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`'s worker escalation, so docs-only focused panels stay valid; a living-documentation status claim on such a diff still requires the `doing-code-review` Step 2.5 guideline checks for the changed files' overlay, without adding a `risk` worker. Within execute-plan Step 3.1 item 6, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
 
 Treat changed dependency coordinates, outbound service URL configuration, downstream error-response mapping, and the shared changed-scope trigger surfaces of the `doing-code-review` Step 2.5 mandatory-evidence rules as risk signals even when the diff is small. They require the `risk` worker and the changed files' language-overlay guideline checks per those rules; the consuming orchestrator owns which stacks those overlays enumerate.
 
@@ -109,6 +110,8 @@ Exception at every tier: a diff carrying a changed normative documentation examp
 The plan's Review tier hint sets the starting tier; post-implement risk signals may raise it and never lower it, and so may the trigger table. When triggers overlap, the highest matching tier wins (a behavior change never resolves below Tier M).
 
 When the plan records no tier hint, derive the tier from the task's `Files:` list and the post-implement diff.
+
+Claims census, upstream outcome matrix, and shared-surface blast radius extend the per-task lens set (patterns `documentation#prose-claims-census`, `testing#upstream-outcome-matrix`, `architecture#shared-surface-blast-radius`; bodies live in their lens catalogs): a shared handler, mapper, or schema change adds design-simplicity; a behavioral-claim-bearing docs or contract diff adds contract-docs; an external-call-boundary diff adds testing. Each mapping adds that worker to the per-task tier set when the shape is present and the worker absent. A diff adding or editing a container-managed collaborator or a per-file framework attribute adds design-simplicity (whose architecture lens carries `architecture#collaborator-wiring`) to the per-task tier set when the shape is present and the worker absent.
 
 A per-task pass is a separate pass from Phase 3 rounds: it carries its own launch accounting under the six-launch ceiling.
 
@@ -211,7 +214,7 @@ Before staging multiple findings that one rule's restatement explains, list the 
 
 ### Plan and RFC `consistency` ownership
 
-The `consistency` lens (catalog: `consistency.md`) is the mandatory home for the `plans` skill's checklist inclusion test. External prerequisites are always blocking plan defects and are never exception-admissible. A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that the receipt binds the confirmation to the item and target, not only that it is fresh. Do not treat plan text as overriding higher-level authorization rules for external writes.
+The `consistency` lens (catalog: `consistency.md`) is the mandatory home for the `plans` skill's checklist inclusion test. A task checkbox that is an external prerequisite is always a blocking plan defect and is never exception-admissible; an owned one under Ship when is the sanctioned form (review-plan Step 2 item 8). A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that the receipt binds the confirmation to the item and target, not only that it is fresh. Do not treat plan text as overriding higher-level authorization rules for external writes.
 
 **Must report:**
 - Design Invariants / Glossary vs Task step contradictions
@@ -219,6 +222,7 @@ The `consistency` lens (catalog: `consistency.md`) is the mandatory home for the
 - Naming drift across tasks
 - A task checkbox that is an external prerequisite (always), or a release gate without a current bound exception receipt plus `why executable now` and observable `completion evidence`
 - A release-gate exception missing `why executable now` or missing `completion evidence`
+- An external prerequisite or release gate under `Ship when` with no evidence owner or closure condition
 - `Ship when` content smuggled into `Tasks`
 - A missing `Done when` or `Ship when` section, including either section collapsed into the old release-gates-as-tasks shape
 - A bare "user confirmed" exception, or a receipt not bound to the specific item, target or environment, and confirmation time or session

@@ -9,6 +9,7 @@
 - **Driving force:** documentation; secondary: security disclosure
 - **Skill/step:** `agents/skills/review-staging/SKILL.md` operator-acked kind definition; `agents/hooks/skill-gate/README.md` alarm paragraph; `scripts/session_channel.py` docstring and `agents/hooks/lessons-recall/README.md` pinned-idiom sentence; `agents/skills/maintenance/state-file.md` correction_authorizations paragraph
 - **Cluster:** docs/history/backlog/2026-10-21-corrections-chain-writer-discipline-consolidation.md; docs/history/backlog/2026-10-20-validation-authoring-rule29-stale-sanctioned-route.md
+- **Cluster:** docs/history/plans/completed/2026-11-13-corrections-writer-distinct-session-dispatch-gap.md (covered twin; the row landed through that plan, now completed: this row's residue 4 trust-qualifier clause lands on the same writer sentence that plan's spawn-recipe pointer edits)
 - **Dedup probe:** r1 contract-docs and correctness lens doc findings; lesson 151's sweep covered disclaimers and case-space inventories at Task 4 time, these are the cross-file residues it could not see.
 
 ## Problem

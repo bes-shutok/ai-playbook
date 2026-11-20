@@ -23,6 +23,7 @@ Witnessed 2026-10-13 (origin row): a claims file naming two review records' mark
 TLDR: the worktree-removal gate refuses teardown while a claimed record's stats sibling would be destroyed by it (the sibling exists in the worktree staging home and is absent from the primary home), so a claim set that names records but not sidecars can no longer strand binding metadata.
 
 Before: claims name `2026-10-13-plan-review-x-r1.md` only; the gate verifies that path at the home and passes; removal deletes `r1.stats.json` sitting in the worktree staging home; the validator later reports the record as an owned half-pair.
+> Scan-disposition note (2026-11-15 reconstruction sweep): the record name above is a test-fixture filename written by this plan's own fixtures, never a durable review record; the report-only missing-review-record scan matches it as a false positive; no record was ever expected at this reference, nothing lost, nothing fabricated.
 
 After: the same invocation refuses before any removal verdict, naming the worktree-side sibling and the transfer remedy; transfer the sidecar with the corrected claim set and the gate passes.
 

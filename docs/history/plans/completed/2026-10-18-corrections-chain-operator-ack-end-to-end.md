@@ -248,3 +248,9 @@ Files:
 - security#ack-append-lost-update-window: folded
 - simplification#yagni: folded
 - architecture#dependency-direction: folded
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-10-plan-delta-classifier-excluded-region-gap.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-16-corrections-chain-unclassified-mechanical-hops.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

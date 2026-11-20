@@ -185,3 +185,12 @@ Primary class anchors:
 - [x] Standalone help presents `gate-removal` exactly once; `main` consumes the dispatch token before parsing flat options and routes the same operands and options. [class: IMPLEMENTATION_REQUIRED]
 - [x] The real `main` invocation should dispatch `--branch` with `--migration-manifest` and no `--worktree`; with passing guards, assert proof/OID output, and with a failed guard, assert ref retention. Malformed inputs retain `OUTCOME: tool_error` and the established exit status. [class: REPOSITORY_TEST]
 - [x] Commit: `fix: flatten gate-removal command usage`. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-07-gate-removal-unremediable-refuse-deadlock.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-08-gate-removal-residual-fail-open-shapes.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-08-gate-removal-usage-doubled-token.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-19-gate-removal-manifest-lookup-skips-branch-closeout.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-19-gate-removal-squash-accounting-requires-archive-twin.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

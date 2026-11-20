@@ -176,3 +176,9 @@ Files:
 - consistency#stale-cross-reference: folded
 - consistency#validation-battery-missing-em-dash-scan: folded
 - security#telemetry-witness-restore-not-exception-safe: folded
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-08-review-staging-ancestor-validation-cache.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-15-review-staging-sidecar-scaffold-hand-filled-sections.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

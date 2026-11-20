@@ -108,3 +108,8 @@ Primary class anchors:
 - [x] Keep the example within the current readiness boundary: it checks existing validation promises and adds no requirement for guessed test identities, new validators, or extra review machinery. [class: IMPLEMENTATION_REQUIRED]
 - [x] Delete equivalent redundant operative prose from this same file so its byte count does not grow; preserve existing obligations and record the before/after byte counts in the task log. [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: show undefined validation variable finding` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-10-plan-validation-command-undefined-repo.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

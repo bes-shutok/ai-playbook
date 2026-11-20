@@ -1,7 +1,7 @@
 # Review-plan Step 5 fold discipline lacks a premise-verification duty for the folded findings' factual claims
 
 - **Filed:** 2026-11-07, learn Step 1.8 capture from the budget-resume-carrier-gc authoring session (r3-r4 review loop)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-08-review-fold-premise-verification.md)
 - **Workflow:** backlog
 - **Priority:** high (each unverified premise became a blocking finding and forced a reconciliation one round before the cap)
 - **Cluster:** docs/history/backlog/2026-10-19-fold-verification-runs-committed-bytes.md (covered; that row owns verifying the fold's own NEW output artifacts against committed bytes; this row owns verifying the fold's INPUT, the folded finding's factual premises, against the source — adjacent halves of one fold-discipline boundary, distinct failure modes)

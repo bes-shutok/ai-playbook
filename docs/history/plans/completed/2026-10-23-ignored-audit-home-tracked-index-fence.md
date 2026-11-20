@@ -143,3 +143,8 @@ Primary class anchors:
 - [x] Write minimal implementation: the tracked sibling helper beside `_ignored_paths` and the one sentence. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run -> expect GREEN: the done-sweep suite passes; the em-dash and public hygiene scans stay clean. [class: REPOSITORY_TEST]
 - [x] Commit: `feat: report tracked ignored paths in the done sweep` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-20-ignored-audit-home-paths-force-tracked.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

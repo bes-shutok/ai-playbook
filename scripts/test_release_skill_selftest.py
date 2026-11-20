@@ -80,6 +80,7 @@ REWRITE_SCRIPT = ROOT / "scripts" / "release-rewrite.sh"
 LOCATOR_HELPER = ROOT / "scripts" / "release-privacy-locators.py"
 REAL_SCANNER = ROOT / "scripts" / "scan-public-hygiene.sh"
 REAL_EM_DASH_CHECK = ROOT / "scripts" / "check-no-em-dash.sh"
+REAL_PUBLISH_SCOPE_CHECKER = ROOT / "scripts" / "release_publish_scope_check.sh"
 
 DENY_TOKEN = "RELEASE-SELFTEST-SECRET-TOKEN"
 GROUPS_MARKER = "release-groups:"
@@ -209,6 +210,7 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.cas_record = self.base / "cas-main.txt"
         self.patterns = self.base / "hygiene.patterns"
         self.patterns.write_text(PATTERNS_TEXT, encoding="utf-8")
+        self._frozen_test_date = None
         # Pinned HOME carrying the scanner's default patterns file, so the
         # default-patterns branch of the privacy gate is hermetic (it never
         # reads the host's own ~/.ai-playbook file).
@@ -225,6 +227,8 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.assertIsNotNone(self.real_git, "git must be on PATH")
         self._write_lock_stub()
         self._write_shim("pass")
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        self._freeze_test_date(now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     # ------------------------------------------------------------------
     # Environment and fixture helpers
@@ -271,6 +275,10 @@ class ReleaseSkillSelftest(unittest.TestCase):
         env["PUBLIC_HYGIENE_PATTERNS_FILE"] = str(self.patterns)
         env["RELEASE_REMOTE"] = "origin"
         env["TZ"] = "UTC"
+        if self._frozen_test_date is not None:
+            env["AI_PLAYBOOK_TEST_DATE_DAY"] = self._frozen_test_date.strftime("%Y-%m-%d")
+            env["AI_PLAYBOOK_TEST_DATE_STAMP"] = self._frozen_test_date.strftime("%Y%m%d%H%M%S")
+            env["AI_PLAYBOOK_TEST_DATE_LOG"] = str(self.base / "date-observations.log")
         for leak in (
             "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_COUNT",
             "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE",
@@ -362,18 +370,47 @@ class ReleaseSkillSelftest(unittest.TestCase):
         path.chmod(0o755)
 
     def _today(self) -> str:
-        """Date-dependent fixture values come from the scripts' own ``date``,
-        under the same UTC pin the scripts run with (see ``_run_env``), so a
-        local-zone midnight rollover cannot split the harness clock from the
-        scripts' clock."""
-        env = dict(os.environ)
-        env["TZ"] = "UTC"
-        out = subprocess.run(["date", "+%Y-%m-%d"], capture_output=True, text=True, check=True, env=env)
-        return out.stdout.strip()
+        """Return the per-test UTC day shared with release-script children."""
+        return self._frozen_test_date.date().isoformat()
 
     def _yesterday(self) -> str:
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        return (now_utc - datetime.timedelta(days=1)).date().isoformat()
+        return (self._frozen_test_date - datetime.timedelta(days=1)).date().isoformat()
+
+    def _freeze_test_date(self, value: str) -> datetime.datetime:
+        """Pin fixture helpers and release-script children to one UTC instant."""
+        frozen = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        self.assertIsNotNone(frozen.tzinfo, "frozen test date must include a timezone")
+        self._frozen_test_date = frozen.astimezone(datetime.timezone.utc)
+        date_shim = self.shim_dir / "date"
+        date_shim.write_text(
+            "#!/bin/sh\n"
+            "case \"${1:-}\" in\n"
+            "  +%Y-%m-%d) value=\"$AI_PLAYBOOK_TEST_DATE_DAY\" ;;\n"
+            "  +%Y%m%d%H%M%S) value=\"$AI_PLAYBOOK_TEST_DATE_STAMP\" ;;\n"
+            "  *) exec /bin/date \"$@\" ;;\n"
+            "esac\n"
+            "printf '%s %s\\n' \"$1\" \"$value\" >> \"$AI_PLAYBOOK_TEST_DATE_LOG\"\n"
+            "printf '%s\\n' \"$value\"\n",
+            encoding="utf-8",
+        )
+        date_shim.chmod(0o755)
+        return self._frozen_test_date
+
+    def _date_observations(self) -> list[str]:
+        log = self.base / "date-observations.log"
+        if not log.exists():
+            return []
+        return log.read_text(encoding="utf-8").splitlines()
+
+    def _assert_child_date_observed(
+        self, previous_observations: list[str], require_timestamp: bool = False
+    ) -> None:
+        observations = self._date_observations()[len(previous_observations):]
+        expected_day = self._frozen_test_date.strftime("%Y-%m-%d")
+        self.assertIn(f"+%Y-%m-%d {expected_day}", observations)
+        if require_timestamp:
+            expected_stamp = self._frozen_test_date.strftime("%Y%m%d%H%M%S")
+            self.assertIn(f"+%Y%m%d%H%M%S {expected_stamp}", observations)
 
     def _today_section(self, marker: str) -> str:
         return "## %s\n\n%s\n" % (self._today(), marker)
@@ -652,10 +689,14 @@ class ReleaseSkillSelftest(unittest.TestCase):
         return self.section_path
 
     def _authoring_step(self):
-        return subprocess.run(
+        previous_observations = self._date_observations()
+        proc = subprocess.run(
             ["bash", str(AUTHORING_SCRIPT), str(self.section_path)],
             cwd=str(self.clone), env=self._run_env(), capture_output=True, text=True,
         )
+        if proc.returncode == 0:
+            self._assert_child_date_observed(previous_observations)
+        return proc
 
     def _parse_authoring(self, proc):
         exports = {}
@@ -710,11 +751,15 @@ class ReleaseSkillSelftest(unittest.TestCase):
         env_extra = {"RELEASE_DRAFT_PATH": str(draft)}
         if extra_env:
             env_extra.update(extra_env)
-        return subprocess.run(
+        previous_observations = self._date_observations()
+        proc = subprocess.run(
             args,
             cwd=str(self.clone), env=self._run_env(lock_exports=exports, env_extra=env_extra),
             capture_output=True, text=True,
         )
+        if proc.returncode == 0:
+            self._assert_child_date_observed(previous_observations, require_timestamp=True)
+        return proc
 
     def _acquire_lock_exports(self) -> dict:
         """A direct lock-stub acquisition for recovery runs that hand-write
@@ -742,6 +787,106 @@ class ReleaseSkillSelftest(unittest.TestCase):
             lines.append("msg %s" % msg)
         groups.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return groups
+
+    def _install_publish_scope_checker(self) -> None:
+        """Copy the real checker into the scratch repo (the rewrite resolves
+        RELEASE_PUBLISH_SCOPE_CHECKER against the primary checkout)."""
+        target = self.clone / "scripts" / "release_publish_scope_check.sh"
+        shutil.copyfile(REAL_PUBLISH_SCOPE_CHECKER, target)
+        target.chmod(target.stat().st_mode | 0o111)
+
+    def _force_add_ignored_commit(self, rel: str, content: str, ignore_line: str) -> None:
+        """Commit a force-added ignored path so the publish delta carries a
+        tracked-but-ignored file."""
+        path = self.clone / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        gitignore = self.clone / ".gitignore"
+        gitignore.write_text((gitignore.read_text() if gitignore.exists() else "") + ignore_line + "\n", encoding="utf-8")
+        self._gitx("add", "--", ".gitignore")
+        self._gitx("add", "-f", "--", rel)
+        self._gitx("commit", "-q", "-m", "force-add ignored %s" % rel)
+
+    def test_publish_scope_banner_ordinary_path(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._install_publish_scope_checker()
+        self._force_add_ignored_commit("leaked-note.txt", "leak\n", "leaked-note.txt")
+        # non-ASCII delta path: the wiring must enumerate raw bytes
+        # (core.quotepath=off) or the C-quoted name silently misses the
+        # class-1 intersection
+        self._force_add_ignored_commit("ignored-дельта.md", "leak\n", "ignored-дельта.md")
+        self._draft_section(DEFAULT_COUNTS + [1, 1], DEFAULT_MSGS + ["force-add ignored leaked-note", "force-add ignored nonascii"], "publish-scope marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        rewrite = self._rewrite_step(groups_path, exports)
+        self._release_lock(exports)
+        self.assertEqual(rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr))
+        self.assertIn("PUBLISH SCOPE", rewrite.stderr)
+        self.assertIn("PUBLISH-SCOPE:", rewrite.stderr)
+        self.assertIn("leaked-note.txt", rewrite.stderr)
+        self.assertIn("(tracked-but-ignored)", rewrite.stderr)
+        self.assertIn("ignored-дельта.md", rewrite.stderr)
+        # stdout stays exactly the push-script path
+        push_script = self._find_push_script()
+        self.assertEqual(rewrite.stdout, str(push_script) + "\n")
+
+    def test_publish_scope_banner_recovery_path(self):
+        exports = self._recovery_fixture()
+        self._install_publish_scope_checker()
+        base = self._rev_parse("main~4")
+        self._force_add_ignored_commit("recovery-leak.txt", "leak\n", "recovery-leak.txt")
+        origin_tip = self._rev_parse("origin/main")
+        main_tip = self._rev_parse("main")
+        groups = self._hand_groups(main_tip, [2, 3], self.RECOVERY_MSGS[:1] + ["merge tail with forced ignored path"])
+        rewrite = self._rewrite_step(
+            groups, exports, recovery_base=base, expect_remote_oid=origin_tip,
+        )
+        self.assertEqual(rewrite.returncode, 0,
+            "recovery rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr))
+        self.assertIn("PUBLISH SCOPE", rewrite.stderr)
+        self.assertIn("recovery-leak.txt", rewrite.stderr)
+        push_script = self._find_push_script()
+        self.assertEqual(rewrite.stdout, str(push_script) + "\n")
+
+    def test_publish_scope_missing_checker_skip_line(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "missing checker marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        rewrite = self._rewrite_step(
+            groups_path, exports,
+            extra_env={"RELEASE_PUBLISH_SCOPE_CHECKER": "scripts/nonexistent-checker.sh"},
+        )
+        self._release_lock(exports)
+        self.assertEqual(rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr))
+        skip_lines = [l for l in rewrite.stderr.splitlines() if "publish-scope checker not found, skipping" in l]
+        self.assertEqual(len(skip_lines), 1, "exactly one skip line expected:\n%s" % rewrite.stderr)
+        self.assertNotIn("PUBLISH SCOPE", rewrite.stderr)
+
+    def test_publish_scope_failing_checker_warning_line(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        stub = self.clone / "scripts" / "stub-publish-scope.sh"
+        stub.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
+        stub.chmod(stub.stat().st_mode | 0o111)
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "failing checker marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        rewrite = self._rewrite_step(
+            groups_path, exports,
+            extra_env={"RELEASE_PUBLISH_SCOPE_CHECKER": "scripts/stub-publish-scope.sh"},
+        )
+        self._release_lock(exports)
+        self.assertEqual(rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr))
+        warn_lines = [l for l in rewrite.stderr.splitlines() if "warning: publish-scope checker" in l]
+        self.assertEqual(len(warn_lines), 1, "exactly one warning line expected:\n%s" % rewrite.stderr)
+        self.assertIn("exited 7", warn_lines[0])
+        self.assertNotIn("PUBLISH SCOPE", rewrite.stderr)
 
     def _recovery_fixture(self):
         """Merge fixture plus a direct lock acquisition: main carries the
@@ -1681,6 +1826,7 @@ class ReleaseSkillSelftest(unittest.TestCase):
         )
 
     def test_backup_ref_collision_creates_suffix(self):
+        frozen_date = self._freeze_test_date("2026-01-02T03:04:05Z")
         self._build_fixture()
         self._install_scanner("noop")
         self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "collision marker")
@@ -1709,6 +1855,11 @@ class ReleaseSkillSelftest(unittest.TestCase):
         self.assertEqual(refs.get("refs/release-backup/pre-release-%s" % yesterday), pre_tip,
                          "yesterday's candidate must stay unchanged")
         self._assert_tree_identical_to("refs/release-backup/pre-release-%s-2" % today)
+        self.assertEqual(today, frozen_date.date().isoformat())
+        self.assertEqual(yesterday, (frozen_date - datetime.timedelta(days=1)).date().isoformat())
+        date_calls = (self.base / "date-observations.log").read_text(encoding="utf-8")
+        self.assertIn("+%Y-%m-%d 2026-01-02", date_calls)
+        self.assertIn("+%Y%m%d%H%M%S 20260102030405", date_calls)
 
     # ------------------------------------------------------------------
     # Task 2: effective-pattern copies, draft lifecycle, diagnostic replay

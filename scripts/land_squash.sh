@@ -35,8 +35,10 @@
 #       ref update taken under the merge lock the mode acquires itself
 #       around the swap critical section (parentage verification,
 #       compare-and-swap, post-landing gate, reconcile tail); the primary
-#       checkout's index and working tree are never written and no arm runs
-#       porcelain or restore against it.
+#       checkout's index and working tree are never written and no arm
+#       restores against it (the one primary-side read is the pre-lock
+#       intersecting staged-state pre-refusal, a modeled refusal reusing
+#       land's snapshot helpers).
 #
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): born-conformant; every
 # non-metadata run ends with exactly one final `OUTCOME: <pass|fail|
@@ -59,6 +61,14 @@
 #   LAND_SQUASH_TEST_FAULT=diverge-origin fires at the post-CAS point and
 #       redirects the post-landing invocation's --origin-ref to the forged
 #       fixture ref refs/remotes/land-squash-fault/diverged.
+#   LAND_SQUASH_TEST_FAULT=phantom-stager (land only) stages the named
+#       tracked path's pre-landing bytes (checked out from the verified
+#       pre-tip) at its single declared point, immediately after the
+#       landing-tail reconcile completes and before the phantom-prevention
+#       tail's read; LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN=1 appends a foreign
+#       line before staging (the report-only arm's fixture) and =2 appends a
+#       foreign line to the worktree only after the pre-tip checkout, leaving
+#       the index at the exact phantom (the split shape's fixture).
 #   LAND_SQUASH_TEST_FAULT=prune-audit-unclassified (land-worktree only)
 #       reclassifies the wired prompt-log prune audit's exit to an
 #       unclassified value (42) after the audit ran, exercising the
@@ -104,7 +114,10 @@ Modes:
           --source-branch and the optional --expected-base passthrough), a
           two-value compare-and-swap git update-ref, the parentage gate's
           post-landing invocation with --origin-ref
-          refs/remotes/origin/<resolved-base-branch>, and the final new-tip
+          refs/remotes/origin/<resolved-base-branch>, the landing-tail
+          reconcile, and the phantom-prevention tail (a final staged-set read
+          that restores reversal-shaped staged entries on landing-touched
+          paths from HEAD, lesson 249's phantom), then the final new-tip
           report with its first-parent diffstat.
   land-worktree
           The worktree-complete landing under the narrowed ref-only lock
@@ -152,11 +165,17 @@ Modes:
           mode (lock authenticity is by construction: the helper holds a
           lock it just acquired; do not hold a merge lock around the
           invocation - that hold is the contention the bounded wait
-          reports). Never writes the primary checkout's index or working
-          tree and never runs porcelain or restore against it (land's
-          snapshot, staged-state and dirty-intersection pre-refusals, and
-          restore machinery are omitted; the interleaved-tip arm keeps the
-          inverse compare-and-swap without any restore call).
+          reports). The intersecting staged-state pre-refusal runs before
+          the lock, after the base tip is resolved: a read-only primary
+          checkout porcelain read reusing land's snapshot helpers that
+          refuses the landing, naming each intersecting path, when the
+          primary holds staged or locally-dirty tracked state on any
+          member of the landing's changed-path set (a staged or dirty path
+          outside the set lands unchanged). Never writes the primary
+          checkout's index or working tree: the restore machinery and
+          land's full snapshot pre-refusal surface stay scoped to land
+          (the interleaved-tip arm keeps the inverse compare-and-swap
+          without any restore call).
           --ack-egress forwards the operator-directed-archive ack to
           check-archive; the matching Archive-egress-ack: <path> trailer
           rides --message.
@@ -166,10 +185,11 @@ with exactly one final `OUTCOME: <pass|fail|indeterminate|tool_error>` line
 on stdout matching the exit code: 0 pass; 1 fail (a modeled refusal: in land
 the prechecks, the tip-moved class, the tree-equality assertion, or a
 propagated gate fail; in land-worktree the source-worktree tip refusals, the
-tree-inequality assertion, the wired check-landing and check-archive
-refusals, the prompt-log prune-audit receipt-less-removal refusal, the
-compare-and-swap refusal, the swap-critical-section lock-contention refusal,
-or a propagated parentage-gate fail);
+intersecting staged-state pre-refusal, the tree-inequality assertion, the
+wired check-landing and check-archive refusals, the prompt-log prune-audit
+receipt-less-removal refusal, the compare-and-swap refusal, the
+swap-critical-section lock-contention refusal, or a propagated
+parentage-gate fail);
 2 indeterminate (in land a land-time merge failure, the interleaved-tip
 refusal, or a mid-restore pipeline failure naming the unrestored paths; in
 land-worktree the interleaved-tip refusal and the ambiguous swap-lock holder
@@ -198,6 +218,14 @@ honored seam prints a loud evidence line naming the value and its env):
       substitutes an unresolvable post-tip into the landing-tail reconcile
       gate's invocation at its single declared point, forcing the
       reconcile-gate refusal while the landed ref stays moved.
+  LAND_SQUASH_TEST_FAULT=phantom-stager (land only) stages the named tracked
+      path's pre-landing bytes (checked out from the verified pre-tip) at its
+      single declared point, immediately after the landing-tail reconcile
+      completes and before the phantom-prevention tail's read;
+      LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN=1 appends a foreign line before
+      staging (the report-only arm's fixture) and =2 appends a foreign line
+      to the worktree only, leaving the index at the exact phantom (the
+      split shape's fixture).
 EOF
 }
 
@@ -406,6 +434,69 @@ snapshot_has_dirty() {
   return 1
 }
 
+# The intersecting staged-state pre-refusal for land-worktree (plan
+# docs/history/plans/2026-11-06-land-worktree-staged-primary-desync.md):
+# given the primary checkout holding staged state (porcelain index column
+# non-blank, not the untracked form) or a locally modified tracked path on
+# any member of the landing's changed-path set, refuses before any ref
+# update, naming each intersecting path on its own refusal line, and exits
+# the outcome contract's modeled-refusal fail shape. A staged or dirty path
+# OUTSIDE the changed-path set never blocks (no blanket staged-state
+# refusal). DEFINED here beside the snapshot family, outside the
+# land-worktree mode section between its two mode markers, because that
+# section's omission-scope audit bans in-section porcelain machinery; the
+# mode invokes it pre-lock with the base tip and source tip, beside its
+# other pre-lock gates. Read-only over the primary checkout: the guard
+# never restores and never writes the primary index or worktree (the
+# restore machinery and land's full snapshot pre-refusal surface stay
+# scoped to land). Reuses the snapshot helper family (load_snapshot,
+# snapshot_contains, snapshot_state_of, snapshot_has_dirty, parse_status_z)
+# and the flow's existing branch-delta derivation form.
+refuse_intersecting_primary_state() {
+  local gw_base="$1" gw_source="$2"
+  local gw_snap gw_paths gw_rc gw_i gw_count gw_p gw_st gw_x gw_intersect=""
+  gw_snap="$(mktemp "${TMPDIR:-/tmp}/land-squash-gsnap.XXXXXX")"
+  gw_paths="$(mktemp "${TMPDIR:-/tmp}/land-squash-gpaths.XXXXXX")"
+  git -C "$REPO_ROOT" status --porcelain=v1 -z > "$gw_snap" || {
+    rm -f "$gw_snap" "$gw_paths"
+    tool_error "git status --porcelain failed over the primary checkout"
+  }
+  load_snapshot "$gw_snap"
+  gw_rc=0
+  git -C "$REPO_ROOT" diff --name-only -z --no-renames \
+    "$gw_base" "$gw_source" > "$gw_paths" || gw_rc=$?
+  if [[ "$gw_rc" -ne 0 ]]; then
+    rm -f "$gw_snap" "$gw_paths"
+    tool_error "git diff over the branch's changed paths failed"
+  fi
+  parse_status_z plain "$gw_paths"
+  rm -f "$gw_snap" "$gw_paths"
+  gw_count=${#Z_ITEMS[@]}
+  if [[ "$gw_count" -gt 0 ]]; then
+    for gw_i in "${!Z_ITEMS[@]}"; do
+      gw_p="${Z_ITEMS[$gw_i]}"
+      snapshot_contains "$gw_p" || continue
+      gw_st="$(snapshot_state_of "$gw_p")"
+      gw_x="${gw_st:0:1}"
+      if [[ "$gw_x" != " " && "$gw_x" != "?" && "$gw_x" != "!" ]]; then
+        gw_intersect="${gw_intersect}${gw_p}"$'\n'
+        continue
+      fi
+      if snapshot_has_dirty "$gw_p"; then
+        gw_intersect="${gw_intersect}${gw_p}"$'\n'
+      fi
+    done
+  fi
+  [[ -z "$gw_intersect" ]] && return 0
+  local gw_path
+  while IFS= read -r gw_path; do
+    [[ -n "$gw_path" ]] || continue
+    echo "refuse: primary checkout staged state intersects the landing changed-path set: ${gw_path}; remedy: if the staged state is this session's, commit or restore it, then retry; a foreign staged path is never staged, discarded, or committed autonomously - route it per the operator-gated foreign-staged remedy, never by following the remedy line on a foreign path"
+  done <<< "$gw_intersect"
+  emit_outcome fail
+  exit 1
+}
+
 RESTORED=()
 REMOVED=()
 SKIPPED_WRITER=()
@@ -556,12 +647,16 @@ run_reconcile_gate() {
     echo "test-only fault seam honored: reconcile-tool-failure (LAND_SQUASH_TEST_FAULT=reconcile-tool-failure): the reconcile invocation's post-tip substituted with an unresolvable value"
   fi
   RRG_RC=0
-  RRG_OUT="$(python3 "$SCRIPT_DIR/reconcile_post_landing.py" --repo "$REPO_ROOT" --base "$BASE_BRANCH" --pre-tip "$pre" --post-tip "$seam_post")" || RRG_RC=$?
+  # --landing-tail: this gate is the landing flow's own reconcile tail, run
+  # under the held merge landing lock; the flag lifts the primary fresh-mtime
+  # bound for the pure stale witness so the landing's own restage residue is
+  # restored instead of left as a sanctioned block (witnessed 2026-11-12).
+  RRG_OUT="$(python3 "$SCRIPT_DIR/reconcile_post_landing.py" --repo "$REPO_ROOT" --base "$BASE_BRANCH" --pre-tip "$pre" --post-tip "$seam_post" --landing-tail)" || RRG_RC=$?
   local receipt_dir="${REPO_ROOT}/docs/tmp/landing-receipts"
   mkdir -p "$receipt_dir" || tool_error "cannot create the receipt home: ${receipt_dir}"
   RRG_RECEIPT="${receipt_dir}/${post}.txt"
   {
-    printf 'command: python3 %s --repo %s --base %s --pre-tip %s --post-tip %s\n' \
+    printf 'command: python3 %s --repo %s --base %s --pre-tip %s --post-tip %s --landing-tail\n' \
       "$SCRIPT_DIR/reconcile_post_landing.py" "$REPO_ROOT" "$BASE_BRANCH" "$pre" "$seam_post"
     printf 'exit code: %s\n' "$RRG_RC"
     printf '%s\n' "$RRG_OUT"
@@ -593,6 +688,68 @@ run_reconcile_gate_or_refuse() {
     emit_outcome fail
     exit 1
   fi
+  return 0
+}
+
+# The phantom-prevention tail (lesson 249's three-witness series; entry
+# landing-reconcile-phantom-recurrence): the land-mode landing composes the
+# primary checkout's index through merge --squash and moves the base ref
+# through a compare-and-swap, and bytes staged in the primary index during
+# that window survive the landing as a reversal-shaped staged entry - the
+# staged diff against HEAD is the exact reverse of the landing's change on a
+# landing-touched path. Run after the landing-tail reconcile completes: every
+# staged landing-touched path whose cached diff equals the landing change's
+# exact reverse is a prevented phantom, restored path-exclusively from HEAD
+# (--source=HEAD --staged --worktree) and named; a staged entry that does not
+# match the reverse shape is peer state per lesson 249's rule and stays in
+# place, report-only (a phantom naming untouched paths is never restored).
+# A split shape - the index holding the exact phantom while the worktree
+# holds diverging bytes - restores the staged half only; the worktree bytes
+# are peer state and stay in place, named. Pathspecs pass through :(literal)
+# so a glob-metacharacter landing path cannot widen the restore onto peer
+# paths.
+prevent_landing_phantoms() {
+  local pre="$1" landed="$2"
+  local pp_file pp_rc pp_i pp_p pp_cached pp_reverse pp_wt pp_prevented=0 pp_left=0
+  pp_file="$(mktemp "${TMPDIR:-/tmp}/land-squash-pp.XXXXXX")"
+  pp_rc=0
+  git -C "$REPO_ROOT" diff --name-only -z --no-renames "$pre" "$landed" \
+    > "$pp_file" || pp_rc=$?
+  if [[ "$pp_rc" -ne 0 ]]; then
+    rm -f "$pp_file"
+    tool_error "git diff over the landing's changed paths failed (phantom-prevention tail)"
+  fi
+  parse_status_z plain "$pp_file"
+  rm -f "$pp_file"
+  for pp_i in "${!Z_ITEMS[@]}"; do
+    pp_p="${Z_ITEMS[$pp_i]}"
+    pp_cached="$(git -C "$REPO_ROOT" diff --cached -- ":(literal)$pp_p" || true)"
+    [[ -n "$pp_cached" ]] || continue
+    pp_reverse="$(git -C "$REPO_ROOT" diff "$landed" "$pre" -- ":(literal)$pp_p" || true)"
+    if [[ "$pp_cached" == "$pp_reverse" ]]; then
+      pp_wt="$(git -C "$REPO_ROOT" diff -- ":(literal)$pp_p" || true)"
+      if [[ -n "$pp_wt" ]]; then
+        if git -C "$REPO_ROOT" restore --source=HEAD --staged -- \
+            ":(literal)$pp_p" >/dev/null 2>&1; then
+          pp_prevented=$((pp_prevented + 1))
+          echo "phantom-prevented (staged half only): ${pp_p} (the staged diff was the exact reverse of the landing change; the worktree bytes diverge from the staged phantom and stay in place as peer state)"
+        else
+          echo "warning: the phantom-prevention restore failed for ${pp_p}; the staged reverse-shape bytes stay in place" >&2
+        fi
+      else
+        if git -C "$REPO_ROOT" restore --source=HEAD --staged --worktree -- \
+            ":(literal)$pp_p" >/dev/null 2>&1; then
+          pp_prevented=$((pp_prevented + 1))
+          echo "phantom-prevented: ${pp_p} (the staged diff was the exact reverse of the landing change; restored from HEAD)"
+        else
+          echo "warning: the phantom-prevention restore failed for ${pp_p}; the staged reverse-shape bytes stay in place" >&2
+        fi
+      fi
+    else
+      pp_left=$((pp_left + 1))
+    fi
+  done
+  echo "phantom-tail: ${pp_prevented} prevented, ${pp_left} left in place (a staged entry that does not match the exact-reverse shape is peer state; report-only)"
   return 0
 }
 
@@ -756,9 +913,17 @@ fi
 # prose's mandatory base-freshness gate; the mode's tree equality is
 # staleness-blind by composition, so check-landing is the load-bearing
 # stale-base guard) and check-archive over the built landing commit. The
-# mode omits land's restore machinery entirely: no arm runs porcelain or
-# restore against the primary checkout, whose index and working tree are
-# never written.
+# mode omits land's restore machinery and its full snapshot pre-refusal
+# surface entirely: nothing restores or writes the primary checkout, whose
+# index and working tree are never written. The one modeled primary-side
+# refusal is the intersecting staged-state pre-refusal (the mode's modeled
+# fail class for primary state intersecting the landing's changed paths;
+# defined beside the snapshot family outside this section, invoked
+# pre-lock below beside the other pre-lock gates, never restore and never
+# write): the primary's staged or locally-dirty tracked state on a member
+# of the landing's changed-path set refuses the landing before any ref
+# update, each intersecting path named on its own refusal line; a staged
+# or dirty path outside the changed-path set lands unchanged.
 
 if [[ "$MODE" == "land-worktree" ]]; then
   # The primary checkout root resolves first (the swap lock keys through
@@ -856,6 +1021,12 @@ if [[ "$MODE" == "land-worktree" ]]; then
   # the source tip.
   BASE_TIP="$(git -C "$REPO_ROOT" rev-parse --verify "refs/heads/${BASE_BRANCH}")" || \
     tool_error "base branch ref unresolvable: refs/heads/${BASE_BRANCH}"
+
+  # The intersecting staged-state pre-refusal, beside the other pre-lock
+  # gates and before any ref update: the modeled refusal is defined beside
+  # the snapshot family outside this section and is read-only over the
+  # primary checkout (never restore, never write).
+  refuse_intersecting_primary_state "$BASE_TIP" "$SOURCE_TIP"
 
   # The wired prompt-log prune audit, before commit composition and before
   # the base ref moves. The landing range is every commit after the source
@@ -1012,6 +1183,19 @@ if [[ "$MODE" == "land-worktree" ]]; then
       echo "refuse: the swap-critical-section lock acquire failed as a done-lock.sh tool error (exit 3: usage, environment, or unsupported lock data); the swap-lock: evidence lines above carry the acquire's diagnostics"
       emit_outcome tool_error
       exit 3
+    fi
+    # The wrapper's captured stderr carries the holder evidence line(s)
+    # ("merge lock held: ... age=NNNs", done-lock.sh's
+    # emit_holder_wait_diagnostic); parse the last age so the refusal can
+    # branch on hold duration instead of sending every contention through
+    # the same blind retry (origin row 2026-11-05-merge-lock-held-after-wait-
+    # refusal-lacks-age-deferral-guidance: two 300s exhaustions against one
+    # continuous long-span hold, then deferral, then the same-day landing).
+    SWAP_HOLD_AGE="$(grep -o 'age=[0-9][0-9]*s' "$SWAP_ACQ_ERR" 2>/dev/null | tail -1 | tr -dc '0-9' || true)"
+    if [[ -n "$SWAP_HOLD_AGE" && "$SWAP_HOLD_AGE" -gt "$SWAP_WAIT" ]]; then
+      echo "refuse: the swap-critical-section merge lock is held after the bounded wait (${SWAP_WAIT}s); the acquire evidence shows a long-span hold (age ${SWAP_HOLD_AGE}s already exceeds the window just spent), so a same-turn retry would blind-wait again - take the deferral path instead: record the run as pending_landing, retain the branch/worktree/claim, and retry the landing on a later turn after the holder releases"
+      emit_outcome fail
+      exit 1
     fi
     echo "refuse: the swap-critical-section merge lock is held after the bounded wait (${SWAP_WAIT}s); the composition above already ran pre-lock, so retry the landing once the holder releases (the retry re-runs the full pre-lock gate sequence)"
     emit_outcome fail
@@ -1408,6 +1592,27 @@ POST_OUT="$(python3 "$PARENTAGE_GATE" post-landing --repo "$REPO_ROOT" --pre-tip
 if [[ "$POST_RC" -eq 0 ]]; then
   print_gate_evidence "$POST_OUT"
   run_reconcile_gate_or_refuse "$EXPECTED_TIP_SHA" "$LANDING_COMMIT"
+  # Test-only seam at its single declared point: after the landing-tail
+  # reconcile completes, immediately before the phantom-prevention tail's
+  # read - the in-run staging writer the tail exists to catch.
+  if [[ "${LAND_SQUASH_TEST_FAULT:-}" == "phantom-stager" ]]; then
+    FAULT_PATH="${LAND_SQUASH_TEST_FAULT_PATH:-}"
+    [[ -n "$FAULT_PATH" ]] || tool_error "the phantom-stager seam requires LAND_SQUASH_TEST_FAULT_PATH"
+    git -C "$REPO_ROOT" checkout -q "$EXPECTED_TIP_SHA" -- "$FAULT_PATH" || \
+      tool_error "the phantom-stager seam could not stage ${FAULT_PATH}'s pre-landing bytes"
+    if [[ "${LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN:-}" == "1" ]]; then
+      printf 'foreign staged line\n' >> "${REPO_ROOT}/${FAULT_PATH}"
+      git -C "$REPO_ROOT" add -- "$FAULT_PATH" || \
+        tool_error "the phantom-stager seam could not stage the foreign-shape bytes"
+    fi
+    if [[ "${LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN:-}" == "2" ]]; then
+      # the split shape: the index holds the exact phantom, the worktree
+      # diverges (unstaged) - the staged-half-only arm's fixture
+      printf 'foreign worktree line\n' >> "${REPO_ROOT}/${FAULT_PATH}"
+    fi
+    echo "test-only fault seam honored: phantom-stager (LAND_SQUASH_TEST_FAULT=phantom-stager, LAND_SQUASH_TEST_FAULT_PATH=${FAULT_PATH}${LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN:+, shape variant ${LAND_SQUASH_TEST_FAULT_STAGE_FOREIGN}}): staged ${FAULT_PATH} bytes after the reconcile gate"
+  fi
+  prevent_landing_phantoms "$EXPECTED_TIP_SHA" "$LANDING_COMMIT"
   echo "new tip: ${LANDING_COMMIT}"
   git -C "$REPO_ROOT" diff --stat "$EXPECTED_TIP_SHA" "$LANDING_COMMIT" | sed 's/^/  /' || true
   emit_outcome pass

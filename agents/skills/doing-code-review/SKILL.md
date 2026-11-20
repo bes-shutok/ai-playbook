@@ -212,6 +212,8 @@ Select the full or focused panel per `review-agents/review-panel-selection.md`, 
 
 Launch all selected review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
 
+**Persist worker returns on arrival:** as each worker returns, before any synthesis or dedup work, write that return verbatim to a per-worker payload file under the round's session dir (`{tmp_dir}/code-review/<slug>/` for a standalone review; `{tmp_dir}/execute-plan/<PLAN_SLUG>/` when the execute-plan parent orchestrates the round) named `review-<round>-worker-<name>-payload.md` (round `1` for a standalone review), and cite those payload files as the staging record's input with a `Worker payloads:` line in the staging record's `## Metadata`. A return must never live only in the orchestrator conversation: a context compaction between arrival and synthesis voids the round's per-worker attribution (the Panel Solo/Echo counts) with no recovery path from any durable surface, and a round whose attribution is unrecoverable cannot be staged honestly.
+
 Each worker receives:
 1. **`severity-calibration.md`** (always; tier definitions and decision procedure)
 2. Its assigned lens catalogs from `review-panel-selection.md`
@@ -814,6 +816,9 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 
 ### With `execute-plan` skill
 Phase 3: the execute-plan **parent** runs this skill as the review orchestrator and launches lens workers (default). Nested "Code Review" sub-agent only when the parent cannot fan out. Exits after one fresh review of the current digest has zero unresolved blocking findings, except a re-bind through verified comment-only corrections rows: `scripts/code_delta_classifier.py` proves the comment-only class over the certified range's committed before and after heads, the CLI-produced row on the review record re-binds the digest with zero rounds, and a missing or erroring classifier at that boundary takes the fresh-review default with the execute-plan copy remedy (the same exception as review-loop's exit criteria; the graded owner text is execute-plan's Phase 3 accepted-fix rule). Post-fix reviews use blind correctness plus every distinct owning or affected worker.
+
+### With `execute-plan-stack` skill
+The execute-plan-stack skill's stack-final fresh review consumes this skill as a review executor, with the full stack diff from the stack base commit through the stack tip as the review range, the consumer naming the base explicitly.
 
 ### With `maintenance` skill
 The maintenance skill's ad-hoc backlog arm (the Ad-hoc backlog arm bullet in Step 3 of `agents/skills/maintenance/SKILL.md`) is the consumer: an ad-hoc run brings this skill's panel over its ad-hoc worktree branch's diff against its merge base, the staging record's canonical `Source digest` being the SHA-256 of those exact reviewed bytes (review-staging's owned field, recomputed at the final post-fold panel run). Blocking findings are folded on the worktree branch and the folding edits land before the final panel run, so the panel's last review covers the exact bytes the merge-locked squash landing commits; the landing's `Ad-hoc-panel-pass:` receipt names the review record path and that digest.

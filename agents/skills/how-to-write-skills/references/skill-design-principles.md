@@ -10,8 +10,8 @@ A skill exists to wrangle determinism out of a stochastic system. **Predictabili
 
 Two choices, trading different costs:
 
-- A **model-invoked** skill keeps a **description**, so the agent can fire it autonomously _and_ other skills can reach it (you can still type its name too). It contributes to **context load** ; the description sits in the window every turn. Mechanics: omit `disable-model-invocation`, and write a model-facing description with rich trigger phrasing ("Use when the user wants…, mentions…").
-- A **user-invoked** skill strips the description from the agent's reach: only you, typing its name, can invoke it ; and no other skill can. Zero context load, but it spends **cognitive load**: _you_ are the index that must remember it exists. Mechanics: set `disable-model-invocation: true`; the `description` becomes human-facing ; a one-line summary, trigger lists stripped.
+- A **model-invoked** skill keeps a **description**. The agent can invoke it on its own, and other skills can reach it. A user can also type its name. The description adds **context load** because it stays in the window on every turn. To enable model invocation, omit `disable-model-invocation` and write a model-facing description with clear trigger phrases ("Use when the user wants…, mentions…").
+- A **user-invoked** skill removes the description from the agent's reach. Only a user can invoke it by name. Other skills cannot invoke it. The skill adds no context load, but it uses **cognitive load**: the user must remember it exists. To set this mode, use `disable-model-invocation: true`. Keep a one-line, human-facing description and remove the trigger list.
 
 Pick model-invocation only when the agent must reach the skill on its own, or another skill must. If it only ever fires by hand, make it user-invoked and pay no context load.
 

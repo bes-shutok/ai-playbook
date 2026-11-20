@@ -19,6 +19,7 @@
 #   done_run.sh commit --stage PATH... --subject TEXT
 #        [--untrack PATH]...
 #        [--expected-ref REF --expected-oid OID]
+#        [--log-expected PATH=BLOB_ID]...
 #        [--guard-firing NAME:KIND:EVIDENCE[:NOTE]]...
 #        [--learn-receipts-from FILE] [--revert-formatting PATH]...
 #        [--side-commit REPO_PATH]... [--manifest PATH] [--run-id RUN_ID]
@@ -49,6 +50,17 @@
 # the report inputs: the landing summary from the run's owned-commits ledger
 # and the report-only missing-review-record scan over the archived plans
 # (missing review records are reported, never blocking, never fabricated).
+# Pinned terminal-state decision (2026-11-18, ad-hoc run over the row
+# docs/history/backlog/2026-11-04-exec-landing-certified-record-status-unbound.md):
+# STAGED is the sanctioned terminal state of an execution-lane certified-final
+# plan-review record. A staged record's operative content is not rewritten
+# by any sanctioned post-landing duty, so no landing-tail status transition
+# exists; the
+# landing's own record verification (presence plus staging digest) is the
+# binding; the record-rewrite refusal and the validator's digest-mutation
+# refusal are the immutability warrants in force, and the finalize scan's
+# status read is documentation-only (report-only expectation, no transition
+# logic exists to flag).
 # The guard-firing rows finalize receives never append directly and never
 # append twice after a successful landing (plan
 # 2026-10-24-done-run-lock-span-and-append-ordering): with a prior landing
@@ -225,6 +237,28 @@
 # unverifiable cleanup reports blocked recovery (the two-path guard then
 # refuses the next primary log writer). The mode never takes the repo-wide
 # merge lock: the docs-branch sync (a final-closeout leg) is skipped.
+# The writer declares each declared owned log path's expected post-edit
+# blob id through the repeatable --log-expected PATH=BLOB_ID operand (a
+# full 40-hex sha1 computed over the authored bytes before the commit,
+# never by hashing the file at commit time); after the runner's own
+# staging, each declared expectation compares against the index's staged
+# blob id at the transaction's staged-blob binding point (the
+# authorized-restoration idiom): an equal check passes silently, a
+# declared path staged as a deletion emits the deletion-shape advisory,
+# and a mismatch emits ONE single-line stderr advisory naming the path
+# and both blob ids as a divergence signal (never an authorship finding;
+# reconciliation runs from the two named ids, the carried foreign bytes'
+# disposition staying operator-gated under the Write boundary rule,
+# docs/history/backlog/PLAN-PROMPTS.md Standing rules) and the commit
+# proceeds: warning-only, never blocking. An expectation outside the
+# pair-carrying mode, a path outside the declared --stage set, a
+# malformed blob id, and a duplicate path are usage refusals (rc 3)
+# before anything mutates. A call without --log-expected behaves
+# byte-identically to the pre-advisory path (witnessed gap: commit
+# 985d37130 carried a parallel emitter's unstaged entry inside its
+# declared log path; plan
+# docs/history/plans/2026-11-17-declared-log-path-foreign-unstaged-byte-carry.md
+# Task 1).
 # Pair-less calls, worktree log commits, and every other behavior keep
 # their existing paths unchanged.
 #
@@ -612,7 +646,10 @@ cmd_setup() {
 
   # 4. Worktree residue sweep (fail-open, report-and-continue). The sweep
   #    removes stale registrations only; on-disk worktrees, their artifacts,
-  #    and every branch ref stay operator-controlled, so the setup report
+  #    and every branch ref stay operator-controlled on stand-alone runs
+  #    (on orchestrated runs they belong to the run's owning orchestrator,
+  #    per the Worktree-first standard's Terminal closeout ownership clause),
+  #    so the setup report
   #    carries every retained branch name, its disposition, the proven OID,
   #    and the retention reasons through the final closeout (plan
   #    2026-10-19-gate-removal-closeout-accounting Task 2). A candidate
@@ -1379,12 +1416,14 @@ side_facts_value() { # key -> value from the user facts markdown table
 
 cmd_commit() {
   local subject="" receipts_file="" path row ig_rc=0
+  local le_path="" le_blob="" le_blob_valid=0 le_joined=""
   # UNTRACK_HEAD is deliberately NOT local: cmd_commit captures the head
   # identity once at the untrack preflight and captured_tree_landing reads
   # the same OID as its 1c scan baseline (one capture, two consumers).
   STAGE_ARGS=(); REVERT_FMT_ARGS=(); SIDE_COMMIT_ARGS=(); GUARD_FIRINGS=()
   UNTRACK_ARGS=()
   DECLARED=()
+  LOG_EXPECTED_PATHS=(); LOG_EXPECTED_BLOBS=()
   COMMIT_MANIFEST=""; RUN_ID_ARG=""; BOUNDARY_CLASS="final-closeout"
   AUTH_PATH=""; AUTH_BLOB=""
   AUTH_MARKER=""; AUTH_MANIFEST=""; AUTH_RUN_ID=""; AUTH_MANIFEST_DIGEST=""
@@ -1431,6 +1470,43 @@ cmd_commit() {
           exit 3;
         }
         EXPECTED_OID="$2"; shift 2;;
+      --log-expected)
+        case "${2:-}" in ""|--*)
+          echo "done_run commit: --log-expected needs <PATH>=<BLOB_ID>" >&2
+          exit 3;;
+        esac
+        case "$2" in
+          *=*) ;;
+          *) echo "done_run commit: --log-expected needs <PATH>=<BLOB_ID>: $2" >&2
+             exit 3;;
+        esac
+        le_path="${2%%=*}"
+        [ -n "$le_path" ] || {
+          echo "done_run commit: --log-expected: the PATH part is empty: $2" >&2
+          exit 3;
+        }
+        le_blob="${2#*=}"
+        # Whole-string validation: a line-based grep alone accepts a
+        # multi-line operand whose first line matches ("40-hex\nextra"
+        # would ride the injected second line verbatim into the advisory
+        # echo), so the length gate runs first (a newline is a non-hex
+        # byte and pushes the length past 40, so no multi-line operand
+        # survives both gates), and -x pins the single-line 40-hex shape.
+        le_blob_valid=0
+        [ "${#le_blob}" -eq 40 ] \
+          && printf '%s' "$le_blob" | grep -qxE '^[0-9a-f]{40}$' \
+          && le_blob_valid=1
+        [ "$le_blob_valid" -eq 1 ] || {
+          echo "done_run commit: --log-expected: malformed expected blob id: $le_blob (want a full 40-hex sha1 blob id)" >&2
+          exit 3;
+        }
+        for path in ${LOG_EXPECTED_PATHS+"${LOG_EXPECTED_PATHS[@]}"}; do
+          [ "$path" = "$le_path" ] && {
+            echo "done_run commit: --log-expected given more than once for path: $le_path; one expectation per path" >&2
+            exit 3;
+          }
+        done
+        LOG_EXPECTED_PATHS+=("$le_path"); LOG_EXPECTED_BLOBS+=("$le_blob"); shift 2;;
       --authorize-ancestor-restoration)
         if [ -n "$AUTH_PATH" ]; then
           echo "done_run commit: --authorize-ancestor-restoration given more than once; one authorized path per invocation" >&2
@@ -1486,6 +1562,18 @@ cmd_commit() {
     ROLLING_LOG=1
   fi
 
+  # A --log-expected expectation rides the pair-carrying rolling-log
+  # transaction only: an expectation the transaction would silently decline
+  # is refused, never skipped (usage refusal before anything mutates; the
+  # declared-set membership arm sits in the rolling-log pre-stage guard
+  # below, where the pair-carrying calls alone arrive).
+  if [ "${#LOG_EXPECTED_PATHS[@]}" -gt 0 ] && [ "$ROLLING_LOG" -eq 0 ]; then
+    for path in ${LOG_EXPECTED_PATHS+"${LOG_EXPECTED_PATHS[@]}"}; do
+      le_joined="${le_joined:+$le_joined, }$path"
+    done
+    commit_die 3 "--log-expected rides the pair-carrying rolling-log transaction only (--expected-ref/--expected-oid); give the pair or drop the expectations (paths: $le_joined)"
+  fi
+
   local repo_top session plans_dir deliverables
   repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || \
     commit_die 3 "not inside a git repository"
@@ -1508,6 +1596,7 @@ cmd_commit() {
   #     worktree bytes stay unchanged.
   if [ "$ROLLING_LOG" -eq 1 ]; then
     local rl_ref="" rl_oid="" rl_residue="" rl_path="" rl_foreign="" rl_owned=0
+    local rl_le_path="" rl_declared=0
     trace_stage rolling-log-pre-stage-guard
     [ "${#STAGE_ARGS[@]}" -gt 0 ] || \
       commit_die 3 "rolling-log mode declares its owned log paths via --stage; none given"
@@ -1516,6 +1605,18 @@ cmd_commit() {
         "$PLAN_PROMPTS_REL"|"$EXEC_PROMPTS_REL") ;;
         *) commit_die 3 "rolling-log mode stages only the rolling prompt logs ($PLAN_PROMPTS_REL, $EXEC_PROMPTS_REL): $path";;
       esac
+    done
+    # --log-expected declared-set preflight: every declared expectation must
+    # name a declared --stage rolling-log path (the id shape and the
+    # per-path uniqueness validated at parse time). A path outside the
+    # declared set is a usage refusal before anything mutates.
+    for rl_le_path in ${LOG_EXPECTED_PATHS+"${LOG_EXPECTED_PATHS[@]}"}; do
+      rl_declared=0
+      for path in ${STAGE_ARGS+"${STAGE_ARGS[@]}"}; do
+        [ "$path" = "$rl_le_path" ] && rl_declared=1
+      done
+      [ "$rl_declared" -eq 1 ] || \
+        commit_die 3 "--log-expected names a path outside the declared --stage set: $rl_le_path; declare the rolling prompt log via --stage first"
     done
     # The declared-deletion combination refusal (backlog untrack-minor
     # usage-and-expectedref residuals): an --untrack declaration beside
@@ -1534,7 +1635,7 @@ cmd_commit() {
     rl_residue="$(git diff --cached --name-only HEAD -- \
       "$PLAN_PROMPTS_REL" "$EXEC_PROMPTS_REL")"
     [ -z "$rl_residue" ] || \
-      commit_die 1 "rolling-log pre-stage guard: a staged delta already exists on a rolling prompt log; resolve it before any primary log write; residue left untouched: $(printf '%s' "$rl_residue" | tr '\n' ' ')"
+      commit_die 1 "rolling-log pre-stage guard: a staged delta already exists on a rolling prompt log; resolve it through the Write boundary rule's operator-gated remedy (docs/history/backlog/PLAN-PROMPTS.md Standing rules; the remedy covers every staged path refused by either guard, regardless of who staged it or whether the writer declared it, with or without an unstaged live delta; an unattended writer stands down or parks without operator direction); residue left untouched: $(printf '%s' "$rl_residue" | tr '\n' ' ')"
     while IFS= read -r rl_path; do
       [ -n "$rl_path" ] || continue
       rl_owned=0
@@ -1544,7 +1645,7 @@ cmd_commit() {
       [ "$rl_owned" -eq 1 ] || rl_foreign="$rl_foreign $rl_path"
     done < <(git diff --cached --name-only HEAD)
     [ -z "$rl_foreign" ] || \
-      commit_die 1 "rolling-log pre-stage guard: a staged path outside the declared owned log set refuses before staging; bytes left untouched:$rl_foreign"
+      commit_die 1 "rolling-log pre-stage guard: a staged path outside the declared owned log set refuses before staging; resolve it through the Write boundary rule's operator-gated remedy (docs/history/backlog/PLAN-PROMPTS.md Standing rules; the remedy covers every staged path refused by either guard, regardless of who staged it or whether the writer declared it, with or without an unstaged live delta; an unattended writer stands down or parks without operator direction); bytes left untouched:$rl_foreign"
   fi
 
   # 0b. The --untrack read-only preflight, before any runner-owned index
@@ -1679,6 +1780,37 @@ cmd_commit() {
   if [ "${#STAGE_LIST[@]}" -gt 0 ]; then
     git add -- ${STAGE_LIST+"${STAGE_LIST[@]}"} || \
       commit_die 3 "git add refused the declared pathspec; stage the surviving paths in their own invocation and re-run"
+  fi
+
+  # 1a. The writer-declared expected-bytes advisory (pair-carrying calls
+  #     carrying --log-expected expectations only): at the transaction's
+  #     staged-blob binding point (the authorized-restoration idiom, the
+  #     staged blob read from the index after the runner's own git add),
+  #     each declared owned log path's staged blob id compares against the
+  #     writer's declared expected blob id (computed over the authored bytes
+  #     before the commit, never by hashing the file here). Equal passes
+  #     silently; a declared path staged as a deletion (no index entry)
+  #     emits the deletion-shape advisory; a mismatch emits ONE single-line
+  #     stderr advisory naming the path and both blob ids as a divergence
+  #     signal (never an authorship finding; reconciliation runs from the
+  #     two named ids and the carried foreign bytes' disposition stays
+  #     operator-gated under the Write boundary rule's foreign-bytes
+  #     posture) and the commit proceeds: warning-only, no refusal added.
+  #     A call without --log-expected never enters this block
+  #     (byte-identical to the pre-advisory path).
+  if [ "$ROLLING_LOG" -eq 1 ] && [ "${#LOG_EXPECTED_PATHS[@]}" -gt 0 ]; then
+    trace_stage log-expected-advisory
+    local le_i=0 le_expected="" le_staged=""
+    for path in ${LOG_EXPECTED_PATHS+"${LOG_EXPECTED_PATHS[@]}"}; do
+      le_expected="${LOG_EXPECTED_BLOBS[$le_i]}"
+      le_staged="$(git ls-files -s -- "$path" | awk '{print $2}')"
+      if [ -z "$le_staged" ]; then
+        echo "done_run commit: log-expected advisory (deletion shape): $path stages as a deletion (no staged content; the writer declared expected blob $le_expected); reconcile through the Write boundary rule (docs/history/backlog/PLAN-PROMPTS.md Standing rules); the commit proceeds unless a later guard refuses" >&2
+      elif [ "$le_staged" != "$le_expected" ]; then
+        echo "done_run commit: log-expected advisory: $path staged blob $le_staged diverges from the declared expected blob $le_expected (a divergence signal, never an authorship finding); reconcile from the two named blob ids (git cat-file the staged blob, diff against the authored bytes); the carried foreign bytes' disposition stays operator-gated under the Write boundary rule (docs/history/backlog/PLAN-PROMPTS.md Standing rules); the commit proceeds unless a later guard refuses" >&2
+      fi
+      le_i=$((le_i+1))
+    done
   fi
 
   # 1b. Bind each authorization to this invocation's declared set and its
@@ -2954,7 +3086,7 @@ cmd_finalize() {
   #    Task 2).
   local ledger landing_commit
   if [ "$finalize_unbound_refused" -eq 1 ]; then
-    echo "done_run finalize: WARNING: the landing summary and the missing-review-record scan are skipped (the unbound-resolution refusal above left the marking undone); re-report them on a bound finalize re-run" >&2
+    echo "done_run finalize: WARNING: the landing summary and the missing-review-record scan are skipped (the unbound-resolution refusal above left the marking undone); the post-landing archive-ceremony report arm skips with them; re-report them on a bound finalize re-run" >&2
   else
   ledger=""
   if [ -n "$RUN_ID" ] && [ -f "$session/owned-commits-$RUN_ID.txt" ]; then
@@ -3051,7 +3183,25 @@ for name in plan_files:
 for citing, record in missing:
     print(f"missing-review-record: {record} cited by {citing} (reconstruction duty: report with a witness note; never fabricate, never block, never delete)")
 print(f"missing-review-record scan: {len(missing)} missing record(s) corpus_root={reviews_dir}")
+print("record-status: cited records are expected STAGED-terminal (decision-only pin, 2026-11-18; no post-landing transition exists or is enforced)")
 PYEOF
+  trace_stage archive-ceremony-report
+  # Post-landing archive-ceremony report arm (plan
+  # docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 2):
+  # warning-only, fail-open re-evaluation of the EXISTING archive-ceremony
+  # gate over the landed state, beside the missing-review-record scan and
+  # after the done-lock and merge-lock releases. The lib entry point owns
+  # the span-boundary resolution (this finalize's pre-release bound
+  # manifest resolution passed as the primary route), the boundary and
+  # derivation-blocker classification into the distinct could-not-evaluate
+  # posture, and the pinned hybrid context (only the reviews corpus
+  # re-roots at the primary reviews home); no bash code classifies the
+  # boundary or string-matches the gate's note text. The arm is never
+  # captured into the finalize exit code: a catastrophic arm failure emits
+  # the could-not-evaluate warning below on the failure channel and the
+  # closeout continues.
+  python3 "$LIB" archive-ceremony-report --manifest "$RUN_MANIFEST" \
+    || echo "done_run finalize: WARNING: archive-ceremony evaluation: could-not-evaluate: the post-landing report arm could not run (report-only; the closeout continues)" >&2
   fi
 
   # 8. Advisory append: the landing-cost telemetry line. Echo-and-continue:

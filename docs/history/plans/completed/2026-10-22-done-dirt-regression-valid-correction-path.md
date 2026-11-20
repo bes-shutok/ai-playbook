@@ -173,3 +173,8 @@ Files:
 - [x] The existing dirt-regression machinery record cites the valid-correction incident, one confirmed valid correction with catch frequency still unknown, the false-positive cost of blocked closeout and recovery work, review date 2027-01-20, and retirement only of the invocation-authorization path if no further valid-correction refusal occurs while retaining the gate's independent accidental-reversion protection [class: IMPLEMENTATION_REQUIRED]
 - [x] Given the updated machinery record, the machinery inventory check was run as the repository test: it stays red on its pre-existing baseline (30 failures at pristine main, byte-identical stashed and pristine-HEAD witnessed), the updated dirt record contributes no new failure, and no new gate or persistent authorization record was added; the baseline is filed as docs/history/backlog/2026-10-23-machinery-inventory-baseline-red-obscures-regrowth.md [class: REPOSITORY_TEST]
 - [x] Commit: `docs: define the done dirt correction authorization` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-20-done-dirt-regression-correction-block.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

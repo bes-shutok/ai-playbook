@@ -918,10 +918,88 @@ def probe_codex(now: Optional[float] = None,
         report["reasons"].append("Codex secondary window omitted (missing or malformed fields)")
     return report
 
+CLAUDE_USAGE_MAX_AGE_SECONDS = 15 * 60
+CLAUDE_USAGE_FUTURE_SKEW_SECONDS = 60
+CLAUDE_WINDOW_MINUTES = {"primary": 300, "secondary": 10080}
+
+
+def parse_claude_usage(payload: Any, now: float) -> list[dict]:
+    """Map a get_usage result to the limit contract; empty when unusable."""
+    plan = payload.get("plan") if isinstance(payload, Mapping) else None
+    if not isinstance(plan, Mapping) or plan.get("status") != "ok":
+        return []
+    windows = plan.get("windows")
+    if not isinstance(windows, Sequence) or isinstance(windows, (str, bytes)):
+        return []
+    limits: dict[str, dict] = {}
+    for window in windows:
+        if not isinstance(window, Mapping):
+            continue
+        label = window.get("label")
+        if not isinstance(label, str):
+            continue
+        if label == "5-hour limit":
+            kind = "primary"
+        elif label.startswith("Weekly"):
+            kind = "secondary"
+        else:
+            continue
+        reset = _parse_epoch(window.get("resetsAt"))
+        raw_percent = window.get("percentUsed")
+        if reset is None or raw_percent is None:
+            continue
+        entry = _validated_limit(kind, raw_percent, reset, now)
+        if entry is None:
+            continue
+        entry["window_minutes"] = CLAUDE_WINDOW_MINUTES[kind]
+        # Several windows of one kind (for example per-model weekly): keep the
+        # fullest, so the reading never depends on payload order.
+        if kind not in limits or entry["used_percent"] > limits[kind]["used_percent"]:
+            limits[kind] = entry
+    return [limits[kind] for kind in ("primary", "secondary") if kind in limits]
+
+
+def probe_claude(usage_file: Optional[os.PathLike | str] = None,
+                 now: Optional[float] = None,
+                 minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
+                 percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
+                 protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+                 plan_cost_percent: Optional[float] = None) -> dict:
+    """Read one get_usage JSON file; fail open to unknown on any problem."""
+    source = RUNTIME_SOURCES["claude"]
+    effective_now = time.time() if now is None else now
+    path = usage_file or os.environ.get("CLAUDE_USAGE_JSON")
+    if not path:
+        return _unknown_report("claude", ["no Claude usage file (pass --usage-file or set CLAUDE_USAGE_JSON)"],
+                               source=source, observed_at_epoch=effective_now)
+    try:
+        file_path = pathlib.Path(os.path.expanduser(str(path)))
+        observed_at = file_path.stat().st_mtime
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+        if (effective_now - observed_at > CLAUDE_USAGE_MAX_AGE_SECONDS
+                or observed_at - effective_now > CLAUDE_USAGE_FUTURE_SKEW_SECONDS):
+            return _unknown_report("claude", ["Claude usage file is stale or future-dated"],
+                                   source=source, observed_at_epoch=observed_at)
+        limits = parse_claude_usage(payload, effective_now)
+    except Exception as exc:  # fail open without copying file content
+        return _unknown_report("claude", ["Claude usage file unreadable ({})".format(
+            type(exc).__name__)], source=source, observed_at_epoch=effective_now)
+    if not any(limit["kind"] == "primary" and limit["reset_at_epoch"] > effective_now
+               for limit in limits):
+        return _unknown_report("claude", ["Claude usage file carried no usable 5-hour window"],
+                               source=source, observed_at_epoch=observed_at)
+    return build_report("claude", limits,
+                        minutes_threshold=minutes_threshold,
+                        percent_threshold=percent_threshold, now=effective_now,
+                        protocol_minutes_threshold=protocol_minutes_threshold,
+                        plan_cost_percent=plan_cost_percent, source=source,
+                        observed_at_epoch=observed_at)
+
+
 def detect_runtime(explicit: Optional[str] = None) -> Optional[str]:
     """Resolve an explicit supported runtime or an unambiguous live signal."""
     if explicit is not None:
-        return explicit if explicit in ("zcode", "codex") else None
+        return explicit if explicit in ("zcode", "codex", "claude") else None
     harness, _method = harness_detection.detect_harness()
     return harness if harness in ("zcode", "codex") else None
 
@@ -1084,8 +1162,15 @@ def run_probe(runtime: str,
               percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
               protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
               plan_cost_percent: Optional[float] = None,
-              codex_transport: Optional[Callable[[], Mapping]] = None) -> dict:
-    if runtime == "zcode":
+              codex_transport: Optional[Callable[[], Mapping]] = None,
+              usage_file: Optional[os.PathLike | str] = None) -> dict:
+    if runtime == "claude":
+        report = probe_claude(usage_file=usage_file, now=now,
+                              minutes_threshold=minutes_threshold,
+                              percent_threshold=percent_threshold,
+                              protocol_minutes_threshold=protocol_minutes_threshold,
+                              plan_cost_percent=plan_cost_percent)
+    elif runtime == "zcode":
         report = probe_zcode(config_path=config_path, url=url, transport=transport, now=now,
                              minutes_threshold=minutes_threshold,
                              percent_threshold=percent_threshold,
@@ -1159,7 +1244,8 @@ def _fire_at_cli(parser: argparse.ArgumentParser, args: argparse.Namespace,
             limits = []
         else:
             report = run_probe(runtime, config_path=args.config,
-                               url=args.url, now=now)
+                               url=args.url, now=now,
+                               usage_file=args.usage_file)
             limits = report.get("limits") or []
     verdict = evaluate_fire_at(
         fire_epoch,
@@ -1204,7 +1290,10 @@ def main(argv: Optional[Sequence[str]] = None,
             )
         )
     )
-    parser.add_argument("--runtime", help="canonical runtime identity (codex or zcode)")
+    parser.add_argument("--runtime", help="canonical runtime identity (codex, zcode, or claude)")
+    parser.add_argument("--usage-file", default=None,
+                        help="claude runtime: path of a get_usage JSON file "
+                             "(falls back to the CLAUDE_USAGE_JSON env var)")
     parser.add_argument("--minutes-before", type=int, default=DEFAULT_MINUTES_THRESHOLD)
     parser.add_argument("--max-percent", type=float, default=DEFAULT_PERCENT_THRESHOLD)
     parser.add_argument("--min-protocol-minutes", type=int, default=DEFAULT_PROTOCOL_MINUTES_THRESHOLD)
@@ -1264,7 +1353,8 @@ def main(argv: Optional[Sequence[str]] = None,
                                url=args.url, minutes_threshold=args.minutes_before,
                                percent_threshold=args.max_percent,
                                protocol_minutes_threshold=args.min_protocol_minutes,
-                               plan_cost_percent=args.plan_cost)
+                               plan_cost_percent=args.plan_cost,
+                               usage_file=args.usage_file)
     if args.write_flag:
         # r2 F10: the boolean is no longer discarded fire-and-forget. A
         # False return on a pause decision means the guard backstop was

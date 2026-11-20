@@ -1,6 +1,6 @@
 # Backlog: execute-plan conflates project test policy with plan validation scope
 
-Status: covered-pending-execution (docs/history/plans/2026-11-06-execute-plan-project-test-policy-scope.md)
+Status: covered (docs/history/plans/2026-11-06-execute-plan-project-test-policy-scope.md)
 Workflow: backlog
 Priority: high
 Origin class: self-serving

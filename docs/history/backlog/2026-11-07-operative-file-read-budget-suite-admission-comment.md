@@ -1,5 +1,7 @@
 # Backlog: update the pins suite budget segment's admission comment when Task 1's promotion and suite-mode rewire land
 
+Cluster: docs/history/backlog/2026-11-07-operative-file-read-budget-why-named-gloss.md (same Task 1 residual family from the operative-file-read-budget plan; one concerns suite admission prose, the other its standalone-gate gloss)
+
 - **Filed:** 2026-11-07, review round r4 certification-residual capture for docs/history/plans/2026-11-07-operative-file-read-budget-gate.md (the unfolded second sentence of r3 F5's fold comment)
 - **Status:** open
 - **Workflow:** backlog

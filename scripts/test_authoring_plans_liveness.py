@@ -27,8 +27,9 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROBE = REPO_ROOT / "scripts" / "check_authoring_plans_liveness.py"
 
-PROMPT_TEMPLATES = REPO_ROOT / "agents" / "skills" / "maintenance" / "prompt-templates.md"
-PLANS_SKILL = REPO_ROOT / "agents" / "skills" / "plans" / "SKILL.md"
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 3): the plans skill's operative text moved byte-verbatim into modules beside the router; the pinned spans live in the Phase 0 module and the handoff-and-done module.
+PLANS_SKILL = REPO_ROOT / "agents" / "skills" / "plans" / "phase-0-placement.md"
+PLANS_HANDOFF = REPO_ROOT / "agents" / "skills" / "plans" / "handoff-and-done.md"
 MAINTENANCE_SKILL = REPO_ROOT / "agents" / "skills" / "maintenance" / "SKILL.md"
 MAINTENANCE_GUARDS = REPO_ROOT / "agents/skills/maintenance/guards.md"
 MAINTENANCE_SURVEY_ARMS = REPO_ROOT / "agents/skills/maintenance/survey-arms.md"
@@ -397,19 +398,19 @@ class LivenessDeclarationTest(unittest.TestCase):
         # certification-time removal wording and any claim that the probe
         # reads the plan header (it matches fresh claim-file text instead).
         plans = self.read(PLANS_SKILL)
-        self.assert_span(self, "Authoring claim: <claim basename> (session <session id>)", plans, "plans/SKILL.md")
-        self.assert_span(self, "Existing path-form markers remain readable as legacy provenance", plans, "plans/SKILL.md")
-        self.assert_span(self, "permanent provenance once written", plans, "plans/SKILL.md")
-        self.assert_span(self, "remains unchanged through certification, landing, and archival", plans, "plans/SKILL.md")
-        self.assert_span(self, "never reads the plan header", plans, "plans/SKILL.md")
-        self.assert_span(self, "fresh claim-file text", plans, "plans/SKILL.md")
+        self.assert_span(self, "Authoring claim: <claim basename> (session <session id>)", plans, "plans/phase-0-placement.md")
+        self.assert_span(self, "Existing path-form markers remain readable as legacy provenance", plans, "plans/phase-0-placement.md")
+        self.assert_span(self, "permanent provenance once written", plans, "plans/phase-0-placement.md")
+        self.assert_span(self, "remains unchanged through certification, landing, and archival", plans, "plans/phase-0-placement.md")
+        self.assert_span(self, "never reads the plan header", plans, "plans/phase-0-placement.md")
+        self.assert_span(self, "fresh claim-file text", plans, "plans/phase-0-placement.md")
         for forbidden in (
             "dropped at the certification commit",
             "The line is dropped",
             "probe reads the marker",
             "probe reads the plan header",
         ):
-            self.assert_absent(self, forbidden, plans, "plans/SKILL.md")
+            self.assert_absent(self, forbidden, plans, "plans/phase-0-placement.md")
         # The canonical marker-lifetime rule lives in the template's AUTHORING
         # CLAIM procedure; this span pins that home so the plans skill's
         # pointer cannot silently dangle.
@@ -524,30 +525,30 @@ class LivenessDeclarationTest(unittest.TestCase):
         # freeze retained for both placements, and the closeout sequence
         # invoking the template-owned procedure without restating claim
         # policy.
-        plans = self.read(PLANS_SKILL)
+        plans = self.read(PLANS_HANDOFF)
         self.assert_span(
             self,
             "the boundary evidence for the session's placement",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
         self.assert_span(
             self,
             "Worktree placement: the owned-files-clean preflight, the gate-removal invocation ending `OUTCOME: pass`, the authoring branch removed with no live worktree or run naming it",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
         self.assert_span(
             self,
             "Primary-checkout placement: the verified `done` commits and the plan and review artifact state at their primary homes, with no owned-files-clean, gate-removal, or branch-removal evidence",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
         self.assert_span(
             self,
             "Both placements also verify the tracked freeze",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
         # Primary-placement freeze arm: a non-default-branch primary run reads
         # the freeze on its own branch per the Entry freeze placement clause.
@@ -555,13 +556,13 @@ class LivenessDeclarationTest(unittest.TestCase):
             self,
             "on a primary-placement run whose current branch is not the default branch, the freeze reads on that run's branch per the Entry freeze paragraph's placement clause",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
         self.assert_span(
             self,
             "run the AUTHORING CLAIM procedure's placement-matched deletion from `agents/skills/maintenance/template-authoring.md` as the closeout's claim step",
             plans,
-            "plans/SKILL.md",
+            "plans/handoff-and-done.md",
         )
 
     def test_done_gate_declared(self) -> None:

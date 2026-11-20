@@ -47,6 +47,25 @@ Detect architectural and design problems. Code that works but violates SOLID pri
 
 Pattern: `architecture#dual-surface-policy-parity`
 
+## Shared-surface blast radius
+
+- Trigger: a change to a shared handler, mapper, or schema.
+- Worker action: list the other operations that pass through the shared surface and their documented contracts; when the change introduces a new error code or status semantics at the surface, flag every sibling operation whose documented contract the change silently altered.
+
+Pattern: `architecture#shared-surface-blast-radius`
+
+## Collaborator Wiring
+
+- Trigger: a diff that adds or edits a collaborator in a container-managed layer (objects the dependency-injection container builds and wires), or a per-file framework attribute on such a type.
+- Worker action: apply the checks below to the changed collaborators; stage a finding for each violated check.
+- Check (a), injection: production-code collaborators are injected, not built with direct construction, a static factory, or a service locator; tests may construct freely.
+- Check (b), sibling shape: a stateless collaborator's type follows the sibling-service shape (interface plus implementation when siblings do), the finding citing the sibling file as precedent evidence.
+- Check (c), build default: a per-file framework annotation value that restates or overrides the build-wide default is flagged with its consequence named.
+- Check (d), composition mechanism: shared helper logic reaches its consumer through the framework's declared composition mechanism, never by inheritance or a duplicated default method.
+- Receipt spot-check: when the reviewing pass's scope materials carry precedent receipts (the Step 1.2b worker receives them from the implement return; a Phase 3 round only when its scope summary carries them), the lens verifies at most one receipt against its cited sibling file, and a receipt claiming match where the sibling differs is a finding.
+
+Pattern: `architecture#collaborator-wiring`
+
 ## God Class / God Method Detection
 
 - Files over 500 lines: flag for extraction consideration

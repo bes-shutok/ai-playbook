@@ -5,6 +5,7 @@
 - **Priority:** high
 - **Class:** fix-class
 - **Origin class:** execution-run witness, repeated across runs
+- **Cluster:** docs/history/plans/completed/2026-11-13-interactive-lane-indefinite-operation.md (completed twin; origin row folded and deleted at landing) (completed twin; origin row folded and deleted at landing) (same root area and same template file; that row owns the review-side templates' reader-leg shape (long silent reading, narrowed briefs, partial-output emission), this row owns the Implement Task template's long-command shape)
 
 ## Skill and step
 

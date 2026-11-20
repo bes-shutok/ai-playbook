@@ -120,7 +120,11 @@ class AuthorSessionDerivationCliTest(unittest.TestCase):
     def setUp(self):
         self.repo = cr.build_scratch_repo(self, name="ack-mint")
         self.start = self.repo.commit_file(PLAN_REL, self.BEFORE, "seed")
+        # The delta bytes are committed before any mint: evidence_commit
+        # is the after-bytes commit (the mint-time binding gate refuses
+        # an uncommitted working tree).
         self.repo.write_file(PLAN_REL, self.AFTER)
+        self.repo.commit_all("apply the delta")
         self.receipt_path = self.repo.root / "receipt.json"
         self.receipt_path.write_text(json.dumps({
             "directive": "re-bind the delta",
@@ -199,6 +203,7 @@ class AuthorSessionDerivationCliTest(unittest.TestCase):
         # with a session identity available; the row stays key-free.
         self.pin_env(**{sc.CLAUDE_SESSION_ENV: "sess-cli-a"})
         self.repo.write_file(PLAN_REL, b"# plan\n\nalpha, bravo.\n")
+        self.repo.commit_all("apply the exempt delta")
         proc = self.run_cli("--plan", str(self.repo.root / PLAN_REL),
                             "--since", self.start, "--emit-row")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -571,10 +576,14 @@ class ClassifierTest(unittest.TestCase):
         fixed = b"# plan\n\nalpha, bravo.\n"
         repo = cr.build_scratch_repo(self)
         start = repo.commit_file(PLAN_REL, old, "seed plan")
+        # The after bytes are committed before the mint: evidence_commit
+        # is the after-bytes commit, so an uncommitted working tree would
+        # take the mint-time refusal pinned at the end of this test.
         repo.write_file(PLAN_REL, fixed)
+        fixed_commit = repo.commit_all("apply the fix")
         # Exit 0 pass with an --emit-row row that validates.
         proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
-                            "--since", "HEAD", "--emit-row")
+                            "--since", start, "--emit-row")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.last_outcome(proc), "OUTCOME: pass")
         rows = [line for line in proc.stdout.splitlines()
@@ -583,15 +592,17 @@ class ClassifierTest(unittest.TestCase):
         row = json.loads(rows[0].split(": ", 1)[1])
         self.assertIsNone(cr.row_schema_reason(row, cr.FAMILY_PLAN))
         self.assertEqual(row["kind"], cr.KIND_SCRIPT_VERIFIED)
-        self.assertEqual(row["evidence_commit"], start)
+        self.assertEqual(row["evidence_commit"], fixed_commit)
         self.assertEqual(row["before_digest"], cr.sha256_hex(old))
         self.assertEqual(row["after_digest"], cr.sha256_hex(fixed))
         self.assertEqual([set(h) for h in row["hunks"]],
                          [{"header", "digest"}] * len(row["hunks"]))
         # Exit 1 fail: an unclassified hunk.
-        repo.write_file(PLAN_REL, b"# plan\n\nalpha charlie.\n")
+        unclassified = b"# plan\n\nalpha charlie.\n"
+        repo.write_file(PLAN_REL, unclassified)
+        repo.commit_all("apply the unclassified edit")
         proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
-                            "--since", "HEAD")
+                            "--since", fixed_commit)
         self.assertEqual(proc.returncode, 1, proc.stdout)
         self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
         # The acked kind emits through the same schema builder and still
@@ -621,7 +632,7 @@ class ClassifierTest(unittest.TestCase):
                 os.environ.pop(name, None)
             os.environ[sc.CODEX_SESSION_ENV] = "codex-stimuli-1"
             proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
-                                "--since", "HEAD", "--emit-row",
+                                "--since", fixed_commit, "--emit-row",
                                 "--kind", "operator-acked",
                                 "--receipt", str(receipt_path))
         finally:
@@ -635,6 +646,22 @@ class ClassifierTest(unittest.TestCase):
         self.assertIsNone(cr.row_schema_reason(row, cr.FAMILY_PLAN))
         self.assertEqual(row["kind"], cr.KIND_OPERATOR_ACKED)
         self.assertEqual(row["author_session_id"], "codex-stimuli-1")
+        # Exit 3 mint-time binding refusal: the after bytes are
+        # uncommitted, so HEAD's blob is the before-state pin; the mint
+        # refuses naming the after-bytes binding instead of emitting a
+        # row that dies at the gate's binding leg.
+        # An exempt (classifiable) delta keeps the mint reachable; the
+        # after bytes stay uncommitted, so HEAD's blob is the before
+        # state.
+        repo.write_file(PLAN_REL, b"# plan\n\nalpha  charlie.\n")
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", "HEAD", "--emit-row")
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("after-bytes commit", proc.stderr)
+        self.assertIn("before-state pin", proc.stderr)
+        rows = [line for line in proc.stdout.splitlines()
+                if line.startswith("corrections-row-json: ")]
+        self.assertEqual(rows, [], proc.stdout)
         # Exit 3: an unreadable plan operand.
         proc = self.run_cli("--plan", str(repo.root / "absent.md"),
                             "--since", "HEAD")
@@ -787,9 +814,11 @@ class DirectoryPlanClassifierTest(unittest.TestCase):
         self.assertIn("file: tasks/02-beta.md", proc.stdout)
         # The corrections chain records one row per changed file: exactly
         # the flipped task file here, its row hunks carrying the decorated
-        # header.
+        # header. The flipped bytes are committed before the mint:
+        # evidence_commit is the after-bytes commit.
+        repo.commit_all("flip box one")
         proc = self.run_cli("--plan", str(repo.root / self.PLAN_DIR),
-                            "--since", "HEAD", "--emit-row")
+                            "--since", "HEAD~1", "--emit-row")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         rows = [line for line in proc.stdout.splitlines()
                 if line.startswith("corrections-row-json: ")]
@@ -805,8 +834,11 @@ class DirectoryPlanClassifierTest(unittest.TestCase):
         repo.write_file(self.PLAN_DIR + "/tasks/02-beta.md",
                         self.TASK_TWO.replace(b"- [ ] box two\n",
                                               b"- [x] box two\n"))
+        # The since pin is the pre-flip seed (HEAD~1 over the flip
+        # commit), so the alpha revert is a no-delta leg and only beta's
+        # forward flip classifies.
         proc = self.run_cli("--plan", str(repo.root / self.PLAN_DIR),
-                            "--since", "HEAD")
+                            "--since", "HEAD~1")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         hunk_lines = [line for line in proc.stdout.splitlines()
                       if line.startswith("hunk ")]
@@ -827,8 +859,11 @@ class DirectoryPlanClassifierTest(unittest.TestCase):
         flipped_two = self.TASK_TWO.replace(b"- [ ] box two\n", b"- [x] box two\n")
         repo.write_file(self.PLAN_DIR + "/tasks/01-alpha.md", flipped_one)
         repo.write_file(self.PLAN_DIR + "/tasks/02-beta.md", flipped_two)
+        # Both flips are committed before the mint: evidence_commit is
+        # the after-bytes commit for every per-file row.
+        repo.commit_all("flip both boxes")
         proc = self.run_cli("--plan", str(repo.root / self.PLAN_DIR),
-                            "--since", "HEAD", "--emit-row")
+                            "--since", "HEAD~1", "--emit-row")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.last_outcome(proc), "OUTCOME: pass")
         rows = [line for line in proc.stdout.splitlines()
@@ -918,6 +953,9 @@ class NewPlanBaselineCliTest(unittest.TestCase):
         added = repo.commit_file(PLAN_REL, self.DRAFT, "plan first draft")
         repo.commit_file(PLAN_REL, self.FOLD_COMMIT, "plan fold")
         repo.write_file(PLAN_REL, self.FOLD)
+        # The after bytes are committed before the mint (the mint-time
+        # binding gate); the before side still comes from the checkpoint.
+        fold_commit = repo.commit_all("apply the fold")
         proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
                             "--since", seed, "--emit-row")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -935,7 +973,7 @@ class NewPlanBaselineCliTest(unittest.TestCase):
         self.assertEqual(len(rows), 1, proc.stdout)
         self.assertEqual(rows[0]["before_digest"],
                          cr.sha256_hex(self.DRAFT))
-        self.assertEqual(rows[0]["evidence_commit"], repo.head())
+        self.assertEqual(rows[0]["evidence_commit"], fold_commit)
 
     def test_absent_baseline_refusal_names_the_outcome_without_a_row(self):
         # The plan was never committed: after a successful history
@@ -998,6 +1036,83 @@ class NewPlanBaselineCliTest(unittest.TestCase):
         self.assertIn("before digest: %s" % cr.sha256_hex(self.DRAFT),
                       proc.stdout)
         self.assertNotIn("baseline commit:", proc.stdout)
+
+    def test_no_start_commit_shape_names_the_distinct_reason(self):
+        # The witnessed authoring shape: the plan path is tracked at no
+        # commit through HEAD, so the authoring checkpoint duty produced
+        # no `wip:` checkpoint commit; the refusal names the missing
+        # start commit distinctly, keeping the unclassified fresh-review
+        # route, the fail exit, no row, and no operator acknowledgement.
+        repo = cr.build_scratch_repo(self, name="new-plan-no-start-commit")
+        seed = repo.commit_file("README.md", b"seed\n", "seed readme")
+        repo.write_file(PLAN_REL, self.DRAFT)
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", seed)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
+        self.assertIn("refusal:", proc.stdout)
+        self.assertIn("no start commit", proc.stdout)
+        self.assertIn("authoring checkpoint duty", proc.stdout)
+        self.assertIn("`wip:`", proc.stdout)
+        self.assertIn("fresh-review", proc.stdout)
+        self.assertNotIn("is not tracked at the --since commit", proc.stdout)
+        self.assertNotIn("corrections-row-json:", proc.stdout)
+        self.assertEqual(proc.stderr, "", proc.stderr)
+
+    def test_ordinary_absent_baseline_keeps_generic_text(self):
+        # The ordinary absent-baseline shape: the plan path is tracked at
+        # an earlier commit, absent at the --since commit (removed after
+        # it), and never re-added through HEAD: the generic absent-
+        # baseline refusal stays, with none of the distinct
+        # no-start-commit wording.
+        repo = cr.build_scratch_repo(self, name="new-plan-ordinary-absent")
+        repo.commit_file(PLAN_REL, self.DRAFT, "seed plan")
+        (repo.root / PLAN_REL).unlink()
+        removal = repo.commit_all("remove the plan")
+        repo.write_file(PLAN_REL, self.FOLD)
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", removal)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: fail")
+        self.assertIn("refusal:", proc.stdout)
+        self.assertIn("is not tracked at the --since commit", proc.stdout)
+        self.assertIn("fresh-review", proc.stdout)
+        self.assertNotIn("no start commit", proc.stdout)
+        self.assertNotIn("authoring checkpoint duty", proc.stdout)
+        self.assertEqual(proc.stderr, "", proc.stderr)
+
+    def test_merge_authored_first_checkpoint_is_recovered(self):
+        # The plan is introduced only inside a merge commit (drafted
+        # into the index while the merge is stopped with --no-commit,
+        # so neither parent adds the path): the merge-aware diff arm
+        # recovers the merge commit as the before side; the default
+        # merge diff would hide the add and the lookup would report
+        # the absent-baseline refusal instead.
+        repo = cr.build_scratch_repo(self, name="new-plan-merge-checkpoint")
+        seed = repo.commit_file("README.md", b"seed\n", "seed readme")
+        repo.git("checkout", "-q", "-b", "side")
+        repo.commit_file("SIDE.md", b"side\n", "side file")
+        repo.git("checkout", "-q", "main")
+        repo.commit_file("MAIN.md", b"main\n", "main file")
+        repo.git("merge", "--no-ff", "--no-commit", "--no-edit", "side")
+        repo.write_file(PLAN_REL, self.DRAFT)
+        repo.git("add", "-A")
+        repo.git("commit", "-m", "merge bringing in the plan draft")
+        merge_commit = repo.head()
+        # merge produced a true merge commit (two parents)
+        repo.git("rev-parse", "--verify", "%s^2" % merge_commit)
+        repo.write_file(PLAN_REL, self.FOLD)
+        # The after bytes are committed before the mint (the mint-time
+        # binding gate); the before side still comes from the merge.
+        repo.commit_all("apply the fold")
+        proc = self.run_cli("--plan", str(repo.root / PLAN_REL),
+                            "--since", seed, "--emit-row")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.last_outcome(proc), "OUTCOME: pass")
+        self.assertIn(pdc.CLASS_TYPOGRAPHY, proc.stdout)
+        self.assertIn("baseline commit: %s" % merge_commit, proc.stdout)
+        self.assertIn("before digest: %s" % cr.sha256_hex(self.DRAFT),
+                      proc.stdout)
 
 
 if __name__ == "__main__":

@@ -58,21 +58,15 @@ blocked ref is <blocked_on>, the bare ref name from the entry's blocked_on field
    merge base recomputed from the moved default-branch ref, the gmail-author check, the
    dirt regression gate against the new merge base, and the landed-commit test probing
    the dependency-landing record identity below.
-   The landing itself (the rebase onto the current default tip, the squash merge, the gate set
-   detached at the current default tip, the pre-swap and post-landing parentage-gate invocations
-   and their per-leg refusal routing including the inverse compare-and-swap rollback with its
-   do-not-retry disposition, and the compare-and-swap ref update that
-   delivers the final squash commit to the default branch) runs per the Worktree arm of the
+   The landing itself (the full rebase, squash, gate-set, parentage-gate, and compare-and-swap
+   mechanics) runs per the Worktree arm of the
    execution blueprint's final-merge paragraph in `agents/skills/maintenance/template-execution.md`
    - that arm is the only landing arm, and a squash commit made in the checkout holding the
    default branch is prohibited. The default-branch ref's value is captured immediately before
    the squash commit inside the run worktree (the arm consumes it in its pre-swap parentage-gate
    invocation and in the compare-and-swap's refusal-on-tip-movement), the arm's gate invocations
    are routed per its spelled mechanics, and every refusal takes this recipe's deferred-landing
-   record path (the arm's four-outcome stops included: the exit-2
-   indeterminate arm, the exit-3 tool-error arm, and a parentage-gate run
-   with no final `OUTCOME:` line, which the outcome contract reads as tool
-   error).
+   record path (the arm's four-outcome stops included).
    Dependency-landing record identity (for any deferred-landing record this run writes
    through the execution blueprint's deferred-landing record duty): landed_path must be
    a path the dependency branch itself changes (a path absent from the default branch
@@ -83,8 +77,7 @@ blocked ref is <blocked_on>, the bare ref name from the entry's blocked_on field
    recorded branch and worktree stays gated on a verified dependency-branch landing.
 7. On a verified landing: after the landing's critical section, reconcile live checkouts of the base branch per the post-landing reconciliation implementation in the Worktree-first standard (agents/skills/execute-plan/worktree-first.md) (fast-forward plus verified completion, named-block refusal, stale-witness restore-and-record), then record the landing's squash commit sha as the entry's
    "landed_as" in its own targeted edit FIRST (the sha must be durably observable before
-   any clear, so the survey arm's ancestry resolution can fire when the later clear write
-   is lost), then clear the ledger entry in a second targeted edit, and queue-prepend the
+   any clear), then clear the ledger entry in a second targeted edit, and queue-prepend the
    serialized plan to "execution_queue" (prepend only when it is not already queued),
    then dispatch or record per the normal successor duty.
 8. Re-cert obligation (the drift gate records it by name): the serialized plan's

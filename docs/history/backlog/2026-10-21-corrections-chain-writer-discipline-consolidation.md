@@ -1,5 +1,7 @@
 # Backlog: corrections writer load discipline and resolver consolidation
 
+Cluster: docs/history/backlog/2026-10-21-corrections-contract-doc-residues.md (same operator-ack contract/documentation family; this row owns writer discipline)
+
 - **Filed:** 2026-10-21, from Phase 3 code review r1 of `corrections-chain-operator-ack-end-to-end`
 - **Status:** open
 - **Workflow:** backlog

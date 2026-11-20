@@ -1,5 +1,6 @@
 # Backlog: Resolve the reconciler's reviews dir through the facts document
 Cluster: docs/history/backlog/2026-11-02-handoff-reconciler-launch-digest-pinning.md; docs/history/backlog/2026-11-02-handoff-reconciler-outcome-contract-row.md (same-day review family)
+Cluster: docs/history/backlog/2026-10-31-handoff-reconciler-cas-reread-window.md; docs/history/backlog/2026-10-31-handoff-reconciler-dead-drift-mappings.md; docs/history/backlog/2026-10-31-handoff-reconciler-env-hermeticity.md; docs/history/backlog/2026-10-31-handoff-reconciler-reread-contract-shape.md; docs/history/backlog/2026-10-31-handoff-reconciler-span-rule-docstring.md; docs/history/backlog/2026-10-31-handoff-reconciler-uppercase-checkbox.md; docs/history/backlog/2026-11-02-handoff-reconciler-launch-digest-pinning.md; docs/history/backlog/2026-11-02-handoff-reconciler-outcome-contract-row.md (shared reconcile_execute_plan_handoff.py implementation surface; each residual retains its own defect scope)
 
 Priority: low
 Origin class: self-serving

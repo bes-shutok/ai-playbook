@@ -43,10 +43,12 @@ Run from the repository root:
     python3 scripts/test_execution_claim.py
 """
 
+import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -69,32 +71,80 @@ def iso_stamp(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class TestExecutionClaim(unittest.TestCase):
+class _ExecutionClaimFixtureMixin:
     """The execution-claim gateway script's behavior over scratch repos."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._git_template_temp = tempfile.TemporaryDirectory(
+            prefix="exec-claim-git-template-"
+        )
+        cls._git_template = Path(cls._git_template_temp.name) / "primary"
+        cls._git_template.mkdir()
+        template_home = Path(cls._git_template_temp.name) / "home"
+        xdg_config = template_home / "config"
+        xdg_config.mkdir(parents=True)
+        template_env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        template_env.update({
+            "HOME": str(template_home),
+            "XDG_CONFIG_HOME": str(xdg_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "LC_ALL": "C",
+            "LANG": "C",
+            "TZ": "UTC",
+        })
+        subprocess.run(
+            ["git", "-C", str(cls._git_template), "init", "-q"],
+            check=True, capture_output=True, env=template_env,
+        )
+        with (cls._git_template / ".git" / "config").open(
+                "a", encoding="utf-8") as fh:
+            fh.write("\n[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n")
+        subprocess.run(
+            ["git", "-C", str(cls._git_template), "commit", "--allow-empty",
+             "-q", "-m", "init"],
+            check=True, capture_output=True, env=template_env,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls._git_template_temp.cleanup()
+        finally:
+            super().tearDownClass()
 
     def setUp(self):
         self.scratch = Path(tempfile.mkdtemp(prefix="exec-claim-fixture-"))
         self.addCleanup(shutil.rmtree, self.scratch, True)
         self.repo = self.scratch / "primary"
         self.repo.mkdir()
-        self._git("init", "-q")
-        self._git("config", "user.email", "fixture@example.invalid")
-        self._git("config", "user.name", "Fixture")
-        self._git("commit", "--allow-empty", "-q", "-m", "init")
+        # Copy an immutable, empty-commit repository template so each test
+        # keeps an independent Git directory without repeating init/commit.
+        shutil.copytree(self._git_template / ".git", self.repo / ".git")
         self.plan = self.scratch / PLAN_NAME
         self.plan.write_text("# Fixture plan\n", encoding="utf-8")
         self.claims_dir = self.repo / "docs" / "tmp" / "execution-claims"
         self.claim = self.claims_dir / f"{SLUG}.md"
+        # The admission record beside the claim (the gateway's fixed
+        # relative path, plan
+        # docs/history/plans/2026-11-06-dispatch-admission-outstanding-
+        # manifest-recovery, Task 2).
+        self.admission_record = self.claims_dir / f"{SLUG}-admission.json"
         self.wt_parent = self.scratch / "wt"
         self.branch = "fixture/feature-branch"
         # Hermetic by construction (the review r1 B1 fold): the trusted
         # lock-root seam points every test's gateway invocations at a
         # scratch lock home, and the scratch primary carries the facts
         # document the preservation scan and provider resolution read.
-        lock_home = self.scratch / "lock-home"
-        lock_home.mkdir()
-        os.environ["EXECUTION_CLAIM_LOCK_HOME"] = str(lock_home)
-        self.addCleanup(os.environ.pop, "EXECUTION_CLAIM_LOCK_HOME", None)
+        # The seam travels through _run's copied child environment, never
+        # the interpreter's os.environ, so a caller-supplied value survives
+        # the fixture untouched (backlog: execution-claim-fixture-caller-environment).
+        self.lock_home = self.scratch / "lock-home"
+        self.lock_home.mkdir()
         facts_dir = self.repo / ".ai-playbook"
         facts_dir.mkdir(exist_ok=True)
         (facts_dir / "facts.md").write_text(
@@ -105,8 +155,6 @@ class TestExecutionClaim(unittest.TestCase):
         inventory_source = SCRIPT.parents[1] / "projects" / ".ai-playbook" / "execute-plan-runtime-inventory.toml"
         self.runtime_inventory = inventory_dir / "execute-plan-runtime-inventory.toml"
         shutil.copyfile(inventory_source, self.runtime_inventory)
-
-    # -- helpers -------------------------------------------------------- #
 
     def _fixture_env(self):
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -149,6 +197,7 @@ class TestExecutionClaim(unittest.TestCase):
     def _run(self, *args, cwd=None, path_prepend=None, extra_env=None):
         env = self._fixture_env()
         env["EXECUTE_PLAN_RUNTIME_INVENTORY"] = str(self.runtime_inventory)
+        env["EXECUTION_CLAIM_LOCK_HOME"] = str(self.lock_home)
         if path_prepend is not None:
             env["PATH"] = str(path_prepend) + os.pathsep + env["PATH"]
         if extra_env:
@@ -486,75 +535,80 @@ class TestExecutionClaim(unittest.TestCase):
         import hashlib
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-    # -- take ----------------------------------------------------------- #
+    def _write_plan_with_files(self):
+        """Rewrite the shared fixture plan with a `Files:` list. The artifact
+        slug derives from the file name, so every existing claim path keeps
+        addressing the same claim while the covering-plan derivation now
+        yields a non-empty seed. Returns the expected seed."""
+        self.plan.write_text(
+            "# Fixture plan\n\n"
+            "Files:\n"
+            "- `scripts/owned_one.py`\n"
+            "- `src/owned_two.py`\n",
+            encoding="utf-8",
+        )
+        return ["scripts/owned_one.py", "src/owned_two.py"]
 
-    def test_take_cold_start_creates_both(self):
-        proc = self._take("session-a")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        # Also proves the exit-path cleanup disarmed on the success path:
-        # an armed trap would have deleted the claim at script exit.
-        self.assertTrue(self.claim.is_file(), "claim missing after cold start")
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn("session: session-a", claim_text)
-        # The take requires --branch, so the claim records the branch line
-        # beside the five frontmatter lines (including runtime_id; the recorded identity the
-        # takeover and recreate paths must carry).
-        self.assertIn(f"branch: {self.branch}", claim_text)
-        self.assertTrue(
-            (self.wt_parent / self.branch).is_dir(), "worktree missing after take"
+    def _plant_admission_record(self, owned_paths):
+        """A prior admission record for the fixture slug in the writer's
+        exact three-field shape, so a lifecycle pin asserts replacement or
+        keeping against known bytes."""
+        self.admission_record.parent.mkdir(parents=True, exist_ok=True)
+        self.admission_record.write_text(
+            json.dumps(
+                {
+                    "owned_paths": list(owned_paths),
+                    "owned_plan_paths": [],
+                    "owned_review_paths": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
         )
 
-    def test_take_with_base_seeds_worktree_head_and_claim_base_line(self):
-        # --base start point: the created worktree's HEAD equals the seeded
-        # ref AND differs from the branch tip (the fixture commits once
-        # more after capturing the base, so base != HEAD and the assertion
-        # discriminates: a take ignoring --base would start at the tip and
-        # fail here), and the claim carries the base line (the base line is
-        # written after the worktree exists, on the take's success path).
-        self._git("commit", "--allow-empty", "-q", "-m", "base commit")
-        base_sha = self._git_out("rev-parse", "HEAD")
-        self._git("commit", "--allow-empty", "-q", "-m", "ahead of base")
-        tip_sha = self._git_out("rev-parse", "HEAD")
-        self.assertNotEqual(base_sha, tip_sha)
-        proc = self._take("session-b", base=base_sha)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        head = self._git_out(
-            "-C", str(self.wt_parent / self.branch), "rev-parse", "HEAD"
-        )
-        self.assertEqual(head, base_sha, "worktree HEAD is not the --base ref")
-        self.assertNotEqual(
-            head,
-            tip_sha,
-            "worktree HEAD equals the branch tip; the base ref is not discriminated",
-        )
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn(f"base: {base_sha}", claim_text, "claim carries no base line")
-        self.assertIn(f"base: {base_sha}", proc.stdout)
+    def _read_admission_payload(self):
+        return json.loads(self.admission_record.read_text(encoding="utf-8"))
 
-    def test_take_fresh_foreign_refusal(self):
-        holder_wt = self._seed_worktree(self.branch, "holder-wt")
-        self._seed_claim("session-holder", FRESH_AGE)
-        before = self.claim.read_text(encoding="utf-8")
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("session-holder", combined)
-        # The age assertion is discriminating: the literal "claim age:"
-        # followed by a numeric second count ("age" alone matches
-        # unrelated words like "agents").
-        self.assertRegex(combined, r"claim age: \d+s \(updated: ")
-        self.assertIn(str(holder_wt), combined)
-        self.assertIn("override", combined)
-        self.assertFalse(
-            (self.wt_parent / self.branch).exists(), "worktree created despite refusal"
+    def _peer_done_setup(self):
+        """A peer done-session setup (scripts/done_run.sh setup) in this
+        scratch repository, ported from the test_done_run_wrapper.py fixture
+        pattern: every lock home, runtime home, and facts input pinned into
+        the scratch tree, so the witness never touches the real checkout."""
+        repo_scripts = SCRIPT.parent
+        env = self._fixture_env()
+        env["PATH"] = (
+            str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
         )
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    # -- dead-run conversion (plan 2026-10-21-dead-run-resume-claim-
-    # conversion; the restored-worktree recognition arm's successor) --------
+        for var in (
+            "DONE_LOCK_DIR", "DONE_LOCK_TOKEN", "DONE_LOCK_HOLDER_PID",
+            "DONE_LOCK_HOLD_PIN", "MERGE_LOCK_DIR", "MERGE_LOCK_TOKEN",
+            "MERGE_LOCK_HOLDER_PID", "MERGE_LOCK_HOLD_PIN",
+            "DONE_LOCK_ROOT", "MERGE_LOCK_ROOT", "DONE_SWEEP_REPO_ROOT",
+            "DONE_SWEEP_RUNTIME_HOME", "DONE_SWEEP_USER_FACTS",
+            "DONE_LOCK_SCRIPT", "DONE_RUN_ID", "DONE_RUN_MANIFEST",
+            "DONE_RUN_MARKER",
+        ):
+            env.pop(var, None)
+        env["DONE_LOCK_ROOT"] = str(self.scratch / "locks" / "done")
+        env["MERGE_LOCK_ROOT"] = str(self.scratch / "locks" / "merge")
+        env["MERGE_LOCK_POLL_SECS"] = "1"
+        env["DONE_LOCK_SCRIPT"] = str(repo_scripts / "done-lock.sh")
+        env["DONE_SWEEP_REPO_ROOT"] = str(self.repo)
+        env["DONE_SWEEP_RUNTIME_HOME"] = str(self.scratch / "runtime-home")
+        env["DONE_SWEEP_USER_FACTS"] = str(self.scratch / "user-facts.md")
+        return subprocess.run(
+            [
+                "bash", str(repo_scripts / "done_run.sh"), "setup",
+                "--label", "peer-done-setup",
+            ],
+            cwd=str(self.repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
 
     def _conversion_fixture(self, holder="session-holder", status="terminal",
                             form="canonical", facts_shape="bare",
@@ -658,7 +712,7 @@ class TestExecutionClaim(unittest.TestCase):
         elif status == "overflow":
             body = (
                 "printf '{\"session_id\": \"%s\", \"status\": \"terminal\"}' \"$1\"\n"
-                "i=0\nwhile [ \"$i\" -lt 70000 ]; do printf 'x'; i=$((i + 1)); done\n"
+                "head -c 70000 /dev/zero\n"
                 "printf '\\n'\n"
             )
         elif status == "mismatched-id":
@@ -695,6 +749,57 @@ class TestExecutionClaim(unittest.TestCase):
                 fh.write(f'session_status_command = "{provider}"\n')
         return wt, manifest
 
+    def _short_timeout_python_bin(self):
+        """Return a PATH shim that injects a short provider deadline.
+
+        It delegates the actual session_status CLI to its production main()
+        and changes only the timeout constant in this isolated test process.
+        All other gateway Python calls execute through the real interpreter.
+        """
+        bin_dir = self.scratch / "short-timeout-python-bin"
+        bin_dir.mkdir(exist_ok=True)
+        wrapper = self.scratch / "session-status-timeout-wrapper.py"
+        wrapper.write_text(
+            "import os, sys\n"
+            "script, *args = sys.argv[1:]\n"
+            "sys.path.insert(0, os.path.dirname(script))\n"
+            "import session_status\n"
+            "session_status.TIMEOUT_SECS = float("
+            "os.environ['SESSION_STATUS_TIMEOUT_SECS'])\n"
+            "sys.argv = [script, *args]\n"
+            "sys.exit(session_status.main())\n",
+            encoding="utf-8",
+        )
+        shim = bin_dir / "python3"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "${1:-}" = "$SESSION_STATUS_SCRIPT" ]; then\n'
+            '  shift\n'
+            '  exec "$TEST_PYTHON" "$SESSION_STATUS_WRAPPER" "$SESSION_STATUS_SCRIPT" "$@"\n'
+            "fi\n"
+            'exec "$TEST_PYTHON" "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        return bin_dir, wrapper
+
+    def _assert_conversion_locks_free(self, worktree):
+        lock_roots = self.scratch / "lock-home" / ".ai-playbook" / "locks"
+        helper = SCRIPT.parent / "done-lock.sh"
+        checks = (
+            ("status", "DONE_LOCK_ROOT", lock_roots / "done", worktree),
+            ("merge-status", "MERGE_LOCK_ROOT", lock_roots / "merge", self.repo),
+        )
+        for command, root_env, lock_root, cwd in checks:
+            env = self._fixture_env()
+            env[root_env] = str(lock_root)
+            proc = subprocess.run(
+                ["bash", str(helper), command], cwd=str(cwd), env=env,
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("free", proc.stdout)
+
     def _conversion_take(self, session, branch=None, plan=None, parent=None,
                          extra_env=None, runtime=None):
         env = {
@@ -713,123 +818,162 @@ class TestExecutionClaim(unittest.TestCase):
             extra_env=env,
         )
 
-    def test_restored_worktree_takeover_on_verifiable_same_run_state(self):
-        # The registered worktree at the take path carries the canonical
-        # run manifest naming the foreign claim's holder and this exact
-        # plan, the provider answers the prior owner terminal, and the
-        # completed-run boundary holds: the claim converts to the resumer
-        # (atomic replacement, no worktree add, no occupant refusal), and
-        # the manifest canonicalizes to the resumer's identity.
-        wt, manifest = self._conversion_fixture()
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        prior_created = next(
-            line for line in self.claim.read_text(encoding="utf-8").splitlines()
-            if line.startswith("created: ")
-        )
-        proc = self._conversion_take("session-b", runtime="codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn("conversion: claim", proc.stdout)
-        self.assertEqual(self._claim_session(), "session-b")
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn("runtime_id: codex", claim_text)
-        # The replacement shape: prior created preserved, branch preserved,
-        # updated refreshed; nothing synthesized.
-        self.assertIn(prior_created, claim_text)
-        self.assertIn(f"branch: {self.branch}", claim_text)
-        self.assertIn("session: session-b", claim_text)
-        self.assertTrue(
-            (self.wt_parent / self.branch).is_dir(), "worktree must be adopted, not recreated"
-        )
-        # Manifest canonicalized: resumer identity, legacy aliases gone,
-        # unrelated content preserved.
-        canonical = manifest.read_text(encoding="utf-8")
-        self.assertIn("session_id: session-b", canonical)
-        self.assertIn(f"plan_path: {self.plan}", canonical)
-        self.assertIn(f"run_worktree: {wt}", canonical)
-        self.assertIn(f"run_branch: {self.branch}", canonical)
-        self.assertNotIn("Session:", canonical)
-        self.assertNotIn("Plan:", canonical)
-        self.assertIn("workflow_state: terminal", canonical)
-        self.assertIn("task_boundary:", canonical)
-        # The converted claim survives the exit path (TAKE_OK disarmed the
-        # cleanup): a second read after the process exited is the proof.
-        self.assertEqual(self._claim_session(), "session-b")
+    def _plant_primary_mirror(self, manifest, *, differing=False):
+        """The primary-side mirror: a copy of the canonical registered
+        manifest under the primary checkout's matching run path (the
+        primary facts resolve tmp_dir to docs/tmp)."""
+        mirror_dir = self.repo / "docs" / "tmp" / "execute-plan" / SLUG
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        mirror = mirror_dir / "manifest.md"
+        if differing:
+            mirror.write_text(
+                "# Execute-plan session: " + SLUG + "\n\na differing copy\n",
+                encoding="utf-8",
+            )
+        else:
+            shutil.copy(manifest, mirror)
+        return mirror
 
-    def test_restored_worktree_refusal_on_unprovable_state(self):
-        # No run manifest at the take target (the seeded worktree sits at a
-        # different path, so the target is not even registered): the
-        # conversion has no context and the historical fresh-foreign
-        # refusal judges.
-        self._seed_worktree(self.branch, "restored-wt-none")
-        (self.wt_parent / self.branch / "docs" / "tmp" / "execute-plan" / SLUG).mkdir(parents=True)
-        self._seed_claim("session-holder", FRESH_AGE)
+    def _sweep(self, session="session-sweeper"):
+        return self._run("sweep", "--session", session)
+
+    def _start_commit_sha(self) -> str:
+        self._git("commit", "--allow-empty", "-q", "-m", "start commit")
+        return self._git_out("rev-parse", "HEAD")
+
+
+class TestExecutionClaim(_ExecutionClaimFixtureMixin, unittest.TestCase):
+    """Contiguous execution-claim test shard 1 of 4."""
+
+    def test_claim_missing_session_line_dies_with_tool_error_in_all_modes(self):
+        # A readable claim carrying no session: line is an unsupported
+        # record shape: take, refresh, and release all die in the parent
+        # shell with exit 3 and a final OUTCOME line on stdout, and the
+        # malformed claim is left untouched throughout.
+        self.claims_dir.mkdir(parents=True, exist_ok=True)
+        self.claim.write_text(
+            f"plan: {self.plan}\ncreated: 2026-10-07T00:00:00Z\n",
+            encoding="utf-8",
+        )
         before = self.claim.read_text(encoding="utf-8")
+
         proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        )
+        self.assertIn("no session: line", proc.stdout + proc.stderr)
+        self.assertFalse((self.wt_parent / self.branch).exists())
+
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        )
+
+        proc = self._run("release", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        )
+        self.assertEqual(
+            self.claim.read_text(encoding="utf-8"),
+            before,
+            "the malformed claim was modified",
+        )
+
+    def test_claim_mode_creates_without_worktree(self):
+        proc = self._run(*self._claim_args("session-b"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertTrue(self.claim.is_file())
+        self.assertFalse(
+            (self.wt_parent / self.branch).exists(),
+            "claim mode created a worktree directory",
+        )
+
+        self.claim.unlink()
+        self._seed_claim("session-holder", FRESH_AGE)
+        proc = self._run(*self._claim_args("session-b"))
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertIn("fresh foreign claim", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("session-holder", combined)
+        self.assertRegex(combined, r"claim age: \d+s \(updated: ")
+        self.assertIn("override", combined)
 
-    def test_conversion_refuses_nonterminal_provider_status(self):
-        # The provider answers live: only a terminal prior owner proceeds;
-        # the claim is preserved byte-identically.
-        self._conversion_fixture(status="live")
+    def test_claim_records_branch_and_start_commit_lines(self):
+        expected_sha = self._start_commit_sha()
+        # The operand is HEAD, not the sha: resolution is discriminated by
+        # requiring the recorded value to be the full 40-hex sha HEAD
+        # resolves to, never the operand form or an abbreviation.
+        self.assertRegex(expected_sha, r"^[0-9a-f]{40}$")
+        proc = self._run(
+            "claim", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", "HEAD",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn(f"branch: {self.branch}", claim_text)
+        # The recorded value is the resolved sha, not the operand form.
+        self.assertIn(f"start-commit: {expected_sha}", claim_text)
+
+    def test_claim_takeover_rebuild_carries_branch_and_start_commit(self):
+        # The takeover rebuild path (create_claim_noclobber) must carry the
+        # recorded identity: a takeover never silently drops it.
+        start_sha = self._start_commit_sha()
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._run(
+            "claim", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", start_sha,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("takeover", proc.stdout)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("session: session-b", claim_text)
+        self.assertIn(f"branch: {self.branch}", claim_text)
+        self.assertIn(f"start-commit: {start_sha}", claim_text)
+
+    def test_claim_unresolvable_start_commit_is_usage_refusal_writing_nothing(self):
+        proc = self._run(
+            "claim", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", "not-a-commit",
+        )
+        # Usage violations are tool errors per the argparse-override
+        # precedent: exit 3, usage text, error, and the final OUTCOME line
+        # all on stderr, stdout empty, and no claim written anywhere.
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(proc.stderr.strip().splitlines()[-1], "OUTCOME: tool_error")
+        self.assertIn("Usage: execution_claim.sh", proc.stderr)
+        self.assertIn("start-commit", proc.stderr)
+        self.assertFalse(
+            self.claim.exists(),
+            "a claim was written despite the unresolvable start commit",
+        )
+
+    def test_conversion_accepts_byte_identical_primary_mirror(self):
+        # A byte-identical copy under the primary checkout's matching run
+        # path is the same manifest identity: the scan reports one identity
+        # retained at the canonical registered worktree, so the conversion
+        # proceeds through it (the mirror copy itself is never rewritten).
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest)
         self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
+        mirror_before = self._hash_file(mirror)
         proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertIn("prior owner session-holder is live, not terminal", proc.stdout + proc.stderr)
-        self.assertIn("live", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    def test_conversion_refuses_without_provider_configuration(self):
-        # No session_status_command in the primary facts: the provider
-        # refuses and the conversion refuses unchanged (the Ship gate's
-        # default: the existing refusal remains active without valid
-        # configuration and verified evidence).
-        self._conversion_fixture()
-        (self.repo / ".ai-playbook" / "facts.md").write_text(
-            'tmp_dir = "docs/tmp"\nother_key = "x"\n', encoding="utf-8"
-        )
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    def test_conversion_fenced_facts_resolves_provider_and_converts(self):
-        # The repository's actual facts input shape (fence-wrapped
-        # Markdown, plan 2026-10-30-session-status-facts-parse-shape-gap
-        # Task 2): session_status_command resolved from the first ```toml
-        # fence reaches the same provider gate, and the conversion
-        # proceeds identically. Both HOME pins: the invocation runs with
-        # HOME at the scratch fixture home, and the provider's witness
-        # file proves that pinned home is the one the provider saw.
-        fixture_home = self.scratch / "fixture-home"
-        fixture_home.mkdir()
-        wt, manifest = self._conversion_fixture(
-            facts_shape="fenced", home_witness=True
-        )
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        proc = self._conversion_take(
-            "session-b", extra_env={"HOME": str(fixture_home)}
-        )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn("conversion: claim", proc.stdout)
         self.assertEqual(self._claim_session(), "session-b")
         self.assertIn("session_id: session-b", manifest.read_text(encoding="utf-8"))
-        self.assertEqual(
-            (fixture_home / "provider-home-witness")
-            .read_text(encoding="utf-8")
-            .strip(),
-            str(fixture_home),
-            "the provider did not run under the pinned fixture home",
-        )
+        self.assertEqual(self._hash_file(mirror), mirror_before)
 
     def test_conversion_fenced_facts_malformed_or_missing_key_refuse_unchanged(self):
         # Fence-wrapped inputs that cannot name a provider — a malformed
@@ -893,36 +1037,35 @@ class TestExecutionClaim(unittest.TestCase):
                     'tmp_dir = "docs/tmp"\n', encoding="utf-8"
                 )
 
-    def test_conversion_refuses_incomplete_run_boundary(self):
-        # The runtime state names task 2 in progress: the completed-run
-        # boundary refuses and the claim is preserved.
-        import json
-        wt, manifest = self._conversion_fixture()
-        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["tasks"] = {"1": "complete", "2": "in-progress"}
-        state_path.write_text(json.dumps(state), encoding="utf-8")
+    def test_conversion_fenced_facts_resolves_provider_and_converts(self):
+        # The repository's actual facts input shape (fence-wrapped
+        # Markdown, plan 2026-10-30-session-status-facts-parse-shape-gap
+        # Task 2): session_status_command resolved from the first ```toml
+        # fence reaches the same provider gate, and the conversion
+        # proceeds identically. Both HOME pins: the invocation runs with
+        # HOME at the scratch fixture home, and the provider's witness
+        # file proves that pinned home is the one the provider saw.
+        fixture_home = self.scratch / "fixture-home"
+        fixture_home.mkdir()
+        wt, manifest = self._conversion_fixture(
+            facts_shape="fenced", home_witness=True
+        )
         self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertIn("not in a sanctioned terminal state", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    def test_conversion_refuses_mismatched_plan_digest(self):
-        # The receipt's plan_digest does not hash the active plan bytes:
-        # refuse unchanged.
-        import json
-        wt, manifest = self._conversion_fixture()
-        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["pre_archive_receipt"]["plan_digest"] = "0" * 64
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("does not hash the active plan bytes", proc.stdout + proc.stderr)
+        proc = self._conversion_take(
+            "session-b", extra_env={"HOME": str(fixture_home)}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
+        self.assertEqual(self._claim_session(), "session-b")
+        self.assertIn("session_id: session-b", manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            (fixture_home / "provider-home-witness")
+            .read_text(encoding="utf-8")
+            .strip(),
+            str(fixture_home),
+            "the provider did not run under the pinned fixture home",
+        )
 
     def test_conversion_legacy_full_and_session_forms_convert(self):
         # The two legacy identity forms convert identically: the manifest's
@@ -952,54 +1095,306 @@ class TestExecutionClaim(unittest.TestCase):
                     'tmp_dir = "docs/tmp"\n', encoding="utf-8"
                 )
 
-    def test_conversion_session_channel_mismatch_refuses(self):
-        # The session channel derives a different active id than --session:
-        # the trusted-channel boundary refuses before any mutation.
-        self._conversion_fixture()
+    def test_conversion_poisoned_lock_environment_cannot_redirect_roots(self):
+        # Poisoned caller HOME and lock-root variables cannot change the
+        # roots: the conversion succeeds with decoys set and the decoy
+        # directories stay empty (the OS-account/seam derivation wins).
+        wt, manifest = self._conversion_fixture()
+        decoy = self.scratch / "decoy-home"
+        decoy.mkdir()
         self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
         proc = self._run(
             "take", str(self.plan),
             "--session", "session-b",
             "--branch", self.branch,
             "--worktree-parent", str(self.wt_parent),
             extra_env={
-                "CLAUDE_CODE_SESSION_ID": "session-someone-else",
+                "CLAUDE_CODE_SESSION_ID": "session-b",
                 "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
+                "HOME": str(decoy),
+                "DONE_LOCK_ROOT": str(decoy / "done-redirect"),
+                "MERGE_LOCK_ROOT": str(decoy / "merge-redirect"),
             },
         )
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("does not equal --session session-b", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-b")
+        self.assertFalse(
+            (decoy / "done-redirect").exists(), "caller DONE_LOCK_ROOT was honored"
+        )
+        self.assertFalse(
+            (decoy / "merge-redirect").exists(), "caller MERGE_LOCK_ROOT was honored"
+        )
+        self.assertEqual(list(decoy.iterdir()), [], "caller HOME was used as the lock root")
 
-    def test_conversion_stale_claim_at_registered_manifest_preserved(self):
-        # Stale take preservation: the manifest remains at its registered
-        # worktree, but the boundary fails (provider live), so the stale
-        # claim is preserved — never taken over by the historical unlink.
-        self._conversion_fixture(status="live")
+    def test_conversion_preserves_all_optional_claim_lines(self):
+        # The replacement shape: created, branch, start-commit, and base
+        # survive; updated refreshes; a later take on another branch still
+        # sees the saved branch occupancy.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        text = self.claim.read_text(encoding="utf-8")
+        text += "start-commit: 0123456789abcdef0123456789abcdef01234567\nbase: main\n"
+        self.claim.write_text(text, encoding="utf-8")
+        updated_before = self._updated_stamp()
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("start-commit: 0123456789abcdef0123456789abcdef01234567", claim_text)
+        self.assertIn("base: main", claim_text)
+        self.assertNotEqual(self._updated_stamp(), updated_before)
+        # The saved branch occupancy: the sweep's branch leg still sees the
+        # saved branch held by the registered worktree, so the spent-looking
+        # claim is skipped whatever the plan's state.
+        proc = self._run("sweep", "--session", "session-z")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(self.claim.exists(), "the converted claim was swept")
+        combined = proc.stdout + proc.stderr
+        self.assertTrue(
+            "run manifest remains at its registered worktree" in combined
+            or f"branch {self.branch} is held by worktree" in combined,
+            f"neither preservation witness fired: {combined}",
+        )
+
+    def test_conversion_r_then_s_second_conversion_succeeds(self):
+        # R-to-S: a second conversion on the already-converted run transfers
+        # the claim again; the artifacts the first conversion wrote (the
+        # manifest's canonical identity block, the old logs) keep their
+        # bytes apart from the ownership fields.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        first = self._conversion_take("session-b")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        manifest_after_first = manifest.read_text(encoding="utf-8")
+        run_log = wt / "run-tmp" / "execute-plan" / SLUG / "task-1-implement.log.md"
+        log_before = run_log.read_bytes()
+        # The claim now names session-b with a fresh updated stamp; make it
+        # stale so the second conversion takes the same gated path.
+        self._seed_claim("session-b", STALE_AGE, branch=self.branch)
+        second = self._conversion_take("session-c")
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(self._claim_session(), "session-c")
+        canonical = manifest.read_text(encoding="utf-8")
+        self.assertIn("session_id: session-c", canonical)
+        self.assertIn("run_session_id: session-holder", canonical)
+        self.assertEqual(run_log.read_bytes(), log_before)
+
+    def test_conversion_refuses_ambiguous_manifests(self):
+        # The manifest exists at the take target AND at another registered
+        # worktree (two worktrees ran the same slug): the ambiguity
+        # preserves the claim for operator reconciliation.
+        wt, manifest = self._conversion_fixture()
+        other_branch = "fixture/other-branch"
+        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
+        (other / ".ai-playbook").mkdir(exist_ok=True)
+        (other / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "run-tmp"\n', encoding="utf-8"
+        )
+        other_run = other / "run-tmp" / "execute-plan" / SLUG
+        other_run.mkdir(parents=True)
+        (other_run / "manifest.md").write_text(
+            f"# Execute-plan session: {SLUG}\n\nSession: session-holder\nPlan: {self.plan}\n",
+            encoding="utf-8",
+        )
         self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
         before = self.claim.read_text(encoding="utf-8")
         proc = self._conversion_take("session-b")
         self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
 
-    def test_sweep_preserves_claim_with_registered_manifest(self):
-        # Sweep-side preservation: a spent-looking claim (landed plan, no
-        # branch occupant) whose run manifest remains at its registered
-        # worktree is skipped untouched, naming the registered worktree.
+    def test_conversion_refuses_claim_manifest_branch_conflict(self):
+        # The manifest's run_branch disagrees with the claim's recorded
+        # branch: refuse before the replacement; nothing mutates.
         wt, manifest = self._conversion_fixture()
-        completed = self.repo / "docs" / "history" / "plans" / "completed"
-        completed.mkdir(parents=True)
-        shutil.copy(self.plan, completed / PLAN_NAME)
-        self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
-        proc = self._run("sweep", "--session", "session-sweeper")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertTrue(self.claim.exists(), "preserved claim was deleted by sweep")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("run manifest remains at its registered worktree", combined)
-        self.assertIn("deleted 0", combined)
+        self._seed_claim("session-holder", STALE_AGE, branch="fixture/other-branch")
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("conflicts with the claim's branch", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_differing_primary_mirror(self):
+        # A primary-side copy whose bytes differ from the canonical
+        # registered manifest stays ambiguous: the multiple-manifest
+        # refusal keeps the claim and all three records byte-for-byte.
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest, differing=True)
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        mirror_before = self._hash_file(mirror)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(mirror), mirror_before)
+
+    def test_conversion_refuses_incomplete_run_boundary(self):
+        # The runtime state names task 2 in progress: the completed-run
+        # boundary refuses and the claim is preserved.
+        import json
+        wt, manifest = self._conversion_fixture()
+        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["tasks"] = {"1": "complete", "2": "in-progress"}
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("not in a sanctioned terminal state", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_malformed_overflow_and_mismatched_provider(self):
+        # Malformed JSON, a 64 KiB stream overflow, and a mismatched
+        # session id each refuse the conversion unchanged (the provider
+        # contract's closed vocabulary; the gateway never proceeds on a
+        # response outside the exact shape).
+        for status, needle in (
+            ("malformed", "not valid JSON"),
+            ("overflow", "byte cap"),
+            ("mismatched-id", "did not return prior owner"),
+        ):
+            with self.subTest(status=status):
+                wt, manifest = self._conversion_fixture(status=status)
+                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+                before = self.claim.read_text(encoding="utf-8")
+                proc = self._conversion_take("session-b")
+                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+                self.assertIn(needle, proc.stdout + proc.stderr)
+                self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+                # Reset the fixture state the next iteration rebuilds.
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                # Restore the facts baseline: the fixture appends the
+                # provider line, so a stale duplicate key would refuse the
+                # next iteration's provider resolution.
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
+
+    def test_conversion_refuses_mirror_plus_second_worktree_manifest(self):
+        # The mirror collapse admits one primary-side copy beside the
+        # canonical manifest, never a third identity: an additional
+        # non-primary worktree manifest keeps the multiple refusal and
+        # the claim preserved.
+        wt, manifest = self._conversion_fixture()
+        mirror = self._plant_primary_mirror(manifest)
+        other_branch = "fixture/other-branch"
+        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
+        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
+        other_run.mkdir(parents=True)
+        (other_run / "manifest.md").write_text("a third identity\n", encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        mirror_before = self._hash_file(mirror)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(mirror), mirror_before)
+
+    def test_conversion_refuses_mismatched_plan_digest(self):
+        # The receipt's plan_digest does not hash the active plan bytes:
+        # refuse unchanged.
+        import json
+        wt, manifest = self._conversion_fixture()
+        state_path = wt / "run-tmp" / "execute-plan" / SLUG / "runtime_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["pre_archive_receipt"]["plan_digest"] = "0" * 64
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not hash the active plan bytes", proc.stdout + proc.stderr)
+
+    def test_conversion_refuses_nonterminal_provider_status(self):
+        # The provider answers live: only a terminal prior owner proceeds;
+        # the claim is preserved byte-identically.
+        self._conversion_fixture(status="live")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("prior owner session-holder is live, not terminal", proc.stdout + proc.stderr)
+        self.assertIn("live", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_refuses_on_slow_provider_timeout(self):
+        # A provider exceeding an injected short deadline exercises the same
+        # timeout refusal path without spending 10 seconds in this suite. The
+        # production session_status default remains untouched; both locks
+        # must be free when the gateway returns.
+        wt, manifest = self._conversion_fixture(status="slow")
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        shim_dir, wrapper = self._short_timeout_python_bin()
+        fixture_path = self._fixture_env()["PATH"]
+        injected_names = (
+            "PATH", "SESSION_STATUS_SCRIPT", "SESSION_STATUS_WRAPPER",
+            "SESSION_STATUS_TIMEOUT_SECS", "TEST_PYTHON",
+        )
+        prior_env = {name: os.environ.get(name) for name in injected_names}
+        proc = self._conversion_take(
+            "session-b",
+            extra_env={
+                "PATH": str(shim_dir) + os.pathsep + fixture_path,
+                "SESSION_STATUS_SCRIPT": str(SCRIPT.parent / "session_status.py"),
+                "SESSION_STATUS_WRAPPER": str(wrapper),
+                "SESSION_STATUS_TIMEOUT_SECS": "0.05",
+                "TEST_PYTHON": sys.executable,
+            },
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
+        self.assertIn("provider exceeded the 0.05s bound", proc.stdout + proc.stderr)
+        self.assertIn("process group terminated and reaped", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self._assert_conversion_locks_free(wt)
+        self.assertEqual(
+            {name: os.environ.get(name) for name in injected_names}, prior_env,
+            "the test-only provider PATH/deadline escaped the child environment",
+        )
+
+    def test_conversion_refuses_run_base_conflict(self):
+        # The manifest's run_base branch token disagrees with the claim's
+        # base line: refuse before the replacement.
+        wt, manifest = self._conversion_fixture()
+        mtext = manifest.read_text(encoding="utf-8")
+        manifest.write_text(
+            mtext + "run_base: some-other-branch @ 0123456789abcdef\n",
+            encoding="utf-8",
+        )
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.claim.write_text(claim_text + "base: main\n", encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("conflicts with the claim's base", proc.stdout + proc.stderr)
+
+    def test_conversion_refuses_split_owner_state(self):
+        # H-claim/R-manifest split owners: the manifest names a different
+        # owner than the claim (the interrupted-replacement shape) — the
+        # conversion refuses byte-identically without inferring lineage.
+        wt, manifest = self._conversion_fixture(holder="session-first")
+        self._seed_claim("session-second", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        manifest_before = manifest.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not verify against the claim", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self.assertEqual(manifest.read_text(encoding="utf-8"), manifest_before)
 
     def test_conversion_refuses_symlinked_manifest(self):
         # A symlinked run manifest is never followed: the conversion
@@ -1031,29 +1426,34 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertTrue(manifest.is_symlink())
         self.assertEqual(self._hash_file(target), target_before)
 
-    def test_conversion_refuses_ambiguous_manifests(self):
-        # The manifest exists at the take target AND at another registered
-        # worktree (two worktrees ran the same slug): the ambiguity
-        # preserves the claim for operator reconciliation.
+
+class TestExecutionClaimShard02(_ExecutionClaimFixtureMixin, unittest.TestCase):
+    """Contiguous execution-claim test shard 2 of 4."""
+
+    def test_conversion_refuses_two_nonprimary_byte_identical_manifests(self):
+        # Two non-primary registered worktrees carrying byte-identical
+        # manifests stay multiple: the one admitted collapse requires a
+        # primary-side copy (either the current or the retained find at
+        # the primary checkout), so with no primary-side manifest the
+        # refusal holds and the claim plus both manifests keep their
+        # bytes.
         wt, manifest = self._conversion_fixture()
         other_branch = "fixture/other-branch"
         other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
-        (other / ".ai-playbook").mkdir(exist_ok=True)
-        (other / ".ai-playbook" / "facts.md").write_text(
-            'tmp_dir = "run-tmp"\n', encoding="utf-8"
-        )
-        other_run = other / "run-tmp" / "execute-plan" / SLUG
+        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
         other_run.mkdir(parents=True)
-        (other_run / "manifest.md").write_text(
-            f"# Execute-plan session: {SLUG}\n\nSession: session-holder\nPlan: {self.plan}\n",
-            encoding="utf-8",
-        )
-        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
+        other_manifest = other_run / "manifest.md"
+        shutil.copy(manifest, other_manifest)
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        claim_before = self._hash_file(self.claim)
+        manifest_before = self._hash_file(manifest)
+        other_manifest_before = self._hash_file(other_manifest)
         proc = self._conversion_take("session-b")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+        self.assertEqual(self._hash_file(self.claim), claim_before)
+        self.assertEqual(self._hash_file(manifest), manifest_before)
+        self.assertEqual(self._hash_file(other_manifest), other_manifest_before)
 
     def test_conversion_refuses_unusable_worktree_facts_names_cause(self):
         # Registered-worktree facts that are missing, unreadable, or lack
@@ -1112,211 +1512,15 @@ class TestExecutionClaim(unittest.TestCase):
                     'tmp_dir = "docs/tmp"\n', encoding="utf-8"
                 )
 
-    def _plant_primary_mirror(self, manifest, *, differing=False):
-        """The primary-side mirror: a copy of the canonical registered
-        manifest under the primary checkout's matching run path (the
-        primary facts resolve tmp_dir to docs/tmp)."""
-        mirror_dir = self.repo / "docs" / "tmp" / "execute-plan" / SLUG
-        mirror_dir.mkdir(parents=True, exist_ok=True)
-        mirror = mirror_dir / "manifest.md"
-        if differing:
-            mirror.write_text(
-                "# Execute-plan session: " + SLUG + "\n\na differing copy\n",
-                encoding="utf-8",
-            )
-        else:
-            shutil.copy(manifest, mirror)
-        return mirror
-
-    def test_conversion_accepts_byte_identical_primary_mirror(self):
-        # A byte-identical copy under the primary checkout's matching run
-        # path is the same manifest identity: the scan reports one identity
-        # retained at the canonical registered worktree, so the conversion
-        # proceeds through it (the mirror copy itself is never rewritten).
-        wt, manifest = self._conversion_fixture()
-        mirror = self._plant_primary_mirror(manifest)
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        mirror_before = self._hash_file(mirror)
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertEqual(self._claim_session(), "session-b")
-        self.assertIn("session_id: session-b", manifest.read_text(encoding="utf-8"))
-        self.assertEqual(self._hash_file(mirror), mirror_before)
-
-    def test_conversion_refuses_differing_primary_mirror(self):
-        # A primary-side copy whose bytes differ from the canonical
-        # registered manifest stays ambiguous: the multiple-manifest
-        # refusal keeps the claim and all three records byte-for-byte.
-        wt, manifest = self._conversion_fixture()
-        mirror = self._plant_primary_mirror(manifest, differing=True)
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        claim_before = self._hash_file(self.claim)
-        manifest_before = self._hash_file(manifest)
-        mirror_before = self._hash_file(mirror)
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
-        self.assertEqual(self._hash_file(self.claim), claim_before)
-        self.assertEqual(self._hash_file(manifest), manifest_before)
-        self.assertEqual(self._hash_file(mirror), mirror_before)
-
-    def test_conversion_refuses_mirror_plus_second_worktree_manifest(self):
-        # The mirror collapse admits one primary-side copy beside the
-        # canonical manifest, never a third identity: an additional
-        # non-primary worktree manifest keeps the multiple refusal and
-        # the claim preserved.
-        wt, manifest = self._conversion_fixture()
-        mirror = self._plant_primary_mirror(manifest)
-        other_branch = "fixture/other-branch"
-        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
-        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
-        other_run.mkdir(parents=True)
-        (other_run / "manifest.md").write_text("a third identity\n", encoding="utf-8")
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        claim_before = self._hash_file(self.claim)
-        manifest_before = self._hash_file(manifest)
-        mirror_before = self._hash_file(mirror)
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
-        self.assertEqual(self._hash_file(self.claim), claim_before)
-        self.assertEqual(self._hash_file(manifest), manifest_before)
-        self.assertEqual(self._hash_file(mirror), mirror_before)
-
-    def test_conversion_refuses_two_nonprimary_byte_identical_manifests(self):
-        # Two non-primary registered worktrees carrying byte-identical
-        # manifests stay multiple: the one admitted collapse requires a
-        # primary-side copy (either the current or the retained find at
-        # the primary checkout), so with no primary-side manifest the
-        # refusal holds and the claim plus both manifests keep their
-        # bytes.
-        wt, manifest = self._conversion_fixture()
-        other_branch = "fixture/other-branch"
-        other = self._seed_worktree(other_branch, os.path.join("wt", other_branch))
-        other_run = other / "docs" / "tmp" / "execute-plan" / SLUG
-        other_run.mkdir(parents=True)
-        other_manifest = other_run / "manifest.md"
-        shutil.copy(manifest, other_manifest)
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        claim_before = self._hash_file(self.claim)
-        manifest_before = self._hash_file(manifest)
-        other_manifest_before = self._hash_file(other_manifest)
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("more than one registered worktree", proc.stdout + proc.stderr)
-        self.assertEqual(self._hash_file(self.claim), claim_before)
-        self.assertEqual(self._hash_file(manifest), manifest_before)
-        self.assertEqual(self._hash_file(other_manifest), other_manifest_before)
-
-    def test_sweep_inconclusive_scan_names_worktree_and_cause(self):
-        # The stale-sweep skip reason carries the same attribution as the
-        # take refusal: a spendable claim (landed plan, branch gone) whose
-        # scan is inconclusive is skipped untouched, naming the registered
-        # worktree and the discovery cause; the claim bytes stay unchanged.
-        for shape in ("missing facts", "unreadable facts", "no tmp_dir", "symlink"):
-            with self.subTest(shape=shape):
-                if shape == "unreadable facts" and os.geteuid() == 0:
-                    self.skipTest("root reads anything")
-                wt, manifest = self._conversion_fixture()
-                facts = wt / ".ai-playbook" / "facts.md"
-                if shape == "missing facts":
-                    facts.unlink()
-                elif shape == "unreadable facts":
-                    os.chmod(facts, 0)
-                elif shape == "no tmp_dir":
-                    facts.write_text('other_key = "x"\n', encoding="utf-8")
-                else:
-                    target = self.scratch / "elsewhere-sweep-manifest.md"
-                    target.write_text("not the manifest\n", encoding="utf-8")
-                    manifest.unlink()
-                    os.symlink(str(target), str(manifest))
-                completed = self.repo / "docs" / "history" / "plans" / "completed"
-                completed.mkdir(parents=True, exist_ok=True)
-                shutil.copy(self.plan, completed / PLAN_NAME)
-                self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
-                claim_before = self._hash_file(self.claim)
-                manifest_before = self._hash_file(manifest)
-                proc = self._run("sweep", "--session", "session-sweeper")
-                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-                combined = proc.stdout + proc.stderr
-                self.assertIn("preservation scan inconclusive", combined)
-                self.assertIn(shape, combined)
-                self.assertIn(os.path.realpath(str(wt)), combined)
-                if shape == "symlink":
-                    # The symlinked manifest path is named in the reason,
-                    # in git's stored physical form (the take-side twin
-                    # asserts the same attribution on its refusal).
-                    self.assertIn(
-                        os.path.join(
-                            os.path.realpath(str(wt)),
-                            "run-tmp", "execute-plan", SLUG, "manifest.md",
-                        ),
-                        combined,
-                    )
-                self.assertTrue(
-                    self.claim.exists(), "inconclusive scan let sweep delete the claim"
-                )
-                self.assertEqual(self._hash_file(self.claim), claim_before)
-                self.assertEqual(self._hash_file(manifest), manifest_before)
-                # Reset the fixture state the next iteration rebuilds.
-                if facts.exists():
-                    os.chmod(facts, 0o644)
-                self._git("worktree", "remove", "--force", str(wt))
-                self._git("worktree", "prune")
-                self._git("branch", "-D", self.branch)
-                if self.claim.exists():
-                    self.claim.unlink()
-                (self.repo / ".ai-playbook" / "facts.md").write_text(
-                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
-                )
-
-    def test_conversion_refuses_run_base_conflict(self):
-        # The manifest's run_base branch token disagrees with the claim's
-        # base line: refuse before the replacement.
-        wt, manifest = self._conversion_fixture()
-        mtext = manifest.read_text(encoding="utf-8")
-        manifest.write_text(
-            mtext + "run_base: some-other-branch @ 0123456789abcdef\n",
-            encoding="utf-8",
+    def test_conversion_refuses_without_provider_configuration(self):
+        # No session_status_command in the primary facts: the provider
+        # refuses and the conversion refuses unchanged (the Ship gate's
+        # default: the existing refusal remains active without valid
+        # configuration and verified evidence).
+        self._conversion_fixture()
+        (self.repo / ".ai-playbook" / "facts.md").write_text(
+            'tmp_dir = "docs/tmp"\nother_key = "x"\n', encoding="utf-8"
         )
-        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.claim.write_text(claim_text + "base: main\n", encoding="utf-8")
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("conflicts with the claim's base", proc.stdout + proc.stderr)
-
-    def test_conversion_refuses_split_owner_state(self):
-        # H-claim/R-manifest split owners: the manifest names a different
-        # owner than the claim (the interrupted-replacement shape) — the
-        # conversion refuses byte-identically without inferring lineage.
-        wt, manifest = self._conversion_fixture(holder="session-first")
-        self._seed_claim("session-second", STALE_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
-        manifest_before = manifest.read_text(encoding="utf-8")
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("does not verify against the claim", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-        self.assertEqual(manifest.read_text(encoding="utf-8"), manifest_before)
-
-    def test_conversion_refuses_claim_manifest_branch_conflict(self):
-        # The manifest's run_branch disagrees with the claim's recorded
-        # branch: refuse before the replacement; nothing mutates.
-        wt, manifest = self._conversion_fixture()
-        self._seed_claim("session-holder", STALE_AGE, branch="fixture/other-branch")
-        before = self.claim.read_text(encoding="utf-8")
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("conflicts with the claim's branch", proc.stdout + proc.stderr)
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    def test_conversion_refuses_on_slow_provider_timeout(self):
-        # A provider exceeding the 10-second bound refuses the conversion
-        # unchanged, and both gateway-owned locks are released (a later
-        # command's merge-acquire must not see a stranded hold).
-        wt, manifest = self._conversion_fixture(status="slow")
         self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
         before = self.claim.read_text(encoding="utf-8")
         proc = self._conversion_take("session-b")
@@ -1324,61 +1528,6 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         self.assertIn("did not return prior owner", proc.stdout + proc.stderr)
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-    def test_conversion_refuses_malformed_overflow_and_mismatched_provider(self):
-        # Malformed JSON, a 64 KiB stream overflow, and a mismatched
-        # session id each refuse the conversion unchanged (the provider
-        # contract's closed vocabulary; the gateway never proceeds on a
-        # response outside the exact shape).
-        for status, needle in (
-            ("malformed", "not valid JSON"),
-            ("overflow", "byte cap"),
-            ("mismatched-id", "did not return prior owner"),
-        ):
-            with self.subTest(status=status):
-                wt, manifest = self._conversion_fixture(status=status)
-                self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-                before = self.claim.read_text(encoding="utf-8")
-                proc = self._conversion_take("session-b")
-                self.assertEqual(proc.returncode, 1)
-                self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-                self.assertIn(needle, proc.stdout + proc.stderr)
-                self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-                # Reset the fixture state the next iteration rebuilds.
-                self._git("worktree", "remove", "--force", str(wt))
-                self._git("worktree", "prune")
-                self._git("branch", "-D", self.branch)
-                if self.claim.exists():
-                    self.claim.unlink()
-                # Restore the facts baseline: the fixture appends the
-                # provider line, so a stale duplicate key would refuse the
-                # next iteration's provider resolution.
-                (self.repo / ".ai-playbook" / "facts.md").write_text(
-                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
-                )
-
-    def test_conversion_r_then_s_second_conversion_succeeds(self):
-        # R-to-S: a second conversion on the already-converted run transfers
-        # the claim again; the artifacts the first conversion wrote (the
-        # manifest's canonical identity block, the old logs) keep their
-        # bytes apart from the ownership fields.
-        wt, manifest = self._conversion_fixture()
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        first = self._conversion_take("session-b")
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        manifest_after_first = manifest.read_text(encoding="utf-8")
-        run_log = wt / "run-tmp" / "execute-plan" / SLUG / "task-1-implement.log.md"
-        log_before = run_log.read_bytes()
-        # The claim now names session-b with a fresh updated stamp; make it
-        # stale so the second conversion takes the same gated path.
-        self._seed_claim("session-b", STALE_AGE, branch=self.branch)
-        second = self._conversion_take("session-c")
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(self._claim_session(), "session-c")
-        canonical = manifest.read_text(encoding="utf-8")
-        self.assertIn("session_id: session-c", canonical)
-        self.assertIn("run_session_id: session-holder", canonical)
-        self.assertEqual(run_log.read_bytes(), log_before)
 
     def test_conversion_same_owner_resumes_through_own_claim_arm(self):
         # The claim and manifest name the invoking session: the verified
@@ -1401,65 +1550,244 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertIn("already exists", proc.stdout + proc.stderr)
         self.assertEqual(self._claim_session(), "session-holder")
 
-    def test_conversion_preserves_all_optional_claim_lines(self):
-        # The replacement shape: created, branch, start-commit, and base
-        # survive; updated refreshes; a later take on another branch still
-        # sees the saved branch occupancy.
-        wt, manifest = self._conversion_fixture()
+    def test_conversion_session_channel_mismatch_refuses(self):
+        # The session channel derives a different active id than --session:
+        # the trusted-channel boundary refuses before any mutation.
+        self._conversion_fixture()
         self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
-        text = self.claim.read_text(encoding="utf-8")
-        text += "start-commit: 0123456789abcdef0123456789abcdef01234567\nbase: main\n"
-        self.claim.write_text(text, encoding="utf-8")
-        updated_before = self._updated_stamp()
-        proc = self._conversion_take("session-b")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn("start-commit: 0123456789abcdef0123456789abcdef01234567", claim_text)
-        self.assertIn("base: main", claim_text)
-        self.assertNotEqual(self._updated_stamp(), updated_before)
-        # The saved branch occupancy: the sweep's branch leg still sees the
-        # saved branch held by the registered worktree, so the spent-looking
-        # claim is skipped whatever the plan's state.
-        proc = self._run("sweep", "--session", "session-z")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertTrue(self.claim.exists(), "the converted claim was swept")
-        combined = proc.stdout + proc.stderr
-        self.assertTrue(
-            "run manifest remains at its registered worktree" in combined
-            or f"branch {self.branch} is held by worktree" in combined,
-            f"neither preservation witness fired: {combined}",
-        )
-
-    def test_conversion_poisoned_lock_environment_cannot_redirect_roots(self):
-        # Poisoned caller HOME and lock-root variables cannot change the
-        # roots: the conversion succeeds with decoys set and the decoy
-        # directories stay empty (the OS-account/seam derivation wins).
-        wt, manifest = self._conversion_fixture()
-        decoy = self.scratch / "decoy-home"
-        decoy.mkdir()
-        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
         proc = self._run(
             "take", str(self.plan),
             "--session", "session-b",
             "--branch", self.branch,
             "--worktree-parent", str(self.wt_parent),
             extra_env={
-                "CLAUDE_CODE_SESSION_ID": "session-b",
+                "CLAUDE_CODE_SESSION_ID": "session-someone-else",
                 "EXECUTION_CLAIM_LOCK_HOME": str(self.scratch / "lock-home"),
-                "HOME": str(decoy),
-                "DONE_LOCK_ROOT": str(decoy / "done-redirect"),
-                "MERGE_LOCK_ROOT": str(decoy / "merge-redirect"),
             },
         )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not equal --session session-b", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_conversion_stale_claim_at_registered_manifest_preserved(self):
+        # Stale take preservation: the manifest remains at its registered
+        # worktree, but the boundary fails (provider live), so the stale
+        # claim is preserved; never taken over by the historical unlink.
+        self._conversion_fixture(status="live")
+        self._seed_claim("session-holder", STALE_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._conversion_take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_dead_run_conversion_replaces_prior_admission_record(self):
+        # New-owner seeding, dead-run conversion: the converted claim's prior
+        # record is replaced with the fresh seed (the plan bytes are
+        # rewritten before the fixture so the boundary's plan_digest hashes
+        # the covering plan the seed derives from).
+        expected_seed = self._write_plan_with_files()
+        self._conversion_fixture()
+        self._plant_admission_record(["prior/only-path.md"])
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        proc = self._conversion_take("session-b", runtime="codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self._claim_session(), "session-b")
-        self.assertFalse(
-            (decoy / "done-redirect").exists(), "caller DONE_LOCK_ROOT was honored"
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
+        payload = self._read_admission_payload()
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertNotIn("prior/only-path.md", payload["owned_paths"])
+
+    def test_failed_add_rolls_back_stranded_branch_and_retry_succeeds(self):
+        # `git worktree add -b` creates the branch before validating the
+        # path: a path-collision failure strands the freshly created branch,
+        # and every later take of that branch name would fail until a manual
+        # delete. The add-failure arm rolls the stranded branch back (only
+        # when it did not exist before this add), so the retry succeeds once
+        # the path collision is freed.
+        target = self.wt_parent / self.branch
+        target.mkdir(parents=True)
+        (target / "collision").write_text("not a worktree", encoding="utf-8")
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("worktree add failed", combined)
+        self.assertIn(
+            "cleanup: removed this invocation's stranded branch", combined
         )
         self.assertFalse(
-            (decoy / "merge-redirect").exists(), "caller MERGE_LOCK_ROOT was honored"
+            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
+            "the stranded branch was not rolled back",
         )
-        self.assertEqual(list(decoy.iterdir()), [], "caller HOME was used as the lock root")
+        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
+        # The unregistered collision directory is not the cleanup's to
+        # remove (its worktree arm only ever removes registered worktrees).
+        self.assertTrue(target.is_dir(), "the collision directory was removed")
+        # Retry with the collision freed: the take now succeeds.
+        shutil.rmtree(target)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertTrue(target.is_dir(), "worktree missing after the retry take")
+        self.assertTrue(self.claim.is_file(), "claim missing after the retry take")
+
+    def test_failed_create_cleans_fresh_claim(self):
+        self._git("branch", self.branch)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("already exists", combined)
+        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
+        self.assertFalse((self.wt_parent / self.branch).exists())
+        # The rollback never touches a branch that pre-existed the add: the
+        # seeded branch (not this add's creation) must survive the failure.
+        self.assertTrue(
+            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
+            "a pre-existing branch was deleted by the failed take",
+        )
+
+    def test_fixture_leaves_caller_lock_home_and_pins_child(self):
+        # The fixture must not mutate the interpreter's os.environ (backlog:
+        # execution-claim-fixture-caller-environment): a caller-supplied
+        # value survives setup, teardown, and gateway invocations untouched,
+        # while the gateway child still receives the fixture's scratch lock
+        # home through _run's copied environment.
+        prior_lock_home = os.environ.get("EXECUTION_CLAIM_LOCK_HOME")
+
+        def restore_lock_home():
+            if prior_lock_home is None:
+                os.environ.pop("EXECUTION_CLAIM_LOCK_HOME", None)
+            else:
+                os.environ["EXECUTION_CLAIM_LOCK_HOME"] = prior_lock_home
+
+        self.addCleanup(restore_lock_home)
+        os.environ["EXECUTION_CLAIM_LOCK_HOME"] = "caller-sentinel"
+        probe = self.scratch / "probe.sh"
+        probe.write_text('printf "%s" "$EXECUTION_CLAIM_LOCK_HOME"\n')
+        with patch(f"{__name__}.SCRIPT", probe):
+            proc = self._run("take", str(self.plan))
+        self.assertEqual(proc.stdout, str(self.lock_home))
+        self.assertEqual(
+            os.environ["EXECUTION_CLAIM_LOCK_HOME"], "caller-sentinel"
+        )
+        restore_lock_home()
+        self.assertEqual(os.environ.get("EXECUTION_CLAIM_LOCK_HOME"),
+                         prior_lock_home)
+
+    def test_foreign_claim_live_record_keeps_peer_done_setup_clean(self):
+        # Safety witness (done machinery untouched): a foreign claim-live
+        # admission record beside the claim never appears on the done-session
+        # classification surface, so a peer done-session setup in the same
+        # scratch repository proceeds with no orphan verdict and no
+        # interrupted-run advisory naming the live run; the record survives
+        # untouched beside the still-standing claim. The GIVEN record is
+        # planted (the witness never depends on the gateway's seeding arm).
+        proc = self._take("session-live")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file())
+        self._plant_admission_record(["foreign/claim-live-window.md"])
+        self.assertTrue(self.admission_record.is_file())
+        # The facts input the done flow reads, in the repository's fenced
+        # shape (the test_done_run_wrapper.py fixture), committed with a
+        # docs/tmp gitignore so the scaffolding itself is not read as dirt.
+        facts_path = self.repo / ".ai-playbook" / "facts.md"
+        facts_path.write_text(
+            "# Scratch primary facts\n"
+            "\n"
+            "```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'backlog_dir = "docs/history/backlog/"\n'
+            'reviews_dir = ".ai-playbook/reviews/"\n'
+            'tmp_dir = "docs/tmp/"\n'
+            'metrics_dir = "docs/tmp/metrics/"\n'
+            'review_certs_dir = ".ai-playbook/review-certs/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".gitignore").write_text(
+            "docs/tmp/\n__pycache__/\n", encoding="utf-8"
+        )
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "scaffolding")
+        setup = self._peer_done_setup()
+        self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
+        combined = setup.stdout + setup.stderr
+        self.assertNotIn("orphan", combined.lower())
+        self.assertNotIn("interrupted", combined.lower())
+        self.assertNotIn(
+            "session-live", combined,
+            "the done setup's output names the live gateway session",
+        )
+        manifests = list(
+            (self.repo / "docs" / "tmp" / "done-session").glob(
+                "run-manifest-*.json"
+            )
+        )
+        self.assertEqual(len(manifests), 1, "the peer setup wrote no manifest")
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the done setup disturbed the claim-live admission record",
+        )
+        self.assertTrue(self.claim.is_file(), "the done setup disturbed the claim")
+
+    def test_freshness_boundary_7199s_refuses(self):
+        # FRESHNESS_SECS=7200 boundary, refuse side: one second inside the
+        # cadence window still refuses (the pinned constant's refuse arm).
+        # The freshness clock is pinned through a date shim answering
+        # `date -u +%s` with the seed epoch itself, so the boundary is
+        # exact: a wall-clock delta between seeding and the script's read
+        # cannot push the age over the boundary (the flake this removes).
+        # The 7200 twin below is shimmed the same way: its takeover arm
+        # reads the identical clock, so its boundary is exact too.
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        self._seed_claim("session-holder", timedelta(seconds=7199), now=seed_now)
+        proc = self._take("session-b", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("session-holder", proc.stdout + proc.stderr)
+        self.assertFalse((self.wt_parent / self.branch).exists())
+
+    def test_freshness_boundary_7200s_takes_over(self):
+        # FRESHNESS_SECS=7200 boundary, takeover side: exactly one cadence
+        # period of age is stale and taken over. The same date shim pins
+        # the freshness clock at the seed epoch, so the read age is
+        # exactly 7200s: the boundary is exact, not merely skew-immune,
+        # matching the 7199 refuse side's exactness (the seeded stamp and
+        # the script's read are the same pinned instant, so any wall-clock
+        # behavior is out of the loop).
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        self._seed_claim("session-dead", timedelta(seconds=7200), now=seed_now)
+        proc = self._take("session-b", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("takeover", proc.stdout)
+        self.assertIn("session: session-b", self.claim.read_text(encoding="utf-8"))
+
+    def test_git_helpers_ignore_ambient_repository_overrides(self):
+        self._install_ambient_git_overrides()
+        self._git("status", "--short")
+        proc = self._run(
+            "claim", str(self.plan), "--session", "session-b", "--runtime", "codex"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+        with patch.object(subprocess, "Popen") as popen:
+            self._take_popen("session-popen", self.scratch / "unblock")
+        child_env = popen.call_args.kwargs["env"]
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.assertNotIn(name, child_env, f"ambient Git variable {name} escaped the fixture")
+
+    def test_help_is_metadata_exit_without_outcome_line(self):
+        proc = self._run("--help")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Usage: execution_claim.sh", proc.stdout)
+        self.assertNotIn("OUTCOME:", proc.stdout)
+        self.assertNotIn("OUTCOME:", proc.stderr)
 
     def test_merge_lock_contention_refuses_claim_commands_once(self):
         self._install_ambient_git_overrides()
@@ -1519,120 +1847,102 @@ class TestExecutionClaim(unittest.TestCase):
                 capture_output=True, text=True, timeout=60,
             )
 
-    def test_restored_worktree_claim_mutation_serialized(self):
-        # The compare-and-delete seam: the takeover and release mutations
-        # re-verify the claim row's session as the unlink's immediately
-        # preceding operation. The fixture states the seam (the grep-plus-rm
-        # pair inside takeover_stale_claim and cmd_release): when the claim
-        # no longer names the expected holder at that last instant, the
-        # mutation aborts and the claim is left untouched.
-        self._seed_claim("session-holder", STALE_AGE)
-        # race the takeover: rewrite the claim to a third session after the
-        # takeover's freshness read but before its compare-and-delete by
-        # making the claim file read as session-c at the last instant
-        holder_wt = None
-        proc = self._take("session-b")
-        # the stale claim of session-holder is taken over; the mutation's
-        # compare-and-delete passed because the row still named session-holder
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self._claim_session(), "session-b")
-        # release's compare-and-delete: a foreign session refuses untouched
-        self._seed_claim("session-other", FRESH_AGE)
-        proc = self._release("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("names session session-other", proc.stdout + proc.stderr)
-        self.assertEqual(self._claim_session(), "session-other")
-        del holder_wt
+    def test_missing_or_invalid_runtime_is_shared_unknown(self):
+        for args in ([], ["--runtime", "not-a-runtime"]):
+            self.claim.unlink(missing_ok=True)
+            proc = self._run("claim", str(self.plan), "--session", "session-b", *args)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("runtime_id: unknown", self.claim.read_text(encoding="utf-8"))
 
-    def test_freshness_boundary_7199s_refuses(self):
-        # FRESHNESS_SECS=7200 boundary, refuse side: one second inside the
-        # cadence window still refuses (the pinned constant's refuse arm).
-        # The freshness clock is pinned through a date shim answering
-        # `date -u +%s` with the seed epoch itself, so the boundary is
-        # exact: a wall-clock delta between seeding and the script's read
-        # cannot push the age over the boundary (the flake this removes).
-        # The 7200 twin below is shimmed the same way: its takeover arm
-        # reads the identical clock, so its boundary is exact too.
-        seed_epoch = 1_700_000_000
-        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
-        self._seed_claim("session-holder", timedelta(seconds=7199), now=seed_now)
-        proc = self._take("session-b", path_prepend=self._date_shim(seed_epoch))
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertIn("session-holder", proc.stdout + proc.stderr)
-        self.assertFalse((self.wt_parent / self.branch).exists())
+    def test_missing_primary_checkout_tool_error(self):
+        nonrepo = self.scratch / "not-a-repo"
+        nonrepo.mkdir()
+        proc = self._take("session-b", cwd=nonrepo)
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
 
-    def test_freshness_boundary_7200s_takes_over(self):
-        # FRESHNESS_SECS=7200 boundary, takeover side: exactly one cadence
-        # period of age is stale and taken over. The same date shim pins
-        # the freshness clock at the seed epoch, so the read age is
-        # exactly 7200s: the boundary is exact, not merely skew-immune,
-        # matching the 7199 refuse side's exactness (the seeded stamp and
-        # the script's read are the same pinned instant, so any wall-clock
-        # behavior is out of the loop).
-        seed_epoch = 1_700_000_000
-        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
-        self._seed_claim("session-dead", timedelta(seconds=7200), now=seed_now)
-        proc = self._take("session-b", path_prepend=self._date_shim(seed_epoch))
+    def test_new_owner_fresh_create_seeds_admission_record(self):
+        # New-owner seeding, fresh create: the record is absent before the
+        # invocation and present at the claims home with the fresh seed once
+        # the take succeeds.
+        expected_seed = self._write_plan_with_files()
+        self.assertFalse(
+            self.admission_record.exists(),
+            "a cold start found a pre-existing admission record",
+        )
+        proc = self._take("session-a")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn("takeover", proc.stdout)
-        self.assertIn("session: session-b", self.claim.read_text(encoding="utf-8"))
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the fresh create wrote no admission record",
+        )
+        payload = self._read_admission_payload()
+        self.assertEqual(
+            set(payload),
+            {"owned_paths", "owned_plan_paths", "owned_review_paths"},
+        )
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertTrue(self.claim.is_file(), "the fresh claim did not survive")
 
-    def test_take_stale_takeover(self):
-        self._seed_claim("session-dead", STALE_AGE)
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn("takeover", proc.stdout)
-        self.assertIn("session-dead", proc.stdout)
-        self.assertIn("session: session-b", self.claim.read_text(encoding="utf-8"))
-        self.assertTrue((self.wt_parent / self.branch).is_dir())
-
-    def test_take_stale_claim_with_occupied_worktree(self):
-        occupied = self._seed_worktree(self.branch, "dead-wt")
-        self._seed_claim("session-dead", STALE_AGE)
-        before = self.claim.read_text(encoding="utf-8")
+    def test_post_acquire_occupant_refusal_over_empty_claims_dir(self):
+        # The post-acquire arm of the branch-occupant refusal over an empty
+        # claims directory: no claim anywhere, a registered worktree holding
+        # the requested branch. The fresh claim this invocation created is
+        # cleaned up by the refusal itself, named by the same cleanup line
+        # the exit-path trap prints, and no worktree is created.
+        self.wt_parent.mkdir()
+        occupied = self._seed_worktree(self.branch, "occupied-wt", parent=self.wt_parent)
         proc = self._take("session-b")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         combined = proc.stdout + proc.stderr
         self.assertIn(str(occupied), combined)
-        self.assertIn("adopt", combined)
-        self.assertIn("remove", combined)
-        # The bounded removal remedy names both removal commands in order
-        # (worktree removal, then branch deletion) before the take re-run.
+        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
+        # The post-acquire arm prints the same bounded removal remedy; pin
+        # its copy so the twin refusal sites cannot silently diverge.
+        self.assertIn("bounded removal remedy", combined)
         self.assertIn("git worktree remove --force", combined)
         self.assertIn("git branch -D", combined)
-        self.assertLess(
-            combined.index("git worktree remove --force"),
-            combined.index("git branch -D"),
-            "the removal remedy does not order worktree removal before branch deletion",
-        )
         self.assertIn("re-run take", combined)
-        # The occupant check runs before the takeover arm: the refusal
-        # preserves the dead session's claim (destroying it would erase the
-        # registry entry the next reader needs) and creates no fresh claim.
-        self.assertEqual(
-            self.claim.read_text(encoding="utf-8"),
-            before,
-            "the stale foreign claim was not preserved by the occupant refusal",
+        self.assertFalse(
+            self.claim.exists(), "fresh claim survived the occupant refusal"
         )
         self.assertFalse((self.wt_parent / self.branch).exists())
 
-    def test_take_own_claim_existing_worktree_fails_keeping_claim(self):
-        self._seed_claim("session-b", FRESH_AGE)
-        target = self.wt_parent / self.branch
-        self._git("worktree", "add", "-b", self.branch, str(target))
-        before = self.claim.read_text(encoding="utf-8")
+    def test_pre_registered_detached_worktree_survives_failed_take(self):
+        # Exit-path probe, detached variant: the same survival contract over
+        # an occupant registered detached (no branch entry at all in the
+        # porcelain listing, so no branch-scoped guard can see it either).
+        self.wt_parent.mkdir()
+        occupant = self.wt_parent / self.branch
+        self._git("worktree", "add", "--detach", str(occupant))
+        marker = occupant / "occupant-uncommitted.txt"
+        marker.write_text("occupant work in progress", encoding="utf-8")
         proc = self._take("session-b")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         combined = proc.stdout + proc.stderr
-        self.assertIn(str(target), combined)
-        self.assertEqual(
-            self.claim.read_text(encoding="utf-8"), before, "claim was not kept"
+        self.assertIn("worktree add failed", combined)
+        self.assertTrue(
+            occupant.is_dir(), "the pre-registered detached worktree was removed"
         )
+        self.assertTrue(
+            marker.is_file(), "the occupant's uncommitted changes were destroyed"
+        )
+        self.assertIn(
+            os.path.realpath(occupant),
+            self._registered_worktree_paths(),
+            "the pre-registered detached worktree was unregistered",
+        )
+        self.assertNotIn(
+            "cleanup: removed this invocation's half-created worktree", combined
+        )
+        self.assertFalse(
+            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
+            "the failed add's collateral branch was not rolled back",
+        )
+        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
 
     def test_pre_registered_occupant_worktree_survives_failed_take(self):
         # Exit-path probe, different-branch variant: a registered worktree
@@ -1673,114 +1983,438 @@ class TestExecutionClaim(unittest.TestCase):
         )
         self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
 
-    def test_pre_registered_detached_worktree_survives_failed_take(self):
-        # Exit-path probe, detached variant: the same survival contract over
-        # an occupant registered detached (no branch entry at all in the
-        # porcelain listing, so no branch-scoped guard can see it either).
-        self.wt_parent.mkdir()
-        occupant = self.wt_parent / self.branch
-        self._git("worktree", "add", "--detach", str(occupant))
-        marker = occupant / "occupant-uncommitted.txt"
-        marker.write_text("occupant work in progress", encoding="utf-8")
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("worktree add failed", combined)
-        self.assertTrue(
-            occupant.is_dir(), "the pre-registered detached worktree was removed"
+    def test_refresh_lost_then_won_succeeds_on_attempt_two(self):
+        # Witness B, cmd_refresh's loop: the recreate loses the first
+        # create to the planted link and wins the second after the shim
+        # releases; the recreate evidence line is the cold recreate shape
+        # and the claim names this session.
+        shim_bin, marker = self._lost_then_won_date_shim()
+        proc = self._run(
+            "refresh", str(self.plan), "--session", "session-b",
+            path_prepend=shim_bin,
         )
-        self.assertTrue(
-            marker.is_file(), "the occupant's uncommitted changes were destroyed"
-        )
-        self.assertIn(
-            os.path.realpath(occupant),
-            self._registered_worktree_paths(),
-            "the pre-registered detached worktree was unregistered",
-        )
-        self.assertNotIn(
-            "cleanup: removed this invocation's half-created worktree", combined
-        )
-        self.assertFalse(
-            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
-            "the failed add's collateral branch was not rolled back",
-        )
-        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
-
-    def test_failed_create_cleans_fresh_claim(self):
-        self._git("branch", self.branch)
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("already exists", combined)
-        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
-        self.assertFalse((self.wt_parent / self.branch).exists())
-        # The rollback never touches a branch that pre-existed the add: the
-        # seeded branch (not this add's creation) must survive the failure.
-        self.assertTrue(
-            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
-            "a pre-existing branch was deleted by the failed take",
-        )
-
-    def test_failed_add_rolls_back_stranded_branch_and_retry_succeeds(self):
-        # `git worktree add -b` creates the branch before validating the
-        # path: a path-collision failure strands the freshly created branch,
-        # and every later take of that branch name would fail until a manual
-        # delete. The add-failure arm rolls the stranded branch back (only
-        # when it did not exist before this add), so the retry succeeds once
-        # the path collision is freed.
-        target = self.wt_parent / self.branch
-        target.mkdir(parents=True)
-        (target / "collision").write_text("not a worktree", encoding="utf-8")
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("worktree add failed", combined)
-        self.assertIn(
-            "cleanup: removed this invocation's stranded branch", combined
-        )
-        self.assertFalse(
-            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
-            "the stranded branch was not rolled back",
-        )
-        self.assertFalse(self.claim.exists(), "fresh claim not deleted after failure")
-        # The unregistered collision directory is not the cleanup's to
-        # remove (its worktree arm only ever removes registered worktrees).
-        self.assertTrue(target.is_dir(), "the collision directory was removed")
-        # Retry with the collision freed: the take now succeeds.
-        shutil.rmtree(target)
-        proc = self._take("session-b")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertTrue(target.is_dir(), "worktree missing after the retry take")
-        self.assertTrue(self.claim.is_file(), "claim missing after the retry take")
+        self.assertTrue(marker.is_file(), "the contender never planted its loss")
+        self.assertIn("recreated:", proc.stdout)
+        self.assertNotIn("kept racing", proc.stdout + proc.stderr)
+        self.assertNotIn("refresh refused", proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-b")
 
-    # -- exit-path cleanup (the trap) ------------------------------------- #
-
-    def test_take_uncreatable_worktree_parent_cleans_fresh_claim(self):
-        # The worktree parent path is an existing regular file, so the
-        # parent creation fails after the claim was created; the take must
-        # still leave no claim behind (tool_error, claim absent).
-        blocker = self.scratch / "wt-parent-blocker"
-        blocker.write_text("a file, not a directory", encoding="utf-8")
-        proc = self._take("session-b", parent=blocker)
+    def test_refresh_permanently_contended_claims_dir_fails_after_third_attempt(self):
+        # Witness A, cmd_refresh's loop: the same contended fixture against
+        # the recreate loop; the ceiling fires with the identical error
+        # text and exit class, and the contender survives untouched.
+        self._plant_dangling_symlink_at_claim()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
         self.assertEqual(proc.returncode, 3)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("worktree parent not creatable", combined)
-        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
-        self.assertFalse(
-            self.claim.exists(),
-            "fresh claim stranded by the worktree-parent failure",
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        )
+        self.assertIn(
+            f"error: claims directory kept racing at {self._physical_claim()}; "
+            "re-derive the state from disk",
+            proc.stdout + proc.stderr,
+        )
+        self.assertTrue(
+            os.path.islink(str(self.claim)), "the planted contender did not survive"
         )
 
-    def test_take_sigint_after_claim_creation_cleans_fresh_claim(self):
-        self._take_signalled_at_fresh_claim(signal.SIGINT, 130)
 
-    def test_take_sigterm_after_claim_creation_cleans_fresh_claim(self):
-        self._take_signalled_at_fresh_claim(signal.SIGTERM, 143)
+class TestExecutionClaimShard03(_ExecutionClaimFixtureMixin, unittest.TestCase):
+    """Contiguous execution-claim test shard 3 of 4."""
+
+    def test_refresh_preserves_branch_and_start_commit(self):
+        # Refresh carries neither --branch nor --start-commit: the recorded
+        # identity lines survive the re-stamp untouched.
+        start_sha = self._start_commit_sha()
+        proc = self._run(
+            "claim", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", start_sha,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        before = self.claim.read_text(encoding="utf-8")
+        self.assertIn(f"branch: {self.branch}", before)
+        self.assertIn(f"start-commit: {start_sha}", before)
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        after = self.claim.read_text(encoding="utf-8")
+        self.assertIn(f"branch: {self.branch}", after)
+        self.assertIn(f"start-commit: {start_sha}", after)
+
+    def test_refresh_preserves_the_claims_recorded_runtime(self):
+        proc = self._run(
+            "claim", str(self.plan), "--session", "session-b", "--runtime", "zcode"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        proc = self._run(
+            "refresh", str(self.plan), "--session", "session-b", "--runtime", "codex"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: zcode", self.claim.read_text(encoding="utf-8"))
+
+    def test_refresh_recreate_carries_branch_and_start_commit(self):
+        # The refresh recreate path (the same create_claim_noclobber write)
+        # carries both lines from the recreating invocation's values.
+        start_sha = self._start_commit_sha()
+        proc = self._run(
+            "claim", str(self.plan),
+            "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", start_sha,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.claim.unlink()
+        proc = self._run(
+            "refresh", str(self.plan), "--session", "session-b",
+            "--branch", self.branch,
+            "--start-commit", start_sha,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        recreated = self.claim.read_text(encoding="utf-8")
+        self.assertIn(f"branch: {self.branch}", recreated)
+        self.assertIn(f"start-commit: {start_sha}", recreated)
+
+    def test_refresh_recreate_keeps_existing_record_and_seeds_when_absent(self):
+        # Refresh recreate: a restamp of an own claim never rewrites the
+        # record; the recreate arm keeps an existing record unchanged and
+        # writes a seed only when no record exists.
+        expected_seed = self._write_plan_with_files()
+        planted = ["kept/by-refresh.md"]
+        self._plant_admission_record(planted)
+        self._seed_claim("session-b", STALE_AGE)
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            planted,
+            "a restamp of an own claim rewrote the admission record",
+        )
+        # Recreate over an existing record: kept unchanged.
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            planted,
+            "the recreate dropped or rewrote the existing record",
+        )
+        # Recreate with no record: the seed is written.
+        self.admission_record.unlink()
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
+        self.assertEqual(
+            self._read_admission_payload()["owned_paths"],
+            expected_seed,
+            "the recreate wrote no seed for the record-less claim",
+        )
+
+    def test_refresh_restamps_recreates_and_fences(self):
+        self._seed_claim("session-b", STALE_AGE)
+        before = self.claim.read_text(encoding="utf-8")
+        created_before = [
+            line for line in before.splitlines() if line.startswith("created: ")
+        ][0]
+        proc = self._run(
+            "refresh", str(self.plan), "--session", "session-b", "--base", "main"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        after = self.claim.read_text(encoding="utf-8")
+        self.assertNotEqual(after, before)
+        self.assertIn("base: main", after)
+        self.assertIn(created_before, after)
+        stamp = self._updated_stamp()
+        parsed = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        age = (datetime.now(timezone.utc) - parsed).total_seconds()
+        self.assertLess(age, 300, "refresh did not re-stamp updated: to now")
+
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
+        recreated = self.claim.read_text(encoding="utf-8")
+        self.assertIn("session: session-b", recreated)
+        self.assertNotIn("base:", recreated)
+
+        self._seed_claim("session-holder", FRESH_AGE)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_release_clears_admission_record_only_for_retiring_session(self):
+        # Clearing, release: the record stays intact while the claim stands
+        # (the foreign-session refusal touches neither), and the retiring
+        # session's release removes it with the claim.
+        self._plant_admission_record(["release/window.md"])
+        self._seed_claim("session-holder", FRESH_AGE)
+        proc = self._run("release", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertTrue(self.claim.is_file(), "the foreign refusal deleted the claim")
+        self.assertTrue(
+            self.admission_record.is_file(),
+            "the foreign refusal cleared the record while the claim stands",
+        )
+        proc = self._run("release", str(self.plan), "--session", "session-holder")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the release retired the claim but left the admission record",
+        )
+
+    def test_release_operand_source_guards_refuse_and_leave_no_residue(self):
+        # The flag's guard arms: the mode restriction refuses every
+        # non-release mode writing nothing; malformed values and a
+        # nonexistent commit:path refuse as named tool errors; no refused
+        # invocation leaves operand scratch residue.
+        tmpdir = self.scratch / "tmpdir"
+        tmpdir.mkdir()
+        proc = self._run(
+            "take", str(self.plan), "--session", "session-x",
+            "--branch", self.branch,
+            "--worktree-parent", str(self.wt_parent),
+            "--operand-source", "HEAD:README.md",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("--operand-source applies to release only", proc.stderr)
+        self.assertIn("take", proc.stderr)
+        self.assertFalse((self.wt_parent / self.branch).exists())
+
+        proc = self._run(
+            "sweep", "--session", "session-x",
+            "--operand-source", "HEAD:README.md",
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("--operand-source applies to release only", proc.stderr)
+
+        for bad in (
+            "HEAD^docs/history/backlog/x.md",
+            ":docs/history/backlog/x.md",
+            "HEAD^:",
+        ):
+            proc = self._run(
+                "release", str(self.plan), "--session", "session-x",
+                "--operand-source", bad,
+                extra_env={"TMPDIR": str(tmpdir)},
+            )
+            self.assertEqual(proc.returncode, 3, bad)
+            self.assertEqual(
+                self._outcome_line(proc), "OUTCOME: tool_error", bad
+            )
+            self.assertIn("--operand-source must be <commit>:<path>", proc.stderr)
+
+        proc = self._run(
+            "release", str(self.plan), "--session", "session-x",
+            "--operand-source", "HEAD:docs/history/backlog/absent-story.md",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("operand-source object unreadable", proc.stderr)
+        self.assertFalse(
+            list(tmpdir.glob("execution-claim-operand.*")),
+            "a refused release left operand scratch residue",
+        )
+
+    def test_release_operand_source_reads_deleted_operand_from_landing_parent(self):
+        # The covered-row lifecycle: the operand the claim was taken against
+        # is deleted by its own landing commit, so the working-tree
+        # readability requirement cannot be met; --operand-source
+        # <landing>^:<path> reads the bytes from object storage (the slug
+        # derivation unchanged through the basename-preserving recovery) and
+        # the release passes.
+        committed = self.repo / "docs" / "history" / "backlog"
+        committed.mkdir(parents=True)
+        operand = committed / PLAN_NAME
+        operand.write_text("# origin row\n", encoding="utf-8")
+        self._git("add", "docs/history/backlog")
+        self._git("commit", "-q", "-m", "land the covered row")
+        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
+        self._git("commit", "-q", "-m", "delete the covered row")
+        # The deleting commit is the covering landing; the operand exists at
+        # its parent, the commit that carried the row.
+        landing = self._git_out("rev-parse", "HEAD")
+        self.assertFalse(operand.exists())
+        self._seed_claim(
+            "session-dead", FRESH_AGE, plan_path=str(operand)
+        )
+        tmpdir = self.scratch / "tmpdir"
+        tmpdir.mkdir()
+        proc = self._run(
+            "release", str(operand), "--session", "session-dead",
+            "--operand-source",
+            f"{landing}^:docs/history/backlog/{PLAN_NAME}",
+            extra_env={"TMPDIR": str(tmpdir)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            list(tmpdir.glob("execution-claim-operand.*")),
+            "a passing release left operand scratch residue",
+        )
+
+    def test_release_ownership_fence(self):
+        self._seed_claim("session-holder", FRESH_AGE)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._run("release", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+        proc = self._run("release", str(self.plan), "--session", "session-holder")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertFalse(self.claim.exists())
+
+        proc = self._run("release", str(self.plan), "--session", "session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        combined = proc.stdout + proc.stderr
+        self.assertIn(str(self.claim), combined)
+
+    def test_release_without_operand_source_keeps_unreadable_refusal(self):
+        # The flag's absence leaves the current refusal intact: the same
+        # deleted-operand shape refuses as a tool error naming the operand,
+        # and the refusal now carries the bounded remedy naming the flag.
+        committed = self.repo / "docs" / "history" / "backlog"
+        committed.mkdir(parents=True)
+        operand = committed / PLAN_NAME
+        operand.write_text("# origin row\n", encoding="utf-8")
+        self._git("add", "docs/history/backlog")
+        self._git("commit", "-q", "-m", "land the covered row")
+        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
+        self._git("commit", "-q", "-m", "delete the covered row")
+        self._seed_claim(
+            "session-dead", FRESH_AGE, plan_path=str(operand)
+        )
+        proc = self._run("release", str(operand), "--session", "session-dead")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
+        self.assertIn("plan operand not readable", proc.stderr)
+        self.assertIn("--operand-source", proc.stderr)
+        self.assertTrue(
+            self.claim.exists(), "the refused release deleted the claim"
+        )
+
+    def test_restored_worktree_claim_mutation_serialized(self):
+        # The compare-and-delete seam: the takeover and release mutations
+        # re-verify the claim row's session as the unlink's immediately
+        # preceding operation. The fixture states the seam (the grep-plus-rm
+        # pair inside takeover_stale_claim and cmd_release): when the claim
+        # no longer names the expected holder at that last instant, the
+        # mutation aborts and the claim is left untouched.
+        self._seed_claim("session-holder", STALE_AGE)
+        # race the takeover: rewrite the claim to a third session after the
+        # takeover's freshness read but before its compare-and-delete by
+        # making the claim file read as session-c at the last instant
+        holder_wt = None
+        proc = self._take("session-b")
+        # the stale claim of session-holder is taken over; the mutation's
+        # compare-and-delete passed because the row still named session-holder
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-b")
+        # release's compare-and-delete: a foreign session refuses untouched
+        self._seed_claim("session-other", FRESH_AGE)
+        proc = self._release("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("names session session-other", proc.stdout + proc.stderr)
+        self.assertEqual(self._claim_session(), "session-other")
+        del holder_wt
+
+    def test_restored_worktree_refusal_on_unprovable_state(self):
+        # No run manifest at the take target (the seeded worktree sits at a
+        # different path, so the target is not even registered): the
+        # conversion has no context and the historical fresh-foreign
+        # refusal judges.
+        self._seed_worktree(self.branch, "restored-wt-none")
+        (self.wt_parent / self.branch / "docs" / "tmp" / "execute-plan" / SLUG).mkdir(parents=True)
+        self._seed_claim("session-holder", FRESH_AGE)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("fresh foreign claim", proc.stdout + proc.stderr)
+        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
+
+    def test_restored_worktree_takeover_on_verifiable_same_run_state(self):
+        # The registered worktree at the take path carries the canonical
+        # run manifest naming the foreign claim's holder and this exact
+        # plan, the provider answers the prior owner terminal, and the
+        # completed-run boundary holds: the claim converts to the resumer
+        # (atomic replacement, no worktree add, no occupant refusal), and
+        # the manifest canonicalizes to the resumer's identity.
+        wt, manifest = self._conversion_fixture()
+        self._seed_claim("session-holder", FRESH_AGE, branch=self.branch)
+        prior_created = next(
+            line for line in self.claim.read_text(encoding="utf-8").splitlines()
+            if line.startswith("created: ")
+        )
+        proc = self._conversion_take("session-b", runtime="codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("conversion: claim", proc.stdout)
+        self.assertEqual(self._claim_session(), "session-b")
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("runtime_id: codex", claim_text)
+        # The replacement shape: prior created preserved, branch preserved,
+        # updated refreshed; nothing synthesized.
+        self.assertIn(prior_created, claim_text)
+        self.assertIn(f"branch: {self.branch}", claim_text)
+        self.assertIn("session: session-b", claim_text)
+        self.assertTrue(
+            (self.wt_parent / self.branch).is_dir(), "worktree must be adopted, not recreated"
+        )
+        # Manifest canonicalized: resumer identity, legacy aliases gone,
+        # unrelated content preserved.
+        canonical = manifest.read_text(encoding="utf-8")
+        self.assertIn("session_id: session-b", canonical)
+        self.assertIn(f"plan_path: {self.plan}", canonical)
+        self.assertIn(f"run_worktree: {wt}", canonical)
+        self.assertIn(f"run_branch: {self.branch}", canonical)
+        self.assertNotIn("Session:", canonical)
+        self.assertNotIn("Plan:", canonical)
+        self.assertIn("workflow_state: terminal", canonical)
+        self.assertIn("task_boundary:", canonical)
+        # The converted claim survives the exit path (TAKE_OK disarmed the
+        # cleanup): a second read after the process exited is the proof.
+        self.assertEqual(self._claim_session(), "session-b")
+
+    def test_runtime_identity_on_claim_refresh_takeover_and_recreate(self):
+        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        self.claim.unlink()
+        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
+
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
 
     def test_signal_with_foreign_session_claim_keeps_claim_cleans_worktree(self):
         # Owner-check witness on the exit-path cleanup: the claim file is
@@ -1864,210 +2498,103 @@ class TestExecutionClaim(unittest.TestCase):
             "the branch the in-flight add created survived the signal",
         )
 
-    def test_post_acquire_occupant_refusal_over_empty_claims_dir(self):
-        # The post-acquire arm of the branch-occupant refusal over an empty
-        # claims directory: no claim anywhere, a registered worktree holding
-        # the requested branch. The fresh claim this invocation created is
-        # cleaned up by the refusal itself, named by the same cleanup line
-        # the exit-path trap prints, and no worktree is created.
-        self.wt_parent.mkdir()
-        occupied = self._seed_worktree(self.branch, "occupied-wt", parent=self.wt_parent)
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn(str(occupied), combined)
-        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
-        # The post-acquire arm prints the same bounded removal remedy; pin
-        # its copy so the twin refusal sites cannot silently diverge.
-        self.assertIn("bounded removal remedy", combined)
-        self.assertIn("git worktree remove --force", combined)
-        self.assertIn("git branch -D", combined)
-        self.assertIn("re-run take", combined)
-        self.assertFalse(
-            self.claim.exists(), "fresh claim survived the occupant refusal"
-        )
-        self.assertFalse((self.wt_parent / self.branch).exists())
-
-    # -- release -------------------------------------------------------- #
-
-    def test_release_ownership_fence(self):
-        self._seed_claim("session-holder", FRESH_AGE)
-        before = self.claim.read_text(encoding="utf-8")
-        proc = self._run("release", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
-
-        proc = self._run("release", str(self.plan), "--session", "session-holder")
+    def test_slug_derived_through_sot(self):
+        upper_plan = self.scratch / UPPER_PLAN_NAME
+        upper_plan.write_text("# Fixture\n", encoding="utf-8")
+        proc = self._run(*self._claim_args("session-b", plan=upper_plan))
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertFalse(self.claim.exists())
-
-        proc = self._run("release", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn(str(self.claim), combined)
-
-    def test_release_operand_source_reads_deleted_operand_from_landing_parent(self):
-        # The covered-row lifecycle: the operand the claim was taken against
-        # is deleted by its own landing commit, so the working-tree
-        # readability requirement cannot be met; --operand-source
-        # <landing>^:<path> reads the bytes from object storage (the slug
-        # derivation unchanged through the basename-preserving recovery) and
-        # the release passes.
-        committed = self.repo / "docs" / "history" / "backlog"
-        committed.mkdir(parents=True)
-        operand = committed / PLAN_NAME
-        operand.write_text("# origin row\n", encoding="utf-8")
-        self._git("add", "docs/history/backlog")
-        self._git("commit", "-q", "-m", "land the covered row")
-        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
-        self._git("commit", "-q", "-m", "delete the covered row")
-        # The deleting commit is the covering landing; the operand exists at
-        # its parent, the commit that carried the row.
-        landing = self._git_out("rev-parse", "HEAD")
-        self.assertFalse(operand.exists())
-        self._seed_claim(
-            "session-dead", FRESH_AGE, plan_path=str(operand)
-        )
-        tmpdir = self.scratch / "tmpdir"
-        tmpdir.mkdir()
-        proc = self._run(
-            "release", str(operand), "--session", "session-dead",
-            "--operand-source",
-            f"{landing}^:docs/history/backlog/{PLAN_NAME}",
-            extra_env={"TMPDIR": str(tmpdir)},
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertFalse(self.claim.exists())
-        self.assertFalse(
-            list(tmpdir.glob("execution-claim-operand.*")),
-            "a passing release left operand scratch residue",
-        )
-
-    def test_release_without_operand_source_keeps_unreadable_refusal(self):
-        # The flag's absence leaves the current refusal intact: the same
-        # deleted-operand shape refuses as a tool error naming the operand,
-        # and the refusal now carries the bounded remedy naming the flag.
-        committed = self.repo / "docs" / "history" / "backlog"
-        committed.mkdir(parents=True)
-        operand = committed / PLAN_NAME
-        operand.write_text("# origin row\n", encoding="utf-8")
-        self._git("add", "docs/history/backlog")
-        self._git("commit", "-q", "-m", "land the covered row")
-        self._git("rm", "-q", f"docs/history/backlog/{PLAN_NAME}")
-        self._git("commit", "-q", "-m", "delete the covered row")
-        self._seed_claim(
-            "session-dead", FRESH_AGE, plan_path=str(operand)
-        )
-        proc = self._run("release", str(operand), "--session", "session-dead")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
-        self.assertIn("plan operand not readable", proc.stderr)
-        self.assertIn("--operand-source", proc.stderr)
+        expected = self.claims_dir / f"{CANONICAL_SLUG}.md"
         self.assertTrue(
-            self.claim.exists(), "the refused release deleted the claim"
+            expected.is_file(),
+            f"claim filename is not the canonical artifact slug: "
+            f"expected {expected.name} at {expected}",
         )
 
-    def test_release_operand_source_guards_refuse_and_leave_no_residue(self):
-        # The flag's guard arms: the mode restriction refuses every
-        # non-release mode writing nothing; malformed values and a
-        # nonexistent commit:path refuse as named tool errors; no refused
-        # invocation leaves operand scratch residue.
-        tmpdir = self.scratch / "tmpdir"
-        tmpdir.mkdir()
-        proc = self._run(
-            "take", str(self.plan), "--session", "session-x",
-            "--branch", self.branch,
-            "--worktree-parent", str(self.wt_parent),
-            "--operand-source", "HEAD:README.md",
-            extra_env={"TMPDIR": str(tmpdir)},
-        )
+    def test_slug_refusal_dies_in_parent_shell_with_tool_error(self):
+        # A plan whose canonical slug derivation refuses dies in the parent
+        # shell: exit 3 with the final OUTCOME line on stdout (the
+        # environment-failure routing), and no claim written anywhere.
+        bad_plan = self.scratch / "2026-09-01-Underscore_story.md"
+        bad_plan.write_text("# Fixture\n", encoding="utf-8")
+        proc = self._take("session-b", plan=bad_plan)
         self.assertEqual(proc.returncode, 3)
-        self.assertIn("OUTCOME: tool_error", proc.stderr)
-        self.assertEqual(proc.stdout, "")
-        self.assertIn("--operand-source applies to release only", proc.stderr)
-        self.assertIn("take", proc.stderr)
-        self.assertFalse((self.wt_parent / self.branch).exists())
-
-        proc = self._run(
-            "sweep", "--session", "session-x",
-            "--operand-source", "HEAD:README.md",
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
         )
-        self.assertEqual(proc.returncode, 3)
-        self.assertIn("OUTCOME: tool_error", proc.stderr)
-        self.assertEqual(proc.stdout, "")
-        self.assertIn("--operand-source applies to release only", proc.stderr)
-
-        for bad in (
-            "HEAD^docs/history/backlog/x.md",
-            ":docs/history/backlog/x.md",
-            "HEAD^:",
-        ):
-            proc = self._run(
-                "release", str(self.plan), "--session", "session-x",
-                "--operand-source", bad,
-                extra_env={"TMPDIR": str(tmpdir)},
-            )
-            self.assertEqual(proc.returncode, 3, bad)
-            self.assertEqual(
-                self._outcome_line(proc), "OUTCOME: tool_error", bad
-            )
-            self.assertIn("--operand-source must be <commit>:<path>", proc.stderr)
-
-        proc = self._run(
-            "release", str(self.plan), "--session", "session-x",
-            "--operand-source", "HEAD:docs/history/backlog/absent-story.md",
-            extra_env={"TMPDIR": str(tmpdir)},
-        )
-        self.assertEqual(proc.returncode, 3)
-        self.assertIn("operand-source object unreadable", proc.stderr)
+        self.assertIn("artifact slug derivation failed", proc.stderr)
         self.assertFalse(
-            list(tmpdir.glob("execution-claim-operand.*")),
-            "a refused release left operand scratch residue",
+            self.claim.exists(), "a claim was written despite the slug refusal"
         )
 
-    # -- sweep ------------------------------------------------------------ #
-
-    def _sweep(self, session="session-sweeper"):
-        return self._run("sweep", "--session", session)
-
-    def test_sweep_deletes_landed_plan_claim_without_worktree(self):
-        # The completed-archive landing leg: the plan file exists under the
-        # plans root's completed/ archive and the recorded branch resolves
-        # to no worktree, so the claim cannot be a live peer and the sweep
-        # deletes it; the scan itself ends pass.
-        completed = self.repo / "docs" / "history" / "plans" / "completed"
+    def test_sweep_absolute_plans_dir_fact_is_not_double_prefixed(self):
+        # The plans-dir fact guard: an absolute plans_dir value in the
+        # scratch facts document is used as the plans root itself, never
+        # joined onto the primary checkout root (the double prefix would
+        # miss the completed/ archive and misjudge the landedness leg into
+        # a skip on a landed claim).
+        plans_root = self.repo / "docs" / "history" / "plans"
+        completed = plans_root / "completed"
         completed.mkdir(parents=True)
         (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
+        facts_dir = self.repo / ".ai-playbook"
+        facts_dir.mkdir(exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            "```toml\n"
+            f'plans_dir = "{plans_root}"\n'
+            'tmp_dir = "docs/tmp"\n'
+            "```\n",
+            encoding="utf-8",
+        )
         self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
         proc = self._sweep()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
         self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
-        self.assertIn(f"branch {self.branch} holds no worktree", proc.stdout)
         self.assertFalse(self.claim.exists(), "the spent claim survived the sweep")
 
-    def test_sweep_skips_live_claim_with_resolving_worktree(self):
-        # The fail-closed leg: the plan is unlanded (absent from the plans
-        # root, no landing commit names the slug) and the recorded branch is
-        # held by a registered worktree; the claim is skipped untouched with
-        # a one-line reason naming the occupying worktree.
-        live_wt = self._seed_worktree(self.branch, "live-wt")
-        self._seed_claim("session-live", FRESH_AGE, branch=self.branch)
-        before = self.claim.read_text(encoding="utf-8")
+    def test_sweep_clears_admission_record_with_spent_claim_and_keeps_live(self):
+        # Clearing, sweep: the spent claim's record goes with it; a skipped
+        # live claim keeps its record (fail closed per claim).
+        completed = self.repo / "docs" / "history" / "plans" / "completed"
+        completed.mkdir(parents=True)
+        (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
+        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+        self._plant_admission_record(["spent/window.md"])
+        # The live neighbor: a claim the sweep must skip, with its own record.
+        self._seed_worktree("live/kept-branch", "kept-wt")
+        self.claims_dir.mkdir(parents=True, exist_ok=True)
+        kept_claim = self.claims_dir / "admission-sweep-kept.md"
+        kept_claim.write_text(
+            "session: session-live\n"
+            "plan: docs/history/plans/kept-plan.md\n"
+            "created: 2026-11-06T10:00:00Z\n"
+            "updated: 2026-11-06T10:00:00Z\n"
+            "branch: live/kept-branch\n",
+            encoding="utf-8",
+        )
+        kept_record = self.claims_dir / "admission-sweep-kept-admission.json"
+        kept_record.write_text(
+            "{\n"
+            '  "owned_paths": ["kept/window.md"],\n'
+            '  "owned_plan_paths": [],\n'
+            '  "owned_review_paths": []\n'
+            "}\n",
+            encoding="utf-8",
+        )
         proc = self._sweep()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn(f"sweep: skipped {self._physical_claim()}:", proc.stdout)
-        self.assertIn(os.path.realpath(live_wt), proc.stdout)
-        self.assertEqual(
-            self.claim.read_text(encoding="utf-8"),
-            before,
-            "the live claim was modified by the sweep",
+        self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
+        self.assertFalse(self.claim.exists())
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the sweep retired the spent claim but left its admission record",
+        )
+        self.assertIn("sweep: skipped", proc.stdout)
+        self.assertTrue(kept_claim.is_file(), "the sweep deleted the live claim")
+        self.assertTrue(
+            kept_record.is_file(),
+            "the sweep cleared a record while the claim stands",
         )
 
     def test_sweep_deletes_gone_worktree_claim_landed_via_main_history(self):
@@ -2088,10 +2615,91 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
         self.assertFalse(self.claim.exists(), "the spent claim survived the sweep")
 
+    def test_sweep_deletes_landed_plan_claim_without_worktree(self):
+        # The completed-archive landing leg: the plan file exists under the
+        # plans root's completed/ archive and the recorded branch resolves
+        # to no worktree, so the claim cannot be a live peer and the sweep
+        # deletes it; the scan itself ends pass.
+        completed = self.repo / "docs" / "history" / "plans" / "completed"
+        completed.mkdir(parents=True)
+        (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
+        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+        proc = self._sweep()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
+        self.assertIn(f"branch {self.branch} holds no worktree", proc.stdout)
+        self.assertFalse(self.claim.exists(), "the spent claim survived the sweep")
+
+    def test_sweep_inconclusive_scan_names_worktree_and_cause(self):
+        # The stale-sweep skip reason carries the same attribution as the
+        # take refusal: a spendable claim (landed plan, branch gone) whose
+        # scan is inconclusive is skipped untouched, naming the registered
+        # worktree and the discovery cause; the claim bytes stay unchanged.
+        for shape in ("missing facts", "unreadable facts", "no tmp_dir", "symlink"):
+            with self.subTest(shape=shape):
+                if shape == "unreadable facts" and os.geteuid() == 0:
+                    self.skipTest("root reads anything")
+                wt, manifest = self._conversion_fixture()
+                facts = wt / ".ai-playbook" / "facts.md"
+                if shape == "missing facts":
+                    facts.unlink()
+                elif shape == "unreadable facts":
+                    os.chmod(facts, 0)
+                elif shape == "no tmp_dir":
+                    facts.write_text('other_key = "x"\n', encoding="utf-8")
+                else:
+                    target = self.scratch / "elsewhere-sweep-manifest.md"
+                    target.write_text("not the manifest\n", encoding="utf-8")
+                    manifest.unlink()
+                    os.symlink(str(target), str(manifest))
+                completed = self.repo / "docs" / "history" / "plans" / "completed"
+                completed.mkdir(parents=True, exist_ok=True)
+                shutil.copy(self.plan, completed / PLAN_NAME)
+                self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
+                claim_before = self._hash_file(self.claim)
+                manifest_before = self._hash_file(manifest)
+                proc = self._run("sweep", "--session", "session-sweeper")
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                combined = proc.stdout + proc.stderr
+                self.assertIn("preservation scan inconclusive", combined)
+                self.assertIn(shape, combined)
+                self.assertIn(os.path.realpath(str(wt)), combined)
+                if shape == "symlink":
+                    # The symlinked manifest path is named in the reason,
+                    # in git's stored physical form (the take-side twin
+                    # asserts the same attribution on its refusal).
+                    self.assertIn(
+                        os.path.join(
+                            os.path.realpath(str(wt)),
+                            "run-tmp", "execute-plan", SLUG, "manifest.md",
+                        ),
+                        combined,
+                    )
+                self.assertTrue(
+                    self.claim.exists(), "inconclusive scan let sweep delete the claim"
+                )
+                self.assertEqual(self._hash_file(self.claim), claim_before)
+                self.assertEqual(self._hash_file(manifest), manifest_before)
+                # Reset the fixture state the next iteration rebuilds.
+                if facts.exists():
+                    os.chmod(facts, 0o644)
+                self._git("worktree", "remove", "--force", str(wt))
+                self._git("worktree", "prune")
+                self._git("branch", "-D", self.branch)
+                if self.claim.exists():
+                    self.claim.unlink()
+                (self.repo / ".ai-playbook" / "facts.md").write_text(
+                    'tmp_dir = "docs/tmp"\n', encoding="utf-8"
+                )
+
     def test_sweep_lands_claim_under_each_recognized_landing_prefix(self):
-        # The grammar pins, one per recognized LANDING_CLAIM_PREFIXES form
+        # The grammar pins, one per plan-lane LANDING_CLAIM_PREFIXES form
         # (scripts/reverse_squash_guard.py, the landing-subject grammar's
-        # single source): a landing commit subject under each prefix naming
+        # single source; the sweep's intentionally narrower plan-lane
+        # subset - the planless `adhoc: land ` form is excluded by design,
+        # ad-hoc landings name backlog-row slugs, never plan claims): a
+        # landing commit subject under each prefix naming
         # the claim's slug lands the spent claim through the sweep's
         # main-history leg exactly as the legacy `check: land ` form does.
         base = self._git_out("rev-parse", "HEAD")
@@ -2125,6 +2733,55 @@ class TestExecutionClaim(unittest.TestCase):
                     "the spent claim survived the sweep",
                 )
 
+    def test_sweep_skips_landing_subject_naming_longer_slug_token(self):
+        # The hyphen-bounded-segment boundary pin: a landing-shaped subject
+        # under a recognized prefix naming a longer token that merely
+        # contains the claim slug as a prefix or suffix never witnesses a
+        # landing (the matcher's boundary regex classes, the docstring's
+        # guarantee in scripts/execution_claim.sh
+        # sweep_landing_subject_names_slug), so the claim survives with its
+        # bytes unchanged - a loosened boundary keeps this pin red.
+        for longer in (f"{SLUG}-extended", f"pre-{SLUG}"):
+            with self.subTest(longer=longer):
+                self._git(
+                    "commit", "--allow-empty", "-q", "-m",
+                    f"check: land {longer} (sweep witness landing)",
+                )
+                self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
+                before = self.claim.read_text(encoding="utf-8")
+                proc = self._sweep()
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+                self.assertIn(
+                    f"sweep: skipped {self._physical_claim()}:", proc.stdout
+                )
+                self.assertEqual(
+                    self.claim.read_text(encoding="utf-8"),
+                    before,
+                    "the longer-token claim was modified by the sweep",
+                )
+
+
+class TestExecutionClaimShard04(_ExecutionClaimFixtureMixin, unittest.TestCase):
+    """Contiguous execution-claim test shard 4 of 4."""
+
+    def test_sweep_preserves_claim_with_registered_manifest(self):
+        # Sweep-side preservation: a spent-looking claim (landed plan, no
+        # branch occupant) whose run manifest remains at its registered
+        # worktree is skipped untouched, naming the registered worktree.
+        wt, manifest = self._conversion_fixture()
+        completed = self.repo / "docs" / "history" / "plans" / "completed"
+        completed.mkdir(parents=True)
+        shutil.copy(self.plan, completed / PLAN_NAME)
+        self._seed_claim("session-holder", STALE_AGE, branch="fixture/gone-branch")
+        proc = self._run("sweep", "--session", "session-sweeper")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertTrue(self.claim.exists(), "preserved claim was deleted by sweep")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("run manifest remains at its registered worktree", combined)
+        self.assertIn("deleted 0", combined)
+
     def test_sweep_skips_claim_under_unrecognized_landing_prefix(self):
         # The fail-closed skip: an unrecognized prefix is not part of the
         # landing-subject grammar's closed vocabulary, so a subject naming
@@ -2143,6 +2800,25 @@ class TestExecutionClaim(unittest.TestCase):
             self.claim.read_text(encoding="utf-8"),
             before,
             "the unrecognized-prefix claim was modified by the sweep",
+        )
+
+    def test_sweep_skips_live_claim_with_resolving_worktree(self):
+        # The fail-closed leg: the plan is unlanded (absent from the plans
+        # root, no landing commit names the slug) and the recorded branch is
+        # held by a registered worktree; the claim is skipped untouched with
+        # a one-line reason naming the occupying worktree.
+        live_wt = self._seed_worktree(self.branch, "live-wt")
+        self._seed_claim("session-live", FRESH_AGE, branch=self.branch)
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._sweep()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(f"sweep: skipped {self._physical_claim()}:", proc.stdout)
+        self.assertIn(os.path.realpath(live_wt), proc.stdout)
+        self.assertEqual(
+            self.claim.read_text(encoding="utf-8"),
+            before,
+            "the live claim was modified by the sweep",
         )
 
     def test_sweep_skips_plan_parked_under_plans_root_despite_landing_subject(self):
@@ -2197,121 +2873,167 @@ class TestExecutionClaim(unittest.TestCase):
             "the parked plans: file claim was modified by the sweep",
         )
 
-    def test_sweep_absolute_plans_dir_fact_is_not_double_prefixed(self):
-        # The plans-dir fact guard: an absolute plans_dir value in the
-        # scratch facts document is used as the plans root itself, never
-        # joined onto the primary checkout root (the double prefix would
-        # miss the completed/ archive and misjudge the landedness leg into
-        # a skip on a landed claim).
-        plans_root = self.repo / "docs" / "history" / "plans"
-        completed = plans_root / "completed"
-        completed.mkdir(parents=True)
-        (completed / PLAN_NAME).write_text("# archived plan\n", encoding="utf-8")
-        facts_dir = self.repo / ".ai-playbook"
-        facts_dir.mkdir(exist_ok=True)
-        (facts_dir / "facts.md").write_text(
-            "```toml\n"
-            f'plans_dir = "{plans_root}"\n'
-            'tmp_dir = "docs/tmp"\n'
-            "```\n",
-            encoding="utf-8",
-        )
-        self._seed_claim("session-dead", STALE_AGE, branch=self.branch)
-        proc = self._sweep()
+    def test_take_cold_start_creates_both(self):
+        self.assertEqual(self._git_out("config", "user.name"), "Fixture")
+        self.assertEqual(self._git_out("config", "user.email"),
+                         "fixture@example.invalid")
+        proc = self._take("session-a")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertIn(f"sweep: deleted {self._physical_claim()}", proc.stdout)
-        self.assertFalse(self.claim.exists(), "the spent claim survived the sweep")
-
-    # -- refresh -------------------------------------------------------- #
-
-    def test_refresh_restamps_recreates_and_fences(self):
-        self._seed_claim("session-b", STALE_AGE)
-        before = self.claim.read_text(encoding="utf-8")
-        created_before = [
-            line for line in before.splitlines() if line.startswith("created: ")
-        ][0]
-        proc = self._run(
-            "refresh", str(self.plan), "--session", "session-b", "--base", "main"
+        # Also proves the exit-path cleanup disarmed on the success path:
+        # an armed trap would have deleted the claim at script exit.
+        self.assertTrue(self.claim.is_file(), "claim missing after cold start")
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn("session: session-a", claim_text)
+        # The take requires --branch, so the claim records the branch line
+        # beside the five frontmatter lines (including runtime_id; the recorded identity the
+        # takeover and recreate paths must carry).
+        self.assertIn(f"branch: {self.branch}", claim_text)
+        self.assertTrue(
+            (self.wt_parent / self.branch).is_dir(), "worktree missing after take"
         )
+
+    def test_take_empty_seed_removes_prior_record_and_stays_conservative(self):
+        # The replace contract holds on the conservative arms too (Terms: a
+        # new-owner claim creation "writes a fresh seed and replaces any
+        # prior admission record for that slug"): a takeover whose covering
+        # plan has no `Files:` list removes the prior record for the slug
+        # instead of leaving it standing as the new owner's owned set; the
+        # take still succeeds and the warning names the plan.
+        self._plant_admission_record(["prior/only-path.md"])
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._take("session-b")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        after = self.claim.read_text(encoding="utf-8")
-        self.assertNotEqual(after, before)
-        self.assertIn("base: main", after)
-        self.assertIn(created_before, after)
-        stamp = self._updated_stamp()
-        parsed = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
+        self.assertIn("takeover", proc.stdout)
+        self.assertIn(
+            "admission-record", proc.stderr,
+            "no empty-seed warning on stderr",
         )
-        age = (datetime.now(timezone.utc) - parsed).total_seconds()
-        self.assertLess(age, 300, "refresh did not re-stamp updated: to now")
+        self.assertIn(
+            str(self.plan), proc.stderr,
+            "the empty-seed warning does not name the plan",
+        )
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the empty-seed takeover left the prior record standing",
+        )
 
-        self.claim.unlink()
-        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+    def test_take_empty_seed_warns_names_plan_and_writes_no_record(self):
+        # Empty seed: the shared setUp plan carries no `Files:` list, so the
+        # derivation reads as an empty seed; the take still succeeds, a
+        # stderr warning names the plan, and no record is written.
+        proc = self._take("session-a")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(self.claim.is_file(), "refresh did not recreate the claim")
-        recreated = self.claim.read_text(encoding="utf-8")
-        self.assertIn("session: session-b", recreated)
-        self.assertNotIn("base:", recreated)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn(
+            "admission-record", proc.stderr,
+            "no empty-seed warning on stderr",
+        )
+        self.assertIn(
+            str(self.plan), proc.stderr,
+            "the empty-seed warning does not name the plan",
+        )
+        self.assertFalse(
+            self.admission_record.exists(), "an empty seed wrote a record"
+        )
+        self.assertTrue(self.claim.is_file(), "the fresh claim did not survive")
 
+    def test_take_failure_cleanup_clears_admission_record(self):
+        # Clearing, take-mode failure cleanup: while the in-flight take's
+        # fresh claim stands, the fresh seed stands beside it; the signal's
+        # exit-path cleanup (lockless, owner check gated) then removes the
+        # record before the claim, so neither survives the failed take.
+        self._write_plan_with_files()
+        unblock = self.scratch / "unblock-git-add"
+        registered = self.scratch / "git-add-registered"
+        proc = self._take_popen("session-b", unblock)
+        try:
+            deadline = time.monotonic() + 30
+            while not self.claim.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the claim never appeared; the script exited or "
+                        f"stalled before parking (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            while not registered.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the worktree add never went in flight over a "
+                        "registered worktree; the script exited or stalled "
+                        f"after the claim (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            # The claim stands: its fresh seed stands beside it. The seed's
+            # shell-out completes just after the claim's create (the parked
+            # add bought the time), so the same bounded poll pins it.
+            while not self.admission_record.exists():
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    self.fail(
+                        "the admission record never appeared beside the "
+                        f"standing claim (rc={proc.poll()})"
+                    )
+                time.sleep(0.01)
+            self.assertTrue(
+                self.admission_record.is_file(),
+                "the fresh claim stood without its admission record",
+            )
+            os.killpg(proc.pid, signal.SIGINT)
+            unblock.write_text("go", encoding="utf-8")
+            proc.communicate(timeout=60)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+        self.assertEqual(proc.returncode, 130)
+        self.assertFalse(
+            self.claim.exists(), "the fresh claim survived the signal"
+        )
+        self.assertFalse(
+            self.admission_record.exists(),
+            "the cleanup left the fresh claim's admission record",
+        )
+
+    def test_take_fresh_foreign_refusal(self):
+        holder_wt = self._seed_worktree(self.branch, "holder-wt")
         self._seed_claim("session-holder", FRESH_AGE)
         before = self.claim.read_text(encoding="utf-8")
-        proc = self._run("refresh", str(self.plan), "--session", "session-b")
+        proc = self._take("session-b")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("session-holder", combined)
+        # The age assertion is discriminating: the literal "claim age:"
+        # followed by a numeric second count ("age" alone matches
+        # unrelated words like "agents").
+        self.assertRegex(combined, r"claim age: \d+s \(updated: ")
+        self.assertIn(str(holder_wt), combined)
+        self.assertIn("override", combined)
+        self.assertFalse(
+            (self.wt_parent / self.branch).exists(), "worktree created despite refusal"
+        )
         self.assertEqual(self.claim.read_text(encoding="utf-8"), before)
 
-    # -- race-retry witnesses (the shared claim retry gate, plan
-    # 2026-10-13-machinery-script-refactor-program, Task 3) ---------------- #
-
-    def test_take_permanently_contended_claims_dir_fails_after_third_attempt(self):
-        # Witness A, acquire_claim's loop: a permanently contended claims
-        # directory (the dangling symlink at the claim path) makes every
-        # noclobber create lose deterministically and root-proofly, so the
-        # loop burns attempts one through three and the ceiling fires with
-        # the racing tool error and the tool-error exit; the take creates
-        # nothing and the contender survives untouched.
-        self._plant_dangling_symlink_at_claim()
-        proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
-        )
+    def test_take_lost_then_won_sets_cold_start_cleanup_flags(self):
+        # Witness B's flag half: the attempt-2 win must leave the state the
+        # cleanup and exit traps consume exactly as a cold start sets it
+        # (the claim is this invocation's own fresh claim, no arm-3
+        # resume). A take whose worktree add fails after the attempt-2
+        # create refuses with the cold-start fresh-claim cleanup line,
+        # never the arm-3 keep line, and leaves no claim behind.
+        shim_bin, _marker = self._lost_then_won_date_shim()
+        target = self.wt_parent / self.branch
+        target.mkdir(parents=True)
+        (target / "collision").write_text("not a worktree", encoding="utf-8")
+        proc = self._take("session-b", path_prepend=shim_bin)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         combined = proc.stdout + proc.stderr
-        self.assertIn(
-            f"error: claims directory kept racing at {self._physical_claim()}; "
-            "re-derive the state from disk",
-            combined,
-        )
-        self.assertNotIn("cleanup:", combined)
-        self.assertTrue(
-            os.path.islink(str(self.claim)), "the planted contender did not survive"
-        )
-        self.assertFalse((self.wt_parent / self.branch).exists())
-        self.assertFalse(
-            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
-            "the contended take stranded a branch",
-        )
-
-    def test_refresh_permanently_contended_claims_dir_fails_after_third_attempt(self):
-        # Witness A, cmd_refresh's loop: the same contended fixture against
-        # the recreate loop; the ceiling fires with the identical error
-        # text and exit class, and the contender survives untouched.
-        self._plant_dangling_symlink_at_claim()
-        proc = self._run("refresh", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
-        )
-        self.assertIn(
-            f"error: claims directory kept racing at {self._physical_claim()}; "
-            "re-derive the state from disk",
-            proc.stdout + proc.stderr,
-        )
-        self.assertTrue(
-            os.path.islink(str(self.claim)), "the planted contender did not survive"
-        )
+        self.assertIn("worktree add failed", combined)
+        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
+        self.assertNotIn("arm-3", combined)
+        self.assertFalse(self.claim.exists(), "the attempt-2 claim was not cleaned")
 
     def test_take_lost_then_won_succeeds_on_attempt_two_cold_start_shape(self):
         # Witness B, acquire_claim's loop: the contender (the date shim)
@@ -2346,144 +3068,48 @@ class TestExecutionClaim(unittest.TestCase):
         )
         self.assertTrue((self.wt_parent / self.branch).is_dir())
 
-    def test_take_lost_then_won_sets_cold_start_cleanup_flags(self):
-        # Witness B's flag half: the attempt-2 win must leave the state the
-        # cleanup and exit traps consume exactly as a cold start sets it
-        # (the claim is this invocation's own fresh claim, no arm-3
-        # resume). A take whose worktree add fails after the attempt-2
-        # create refuses with the cold-start fresh-claim cleanup line,
-        # never the arm-3 keep line, and leaves no claim behind.
-        shim_bin, _marker = self._lost_then_won_date_shim()
+    def test_take_own_claim_existing_worktree_fails_keeping_claim(self):
+        self._seed_claim("session-b", FRESH_AGE)
         target = self.wt_parent / self.branch
-        target.mkdir(parents=True)
-        (target / "collision").write_text("not a worktree", encoding="utf-8")
-        proc = self._take("session-b", path_prepend=shim_bin)
+        self._git("worktree", "add", "-b", self.branch, str(target))
+        before = self.claim.read_text(encoding="utf-8")
+        proc = self._take("session-b")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
         combined = proc.stdout + proc.stderr
-        self.assertIn("worktree add failed", combined)
-        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
-        self.assertNotIn("arm-3", combined)
-        self.assertFalse(self.claim.exists(), "the attempt-2 claim was not cleaned")
-
-    def test_refresh_lost_then_won_succeeds_on_attempt_two(self):
-        # Witness B, cmd_refresh's loop: the recreate loses the first
-        # create to the planted link and wins the second after the shim
-        # releases; the recreate evidence line is the cold recreate shape
-        # and the claim names this session.
-        shim_bin, marker = self._lost_then_won_date_shim()
-        proc = self._run(
-            "refresh", str(self.plan), "--session", "session-b",
-            path_prepend=shim_bin,
+        self.assertIn(str(target), combined)
+        self.assertEqual(
+            self.claim.read_text(encoding="utf-8"), before, "claim was not kept"
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertTrue(marker.is_file(), "the contender never planted its loss")
-        self.assertIn("recreated:", proc.stdout)
-        self.assertNotIn("kept racing", proc.stdout + proc.stderr)
-        self.assertNotIn("refresh refused", proc.stdout + proc.stderr)
-        self.assertEqual(self._claim_session(), "session-b")
 
-    # -- claim mode ------------------------------------------------------ #
-
-    def test_claim_mode_creates_without_worktree(self):
-        proc = self._run(*self._claim_args("session-b"))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        self.assertTrue(self.claim.is_file())
+    def test_take_permanently_contended_claims_dir_fails_after_third_attempt(self):
+        # Witness A, acquire_claim's loop: a permanently contended claims
+        # directory (the dangling symlink at the claim path) makes every
+        # noclobber create lose deterministically and root-proofly, so the
+        # loop burns attempts one through three and the ceiling fires with
+        # the racing tool error and the tool-error exit; the take creates
+        # nothing and the contender survives untouched.
+        self._plant_dangling_symlink_at_claim()
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(
+            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertIn(
+            f"error: claims directory kept racing at {self._physical_claim()}; "
+            "re-derive the state from disk",
+            combined,
+        )
+        self.assertNotIn("cleanup:", combined)
+        self.assertTrue(
+            os.path.islink(str(self.claim)), "the planted contender did not survive"
+        )
+        self.assertFalse((self.wt_parent / self.branch).exists())
         self.assertFalse(
-            (self.wt_parent / self.branch).exists(),
-            "claim mode created a worktree directory",
+            self._git_ok("rev-parse", "--verify", "-q", "refs/heads/" + self.branch),
+            "the contended take stranded a branch",
         )
-
-        self.claim.unlink()
-        self._seed_claim("session-holder", FRESH_AGE)
-        proc = self._run(*self._claim_args("session-b"))
-        self.assertEqual(proc.returncode, 1)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
-        combined = proc.stdout + proc.stderr
-        self.assertIn("session-holder", combined)
-        self.assertRegex(combined, r"claim age: \d+s \(updated: ")
-        self.assertIn("override", combined)
-
-    # -- recorded branch and start commit (plan
-    # 2026-10-13-execute-plan-company-task-branch, Task 2) ---------------- #
-    # Script tests cover the claim file only: the branch-mismatch
-    # stand-down is placement-arm behavior with no script witness.
-
-    def _start_commit_sha(self) -> str:
-        self._git("commit", "--allow-empty", "-q", "-m", "start commit")
-        return self._git_out("rev-parse", "HEAD")
-
-    def test_claim_records_branch_and_start_commit_lines(self):
-        expected_sha = self._start_commit_sha()
-        # The operand is HEAD, not the sha: resolution is discriminated by
-        # requiring the recorded value to be the full 40-hex sha HEAD
-        # resolves to, never the operand form or an abbreviation.
-        self.assertRegex(expected_sha, r"^[0-9a-f]{40}$")
-        proc = self._run(
-            "claim", str(self.plan),
-            "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", "HEAD",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn(f"branch: {self.branch}", claim_text)
-        # The recorded value is the resolved sha, not the operand form.
-        self.assertIn(f"start-commit: {expected_sha}", claim_text)
-
-    def test_runtime_identity_on_claim_refresh_takeover_and_recreate(self):
-        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
-
-        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
-
-        self.claim.unlink()
-        proc = self._run("refresh", str(self.plan), "--session", "session-b", "--runtime", "codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
-
-        self._seed_claim("session-dead", STALE_AGE)
-        proc = self._run("claim", str(self.plan), "--session", "session-b", "--runtime", "codex")
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
-
-    def test_refresh_preserves_the_claims_recorded_runtime(self):
-        proc = self._run(
-            "claim", str(self.plan), "--session", "session-b", "--runtime", "zcode"
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        proc = self._run(
-            "refresh", str(self.plan), "--session", "session-b", "--runtime", "codex"
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: zcode", self.claim.read_text(encoding="utf-8"))
-
-    def test_git_helpers_ignore_ambient_repository_overrides(self):
-        self._install_ambient_git_overrides()
-        self._git("status", "--short")
-        proc = self._run(
-            "claim", str(self.plan), "--session", "session-b", "--runtime", "codex"
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
-        with patch.object(subprocess, "Popen") as popen:
-            self._take_popen("session-popen", self.scratch / "unblock")
-        child_env = popen.call_args.kwargs["env"]
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-            self.assertNotIn(name, child_env, f"ambient Git variable {name} escaped the fixture")
-
-    def test_missing_or_invalid_runtime_is_shared_unknown(self):
-        for args in ([], ["--runtime", "not-a-runtime"]):
-            self.claim.unlink(missing_ok=True)
-            proc = self._run("claim", str(self.plan), "--session", "session-b", *args)
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertIn("runtime_id: unknown", self.claim.read_text(encoding="utf-8"))
 
     def test_take_records_runtime_identity(self):
         proc = self._run(
@@ -2493,163 +3119,111 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("runtime_id: codex", self.claim.read_text(encoding="utf-8"))
 
-    def test_claim_unresolvable_start_commit_is_usage_refusal_writing_nothing(self):
-        proc = self._run(
-            "claim", str(self.plan),
-            "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", "not-a-commit",
-        )
-        # Usage violations are tool errors per the argparse-override
-        # precedent: exit 3, usage text, error, and the final OUTCOME line
-        # all on stderr, stdout empty, and no claim written anywhere.
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(proc.stdout, "")
-        self.assertEqual(proc.stderr.strip().splitlines()[-1], "OUTCOME: tool_error")
-        self.assertIn("Usage: execution_claim.sh", proc.stderr)
-        self.assertIn("start-commit", proc.stderr)
-        self.assertFalse(
-            self.claim.exists(),
-            "a claim was written despite the unresolvable start commit",
-        )
+    def test_take_sigint_after_claim_creation_cleans_fresh_claim(self):
+        self._take_signalled_at_fresh_claim(signal.SIGINT, 130)
 
-    def test_refresh_preserves_branch_and_start_commit(self):
-        # Refresh carries neither --branch nor --start-commit: the recorded
-        # identity lines survive the re-stamp untouched.
-        start_sha = self._start_commit_sha()
-        proc = self._run(
-            "claim", str(self.plan),
-            "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", start_sha,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        before = self.claim.read_text(encoding="utf-8")
-        self.assertIn(f"branch: {self.branch}", before)
-        self.assertIn(f"start-commit: {start_sha}", before)
-        proc = self._run("refresh", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        after = self.claim.read_text(encoding="utf-8")
-        self.assertIn(f"branch: {self.branch}", after)
-        self.assertIn(f"start-commit: {start_sha}", after)
+    def test_take_sigterm_after_claim_creation_cleans_fresh_claim(self):
+        self._take_signalled_at_fresh_claim(signal.SIGTERM, 143)
 
-    def test_claim_takeover_rebuild_carries_branch_and_start_commit(self):
-        # The takeover rebuild path (create_claim_noclobber) must carry the
-        # recorded identity: a takeover never silently drops it.
-        start_sha = self._start_commit_sha()
+    def test_take_stale_claim_with_occupied_worktree(self):
+        occupied = self._seed_worktree(self.branch, "dead-wt")
         self._seed_claim("session-dead", STALE_AGE)
-        proc = self._run(
-            "claim", str(self.plan),
-            "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", start_sha,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("takeover", proc.stdout)
-        claim_text = self.claim.read_text(encoding="utf-8")
-        self.assertIn("session: session-b", claim_text)
-        self.assertIn(f"branch: {self.branch}", claim_text)
-        self.assertIn(f"start-commit: {start_sha}", claim_text)
-
-    def test_refresh_recreate_carries_branch_and_start_commit(self):
-        # The refresh recreate path (the same create_claim_noclobber write)
-        # carries both lines from the recreating invocation's values.
-        start_sha = self._start_commit_sha()
-        proc = self._run(
-            "claim", str(self.plan),
-            "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", start_sha,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.claim.unlink()
-        proc = self._run(
-            "refresh", str(self.plan), "--session", "session-b",
-            "--branch", self.branch,
-            "--start-commit", start_sha,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        recreated = self.claim.read_text(encoding="utf-8")
-        self.assertIn(f"branch: {self.branch}", recreated)
-        self.assertIn(f"start-commit: {start_sha}", recreated)
-
-    # -- slug derivation -------------------------------------------------- #
-
-    def test_slug_derived_through_sot(self):
-        upper_plan = self.scratch / UPPER_PLAN_NAME
-        upper_plan.write_text("# Fixture\n", encoding="utf-8")
-        proc = self._run(*self._claim_args("session-b", plan=upper_plan))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        expected = self.claims_dir / f"{CANONICAL_SLUG}.md"
-        self.assertTrue(
-            expected.is_file(),
-            f"claim filename is not the canonical artifact slug: "
-            f"expected {expected.name} at {expected}",
-        )
-
-    # -- tool error -------------------------------------------------------- #
-
-    def test_missing_primary_checkout_tool_error(self):
-        nonrepo = self.scratch / "not-a-repo"
-        nonrepo.mkdir()
-        proc = self._take("session-b", cwd=nonrepo)
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
-
-    def test_slug_refusal_dies_in_parent_shell_with_tool_error(self):
-        # A plan whose canonical slug derivation refuses dies in the parent
-        # shell: exit 3 with the final OUTCOME line on stdout (the
-        # environment-failure routing), and no claim written anywhere.
-        bad_plan = self.scratch / "2026-09-01-Underscore_story.md"
-        bad_plan.write_text("# Fixture\n", encoding="utf-8")
-        proc = self._take("session-b", plan=bad_plan)
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
-        )
-        self.assertIn("artifact slug derivation failed", proc.stderr)
-        self.assertFalse(
-            self.claim.exists(), "a claim was written despite the slug refusal"
-        )
-
-    def test_claim_missing_session_line_dies_with_tool_error_in_all_modes(self):
-        # A readable claim carrying no session: line is an unsupported
-        # record shape: take, refresh, and release all die in the parent
-        # shell with exit 3 and a final OUTCOME line on stdout, and the
-        # malformed claim is left untouched throughout.
-        self.claims_dir.mkdir(parents=True, exist_ok=True)
-        self.claim.write_text(
-            f"plan: {self.plan}\ncreated: 2026-10-07T00:00:00Z\n",
-            encoding="utf-8",
-        )
         before = self.claim.read_text(encoding="utf-8")
-
         proc = self._take("session-b")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        combined = proc.stdout + proc.stderr
+        self.assertIn(str(occupied), combined)
+        self.assertIn("adopt", combined)
+        self.assertIn("remove", combined)
+        # The bounded removal remedy names both removal commands in order
+        # (worktree removal, then branch deletion) before the take re-run.
+        self.assertIn("git worktree remove --force", combined)
+        self.assertIn("git branch -D", combined)
+        self.assertLess(
+            combined.index("git worktree remove --force"),
+            combined.index("git branch -D"),
+            "the removal remedy does not order worktree removal before branch deletion",
         )
-        self.assertIn("no session: line", proc.stdout + proc.stderr)
-        self.assertFalse((self.wt_parent / self.branch).exists())
-
-        proc = self._run("refresh", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
-        )
-
-        proc = self._run("release", str(self.plan), "--session", "session-b")
-        self.assertEqual(proc.returncode, 3)
-        self.assertEqual(
-            proc.stdout.strip().splitlines()[-1], "OUTCOME: tool_error"
-        )
+        self.assertIn("re-run take", combined)
+        # The occupant check runs before the takeover arm: the refusal
+        # preserves the dead session's claim (destroying it would erase the
+        # registry entry the next reader needs) and creates no fresh claim.
         self.assertEqual(
             self.claim.read_text(encoding="utf-8"),
             before,
-            "the malformed claim was modified",
+            "the stale foreign claim was not preserved by the occupant refusal",
+        )
+        self.assertFalse((self.wt_parent / self.branch).exists())
+
+    def test_take_stale_takeover(self):
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("takeover", proc.stdout)
+        self.assertIn("session-dead", proc.stdout)
+        self.assertIn("session: session-b", self.claim.read_text(encoding="utf-8"))
+        self.assertTrue((self.wt_parent / self.branch).is_dir())
+
+    def test_take_stale_takeover_replaces_prior_admission_record(self):
+        # New-owner seeding, stale-foreign-claim takeover: the prior record
+        # for the slug is replaced with the fresh seed.
+        self._plant_admission_record(["prior/only-path.md"])
+        expected_seed = self._write_plan_with_files()
+        self._seed_claim("session-dead", STALE_AGE)
+        proc = self._take("session-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("takeover", proc.stdout)
+        payload = self._read_admission_payload()
+        self.assertEqual(payload["owned_paths"], expected_seed)
+        self.assertNotIn("prior/only-path.md", payload["owned_paths"])
+
+    def test_take_uncreatable_worktree_parent_cleans_fresh_claim(self):
+        # The worktree parent path is an existing regular file, so the
+        # parent creation fails after the claim was created; the take must
+        # still leave no claim behind (tool_error, claim absent).
+        blocker = self.scratch / "wt-parent-blocker"
+        blocker.write_text("a file, not a directory", encoding="utf-8")
+        proc = self._take("session-b", parent=blocker)
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("worktree parent not creatable", combined)
+        self.assertIn("cleanup: removed this invocation's fresh claim", combined)
+        self.assertFalse(
+            self.claim.exists(),
+            "fresh claim stranded by the worktree-parent failure",
         )
 
-    # -- usage contract -------------------------------------------------- #
+    def test_take_with_base_seeds_worktree_head_and_claim_base_line(self):
+        # --base start point: the created worktree's HEAD equals the seeded
+        # ref AND differs from the branch tip (the fixture commits once
+        # more after capturing the base, so base != HEAD and the assertion
+        # discriminates: a take ignoring --base would start at the tip and
+        # fail here), and the claim carries the base line (the base line is
+        # written after the worktree exists, on the take's success path).
+        self._git("commit", "--allow-empty", "-q", "-m", "base commit")
+        base_sha = self._git_out("rev-parse", "HEAD")
+        self._git("commit", "--allow-empty", "-q", "-m", "ahead of base")
+        tip_sha = self._git_out("rev-parse", "HEAD")
+        self.assertNotEqual(base_sha, tip_sha)
+        proc = self._take("session-b", base=base_sha)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        head = self._git_out(
+            "-C", str(self.wt_parent / self.branch), "rev-parse", "HEAD"
+        )
+        self.assertEqual(head, base_sha, "worktree HEAD is not the --base ref")
+        self.assertNotEqual(
+            head,
+            tip_sha,
+            "worktree HEAD equals the branch tip; the base ref is not discriminated",
+        )
+        claim_text = self.claim.read_text(encoding="utf-8")
+        self.assertIn(f"base: {base_sha}", claim_text, "claim carries no base line")
+        self.assertIn(f"base: {base_sha}", proc.stdout)
 
     def test_usage_violation_exits_3_with_usage_text_on_stderr(self):
         # Usage violations are tool errors per the argparse-override
@@ -2669,12 +3243,119 @@ class TestExecutionClaim(unittest.TestCase):
         self.assertEqual(proc.stderr.strip().splitlines()[-1], "OUTCOME: tool_error")
         self.assertIn("Usage: execution_claim.sh", proc.stderr)
 
-    def test_help_is_metadata_exit_without_outcome_line(self):
-        proc = self._run("--help")
+
+class TestExecutionClaimProbe(_ExecutionClaimFixtureMixin, unittest.TestCase):
+    """The read-only claim-presence probe mode (the dispatch-time claim
+    re-check, plan docs/history/plans/2026-11-10-exec-dispatch-claim-recheck
+    Task 1): classification through the take path's freshness substrate,
+    the fresh-foreign refusal, staleness passing, mutation-free reads,
+    the torn-read re-read, and the unknown-mode gateway-skew refusal."""
+
+    def _probe(self, session, path_prepend=None):
+        return self._run(
+            "probe", str(self.plan), "--session", session,
+            path_prepend=path_prepend,
+        )
+
+    def test_probe_absent_claim_passes_without_creating_claims_dir(self):
+        # The probe mutates nothing: an absent claim reads pass with the
+        # `claim: absent` classification and creates no claims directory
+        # (the mkdir carve-out is witnessed, not assumed).
+        proc = self._probe("session-self")
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("Usage: execution_claim.sh", proc.stdout)
-        self.assertNotIn("OUTCOME:", proc.stdout)
-        self.assertNotIn("OUTCOME:", proc.stderr)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("claim: absent", proc.stdout)
+        self.assertFalse(self.claims_dir.exists())
+
+    def test_probe_absent_claim_leaves_existing_parent_dir_untouched(self):
+        # Even with the tmp parents present, no claims directory appears.
+        self.claims_dir.parent.mkdir(parents=True, exist_ok=True)
+        proc = self._probe("session-self")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("claim: absent", proc.stdout)
+        self.assertFalse(self.claims_dir.exists())
+
+    def test_probe_fresh_own_at_7199s_passes_with_stamp(self):
+        # FRESHNESS_SECS=7200 boundary, fresh-own side: one second inside
+        # the window with the caller's own session reads fresh-own and
+        # passes; the classification line carries session= and updated=
+        # (the single-sourced output rule) and the claim bytes are
+        # unchanged after the run (mutation-free read).
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        self._seed_claim("session-self", timedelta(seconds=7199), now=seed_now)
+        before = self.claim.read_bytes()
+        proc = self._probe("session-self", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("claim: fresh-own session=session-self updated=", proc.stdout)
+        self.assertEqual(self.claim.read_bytes(), before)
+
+    def test_probe_fresh_foreign_at_7199s_refuses(self):
+        # FRESHNESS_SECS=7200 boundary, refuse side: one second inside the
+        # window with a foreign holder session reads fresh-foreign and
+        # refuses (exit 1, OUTCOME: fail on stdout, classification and
+        # evidence on stderr with the holder session, the updated stamp,
+        # and the override route pointer).
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        self._seed_claim("session-holder", timedelta(seconds=7199), now=seed_now, branch=self.branch)
+        proc = self._probe("session-b", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: fail")
+        self.assertIn("claim: fresh-foreign session=session-holder updated=", proc.stderr)
+        self.assertIn("override:", proc.stderr)
+        # The probe mutates nothing on the refusal path either.
+        self.assertTrue(self.claim.exists())
+
+    def test_probe_fresh_foreign_carries_occupying_worktree_evidence(self):
+        # When the claim's branch maps to a registered worktree, the
+        # refusal carries occupying-worktree=<path> (evidence, not a
+        # fence axis).
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        wt = self._seed_worktree(self.branch, "occupied-wt")
+        self._seed_claim("session-holder", timedelta(seconds=7199), now=seed_now, branch=self.branch)
+        proc = self._probe("session-b", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("occupying-worktree=%s" % os.path.realpath(wt), proc.stderr)
+
+    def test_probe_stale_foreign_at_7200s_passes(self):
+        # FRESHNESS_SECS=7200 boundary, stale side: exactly one cadence
+        # period of age is stale and passes (never blocks), matching the
+        # in-repo pattern twin test_freshness_boundary_7200s_takes_over.
+        seed_epoch = 1_700_000_000
+        seed_now = datetime.fromtimestamp(seed_epoch, timezone.utc)
+        self._seed_claim("session-holder", timedelta(seconds=7200), now=seed_now)
+        proc = self._probe("session-b", path_prepend=self._date_shim(seed_epoch))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: pass")
+        self.assertIn("claim: stale session=session-holder updated=", proc.stdout)
+
+    def test_probe_malformed_claim_tool_error_after_reread(self):
+        # A claim file read that fails parsing re-reads once before
+        # reporting the tool error (the torn-read rule); a persistently
+        # malformed record (no session line, no parseable updated line)
+        # exits 3 with OUTCOME: tool_error on stdout.
+        self.claims_dir.mkdir(parents=True, exist_ok=True)
+        self.claim.write_text("garbage bytes, no frontmatter\n", encoding="utf-8")
+        proc = self._probe("session-self")
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self._outcome_line(proc), "OUTCOME: tool_error")
+
+    def test_probe_unknown_mode_usage_refusal(self):
+        # The unknown-mode usage refusal is the gateway-skew discriminator
+        # Task 2's skew matcher keys on: exit 3, the `unknown mode:` usage
+        # line on stderr (the existing usage-violation contract).
+        proc = self._run("probes", str(self.plan), "--session", "session-self")
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("unknown mode:", proc.stderr)
+
+    def test_probe_requires_session(self):
+        proc = self._run("probe", str(self.plan))
+        self.assertEqual(proc.returncode, 3)
+        self.assertIn("--session", proc.stderr)
+
 
 
 if __name__ == "__main__":

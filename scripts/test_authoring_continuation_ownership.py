@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PLANS = (ROOT / "agents/skills/plans/SKILL.md").read_text(encoding="utf-8")
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 3): the plans skill's Phase 0 operative text moved byte-verbatim to the phase-0-placement.md module beside the router.
+PLANS = (ROOT / "agents/skills/plans/phase-0-placement.md").read_text(encoding="utf-8")
 SELF_HEAL = (ROOT / "agents/skills/self-heal/SKILL.md").read_text(encoding="utf-8")
 TEMPLATE = (ROOT / "agents/skills/maintenance/template-authoring.md").read_text(encoding="utf-8")
 
@@ -85,7 +86,7 @@ class PreservedSpansTest(unittest.TestCase):
 
     def test_prework_gate_refusal_and_takeover(self) -> None:
         para = paragraph(TEMPLATE, GATE_PARA_PREFIX)
-        self.assertIn("refuse to start: stand down and write nothing", para)
+        self.assertIn("refuses the start: stand down and write nothing", para)
         self.assertIn("Stale-foreign-claim takeover", para)
 
     def test_plans_authoring_claim_noclobber(self) -> None:

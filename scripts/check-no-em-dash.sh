@@ -33,6 +33,9 @@ Use CHECK_NO_EM_DASH_ALL=1 to scan every path argument regardless of extension.
 The added-lines command scans every extension regardless of this prose filter.
 
 Exit 0 when clean; exit 1 when em dash found (prints paths and line numbers).
+Exit 2 on any usage error: a bare invocation, an unknown command, missing
+operands, a --base operand error, an added-lines pathspec matching no tracked
+file, or a file-mode operand that is not a readable file.
 EOF
 }
 
@@ -200,6 +203,11 @@ shift || true
 case "$cmd" in
   file|paths)
     [[ $# -gt 0 ]] || { echo "check-no-em-dash: missing paths" >&2; exit 2; }
+    # An operand that resolves to no readable file would scan nothing and
+    # read as clean; that is the same silent-pass class, so refuse it.
+    for arg in "$@"; do
+      [[ -f "$arg" && -r "$arg" ]] || { echo "check-no-em-dash: operand is not a readable file: $arg" >&2; exit 2; }
+    done
     scan_paths "$@"
     ;;
   staged)
@@ -225,6 +233,14 @@ case "$cmd" in
     scan_paths "${files[@]}"
     ;;
   added-lines)
+    # Missing operands are a usage error: the no-path form diffs the whole
+    # repository against the base and reads as a clean gate that scanned
+    # nothing the caller meant (witnessed mis-invocation). Paths required.
+    if [[ $# -eq 0 ]]; then
+      echo "check-no-em-dash: added-lines requires at least one path operand" >&2
+      usage >&2
+      exit 2
+    fi
     scan_added_lines "$@"
     ;;
   stdin)
@@ -235,9 +251,17 @@ case "$cmd" in
     [[ ${#files[@]} -eq 0 ]] && exit 0
     scan_paths "${files[@]}"
     ;;
-  -h|--help|help|"")
+  -h|--help|help)
     usage
-    [[ -z "$cmd" ]] && exit 0 || exit 0
+    exit 0
+    ;;
+  "")
+    # A bare invocation is a usage error, not a clean scan (witnessed
+    # silent-pass class: a session read the bare-usage exit 0 as a passed
+    # gate). Exit 2 so only a scan over real inputs can exit 0.
+    echo "check-no-em-dash: missing subcommand" >&2
+    usage >&2
+    exit 2
     ;;
   *)
     echo "check-no-em-dash: unknown command: $cmd" >&2

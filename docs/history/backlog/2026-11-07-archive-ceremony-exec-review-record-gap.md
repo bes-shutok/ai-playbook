@@ -1,7 +1,7 @@
 # Backlog: archive rider lands after the closeout sweep, red-ing every later landing's archive-ceremony gate
 
 - **Filed:** 2026-11-07, authoring lane blocked at its Phase 0 freeze write
-- **Status:** covered-pending-execution (docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md)
+- **Status:** covered (docs/history/plans/completed/2026-11-07-archive-rider-sweep-ordering.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** self-serving
@@ -9,6 +9,7 @@
 - **Driving force:** correctness
 - **Cluster:** docs/history/backlog/2026-10-18-acrem-certification-residuals.md (same gate surface; that row owns certification-test residuals, this row owns a live archived plan missing its execution-evidence record)
 - **Cluster:** docs/history/backlog/2026-11-07-plan-readiness-consumer-ordering-residuals.md (same executed plan; that row owns consumer-ordering residuals, this row owns the archive ceremony's missing record)
+- **Cluster:** docs/history/backlog/2026-11-13-producer-exec-record-grammar-arm-promotion.md (the deferred producer write-time arm this row priced, re-filed after the 2026-11-12/13 second incident)
 
 ## Observed versus expected
 

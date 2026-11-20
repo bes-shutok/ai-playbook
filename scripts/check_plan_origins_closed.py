@@ -138,6 +138,18 @@ COVERED_FOLD_REMEDY = (
 
 PASS_STATES = ("completed", "closed", "rejected")
 
+# Completed-directory posture (plan
+# docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md Task 1):
+# a row parked under the backlog completed/ directory is a posture defect
+# ("archived against the fold-then-delete rule"; fold-then-delete is the
+# only terminal shape for a covered origin row). "warning" emits the
+# posture warning in plan (strict) mode and still exits 0; promoting to
+# "refusing" (only after a first true catch, per the machinery registry
+# row script:origins-completed-dir-posture) routes the state into the
+# fail set. Corpus warn mode never changes with this constant.
+COMPLETED_DIR_POSTURE = "warning"
+COMPLETED_DIR_POSTURE_DETAIL = "archived against the fold-then-delete rule"
+
 # The plan-side "## Origins dispositions" section (case-insensitive
 # heading) lists one disposition line per origin; its backtick backlog
 # paths are the undercount warning's comparison set.
@@ -667,7 +679,23 @@ def run_plan_mode(
         if state == "unreadable":
             unreadable.append((name, detail))
             continue
+        if state == "completed" and COMPLETED_DIR_POSTURE == "refusing":
+            # Posture promotion: parking is a fail-set straggler.
+            stragglers.append(
+                (name, f"{COMPLETED_DIR_POSTURE_DETAIL} ({detail})")
+            )
+            continue
         if state in PASS_STATES:
+            if (
+                state == "completed"
+                and COMPLETED_DIR_POSTURE == "warning"
+            ):
+                # Warning-only posture defect: parking stays visible at
+                # every landing without blocking until promotion.
+                print(
+                    f"warning: {plan_path.name}: origin {name} "
+                    f"{COMPLETED_DIR_POSTURE_DETAIL} ({detail})"
+                )
             continue
         if state == "missing" and _disposition_consult(text, name):
             continue  # fold-then-delete: the plan's own disposition section anchors it

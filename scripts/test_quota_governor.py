@@ -941,3 +941,156 @@ def test_consult_cli_absent_state(tmp_path):
     assert out.returncode == 0
     report = json.loads(out.stdout)
     assert report["class"] == "unknown"
+
+
+# --- claude runtime ----------------------------------------------------------
+
+_SESSION_ENV = ("ZCODE_SESSION_ID", "CODEX_SESSION_ID", "SESSION_ID",
+                "CLAUDE_CODE_SESSION_ID", "CLAUDE_USAGE_JSON")
+
+
+def _clean_env(monkeypatch):
+    for key in _SESSION_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _claude_usage_file(tmp_path, windows, name="usage.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps({"plan": {"status": "ok", "windows": windows}}),
+                    encoding="utf-8")
+    return path
+
+
+def _claude_window(label, percent, reset_epoch):
+    return {"label": label, "percentUsed": percent,
+            "resetsAt": datetime.fromtimestamp(reset_epoch, timezone.utc).isoformat()}
+
+
+def _lane_verdicts(report):
+    return {lane: report["dispatch"][lane]["verdict"]
+            for lane in ("execution", "authoring")}
+
+
+def test_claude_refresh_matches_codex_class_and_lane_verdicts(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+
+    _clean_env(monkeypatch)
+    now = time.time()
+    usage = _claude_usage_file(
+        tmp_path, [_claude_window("5-hour limit", 95, int(now) + 3600)])
+    monkeypatch.setenv("CLAUDE_USAGE_JSON", str(usage))
+    claude = g.refresh(str(tmp_path / "claude.json"), log_dir=str(tmp_path),
+                       updated_by="t", runtime="claude")
+
+    monkeypatch.setattr(probe, "run_probe",
+                        lambda runtime: codex_report(95, NOW - 20))
+    codex = g.refresh(str(tmp_path / "codex.json"), log_dir=str(tmp_path),
+                      updated_by="t", now=NOW, runtime="codex")
+
+    assert claude["runtime"] == "claude"
+    assert claude["class"] == codex["class"] != "unknown"
+    assert _lane_verdicts(claude) == _lane_verdicts(codex)
+    assert claude["reset_at_epoch"] is not None
+
+
+def test_claude_refresh_without_usage_variable_is_unknown_and_cursor_refused(
+        tmp_path, monkeypatch):
+    _clean_env(monkeypatch)
+    report = g.refresh(str(tmp_path / "claude.json"), log_dir=str(tmp_path),
+                       updated_by="t", runtime="claude")
+    assert report["class"] == "unknown"
+    assert report["runtime"] == "claude"
+
+    refused = g.refresh(str(tmp_path / "cursor.json"), log_dir=str(tmp_path),
+                        updated_by="t", runtime="cursor")
+    assert refused["class"] == "unknown"
+    assert refused["reason"] == "explicit runtime is unknown or unsupported"
+    assert not (tmp_path / "cursor.json").exists()
+
+
+def test_claude_refresh_reads_percent_from_file_through_environment(
+        tmp_path, monkeypatch):
+    import quota_window_probe as probe
+
+    _clean_env(monkeypatch)
+    now = time.time()
+    usage = _claude_usage_file(
+        tmp_path, [_claude_window("5-hour limit", 33, int(now) + 3600)])
+    monkeypatch.setenv("CLAUDE_USAGE_JSON", str(usage))
+    calls = []
+    real = probe.run_probe
+
+    def spy(runtime):
+        calls.append(runtime)
+        return real(runtime)
+
+    monkeypatch.setattr(probe, "run_probe", spy)
+    report = g.refresh(str(tmp_path / "claude.json"), log_dir=str(tmp_path),
+                       updated_by="t", runtime="claude")
+
+    assert calls == ["claude"]
+    assert report["runtime"] == "claude"
+    assert report["source"] == g.RUNTIME_SOURCES["claude"]
+    state = g.read_state(str(tmp_path / "claude.json"))
+    assert state["pressure"]["inputs"]["primary_used_percent"] == 33
+
+    # codex keeps the plain single-argument probe call
+    monkeypatch.setattr(probe, "run_probe", lambda runtime: codex_report(10, NOW))
+    codex = g.refresh(str(tmp_path / "codex.json"), log_dir=str(tmp_path),
+                      updated_by="t", now=NOW + 1, runtime="codex")
+    assert codex["runtime"] == "codex"
+    state = g.read_state(str(tmp_path / "codex.json"))
+    assert state["pressure"]["inputs"]["primary_used_percent"] == 10
+
+
+def test_claude_unknown_report_and_weekly_only_file_fail_open(tmp_path, monkeypatch):
+    import quota_window_probe as probe
+
+    _clean_env(monkeypatch)
+    now = time.time()
+    unknown = {"runtime": "claude", "source": g.RUNTIME_SOURCES["claude"],
+               "observed_at_epoch": now, "limits": [], "binding": None,
+               "pause_decision": "continue", "reasons": ["x"], "status": "unknown"}
+    with monkeypatch.context() as scoped:
+        scoped.setattr(probe, "run_probe", lambda runtime: unknown)
+        reports = [g.refresh(str(tmp_path / "a.json"), log_dir=str(tmp_path),
+                             updated_by="t", runtime="claude")]
+    weekly = _claude_usage_file(
+        tmp_path, [_claude_window("Weekly limit", 99, int(now) + 86400)])
+    monkeypatch.setenv("CLAUDE_USAGE_JSON", str(weekly))
+    reports.append(g.refresh(str(tmp_path / "b.json"), log_dir=str(tmp_path),
+                             updated_by="t", runtime="claude"))
+    for report in reports:
+        assert report["class"] == "unknown"
+        assert _lane_verdicts(report) == {"execution": "allow", "authoring": "allow"}
+        assert report.get("reset_at_epoch") is None
+
+
+def test_claude_refresh_default_updated_by_uses_claude_session_id(
+        tmp_path, monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess-7")
+    claude_state = tmp_path / "claude.json"
+    codex_state = tmp_path / "codex.json"
+    codex_state.write_text("untouched", encoding="utf-8")
+    g.refresh(str(claude_state), log_dir=str(tmp_path), runtime="claude")
+    assert "claude-sess-7" in json.loads(claude_state.read_text())["updated_by"]
+    assert codex_state.read_text() == "untouched"
+
+    monkeypatch.setenv("CODEX_SESSION_ID", "codex-first")
+    assert g._default_updated_by().endswith(":codex-first")
+
+
+def test_claude_cached_class_without_primary_reading_is_unknown(tmp_path, monkeypatch):
+    _clean_env(monkeypatch)
+    now = time.time()
+    usage = _claude_usage_file(
+        tmp_path, [_claude_window("5-hour limit", 95, int(now) + 3600)])
+    monkeypatch.setenv("CLAUDE_USAGE_JSON", str(usage))
+    state_path = str(tmp_path / "claude.json")
+    g.refresh(state_path, log_dir=str(tmp_path), updated_by="t", runtime="claude")
+    assert g.consult(state_path, now, runtime="claude")["class"] != "unknown"
+    state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    state["pressure"]["inputs"] = {}
+    Path(state_path).write_text(json.dumps(state), encoding="utf-8")
+    assert g.consult(state_path, now, runtime="claude")["class"] == "unknown"

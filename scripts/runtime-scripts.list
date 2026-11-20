@@ -137,3 +137,10 @@ quota_pressure_stats.py
 # and quota_window_probe.py both plain-import this sibling, so the closure criterion
 # admits it beside them):
 quota_sources.py
+# The maintenance admission consult is resolved from the deployed script home
+# as a fallback and is imported by done_sweep_gates_lib.py:
+dispatch_admission.py
+# Import-closure member joined by the 2026-11-20-fire-outcomes-adapter-unadmitted-runtime-sibling
+# row (execute_plan_runtime.py plain-imports this sibling inside its
+# carrier-liveness and zero-turn-census arms, so the closure criterion admits it):
+maintenance_fire_outcomes.py

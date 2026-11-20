@@ -118,6 +118,21 @@ LEARN_BLOCK_MESSAGE = (
     "Invoke the learn skill before editing the project lessons corpus."
 )
 
+#: Measurement-only timing emission (plan
+#: 2026-11-09-hook-timeout-recurrence-diagnostic, Task 1). When
+#: ``SKILL_GATE_TIMING_PATH`` is set in the environment, AFTER the decision
+#: has been emitted to stdout the core writes ONE buffered JSON record to
+#: that path: the per-stage durations in seconds (``stages``), the core pid
+#: (``pid``), and the nonce passed in ``SKILL_GATE_TIMING_NONCE`` echoed
+#: verbatim (``nonce``). The record NEVER touches stdout (stdout carries the
+#: decision) nor stderr (the adapter discards it, and the block contract
+#: writes the deny text there). When the variable is unset NOTHING is
+#: written; the decision stdout bytes and exit codes are byte-identical
+#: whether the variable is set or not. A write failure is swallowed
+#: silently (measurement must never perturb the gate).
+TIMING_PATH_ENV = "SKILL_GATE_TIMING_PATH"
+TIMING_NONCE_ENV = "SKILL_GATE_TIMING_NONCE"
+
 #: Gated-class registry: ``class_name -> (path_matcher, marker_prefix, deny_message)``.
 #: Matchers receive ``(target, plans_dir)``; ``plans_dir`` is the cwd-resolved
 #: value from ``facts_paths.resolve_plans_dir`` (``None`` when absent).
@@ -363,6 +378,49 @@ def check_marker(
 
 
 # --------------------------------------------------------------------------- #
+# Measurement-only stage timing (plan 2026-11-09-hook-timeout-recurrence-
+# diagnostic, Task 1). The sink dict is None when the timing variable is
+# unset, so the untimed path adds zero work beyond one None check per stage.
+# --------------------------------------------------------------------------- #
+def _tstage(timing_stages: dict[str, float] | None, name: str, fn):
+    """Run ``fn`` and record its duration into ``timing_stages`` (if enabled).
+
+    Measurement-only: the recorded duration drives NO branch; on exception the
+    partial duration is still recorded before the exception propagates to the
+    caller's existing fail-open policy (identical behavior either way).
+    """
+    if timing_stages is None:
+        return fn()
+    t0 = time.perf_counter()
+    try:
+        return fn()
+    finally:
+        timing_stages[name] = time.perf_counter() - t0
+
+
+def _write_timing_record(
+    timing_stages: dict[str, float] | None, path: str | None
+) -> None:
+    """Write the opt-in timing record AFTER the decision (see TIMING_PATH_ENV).
+
+    ONE buffered JSON write; silent on any OSError (measurement-only). Never
+    writes to stdout or stderr.
+    """
+    if not path or timing_stages is None:
+        return
+    record = {
+        "nonce": os.environ.get(TIMING_NONCE_ENV, ""),
+        "pid": os.getpid(),
+        "stages": {k: round(v, 6) for k, v in sorted(timing_stages.items())},
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(record))
+    except OSError:
+        return
+
+
+# --------------------------------------------------------------------------- #
 # Consultation core.
 # --------------------------------------------------------------------------- #
 def _consult(
@@ -372,6 +430,7 @@ def _consult(
     session_id: str | None,
     runtime_dir: Path | None = None,
     now: float | None = None,
+    timing_stages: dict[str, float] | None = None,
 ) -> tuple[bool, str]:
     """Run one consultation. Returns ``(allow, deny_reason)``.
 
@@ -383,6 +442,10 @@ def _consult(
     2. Classify the target path against the gated-class set.
     3. If NOT gated -> ALLOW.
     4. If gated -> consult the marker. ALLOW iff fresh; BLOCK otherwise.
+
+    Measurement-only: when ``timing_stages`` is a dict, each step's duration
+    is recorded into it (see ``TIMING_PATH_ENV``); ``None`` (the default)
+    adds no behavior.
 
     Fail-open policy (this function's own catch): an ``OSError`` from the
     marker store (``PermissionError`` is a subclass; r2-M1 widened this from
@@ -406,10 +469,10 @@ def _consult(
         if (session_id is not None and session_id.strip() != "")
         else "project-only"
     )
-    facts_paths._append_hooks_log_line({
+    _tstage(timing_stages, "keying_log_append", lambda: facts_paths._append_hooks_log_line({
         "ts": datetime.now(timezone.utc).isoformat(),
         "keying": keying,
-    })
+    }))
 
     # Step 2-4: resolve/classify/consult. The whole chain is wrapped in ONE
     # try/except OSError so a marker-store OS error (EROFS/EIO/ELOOP/ENOSPC,
@@ -423,8 +486,14 @@ def _consult(
     try:
         # Step 2: classify via registry. plans_dir is resolved from repo facts
         # when present, else None (_plans_path_matcher falls back to default suffix).
-        plans_dir = facts_paths.resolve_plans_dir(start_dir)
-        gated = resolve_gated_class(target, plans_dir)
+        plans_dir = _tstage(
+            timing_stages, "plans_dir_resolve",
+            lambda: facts_paths.resolve_plans_dir(start_dir),
+        )
+        gated = _tstage(
+            timing_stages, "classify_target",
+            lambda: resolve_gated_class(target, plans_dir),
+        )
 
         # Step 3: non-gated -> ALLOW (silent).
         if gated is None:
@@ -433,14 +502,23 @@ def _consult(
         _class_name, marker_prefix, deny_message = gated
 
         # Step 4: gated -> consult the per-class marker.
-        project = resolve_project_key(start_dir)
-        session = _derive_session_component(session_id)
-        fresh = check_marker(
-            project,
-            session,
-            marker_prefix=marker_prefix,
-            now=now,
-            runtime_dir=runtime_dir,
+        project = _tstage(
+            timing_stages, "project_key_resolve",
+            lambda: resolve_project_key(start_dir),
+        )
+        session = _tstage(
+            timing_stages, "session_derive",
+            lambda: _derive_session_component(session_id),
+        )
+        fresh = _tstage(
+            timing_stages, "marker_check",
+            lambda: check_marker(
+                project,
+                session,
+                marker_prefix=marker_prefix,
+                now=now,
+                runtime_dir=runtime_dir,
+            ),
         )
     except OSError as e:
         # Fail-open on ANY marker-store OSError (r2-M1: was PermissionError
@@ -1035,11 +1113,17 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("usage: skill_gate.py --target PATH [--session-id ID] [--cwd DIR]\n")
         return 2
 
+    # Opt-in measurement-only timing sink (Task 1). None when the timing
+    # variable is unset -> the consult path is byte-identical to before.
+    timing_path = os.environ.get(TIMING_PATH_ENV)
+    timing_stages: dict[str, float] | None = {} if timing_path else None
+
     try:
         allow, deny_reason = _consult(
             ns.target,
             start_dir=start_dir,
             session_id=ns.session_id,
+            timing_stages=timing_stages,
         )
     except (KeyboardInterrupt, SystemExit):
         # Propagate Ctrl-C / SystemExit: a user interrupt during a consultation
@@ -1059,12 +1143,14 @@ def main(argv: list[str] | None = None) -> int:
             "keying": "error",
             "error": repr(e),
         })
+        _write_timing_record(timing_stages, timing_path)
         return 0
 
     if allow:
         # Emit an allow JSON line (adapter-shaped; agy expects top-level
         # {"allow_tool": true}). Adapters re-shape as needed.
         sys.stdout.write(json.dumps({"allow_tool": True}))
+        _write_timing_record(timing_stages, timing_path)
         return 0
 
     # Block. deny_reason is data-influenced -> json.dumps (L9). Emit a
@@ -1072,6 +1158,7 @@ def main(argv: list[str] | None = None) -> int:
     # and re-emits on stderr + exit 2.
     envelope = {"allow_tool": False, "deny_reason": deny_reason}
     sys.stdout.write(json.dumps(envelope))
+    _write_timing_record(timing_stages, timing_path)
     # Core exits 0; the adapter layer chooses exit 2 (Claude) or 0 (agy).
     return 0
 

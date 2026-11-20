@@ -1,6 +1,6 @@
 # Backlog: authoring-claim discovery misses convention-divergent claim filenames
 
-Status: covered-pending-execution (docs/history/plans/2026-11-06-authoring-claim-discovery-filename-convention.md)
+Status: covered (docs/history/plans/2026-11-06-authoring-claim-discovery-filename-convention.md)
 Workflow: backlog
 Priority: medium
 Origin class: self-serving

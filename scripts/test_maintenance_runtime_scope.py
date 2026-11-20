@@ -11,6 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GUARDS = (ROOT / "agents/skills/maintenance/guards.md").read_text(encoding="utf-8")
 DECISIONS = (ROOT / "agents/skills/maintenance/decisions.md").read_text(encoding="utf-8")
+FAILURE_CAP = (ROOT / "agents/skills/maintenance/failure-cap.md").read_text(encoding="utf-8")
+IDLE_TIME_RULE = next(
+    line for line in FAILURE_CAP.splitlines()
+    if line.startswith("- Idle-time children are covered too:")
+)
 
 
 def bullet(text: str, prefix: str) -> str:
@@ -23,6 +28,10 @@ RUNTIME_SCOPE = next(
 )
 G1E = bullet(GUARDS, "- `G1e (execution lane)`")
 G1A = bullet(GUARDS, "- `G1a (authoring lane)`")
+G1_STATE_FILE = next(
+    line for line in GUARDS.splitlines()
+    if line.startswith("  - State-file arm (release rules)")
+)
 EXECUTION_DISCOVERY = next(line for line in GUARDS.splitlines() if "Execution-claim check" in line)
 AUTHORING_DISCOVERY = next(line for line in GUARDS.splitlines() if line.startswith("  - Discovery arm (authoring-side)"))
 FLEET = bullet(GUARDS, "- Fleet cap")
@@ -30,6 +39,37 @@ FLEET = bullet(GUARDS, "- Fleet cap")
 
 class MaintenanceRuntimeScopeContractTest(unittest.TestCase):
     """Keep each occupancy evidence family and global exception explicit."""
+
+    def test_unavailable_foreign_idle_listing_stays_pending_without_failure_credit(self) -> None:
+        for clause in (
+            "Foreign-listing gap: known foreign `runtime_id` stays pending/no credit",
+            "same-runtime uses blocker recovery and stays unresolved",
+            "unknown IDs stay shared",
+            "an available listing that omits the child without progress still fails it like any other child",
+            "Six hours after `created_at` is the lane-hold horizon only",
+            "still shown queued or running at that mark is not failed and accrues no failure credit",
+        ):
+            with self.subTest(clause=clause):
+                self.assertIn(clause, IDLE_TIME_RULE)
+
+    def test_foreign_listing_exception_does_not_make_same_target_hold_unconditional(self) -> None:
+        clause = (
+            "exception: only if this turn's foreign listing is unavailable, "
+            "hold same-target work past six hours; distinct targets remain "
+            "subject to G1/G2."
+        )
+        self.assertIn(clause, G1_STATE_FILE)
+        self.assertEqual(G1_STATE_FILE.count("hold same-target work past six hours"), 1)
+
+    def test_unavailable_foreign_idle_listing_keeps_same_target_held_past_horizon(self) -> None:
+        self.assertIn(
+            "exception: only if this turn's foreign listing is unavailable, hold same-target work past six hours",
+            G1_STATE_FILE,
+        )
+        self.assertIn(
+            "distinct targets remain subject to G1/G2",
+            G1_STATE_FILE,
+        )
 
     def test_all_ordinary_occupancy_arms_are_runtime_filtered_before_dedup(self) -> None:
         for arm in ("state-file", "armed", "fired", "widened", "discovery"):

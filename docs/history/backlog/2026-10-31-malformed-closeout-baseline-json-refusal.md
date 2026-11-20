@@ -1,7 +1,7 @@
 # Malformed closeout baseline JSON escapes as a traceback
 
 - **Filed:** 2026-10-31, execution validation residual from the completed missing-baseline plan
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-15-malformed-closeout-baseline-json-refusal.md)
 - **Priority:** low
 - **Workflow:** plan-worthy
 - **Class:** fix-class
@@ -9,8 +9,7 @@
 - **Quarantine:** 2026-11-04
 - **Severity:** Low
 - **Driving force:** observability
-- **Cluster:** docs/history/backlog/2026-10-31-closeout-zero-delta-report-arm-coverage.md (the clobber-guard cluster's 2026-11-01 row was deleted at its ad-hoc landing)
-- **Cluster:** docs/history/backlog/2026-11-06-phase0-baseline-midflow-entry-order.md (same capture-contract surface; that row owns the chained-entry order trigger, this row owns the malformed-JSON refusal shape)
+- **Cluster:** (sibling row 2026-10-31-closeout-zero-delta-report-arm-coverage.md deleted covered at its landing commit 9a6597934, witness the EXEC-PROMPTS-PRUNE zero-delta-report-defensive-arm-tests receipt; the clobber-guard cluster's 2026-11-01 row was deleted at its own ad-hoc landing)
 - **Source reference:** `docs/history/plans/completed/2026-10-27-plan-closeout-missing-phase0-baseline.md` and `docs/tmp/execute-plan/plan-closeout-missing-phase0-baseline/task-1-implement.log.md` (malformed-baseline case, exit 1 with `JSONDecodeError` traceback and no target copy)
 - **Capture hygiene:** `scan-public-hygiene --files` pass
 

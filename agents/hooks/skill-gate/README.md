@@ -52,7 +52,7 @@ injecting sibling keys (M3; Family H, Family C, Family G).
 
 Each agent's envelope shape is DISTINCT:
 - **Claude** translates block into stderr-reason + `exit 2`; allow is `exit 0`
-  (matches the only wired precedent, `check-plan-review-gate.sh`).
+  (matches the only wired precedent, `check-plan-review-gate.sh` (versioned at `agents/hooks/plan-review-gate/check-plan-review-gate.sh`)).
 - **agy** emits a TOP-LEVEL `{"allow_tool": true}` / `{"allow_tool": false,
   "deny_reason": ...}` and exits 0 ALWAYS (a non-zero exit is a hook FAILURE on
   agy, not a block). NO `hookSpecificOutput` wrapper (the nested shape fails
@@ -133,9 +133,9 @@ there and in `skill_gate.py`):
    via the shared `facts_paths.resolve_project_key` (the ONE function both cores
    import; do NOT re-implement) and `session` derives per Terms "Session key"
    (emptiness check FIRST; empty-after-strip -> literal `no-session`; otherwise
-   `sha1(value)[:16]` hex). In an ad-hoc-worktree session the project key MUST come from the WRITE TARGET's project derivation (the worktree root), never the session's default or primary-checkout cwd; the gate consult keys from the directory its adapter supplies (Claude and Cursor pass the hook payload's cwd, falling back to the write target's dirname when the payload carries none; agy and Codex pass none and the core keys from its own process cwd), so the marker write must key the same write-target derivation the consult will use.
+   `sha1(value)[:16]` hex). In an ad-hoc-worktree session the project key MUST come from the WRITE TARGET's project derivation (the worktree root), never the session's default or primary-checkout cwd; the gate consult keys from the directory its adapter supplies (Claude and Cursor pass the hook payload's cwd, falling back to the write target's dirname when the payload carries none; agy and Codex pass none and the core keys from its own process cwd), so the marker write must key the same write-target derivation the consult will use. Exception, Claude Code: the consult keys from the session cwd and a Bash `cd` does not persist, so a worktree authoring session writes its own marker keyed to the session cwd with `--cwd <session cwd>`; this is the one sanctioned case of a marker keyed away from the write target, and only for that session's own marker.
 5. CLI: `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker [--cwd <write-target project root>] [--session-id "$SID"]`
-   (bare `--write-marker` defaults to the plans class; `--cwd` keys the marker to an explicit project root such as an ad-hoc worktree, independent of the invoking shell's cwd - the core already accepts it for both consult and write). On a runtime whose session identity lives in runtime context rather than the subprocess environment (ZCode), the `$SID` derivation uses the helper's explicit input (`--session-id '<runtime session id>'`, see **Session channel derivation** above); the fail-loud rule of this recipe applies to that derivation unchanged - a non-zero helper exit aborts BEFORE this step and writes NO marker: run the derivation as its own command and abort on a non-zero exit, with the abort OUTSIDE the capture substitution (a bare `exit 1` inside `$()` cannot escape it): for example `SID="$(python3 ~/.ai-playbook/scripts/session_channel.py --session-id '<runtime session id>')" || { echo "session derivation failed" >&2; exit 1; }`; never chain it with `;`.
+   (bare `--write-marker` defaults to the plans class; `--cwd` keys the marker to an explicit project root such as an ad-hoc worktree, independent of the invoking shell's cwd - the core already accepts it for both consult and write). On a runtime whose adapter passes a session id to the gate (Claude, Cursor), the flag `--session-id "$SID"` is REQUIRED, with `SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"` derived first; a bare write still exits 0 but keys a no-session marker the adapter never reads, so the next gated edit is refused. On a runtime whose session identity lives in runtime context rather than the subprocess environment (ZCode), the `$SID` derivation uses the helper's explicit input (`--session-id '<runtime session id>'`, see **Session channel derivation** above); the fail-loud rule of this recipe applies to that derivation unchanged - a non-zero helper exit aborts BEFORE this step and writes NO marker: run the derivation as its own command and abort on a non-zero exit, with the abort OUTSIDE the capture substitution (a bare `exit 1` inside `$()` cannot escape it): for example `SID="$(python3 ~/.ai-playbook/scripts/session_channel.py --session-id '<runtime session id>')" || { echo "session derivation failed" >&2; exit 1; }`; never chain it with `;`.
 6. Acceptance: the marker EXISTS AND `0 <= (now - mtime) <= SKILL_GATE_WINDOW`
    (default 4h, FLAGGED; future-dated/negative delta or `mtime == 0` is STALE ->
    block, M4). ALL agents use the FULL window (r10-M10).
@@ -233,12 +233,37 @@ The agy host `~/.gemini/antigravity-cli/hooks.json` ships `timeout: 10`; the
 have a wired doctor check for the host timeout field, so the value is
 HAND-SYNCED at install time against this recipe.
 
+### Consult-path load measurement — incident regime NOT reached (2026-11-09; note arm, plan 2026-11-09-hook-timeout-recurrence-diagnostic)
+
+Measured disposition, NOT an accepted-cost record: the profiling run did not
+reach the incident regime, so no stage verdict is drawn and no cost is priced
+or accepted here. Under matched parallel load (11 workers = 12 physical cores
+- 1, 25 iterations per worker per decision-path class, two loaded
+matched-control repeats plus one idle control, both allow and block classes,
+clean-sample floor of 20 met everywhere, keying branch uniformly `empty`, zero
+degraded samples), the worse run (loaded repeat 0) measured loaded end-to-end
+p95/max of 1.464 s / 2.033 s (allow) and 1.865 s / 2.223 s (block). The run's
+all-sample loaded max, 2.223 s (block), sits below half the 10 s per-hook host
+timeout — the 5.0 s incident-regime threshold — so the regime was NOT reached
+and no stage verdict is drawn from this run. The block-class emission-off
+spot-check measured p95 0.823 s beside the emission-on block p95 1.865 s;
+repeat-to-repeat variance at matched ambient load is of the same order, so the
+gap is not attributed to the timing-emission instrument alone. This measurement
+cannot price or narrow the origin row's six witnessed hook timeouts in one
+afternoon (2026-11-04 telemetry, harvested 2026-11-05; origin row
+docs/history/backlog/2026-11-05-hook-timeout-recurrence-diagnostic.md), which
+stands here as historical context only; a higher-load re-measurement is
+requested in
+docs/history/backlog/2026-11-09-hook-timeout-higher-load-remeasure.md.
+Regenerate the samples with
+`python3 scripts/profile_skill_gate_consult.py load --out <output-dir> --kind loaded --repeat 0 --workers <N> --iterations <M> && python3 scripts/profile_skill_gate_consult.py analyze --out <output-dir>`.
+
 ## Per-agent wiring recipes
 
 ### Claude (PreToolUse, exit-2 + stderr contract)
 
 Register in `~/.claude/settings.json` under `hooks.PreToolUse` (alongside the
-existing `Bash` entry for `check-plan-review-gate.sh`, which MUST be preserved):
+existing `Bash` entry for `check-plan-review-gate.sh` (versioned at `agents/hooks/plan-review-gate/check-plan-review-gate.sh`), which MUST be preserved):
 
 ```json
 {
@@ -382,7 +407,7 @@ the Task 4 Doctor spec for the full algorithm):
 1. **PreToolUse array** (`~/.claude/settings.json`): an entry whose matcher
    `|`-split alternation is a SUPERSET of `{Write,Edit,MultiEdit}` is present,
    AND a SEPARATE `Bash` entry is preserved (no regression of
-   `check-plan-review-gate.sh`).
+   `check-plan-review-gate.sh` (versioned at `agents/hooks/plan-review-gate/check-plan-review-gate.sh`)).
 2. **11 paths live + parent dirs exist**: the helper + 2 cores + 8 adapter
    symlinks all resolve (no dangling links); the parent dirs
    (`~/.ai-playbook/scripts/`, `~/.codex/hooks/`,

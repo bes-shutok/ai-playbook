@@ -9,6 +9,7 @@
 - **Class:** fix-class
 - **Driving force:** reliability + clarity
 - **Skill/step:** `agents/skills/execute-plan-stack/SKILL.md` Workflow step 2 (adopt the established claim); `agents/skills/execute-plan/SKILL.md` execution claim registration; `agents/skills/maintenance/template-execution.md` recovery procedure; `scripts/execution_claim.sh` take, claim and refresh modes
+- **Cluster:** docs/history/backlog/2026-11-19-codex-incomplete-run-owner-status-unavailable.md (same configured-provider prerequisite; this row owns dead-owner verification for incomplete plan runs, this row the stack-run successor identity handoff)
 - **Catch frequency:** witnessed once.
 - **False-positive cost:** loosening the claim fence could let two live sessions both believe they own a run; any fix must keep the foreign-live-claim refusal.
 - **Review date:** 2026-12-05

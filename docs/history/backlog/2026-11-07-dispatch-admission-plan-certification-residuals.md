@@ -2,10 +2,10 @@
 
 Status: open
 Priority: low
-Cluster: docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md
+Cluster: docs/history/plans/completed/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md
 Driving force: correctness
 
-Origin: the terminal plan-review round (r5, cap closure) over docs/history/plans/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md; non-blocking residuals recorded in the round's overflow, carried here as the durable copy for the plan's execution.
+Origin: the terminal plan-review round (r5, cap closure) over docs/history/plans/completed/2026-11-06-dispatch-admission-outstanding-manifest-recovery.md; non-blocking residuals recorded in the round's overflow, carried here as the durable copy for the plan's execution.
 
 Resolve at execution of that plan (fold into its tasks when touched, or close with a recorded reason):
 

@@ -87,3 +87,8 @@ Primary class anchors:
 - [x] Retarget the second placement row to a distinctive span within the advisory's cumulative-diff measurement clause, so drift in that behavior remains visible. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run the existing placement-pin suite and record its result; confirm the two pins hold and the suite remains warning-only. [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: trim done advisory and align placement pins` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-17-done-skill-text-economy.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

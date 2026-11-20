@@ -39,6 +39,8 @@ REPLACEMENT = ", "
 
 PROG = "fix_plan_em_dashes.py"
 OUTCOME_LABELS = {0: "pass", 3: "tool_error"}
+TASK_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+Task\b.*$", re.IGNORECASE)
+VALID_TASK_HEADING_RE = re.compile(r"^### Task ([1-9]\d*):\s+.+$")
 
 # A prose line appended past the operand's bytes: corrections_record's
 # scanner excludes it exactly when a fence is still open at end of file
@@ -58,7 +60,44 @@ def unbalanced_fence(text):
     return cr.line_fully_excluded(probe, len(probe.splitlines()))
 
 
-def substitute(text):
+def task_section_lines(text):
+    """Return line indexes covered by task sections, refusing unclear
+    task headings before a caller can write modified plan bytes."""
+    lines = text.split("\n")
+    excluded = cr.excluded_line_numbers(text)
+    headings = []
+    for index, line in enumerate(lines):
+        line_number = index + 1
+        match = VALID_TASK_HEADING_RE.fullmatch(line)
+        if match is not None:
+            headings.append((index, int(match.group(1))))
+            continue
+        if line_number in excluded or not TASK_HEADING_RE.match(line):
+            continue
+        if match is None:
+            raise ValueError("malformed task heading on line %d" % line_number)
+
+    ordinals = [ordinal for _, ordinal in headings]
+    if len(set(ordinals)) != len(ordinals):
+        raise ValueError("ambiguous task heading: duplicate task ordinal")
+
+    protected = set()
+    for position, (start, _) in enumerate(headings):
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if index in {heading_start for heading_start, _ in headings[position + 1:]}:
+                end = index
+                break
+            # Match the digest extractor's literal boundary, including
+            # headings within fenced examples and excluding indented ones.
+            if lines[index].startswith(("## ", "### ")):
+                end = index
+                break
+        protected.update(range(start, end))
+    return protected
+
+
+def substitute(text, protected_lines=None):
     """(new_text, counts) with counts keyed by 1-based line number. The
     exclusion decision is derived from drift-free outputs only:
     corrections_record's excluded_line_numbers marks the whole-line
@@ -73,10 +112,11 @@ def substitute(text):
     a digit on both sides across the surrounding spaces is a numeric
     range and stays unchanged."""
     excluded = cr.excluded_line_numbers(text)
+    protected_lines = protected_lines or set()
     lines = text.split("\n")
     counts = {}
     for index, line in enumerate(lines):
-        if index + 1 in excluded:
+        if index + 1 in excluded or index in protected_lines:
             continue
         local_spans = cr._inline_excluded_spans(line, 0)
         pieces = []
@@ -131,6 +171,8 @@ def main(argv=None):
     parser.add_argument("plan",
                         help="path to the plan Markdown operand (rewritten "
                              "in place)")
+    parser.add_argument("--preserve-tasks", action="store_true",
+                        help="leave all task sections byte-identical")
     args = parser.parse_args(argv)
     path = Path(args.plan)
     try:
@@ -149,7 +191,11 @@ def main(argv=None):
             "(an unclosed fenced region extends to end of file); refusing "
             "to rewrite rather than guess the excluded tail; close or "
             "remove the fence by hand")
-    new_text, counts = substitute(text)
+    try:
+        protected_lines = task_section_lines(text) if args.preserve_tasks else set()
+    except ValueError as exc:
+        return tool_error(str(exc))
+    new_text, counts = substitute(text, protected_lines)
     if new_text != text:
         try:
             path.write_bytes(new_text.encode("utf-8"))

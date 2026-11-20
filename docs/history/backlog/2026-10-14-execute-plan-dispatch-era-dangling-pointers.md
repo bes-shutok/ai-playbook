@@ -1,5 +1,7 @@
 # Backlog: sweep the dangling dispatch-era pointers in the execute-plan surfaces
 
+Cluster: docs/history/plans/completed/2026-11-06-budget-resume-carrier-gc.md (same dispatch-era residue family; this row owns dangling pointers and the sibling, executed by commit 74a2aaeea with its origin row fold-deleted, owns stale armed carriers)
+
 - **Filed:** 2026-10-14, red-on-main-baseline-repair-and-auto-demote execution review r1 (worker 1, finding 4; recorded-only residual, ruled out of that plan's mirror-coherence scope)
 - **Status:** open
 - **Workflow:** skill text adjudication

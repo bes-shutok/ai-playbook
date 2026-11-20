@@ -60,11 +60,16 @@ New-plan baseline (single-file CLI): a plan path absent from the
 ``--since`` commit reuses the first checkpoint commit after ``--since``
 that adds the path (the earliest ``--diff-filter=A`` commit in
 ``since..HEAD``) as the exact before side, reporting the selected
-baseline commit; a successful lookup finding no such commit through
-``HEAD`` emits the named absent-baseline refusal (unclassified, the
-fresh-review route, no corrections row, no operator acknowledgement);
-a lookup or blob-read failure keeps the indeterminate and tool-error
-outcomes and is never reported as an absent checkpoint.
+baseline commit; when a successful lookup finds no such commit through
+``HEAD``, the full-history add lookup discriminates two refusal shapes,
+both unclassified on the fresh-review route (no corrections row, no
+operator acknowledgement): a plan tracked at NO commit anywhere through
+HEAD carries no start commit - the authoring checkpoint duty produced
+no ``wip:`` checkpoint commit - and takes the distinct no-start-commit
+refusal naming that duty, while the ordinary shape (tracked at an
+earlier commit, absent at ``--since``) keeps the named absent-baseline
+refusal; a lookup or blob-read failure keeps the indeterminate and
+tool-error outcomes and is never reported as an absent checkpoint.
 """
 
 import argparse
@@ -675,7 +680,7 @@ def run_directory_plan_mode(args):
             print("hunk %d: %s %s (%s)"
                   % (index, hunk["header"], hunk["class"], hunk["reason"]))
         if hunks:
-            changed.append((rel, old_bytes, new_bytes, hunks))
+            changed.append((file_rel, old_bytes, new_bytes, hunks))
             all_hunks.extend(hunks)
     if not all_hunks:
         print("verdict: %sno delta: identical bytes" % cr.MARKER_PREFIX)
@@ -711,6 +716,28 @@ def run_directory_plan_mode(args):
                     row = build_row(args.kind, old_bytes, new_bytes, head,
                                     hunks, receipt=receipt,
                                     author_session_id=author)
+                    # Mint-time binding validation (the evidence-commit
+                    # mint guidance): the same after-bytes compare the
+                    # single-file route runs, per changed file.
+                    evidence_bytes = cr.blob_bytes(root, head, _rel)
+                    if evidence_bytes is None:
+                        return tool_error(
+                            "mint-time binding validation: the plan blob "
+                            "at evidence commit %s is unresolvable for "
+                            "%s; evidence_commit must be the after-bytes "
+                            "commit (its artifact blob hashes to "
+                            "after_digest)" % (head, _rel))
+                    if cr.sha256_hex(evidence_bytes) != \
+                            row["after_digest"]:
+                        return tool_error(
+                            "mint-time binding validation: the plan "
+                            "blob at evidence commit %s hashes to %s, "
+                            "not %s's row after_digest %s; "
+                            "evidence_commit is the after-bytes commit, "
+                            "never the before-state pin (commit the "
+                            "after bytes, then re-mint)"
+                            % (head, cr.sha256_hex(evidence_bytes),
+                               _rel, row["after_digest"]))
                     print("corrections-row-json: %s"
                           % json.dumps(row, sort_keys=True))
             except (OSError, ValueError, UnicodeDecodeError) as exc:
@@ -788,13 +815,16 @@ FIRST_CHECKPOINT_FAILED = "failed"
 def first_checkpoint_bytes(root, since, rel):
     """The plan's first-draft checkpoint after ``since``: the earliest
     commit in ``since..HEAD`` that adds ``rel`` (``git log
-    --diff-filter=A --reverse``), returned as (status, commit, blob
-    bytes). Status is FIRST_CHECKPOINT_FOUND with that commit's exact
-    blob, FIRST_CHECKPOINT_ABSENT when the successful lookup found no
-    such commit, or FIRST_CHECKPOINT_FAILED when a git plumbing step
-    failed over resolved inputs."""
+    --diff-filter=A --diff-merges=first-parent --reverse``), returned
+    as (status, commit, blob bytes). The merge-aware diff arm recovers
+    a first checkpoint authored only inside a merge commit, whose add
+    the default merge diff hides; Status is FIRST_CHECKPOINT_FOUND with
+    that commit's exact blob, FIRST_CHECKPOINT_ABSENT when the
+    successful lookup found no such commit, or FIRST_CHECKPOINT_FAILED
+    when a git plumbing step failed over resolved inputs."""
     text = cr.git_text(root, "log", "--format=%H", "--diff-filter=A",
-                       "--reverse", "%s..HEAD" % since, "--", rel)
+                       "--diff-merges=first-parent", "--reverse",
+                       "%s..HEAD" % since, "--", rel)
     if text is None:
         return FIRST_CHECKPOINT_FAILED, None, None
     commit = next((ln.strip() for ln in text.splitlines() if ln.strip()),
@@ -882,6 +912,38 @@ def main(argv=None):
                     "git plumbing failed over resolved "
                     "inputs" % (rel, step))
             if status == FIRST_CHECKPOINT_ABSENT:
+                # Two shapes share the absent-lookup outcome: the plan
+                # tracked at NO commit through HEAD (the authoring
+                # checkpoint duty produced no `wip:` checkpoint commit;
+                # the witnessed untracked-plan run) and the ordinary
+                # absent-baseline shape (tracked at an earlier commit,
+                # absent at --since). The full-history add lookup
+                # discriminates them; a plumbing failure keeps the
+                # indeterminate outcome and is never reported as either
+                # refusal.
+                history = cr.git_text(root, "log", "--format=%H",
+                                      "--diff-filter=A",
+                                      "--diff-merges=first-parent",
+                                      "--", rel)
+                if history is None:
+                    return indeterminate(
+                        "the full-history add lookup for %s failed: git "
+                        "plumbing failed over resolved inputs" % rel)
+                if not history.strip():
+                    print("plan: %s" % rel)
+                    print("since: %s" % since)
+                    print("refusal: %s" % cr.leg_reason(
+                        "classify",
+                        "absent baseline: the plan path %s has no start "
+                        "commit: no commit adds it anywhere through "
+                        "HEAD, so the authoring checkpoint duty produced "
+                        "no `wip:` checkpoint commit to use as the "
+                        "before side; the delta has no before side and "
+                        "is unclassified, so the fold takes the "
+                        "fresh-review path"
+                        % rel))
+                    emit_outcome(1)
+                    return 1
                 print("plan: %s" % rel)
                 print("since: %s" % since)
                 print("refusal: %s" % cr.leg_reason(
@@ -913,6 +975,10 @@ def main(argv=None):
         print("baseline commit: %s" % baseline_commit)
     print("before digest: %s" % cr.sha256_hex(old_bytes))
     print("after digest: %s" % cr.sha256_hex(new_bytes))
+    if args.emit_row and hunks:
+        print("evidence commit binding: evidence_commit is the "
+              "after-bytes commit whose artifact blob hashes to the "
+              "after digest, never the before-state pin")
     for index, hunk in enumerate(hunks, 1):
         print("hunk %d: %s %s (%s)"
               % (index, hunk["header"], hunk["class"], hunk["reason"]))
@@ -944,6 +1010,31 @@ def main(argv=None):
                 row = build_row(args.kind, old_bytes, new_bytes, head,
                                 hunks, receipt=receipt,
                                 author_session_id=author)
+                # Mint-time binding validation (the evidence-commit mint
+                # guidance): evidence_commit is the after-bytes commit -
+                # the commit whose artifact blob hashes to the row's
+                # after_digest, never the before-state pin. Digest the
+                # named commit's blob now, reusing the validator's own
+                # compare, so a mis-bound row dies at mint rather than at
+                # gate time.
+                evidence_bytes = cr.blob_bytes(root, head, rel)
+                if evidence_bytes is None:
+                    return tool_error(
+                        "mint-time binding validation: the plan blob at "
+                        "evidence commit %s is unresolvable; "
+                        "evidence_commit must be the after-bytes commit "
+                        "(its artifact blob hashes to after_digest)"
+                        % head)
+                if cr.sha256_hex(evidence_bytes) != \
+                        row["after_digest"]:
+                    return tool_error(
+                        "mint-time binding validation: the plan blob at "
+                        "evidence commit %s hashes to %s, not the row's "
+                        "after_digest %s; evidence_commit is the "
+                        "after-bytes commit, never the before-state pin "
+                        "(commit the after bytes, then re-mint)"
+                        % (head, cr.sha256_hex(evidence_bytes),
+                           row["after_digest"]))
             except (OSError, ValueError, UnicodeDecodeError) as exc:
                 return tool_error("the receipt operand %s is unreadable "
                                   "or not decodable JSON: %s"

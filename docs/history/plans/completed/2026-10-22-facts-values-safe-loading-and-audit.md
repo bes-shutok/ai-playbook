@@ -109,3 +109,8 @@ Files:
 - [x] Given the existing OAuth backup and recovery workflow, sections 53.2-53.4 retain its current backup, snapshot, restore, and status behavior. [class: IMPLEMENTATION_REQUIRED]
 - [x] Given section 53.1 covers credential classes beyond OAuth, the section 53 heading describes credential storage generally while sections 53.2-53.4 remain clearly OAuth-specific. [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: broaden safe facts credential storage rule` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-21-facts-values-safe-loading-and-audit.md`: covered by this plan (this plan's Backlog origin declaration names the row); the completion pass of docs/history/plans/completed/2026-11-08-backlog-completed-dir-regrowth.md (completion pass, 2026-11-09) folded the row here and deleted the row file, preserving the row's two deliberately-open arms verbatim: (1) the owner-led local-facts audit - "Class: investigate-class (safe-read guidance now exists; current local facts still need an owner-led audit and any required remediation)" and "The stored facts still need a safe, owner-led review: existing policy names access and refresh tokens, while other credential forms may also be present"; (2) the preserved OAuth guidance residual - "During plan execution, preserve all existing OAuth-specific guidance in sections 53.2-53.7 while broadening section 53.1; add explicit scope and acceptance witnesses for sections 53.5-53.7 if the implementation plan does not already cover them. Do not duplicate or rewrite the OAuth procedure without a demonstrated contradiction."

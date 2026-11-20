@@ -42,6 +42,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import dispatch_admission
 import done_sweep_gates_lib as lib
 from done_sweep_gates_lib import (
     LANDING_GATES,
@@ -3341,6 +3342,131 @@ def test_docs_tmp_sweep_keeps_unknown_candidate_types_and_symlinks(
     assert "unclear ownership or active work" in result.message
 
 
+def test_docs_tmp_sweep_keeps_live_claims_directories_by_name(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Both live claims directories stay kept by
+    their named retention rule even when one contained claim is stale."""
+    root = make_repo(tmp_path, "live-claims-default", gitignore_docs=True)
+    write_facts(root)
+    tmp_dir = root / "docs" / "tmp"
+    authoring = tmp_dir / "authoring-claims"
+    execution = tmp_dir / "execution-claims"
+    authoring.mkdir(parents=True)
+    execution.mkdir()
+    fresh_claim = authoring / "plan-a.md"
+    fresh_claim.write_text(
+        "session: session-a\n"
+        "item: docs/history/plans/2026-11-16-plan-a.md\n"
+        "created: 2026-11-16T12:00:00Z\n"
+        "updated: 2026-11-16T12:00:00Z\n"
+        "runtime_id: runtime-a\n",
+        encoding="utf-8",
+    )
+    stale_claim = execution / "plan-b.md"
+    stale_claim.write_text(
+        "session: session-b\n"
+        "item: docs/history/plans/2026-10-01-plan-b.md\n"
+        "created: 2026-10-01T12:00:00Z\n"
+        "updated: 2026-10-01T12:00:00Z\n"
+        "runtime_id: runtime-b\n",
+        encoding="utf-8",
+    )
+    stale_epoch = time.time() - (DOCS_TMP_HORIZON_S + 86400)
+    os.utime(stale_claim, (stale_epoch, stale_epoch))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    reason = (
+        "live claims directory; retained by name; the owning session deletes "
+        "its files at closeout and stale claims decay via takeover"
+    )
+    for directory in ("authoring-claims", "execution-claims"):
+        assert f"docs/tmp/{directory} ({reason})" in result.message
+        assert f"docs/tmp/{directory}/" not in result.message.split("removed:", 1)[-1]
+        assert (
+            f"docs/tmp/{directory} (unclear ownership or active work)"
+            not in result.message
+        )
+
+
+def test_docs_tmp_sweep_drain_posture_on_never_enumerates_claims_directories(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Drain-on removes stale top-level scratch but
+    never enumerates either named claims directory or its stale claim files."""
+    root = make_repo(tmp_path, "live-claims-drain-on", gitignore_docs=True)
+    write_facts(root)
+    _write_facts_with_knob(root, 'docs_tmp_drain_arms = "on"')
+    _seed_never_synced_window(root)
+    _add_docs_branch_files(root, {"docs-readme.md": "docs body\n"})
+    survivor = _seed_stale_survivor(
+        root, "scratch-notes.txt", DOCS_TMP_HORIZON_S + 86400
+    )
+    claim_files = []
+    for directory, filename in (
+        ("authoring-claims", "plan-a.md"),
+        ("execution-claims", "plan-b.md"),
+    ):
+        claims_dir = root / "docs" / "tmp" / directory
+        claims_dir.mkdir(parents=True)
+        claim = claims_dir / filename
+        claim.write_text(
+            "session: session\n"
+            "item: docs/history/plans/old-plan.md\n"
+            "created: 2026-10-01T12:00:00Z\n"
+            "updated: 2026-10-01T12:00:00Z\n"
+            "runtime_id: runtime\n",
+            encoding="utf-8",
+        )
+        stale_epoch = time.time() - (DOCS_TMP_HORIZON_S + 86400)
+        os.utime(claim, (stale_epoch, stale_epoch))
+        claim_files.append(claim)
+    monkeypatch.setattr(lib, "_entry_birth_epoch", lambda st: float(st.st_mtime))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not survivor.exists(), "stale uncited survivor must drain in the on posture"
+    assert all(claim.exists() for claim in claim_files)
+    assert "docs/tmp/scratch-notes.txt" in result.message
+    reason = (
+        "live claims directory; retained by name; the owning session deletes "
+        "its files at closeout and stale claims decay via takeover"
+    )
+    for directory in ("authoring-claims", "execution-claims"):
+        assert f"docs/tmp/{directory} ({reason})" in result.message
+        assert f"docs/tmp/{directory}/" not in result.message
+        assert (
+            f"docs/tmp/{directory} (unclear ownership or active work)"
+            not in result.message
+        )
+
+
+def test_docs_tmp_sweep_symlink_named_like_claims_dir_keeps_catch_all_path(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A claims-named symlink remains on the
+    no-follow catch-all path and leaves its external target untouched."""
+    root = make_repo(tmp_path, "claims-dir-symlink", gitignore_docs=True)
+    write_facts(root)
+    tmp_dir = root / "docs" / "tmp"
+    tmp_dir.mkdir(parents=True)
+    external = tmp_path / "external-claims-sentinel"
+    external.mkdir()
+    sentinel = external / "claim.md"
+    sentinel.write_bytes(b"external claim bytes\n")
+    link = tmp_dir / "authoring-claims"
+    link.symlink_to(external, target_is_directory=True)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert link.is_symlink()
+    assert sentinel.read_bytes() == b"external claim bytes\n"
+    assert "docs/tmp/authoring-claims (unclear ownership or active work)" in result.message
+    assert "live claims directory; retained by name" not in result.message
+
+
 def test_docs_tmp_sweep_preserves_protected_scratch_trees(
     tmp_path, sweep_env
 ):
@@ -3989,8 +4115,10 @@ def test_write_manifest_foreign_by_arrival_unparseable_marker_epoch_fails_closed
         done_session = linked / "docs" / "tmp" / "done-session"
         return linked, done_session, done_session / "run-start-20261101T000000Z", rel
 
-    # Arm 1: the epoch token parses as a float but never as an integer, so the
-    # marker still confirms the repo root while carrying no usable epoch.
+    # Arm 1: the epoch token parses as a float but is non-finite (the
+    # parser accepts finite floats, so the vocabulary is finite-float, not
+    # integer), so the marker still confirms the repo root while carrying
+    # no usable epoch.
     linked, done_session, marker, rel = provision("fbnan", "fb-nan-side")
     done_session.mkdir(parents=True, exist_ok=True)
     marker.write_text(f"nan {linked} {os.getpid()}\n", encoding="utf-8")
@@ -4001,7 +4129,10 @@ def test_write_manifest_foreign_by_arrival_unparseable_marker_epoch_fails_closed
     )
     assert rc != 0
     err = capsys.readouterr().err
-    assert "epoch" in err.lower()
+    # Tightened to the named reason token (origin row: the loose "epoch"
+    # substring cannot distinguish the non-finite refusal from the
+    # unparseable one).
+    assert "non-finite epoch" in err
     assert rel in err
     assert list(done_session.glob("run-manifest-*.json")) == []
 
@@ -4019,6 +4150,276 @@ def test_write_manifest_foreign_by_arrival_unparseable_marker_epoch_fails_closed
     err2 = capsys.readouterr().err
     assert "no content-confirmed run-start marker" in err2
     assert list(done_session2.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_candidate_unlinked_between_enumeration_and_classification(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Arm 1 (TOCTOU pin): a candidate unlinked
+    between enumeration and classification (simulated by a stat() call
+    raising OSError for exactly that path at classification time) lands in
+    the refuse set as a named per-candidate refusal, never crashes the
+    writer and never auto-classifies: the writer exits non-zero naming the
+    vanished candidate under claim-or-foreign, and no manifest is
+    written."""
+    root = mktemp_repo("fbtoctou")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbtoctou-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-toctou-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    vanishing = ".ai-playbook/reviews/2026-11-01-vanished-review-r1.md"
+    old_t = float(marker_epoch - 120)
+    (linked / vanishing).parent.mkdir(parents=True, exist_ok=True)
+    (linked / vanishing).write_text("staging record\n", encoding="utf-8")
+    os.utime(linked / vanishing, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    # The injection seam relies on Python 3.13+ pathlib internals: on the
+    # pinned runner (3.14) Path.is_file() delegates to os.path.isfile and
+    # bypasses this patch, so enumeration is transparent and the OSError
+    # first bites at the split's classification-time stat(); on older
+    # interpreters the test fails loudly instead of passing vacuously.
+    real_stat = Path.stat
+
+    def racing_stat(self, *args, **kwargs):
+        if self.name == Path(vanishing).name and "reviews" in str(self):
+            raise OSError("unlinked between enumeration and classification")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", racing_stat)
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    monkeypatch.undo()
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "claim-or-foreign" in err
+    assert vanishing in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+def test_write_manifest_foreign_by_arrival_over_sample_limit_bounded_report(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Arm 2: an arrival classification over
+    SAMPLE_LIMIT candidates emits the bounded report shape at the
+    write-manifest call site - the count header names the full count, the
+    inline listing shows at most SAMPLE_LIMIT samples, the full
+    enumeration lands under the done-session gate-reports home, and the
+    manifest itself records all candidates."""
+    root = mktemp_repo("fblimit")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fblimit-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-limit-side")
+    marker_epoch = int(time.time()) - 3600
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    old_t = float(marker_epoch - 120)
+    rels = [
+        f".ai-playbook/reviews/2026-11-01-transferred-review-r{i:02d}.md"
+        for i in range(1, lib.SAMPLE_LIMIT + 3)
+    ]
+    for rel in rels:
+        (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+        (linked / rel).write_text("transferred staging record\n", encoding="utf-8")
+        os.utime(linked / rel, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    total = len(rels)
+    assert f"foreign-by-arrival: {total} gitignored staging candidate(s)" in out
+    assert f"(showing the first {lib.SAMPLE_LIMIT}" in out
+    for rel in rels[: lib.SAMPLE_LIMIT]:
+        assert rel in out
+    # The inline listing is actually truncated: the beyond-limit entries
+    # appear only in the full-list file, never inline.
+    for rel in rels[lib.SAMPLE_LIMIT :]:
+        assert rel not in out
+    full_lists = list((done_session / lib.GATE_REPORTS_DIRNAME).glob("*"))
+    assert full_lists, "the over-limit full enumeration file must be written"
+    full_text = "\n".join(
+        p.read_text(encoding="utf-8") for p in full_lists
+    )
+    for rel in rels:
+        assert rel in full_text
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert sorted(payload["foreign_review_paths"]) == sorted(rels)
+
+
+def test_run_marker_epoch_refusal_arms_named(tmp_path):
+    """[class: REPOSITORY_TEST] Arm 3: ``_run_marker_epoch``'s refusal arms
+    each carry their named reason - an unreadable marker, a marker with no
+    content line, an unparseable first token, a non-finite (``nan``) first
+    token refusing under the exact ``non-finite epoch`` reason token, and
+    a non-UTF-8 marker refusing under the ``not valid UTF-8`` reason
+    instead of crashing with an unhandled UnicodeDecodeError."""
+    missing = tmp_path / "absent-marker"
+    epoch, refusal = lib._run_marker_epoch(missing)
+    assert epoch is None and refusal is not None
+    assert "unreadable" in refusal
+
+    empty = tmp_path / "empty-marker"
+    empty.write_text("\n\n", encoding="utf-8")
+    epoch, refusal = lib._run_marker_epoch(empty)
+    assert epoch is None and refusal is not None
+    assert "no content line" in refusal
+
+    unparseable = tmp_path / "unparseable-marker"
+    unparseable.write_text("not-an-epoch /tmp/x 42\n", encoding="utf-8")
+    epoch, refusal = lib._run_marker_epoch(unparseable)
+    assert epoch is None and refusal is not None
+    assert "records no parseable epoch" in refusal
+
+    nan = tmp_path / "nan-marker"
+    nan.write_text("nan /tmp/x 42\n", encoding="utf-8")
+    epoch, refusal = lib._run_marker_epoch(nan)
+    assert epoch is None and refusal is not None
+    assert "non-finite epoch" in refusal
+
+    binary = tmp_path / "binary-marker"
+    binary.write_bytes(b"\xff\xfe\x00binary-junk\n")
+    epoch, refusal = lib._run_marker_epoch(binary)
+    assert epoch is None and refusal is not None
+    assert "not valid UTF-8" in refusal
+
+
+def test_write_manifest_foreign_by_arrival_split_consumes_passed_epoch(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Arm 4: the confirmed epoch pair reaches the
+    split through its keyword parameters, not through a split-side read.
+    The discriminator is the spy on ``_foreign_by_default_split``: it
+    asserts the caller-parsed pair arrived via kwargs (a non-None epoch,
+    a None refusal) - under the removed split-side re-read shape the
+    kwargs would carry the defaults (None, None) and the pin fails - while
+    the single-parse count and the classification outcome ride as
+    supplements."""
+    root = mktemp_repo("fbpassed")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbpassed-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-passed-side")
+    marker_epoch = int(time.time()) - 7200
+    make_marker(linked, marker_epoch, os.getpid())
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    rel = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+    old_t = float(marker_epoch - 120)
+    (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+    (linked / rel).write_text("transferred staging record\n", encoding="utf-8")
+    os.utime(linked / rel, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+    done_session = linked / "docs" / "tmp" / "done-session"
+
+    real_parse = lib._run_marker_epoch
+    parse_calls = []
+
+    def counting_parse(path):
+        parse_calls.append(path)
+        return real_parse(path)
+
+    monkeypatch.setattr(lib, "_run_marker_epoch", counting_parse)
+    real_split = lib._foreign_by_default_split
+    split_kwargs = []
+
+    def spying_split(ctx, uncovered, owned, **kwargs):
+        split_kwargs.append(kwargs)
+        return real_split(ctx, uncovered, owned, **kwargs)
+
+    monkeypatch.setattr(lib, "_foreign_by_default_split", spying_split)
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "foreign-by-arrival" in out
+    assert rel in out
+    # The discriminator: the split received the caller-parsed pair.
+    assert len(split_kwargs) == 1
+    kwargs = split_kwargs[0]
+    assert kwargs["arrival_epoch"] == float(marker_epoch)
+    assert kwargs["arrival_epoch_refusal"] is None
+    assert kwargs["arrival_marker"] is not None
+    # Supplements: the parse ran exactly once at the caller's single site,
+    # and the manifest records the classified candidate.
+    assert len(parse_calls) == 1
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["foreign_review_paths"] == [rel]
+
+
+def test_write_manifest_foreign_by_arrival_non_utf8_marker_named_refusal(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Arm 4 (companion): a non-UTF-8 bound marker
+    never surfaces as an unhandled UnicodeDecodeError crash or the CLI's
+    mislabeled ``config error`` rendering: the window reader counts it
+    malformed (the window refusal names the unanchorable session), and the
+    split-side parser names it ``not valid UTF-8`` (pinned by
+    test_run_marker_epoch_refusal_arms_named)."""
+    root = mktemp_repo("fbbinary")
+    git(root, "add", "-A")
+    with open(root / ".gitignore", "a", encoding="utf-8") as handle:
+        handle.write(".ai-playbook/reviews/\n")
+    git(root, "add", ".gitignore")
+    git(root, "commit", "-m", "ignore reviews home", "-q")
+    linked = Path(tempfile.mkdtemp(prefix="fbbinary-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "fb-binary-side")
+    (linked / ".ai-playbook" / "facts.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    shutil.copy(root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md")
+    done_session = linked / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True, exist_ok=True)
+    marker = done_session / marker_name(int(time.time()) - 600)
+    marker.write_bytes(b"\xff\xfe\x00not-utf8\n")
+    rel = ".ai-playbook/reviews/2026-11-01-transferred-review-r1.md"
+    old_t = float(int(time.time()) - 7200)
+    (linked / rel).parent.mkdir(parents=True, exist_ok=True)
+    (linked / rel).write_text("transferred staging record\n", encoding="utf-8")
+    os.utime(linked / rel, (old_t, old_t))
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-11-01-x.md"]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "config error" not in err
+    assert "no content-confirmed run-start marker" in err
+    assert list(done_session.glob("run-manifest-*.json")) == []
 
 
 def test_write_manifest_foreign_by_arrival_tracked_unclaimed_refuses(
@@ -6398,6 +6799,291 @@ def test_done_session_retention_unknown_ref_recovery_and_post_removal_prune(
     assert not cited.exists(), "post-removal the report is age-prunable again"
 
 
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-11-08-branch-only-closeout-gate-report-retention.md
+# Task 3: RED tests for retention terminal consumption.
+# --------------------------------------------------------------------------- #
+def _receipt_entry(root: Path, branch: str) -> dict:
+    """A hand-crafted terminal completion receipt bound to ``branch`` (the
+    plan's receipt shape: the recorded branch, the one proven tip OID, the
+    verdict, a timestamp)."""
+    return {
+        "branch": branch,
+        "oid": git(root, "rev-parse", "HEAD").stdout.strip(),
+        "verdict": "ancestry-accounted",
+        "recorded_at": "2026-11-08T00:00:00+0000",
+    }
+
+
+def _stamp_receipt_section(manifest: Path, value) -> Path:
+    """Add the top-level ``terminal_completion_receipts`` section carrying
+    ``value`` to an already-written migration manifest (the section marker is
+    the only byte that differs from a no-section manifest)."""
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["terminal_completion_receipts"] = value
+    manifest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+def test_docs_tmp_sweep_prunes_aged_report_by_terminal_receipt_consult(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a no-worktree-match manifest whose
+    ``terminal_completion_receipts`` section carries a hand-crafted receipt
+    (an entry whose ``branch`` equals the manifest's recorded branch) whose
+    branch ref no longer resolves, expects the aged report prunes AND the
+    consulted justification is the receipt section: the pinned
+    ``_branch_ref_resolves`` helper is consulted for the recorded branch
+    inside the retention window's own hold (the ``prune_within_hold``
+    consumer), not only by the unrelated proof-family drain (plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 3; fails today
+    on the discriminating leg: the report prunes today, but with no receipt
+    consulted)."""
+    root = mktemp_repo("receipt-prune")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-receipt-prune-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    branch = "wt-receipt-prune"
+    created = git(root, "branch", branch)
+    assert created.returncode == 0, created.stderr
+    receipt = _receipt_entry(root, branch)
+    removed_ref = git(root, "branch", "-D", branch)
+    assert removed_ref.returncode == 0, removed_ref.stderr
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-11-08-receipt-prune"
+        / "closeout-migration.json",
+        branch=branch,
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+    _stamp_receipt_section(manifest, [receipt])
+    assert manifest.is_file()
+
+    consulted: list[tuple[str, str, bool]] = []
+    active_consumer: dict = {"name": None}
+    real_hold = lib._closeout_reference_hold
+    real_resolves = lib._branch_ref_resolves
+
+    def spy_hold(ctx, consume):
+        active_consumer["name"] = getattr(consume, "__name__", "")
+        try:
+            return real_hold(ctx, consume)
+        finally:
+            active_consumer["name"] = None
+
+    def spy_resolves(ctx, branch_name):
+        resolves = real_resolves(ctx, branch_name)
+        consulted.append((active_consumer["name"], branch_name, resolves))
+        return resolves
+
+    monkeypatch.setattr(lib, "_closeout_reference_hold", spy_hold)
+    monkeypatch.setattr(lib, "_branch_ref_resolves", spy_resolves)
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not cited.exists(), "the receipt-consulted aged report prunes"
+    assert str(cited.resolve()) in result.message, result.message
+    assert ("prune_within_hold", branch, False) in consulted, (
+        "the consulted justification is the receipt section, consulted by "
+        "the retention window's own hold; today's prune is receipt-blind "
+        f"(consulted: {consulted})"
+    )
+
+
+def test_docs_tmp_sweep_retains_report_when_receipt_branch_ref_resolves(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a no-worktree-match manifest whose
+    section carries a receipt whose branch ref still resolves, expects the
+    cited aged report stays retained (authorization is not completion; plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 3; fails
+    today: the report prunes on age) while an unreferenced sibling still
+    prunes (the hold stays verified and selective)."""
+    root = mktemp_repo("receipt-live-ref")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-receipt-live-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    loose = _aged_gate_report(
+        reports_dir, "run-receipt-live-loose-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    branch = "wt-receipt-live"
+    created = git(root, "branch", branch)
+    assert created.returncode == 0, created.stderr
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-11-08-receipt-live"
+        / "closeout-migration.json",
+        branch=branch,
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+    _stamp_receipt_section(manifest, [_receipt_entry(root, branch)])
+    assert manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "a receipt whose branch ref still resolves retains the report"
+    assert not loose.exists(), "unreferenced aged report still prunes beside the retained one"
+
+
+def test_docs_tmp_sweep_retains_report_with_stamped_empty_receipt_section(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a no-worktree-match manifest whose
+    ``terminal_completion_receipts`` section is present and empty (the
+    unresolved attempt's stamp, its recorded ref no longer resolving during
+    recovery), expects the cited aged report stays retained through recovery
+    (the Outcome witness: unresolved attempts keep their verified reports;
+    plan 2026-11-08-branch-only-closeout-gate-report-retention Task 3; fails
+    today: the report prunes on age) while an unreferenced sibling still
+    prunes."""
+    root = mktemp_repo("receipt-stamped-empty")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-receipt-empty-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    loose = _aged_gate_report(
+        reports_dir, "run-receipt-empty-loose-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    branch = "wt-stamped-empty"
+    created = git(root, "branch", branch)
+    assert created.returncode == 0, created.stderr
+    dropped = git(root, "branch", "-D", branch)
+    assert dropped.returncode == 0, dropped.stderr
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-11-08-receipt-empty"
+        / "closeout-migration.json",
+        branch=branch,
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+    _stamp_receipt_section(manifest, [])
+    assert manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert cited.exists(), "a stamped empty section retains the report through recovery"
+    assert not loose.exists(), "unreferenced aged report still prunes beside the retained one"
+
+
+def test_docs_tmp_sweep_manifest_without_receipt_section_keeps_aged_prune(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a no-worktree-match manifest without
+    the ``terminal_completion_receipts`` key (the worktree-completed and
+    legacy-grandfather shape), expects today's aged prune (green-at-RED pin;
+    must stay green after Task 4 beside the existing post-removal pins; plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 3)."""
+    root = mktemp_repo("receipt-no-section")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    cited = _aged_gate_report(
+        reports_dir, "run-receipt-absent-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    manifest = _write_migration_manifest(
+        root
+        / "docs"
+        / "tmp"
+        / "execute-plan"
+        / "2026-11-08-receipt-absent"
+        / "closeout-migration.json",
+        branch="wt-no-section",
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(cited.resolve())],
+    )
+    assert manifest.is_file()
+    assert "terminal_completion_receipts" not in json.loads(
+        manifest.read_text(encoding="utf-8")
+    )
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert not cited.exists(), "no section marker keeps today's aged prune"
+    assert str(cited.resolve()) in result.message, result.message
+
+
+def test_docs_tmp_sweep_retains_report_on_malformed_receipt_section(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a readable manifest whose
+    ``terminal_completion_receipts`` value is not a list, and separately one
+    whose list holds an entry without a string ``branch``, expects both
+    reports stay retained (a malformed section degrades to retention, never
+    to a receipt-blind prune; plan
+    2026-11-08-branch-only-closeout-gate-report-retention Task 3; fails
+    today: the reports prune on age) while an unreferenced sibling still
+    prunes."""
+    root = mktemp_repo("receipt-malformed")
+    _retention_markers(root)
+    reports_dir = _gate_reports_dir(root)
+    reports_dir.mkdir(parents=True)
+    shape_report = _aged_gate_report(
+        reports_dir, "run-receipt-shape-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    entry_report = _aged_gate_report(
+        reports_dir, "run-receipt-entry-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    loose = _aged_gate_report(
+        reports_dir, "run-receipt-malformed-loose-full.txt", int(time.time()) - RETENTION_ANCHOR_OFFSET_S
+    )
+    sessions = root / "docs" / "tmp" / "execute-plan"
+    shape_manifest = _write_migration_manifest(
+        sessions / "2026-11-08-receipt-shape" / "closeout-migration.json",
+        branch="wt-receipt-shape",
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(shape_report.resolve())],
+    )
+    _stamp_receipt_section(shape_manifest, "not-a-list")
+    entry_manifest = _write_migration_manifest(
+        sessions / "2026-11-08-receipt-entry" / "closeout-migration.json",
+        branch="wt-receipt-entry",
+        source=str(root / "recorded-source-not-the-worktree"),
+        destinations=[str(entry_report.resolve())],
+    )
+    _stamp_receipt_section(
+        entry_manifest,
+        [
+            {
+                "oid": "0" * 64,
+                "verdict": "ancestry-accounted",
+                "recorded_at": "2026-11-08T00:00:00+0000",
+            }
+        ],
+    )
+    assert shape_manifest.is_file() and entry_manifest.is_file()
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    assert shape_report.exists(), "a non-list section value retains the report"
+    assert entry_report.exists(), "an entry without a string branch retains the report"
+    assert not loose.exists(), "unreferenced aged report still prunes beside the retained ones"
+
+
 def test_session_ignored_paths_stay_window_anchored_under_manifest(
     tmp_path, sweep_env, mktemp_repo
 ):
@@ -8517,6 +9203,508 @@ def test_disposition_skill_anchor_phrases_present():
     ).read_text(encoding="utf-8")
     assert "HEAD:<recorded path>" in done_text
     assert "stale-deployment" in maintenance_text
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-11-09-interrupted-manifest-gitignored-witness-gap.md
+# Task 1: operator-directed loss reason in disposition-manifest.
+# --------------------------------------------------------------------------- #
+def test_disposition_operator_directed_loss_stamps_loss_reason(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 acceptance: given a dead-root
+    manifest whose ``owned_plan_paths`` entry resolves through no tracked
+    arm and a ``--note`` naming that path, ``disposition-manifest
+    --operator-directed-loss`` stamps ``{reason: "operator-directed-loss",
+    date, note}``, exits 0, and a ``list-interrupted-manifests`` line prints
+    ``dispositioned=yes``; the same outcome holds for a never-tracked
+    ``owned_paths`` entry named in the note."""
+    root = mktemp_repo("disposition-loss")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    # Arm A: a note-only owned_plan_paths entry (never on disk, never at
+    # HEAD, no archive twin; docs/ is gitignored in the fixture).
+    loss_id = "run-operator-loss-plan"
+    orphan_plan = "docs/history/plans/2026-11-09-lost-plan.md"
+    _seed_run_manifest(
+        root, loss_id, marker_name(now), str(tmp_path / "deleted-worktree"),
+        now, owned_plan_paths=[orphan_plan],
+    )
+    note = f"{orphan_plan} lost with its dead checkout"
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                loss_id,
+                "--note",
+                note,
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert f"dispositioned: {loss_id} ({today})" in capsys.readouterr().out
+    expected = {
+        "reason": "operator-directed-loss",
+        "date": today,
+        "note": note,
+    }
+    reloaded = lib._read_manifest_by_run_id(done_session, loss_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned == expected
+
+    # The census line prints dispositioned=yes for the loss disposition.
+    assert lib.main(["list-interrupted-manifests"]) == 0
+    out = capsys.readouterr().out
+    census = [ln for ln in out.splitlines() if ln.startswith(loss_id)]
+    assert len(census) == 1
+    assert "root_matches_current_repo=no" in census[0]
+    assert "dispositioned=yes" in census[0]
+
+    # Arm B: the same outcome for a never-tracked owned_paths entry named
+    # in the note (not at HEAD, no twin, no landed deletion reachable).
+    never_id = "run-operator-loss-never-tracked"
+    never_path = ".ai-playbook/reviews/2026-11-09-lost-review.md"
+    _seed_run_manifest(
+        root, never_id, marker_name(now + 1), str(tmp_path / "deleted-wt-2"),
+        now + 1, owned_paths=[never_path],
+    )
+    never_note = f"{never_path} lost with its dead checkout"
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                never_id,
+                "--note",
+                never_note,
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    reloaded_b = lib._read_manifest_by_run_id(done_session, never_id)
+    assert reloaded_b is not None
+    assert reloaded_b.dispositioned == {
+        "reason": "operator-directed-loss",
+        "date": today,
+        "note": never_note,
+    }
+
+
+def test_disposition_operator_directed_loss_inert_for_tracked_plan_path(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: IMPLEMENTATION_REQUIRED] Plan Task 1 tracked-plan witness:
+    given the flag with a ``--note`` naming an ``owned_plan_paths`` entry
+    that resolves through a tracked arm (the plan path present at HEAD),
+    expects exit 0, the ``work-verified-landed`` stamp, and one printed
+    inert-notice line. Pins the tracked-before-note collection order for the
+    ``owned_plan_paths`` loop (the collector-parameter cell pins the
+    ``owned_paths`` loop only), so hoisting the collector append above the
+    tracked-arm ``continue`` cannot mis-stamp ``operator-directed-loss``
+    over a HEAD-landed plan path - asserted directly through the witness
+    collector, which stays empty for this invocation."""
+    root = mktemp_repo("disposition-loss-tracked-plan")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    # The plan path committed at HEAD (docs/ is gitignored, so add -f).
+    landed_plan = "docs/history/plans/2026-11-09-landed-plan.md"
+    landed_path = root / landed_plan
+    landed_path.parent.mkdir(parents=True, exist_ok=True)
+    landed_path.write_text("landed plan\n", encoding="utf-8")
+    git(root, "add", "-f", landed_plan)
+    git(root, "commit", "-m", "land the plan", "-q")
+
+    tracked_id = "run-operator-loss-tracked-plan"
+    _seed_run_manifest(
+        root, tracked_id, marker_name(now), str(tmp_path / "deleted-worktree"),
+        now, owned_plan_paths=[landed_plan],
+    )
+    note = f"{landed_plan} landed at HEAD of this checkout"
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                tracked_id,
+                "--note",
+                note,
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    notice = [
+        ln for ln in out.splitlines()
+        if "--operator-directed-loss" in ln and "unused" in ln
+    ]
+    assert len(notice) == 1
+    reloaded = lib._read_manifest_by_run_id(done_session, tracked_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned == {
+        "reason": "work-verified-landed",
+        "date": today,
+        "note": note,
+    }
+
+    # The witness collector for this invocation stays empty: the entry
+    # resolved through a tracked arm before the note arm was consulted
+    # (the mutation-sensitive pin - hoisting the append above the tracked
+    # arm's continue would collect the path and mis-stamp the reason).
+    ctx = ctx_for(root)
+    collected: list[str] = []
+    assert (
+        lib._disposition_first_missing_deliverable(
+            reloaded, ctx, note=note, note_only=collected
+        )
+        is None
+    )
+    assert collected == []
+
+
+def test_disposition_note_only_collector_parameter_defaults_off(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: IMPLEMENTATION_REQUIRED] Plan Task 1: the witness
+    (``_disposition_first_missing_deliverable``) reports note-only
+    deliverables through an optional collector parameter that defaults off,
+    so ``recover-manifest`` and every unflagged call keep the first-missing
+    return contract unchanged: with no collector and no note the witness
+    returns the first-missing message; with a note the entry resolves and
+    None returns; with the collector on the note-only entry is reported
+    while the return stays None; a tracked-resolved entry never lands in
+    the collector, even when the note names it."""
+    root = mktemp_repo("disposition-collector")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    orphan_plan = "docs/history/plans/2026-11-09-collector-plan.md"
+    _seed_run_manifest(
+        root, "run-collector", marker_name(now),
+        str(tmp_path / "deleted-worktree"), now,
+        owned_plan_paths=[orphan_plan],
+    )
+    manifest = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", "run-collector"
+    )
+    assert manifest is not None
+    ctx = ctx_for(root)
+    note = f"{orphan_plan} lost with its dead checkout"
+
+    # Default (collector off): the first-missing return contract unchanged.
+    assert lib._disposition_first_missing_deliverable(manifest, ctx) is not None
+    assert (
+        lib._disposition_first_missing_deliverable(manifest, ctx, note=note)
+        is None
+    )
+
+    # Collector on: the note-only entry is reported, the return stays None.
+    collected: list[str] = []
+    assert (
+        lib._disposition_first_missing_deliverable(
+            manifest, ctx, note=note, note_only=collected
+        )
+        is None
+    )
+    assert collected == [orphan_plan]
+
+    # A tracked-resolved entry never lands in the collector, even when the
+    # note names it (resolved through the tracked arm before the note arm).
+    _seed_run_manifest(
+        root, "run-collector-tracked", marker_name(now + 1),
+        str(tmp_path / "deleted-wt-2"), now + 1, owned_paths=["README.md"],
+    )
+    tracked = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", "run-collector-tracked"
+    )
+    assert tracked is not None
+    collected_tracked: list[str] = []
+    assert (
+        lib._disposition_first_missing_deliverable(
+            tracked, ctx, note="README.md verified at HEAD",
+            note_only=collected_tracked,
+        )
+        is None
+    )
+    assert collected_tracked == []
+
+
+def test_disposition_operator_directed_loss_inert_without_note_only_deliverable(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 inert-flag witness: given the
+    flag on a dead-root manifest whose every deliverable resolves through a
+    tracked arm - once without ``--note`` and once with a ``--note`` naming
+    the tracked-resolved path - and given the flag on a manifest owning no
+    deliverables, expects a ``work-verified-landed`` stamp, exit 0, and one
+    printed notice line naming the flag as unused."""
+    root = mktemp_repo("disposition-loss-inert")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    # Arm A: every deliverable tracked-resolved (README.md at HEAD), no note.
+    inert_id = "run-loss-flag-inert"
+    _seed_run_manifest(
+        root, inert_id, marker_name(now), str(tmp_path / "deleted-worktree"),
+        now, owned_paths=["README.md"],
+    )
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                inert_id,
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    notice = [
+        ln for ln in out.splitlines()
+        if "--operator-directed-loss" in ln and "unused" in ln
+    ]
+    assert len(notice) == 1
+    reloaded = lib._read_manifest_by_run_id(done_session, inert_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned == {
+        "reason": "work-verified-landed",
+        "date": today,
+        "note": "",
+    }
+
+    # Arm B: the note names the tracked-resolved path; the entry resolved
+    # through the tracked arm first, so the flag stays inert.
+    inert_note_id = "run-loss-flag-inert-note"
+    _seed_run_manifest(
+        root, inert_note_id, marker_name(now + 1),
+        str(tmp_path / "deleted-wt-2"), now + 1, owned_paths=["README.md"],
+    )
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                inert_note_id,
+                "--note",
+                "README.md verified at HEAD of this checkout",
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    out_b = capsys.readouterr().out
+    notice_b = [
+        ln for ln in out_b.splitlines()
+        if "--operator-directed-loss" in ln and "unused" in ln
+    ]
+    assert len(notice_b) == 1
+    reloaded_b = lib._read_manifest_by_run_id(done_session, inert_note_id)
+    assert reloaded_b is not None
+    assert reloaded_b.dispositioned["reason"] == "work-verified-landed"
+    assert reloaded_b.dispositioned["note"] == (
+        "README.md verified at HEAD of this checkout"
+    )
+
+    # Arm C: the manifest owns no deliverables at all; the flag is inert.
+    empty_id = "run-loss-flag-inert-empty"
+    _seed_run_manifest(
+        root, empty_id, marker_name(now + 2), str(tmp_path / "deleted-wt-3"),
+        now + 2,
+    )
+    assert (
+        lib.main(
+            [
+                "disposition-manifest",
+                "--run-id",
+                empty_id,
+                "--operator-directed-loss",
+            ]
+        )
+        == 0
+    )
+    out_c = capsys.readouterr().out
+    assert "no-deliverables" in out_c
+    notice_c = [
+        ln for ln in out_c.splitlines()
+        if "--operator-directed-loss" in ln and "unused" in ln
+    ]
+    assert len(notice_c) == 1
+    reloaded_c = lib._read_manifest_by_run_id(done_session, empty_id)
+    assert reloaded_c is not None
+    assert reloaded_c.dispositioned["reason"] == "work-verified-landed"
+
+
+def test_disposition_operator_directed_loss_flagged_refusal_unchanged(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 flagged-refusal witness: given
+    the flag with a note that omits the missing path, expects the existing
+    refusal naming that path and the arms attempted, exit 1, and the
+    manifest byte-identical: the flag adds no acceptance a no-flag
+    invocation would refuse."""
+    root = mktemp_repo("disposition-loss-refusal")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    orphan_plan = "docs/history/plans/2026-11-09-refused-plan.md"
+    run_id = "run-loss-flag-refusal"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"),
+        now, owned_plan_paths=[orphan_plan],
+    )
+    manifest_path = (
+        root / "docs" / "tmp" / "done-session" / f"run-manifest-{run_id}.json"
+    )
+    before = manifest_path.read_bytes()
+
+    rc = lib.main(
+        [
+            "disposition-manifest",
+            "--run-id",
+            run_id,
+            "--note",
+            "a closure note that names no lost path",
+            "--operator-directed-loss",
+        ]
+    )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "deliverables witness failed" in err
+    assert orphan_plan in err
+    assert "witness arms" in err
+    assert "note-backed" in err
+    assert manifest_path.read_bytes() == before
+
+
+def test_disposition_unflagged_pins_stay_byte_identical(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 unflagged pin: given the same
+    manifest shape without the flag, expects the existing refusal with no
+    note and the existing ``work-verified-landed`` stamp with a note naming
+    the path - both byte-identical to today's unflagged contract."""
+    root = mktemp_repo("disposition-unflagged-pin")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    orphan_plan = "docs/history/plans/2026-11-09-unflagged-plan.md"
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    # Arm A: no note - the existing refusal, byte-identical, no mutation.
+    refuse_id = "run-unflagged-refusal"
+    _seed_run_manifest(
+        root, refuse_id, marker_name(now), str(tmp_path / "deleted-worktree"),
+        now, owned_plan_paths=[orphan_plan],
+    )
+    refuse_path = done_session / f"run-manifest-{refuse_id}.json"
+    before = refuse_path.read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", refuse_id]) == 1
+    err = capsys.readouterr().err
+    assert "deliverables witness failed" in err
+    assert orphan_plan in err
+    assert "witness arms" in err
+    assert refuse_path.read_bytes() == before
+
+    # Arm B: a note naming the path - the existing work-verified-landed
+    # stamp, the reason literal pinned exactly.
+    stamp_id = "run-unflagged-stamp"
+    _seed_run_manifest(
+        root, stamp_id, marker_name(now + 1), str(tmp_path / "deleted-wt-2"),
+        now + 1, owned_plan_paths=[orphan_plan],
+    )
+    note = f"{orphan_plan} lost with its dead checkout"
+    assert (
+        lib.main(["disposition-manifest", "--run-id", stamp_id, "--note", note])
+        == 0
+    )
+    capsys.readouterr()
+    today = datetime.now(timezone.utc).date().isoformat()
+    reloaded = lib._read_manifest_by_run_id(done_session, stamp_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned == {
+        "reason": "work-verified-landed",
+        "date": today,
+        "note": note,
+    }
+
+
+def test_recover_manifest_rejects_operator_directed_loss_flag(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan Task 1 recovery pin: given
+    ``recover-manifest`` with the flag, expects an argument-usage rejection
+    with the manifest byte-identical (the flag is disposition-only);
+    without the flag the recovery behavior is unchanged (the vacuous-
+    witness live-root fixture still stamps the recovery reason, the shape
+    the existing recovery cells pin)."""
+    root = mktemp_repo("recover-loss-flag")
+    now = time.time()
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True, exist_ok=True)
+    run_id = "run-recover-loss-flag"
+    _seed_run_manifest(root, run_id, marker_name(now), root_digest(root), now)
+    manifest_path = done_session / f"run-manifest-{run_id}.json"
+    before = manifest_path.read_bytes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        lib.main(
+            [
+                "recover-manifest",
+                "--run-id",
+                run_id,
+                "--operator-directed-loss",
+            ]
+        )
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--operator-directed-loss" in err
+    assert "unrecognized arguments" in err
+    assert manifest_path.read_bytes() == before
+
+    # Without the flag: the recovery behavior is unchanged.
+    assert lib.main(["recover-manifest", "--run-id", run_id]) == 0
+    capsys.readouterr()
+    reloaded = lib._read_manifest_by_run_id(done_session, run_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned is not None
+    assert reloaded.dispositioned["reason"] == (
+        "work-verified-landed-live-recovery"
+    )
+
+
+def test_disposition_manifest_usage_declares_operator_directed_loss():
+    """[class: IMPLEMENTATION_REQUIRED] Plan Task 1: the top-level usage
+    string's ``disposition-manifest`` entry declares the flag, the
+    note-only condition, the inert notice, its operator-invoked ownership,
+    its disposition-only scope, the reprint and racer arms ignoring the
+    flag, and the homes the witness never probes (sibling worktrees,
+    stashes, other checkouts, remote refs)."""
+    usage = lib._usage()
+    assert "--operator-directed-loss" in usage
+    assert "note-only deliverable" in usage
+    assert "inert" in usage
+    assert "unused" in usage
+    assert "operator-invoked" in usage
+    assert "recover-manifest never accepts it" in usage
+    assert "reprint arm" in usage
+    assert "racer arm" in usage
+    assert "ignore the flag" in usage
+    assert "sibling worktrees" in usage
+    assert "stashes" in usage
+    assert "other checkouts" in usage
+    assert "remote refs" in usage
 
 
 # --------------------------------------------------------------------------- #
@@ -17234,9 +18422,25 @@ def test_closeout_gate_keeps_paused_mid_run_pass_with_note(
 # records.md, Task 2 presence pins: the receipt keys and the landed-archive
 # verification phrase appear in the execute-plan skill text, and the skill
 # and its vendored twin stay byte-equal (the Validation Commands' pinned
-# diff line exits 0).
+# diff line exits 0). Re-aimed 2026-11-10 (plan
+# docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4):
+# after the load-on-dispatch split the pins read their owning module, and the
+# twin leg is split-aware: while the twin still carries the pre-split body it
+# must equal the router head plus the modules byte-exactly; once the twin
+# carries the split (the closeout vendored-sync landing) it must equal the
+# router and the modules file-for-file.
 # --------------------------------------------------------------------------- #
 EXECUTE_PLAN_SKILL_REL = "agents/skills/execute-plan/SKILL.md"
+EXECUTE_PLAN_MODULE_RELS = (
+    "agents/skills/execute-plan/invocation-and-orchestration.md",
+    "agents/skills/execute-plan/run-setup.md",
+    "agents/skills/execute-plan/implementation-loop.md",
+    "agents/skills/execute-plan/phase-3-review.md",
+    "agents/skills/execute-plan/archive-and-cleanup.md",
+    "agents/skills/execute-plan/launch-rules-and-gates.md",
+    "agents/skills/execute-plan/recovery-and-integration.md",
+)
+EXECUTE_PLAN_DISPATCH_MARKER = b"## Module dispatch (the router contract)"
 EXECUTE_PLAN_SKILL_PINS = (
     "pre_archive_receipt",
     "filed_row_paths",
@@ -17252,30 +18456,96 @@ EXECUTE_PLAN_SKILL_PINS = (
 )
 
 
-def test_execute_plan_skill_receipt_pins_and_vendored_twin():
+def test_execute_plan_skill_receipt_pins():
     """[class: REPOSITORY_TEST] Plan Task 2 presence pins: the receipt keys
     (``pre_archive_receipt``, ``declared_paths``, ``archived_plan_path``,
     ``plan_digest``, ``recorded_at``, ``filed_row_paths``) and the
-    landed-archive verification phrase appear in the execute-plan skill
-    text, and the skill is byte-equal with its vendored twin, which carries
-    the same pins. Fails before the skill text lands, passes after."""
+    landed-archive verification phrase appear in the execute-plan skill text.
+    Fails before the skill text lands, passes after."""
     repo_root = Path(__file__).resolve().parents[1]
     skill_bytes = (repo_root / EXECUTE_PLAN_SKILL_REL).read_bytes()
-    skill_text = skill_bytes.decode("utf-8")
+    module_bytes = {
+        rel: (repo_root / rel).read_bytes() for rel in EXECUTE_PLAN_MODULE_RELS
+    }
+    owning_text = module_bytes["agents/skills/execute-plan/archive-and-cleanup.md"].decode("utf-8")
     for pin in EXECUTE_PLAN_SKILL_PINS:
-        assert pin in skill_text, f"presence pin absent from the skill: {pin!r}"
+        assert pin in owning_text, f"presence pin absent from the owning module: {pin!r}"
+    skill_path = repo_root / EXECUTE_PLAN_SKILL_REL
     twin_path = Path.home() / ".agents" / "skills" / "execute-plan" / "SKILL.md"
     if not twin_path.exists():
         pytest.skip(
-            "vendored twin not deployed on this machine; the same-change "
-            "twin sync and the Validation Commands diff line own it"
+            "runtime twin not deployed on this machine; deployment smoke check is not applicable"
         )
-    twin_bytes = twin_path.read_bytes()
-    assert twin_bytes == skill_bytes, (
-        "the vendored twin diverges from agents/skills/execute-plan/SKILL.md "
-        "(the diff line in the plan's Validation Commands must exit 0)"
+    # A worktree can be based on an older primary revision while the runtime
+    # skills registry still resolves to the current primary checkout. Compare
+    # against that canonical source only when the feature branch did not edit
+    # this skill; branch-authored edits must remain byte-equal to the twin.
+    canonical_path = skill_path
+    common_dir = Path(
+        subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=repo_root,
+            text=True,
+        ).strip()
     )
-    twin_text = twin_bytes.decode("utf-8")
+    primary_root = common_dir.parent.resolve()
+    if primary_root != repo_root.resolve():
+        merge_base = subprocess.check_output(
+            ["git", "merge-base", "HEAD", "main"],
+            cwd=repo_root,
+            text=True,
+        ).strip()
+        rel_skill = str(skill_path.relative_to(repo_root))
+        branch_changed_skill = subprocess.run(
+            ["git", "diff", "--quiet", f"{merge_base}..HEAD", "--", rel_skill],
+            cwd=repo_root,
+            check=False,
+        ).returncode != 0
+        working_tree_changed_skill = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", rel_skill],
+            cwd=repo_root,
+            check=False,
+        ).returncode != 0
+        if not branch_changed_skill and not working_tree_changed_skill:
+            primary_skill = primary_root / rel_skill
+            if primary_skill.is_file():
+                canonical_path = primary_skill
+    canonical_bytes = canonical_path.read_bytes()
+    twin_bytes = twin_path.read_bytes()
+    if EXECUTE_PLAN_DISPATCH_MARKER in twin_bytes:
+        # the twin carries the split: file-for-file byte-equality with the repo
+        assert twin_bytes == canonical_bytes, (
+            "the vendored twin diverges from agents/skills/execute-plan/SKILL.md "
+            "(the diff line in the plan's Validation Commands must exit 0)"
+        )
+        twin_parts = [twin_bytes]
+        for rel, data in module_bytes.items():
+            # the deployed home mirrors the repo layout without the
+            # top-level agents/ component: strip it from the repo-relative
+            # module path before joining (the SKILL.md pin above already
+            # uses this direct-home shape)
+            twin_module = Path.home() / ".agents" / Path(rel).relative_to("agents")
+            assert twin_module.is_file() and twin_module.read_bytes() == data, (
+                f"the vendored twin diverges from {rel} "
+                "(the closeout vendored-sync landing must sync every module)"
+            )
+            twin_parts.append(data)
+        twin_text = b"\n".join(twin_parts).decode("utf-8")
+    else:
+        # the twin still carries the pre-split body: it must equal the router
+        # head plus the modules (the split's own verbatim move) until the
+        # closeout vendored-sync landing re-homes this leg onto the twin's
+        # split corpus
+        head = skill_bytes.split(EXECUTE_PLAN_DISPATCH_MARKER, 1)[0]
+        pre_split = head + b"".join(
+            module_bytes[rel] for rel in EXECUTE_PLAN_MODULE_RELS
+        )
+        assert twin_bytes == pre_split, (
+            "the vendored twin diverges from the pre-split execute-plan body "
+            "(the pending vendored-sync landing path owns the sync; any other "
+            "twin edit is unsanctioned drift)"
+        )
+        twin_text = twin_bytes.decode("utf-8")
     for pin in EXECUTE_PLAN_SKILL_PINS:
         assert pin in twin_text, f"presence pin absent from the twin: {pin!r}"
 
@@ -19571,3 +20841,923 @@ def test_review_fold_manifest_less_terminal_drains(tmp_path, sweep_env):
     assert result.rc == 0, result.message
     assert not session.exists(), "a manifest-less terminal session drains"
     assert PROOF_DRAIN_REASON in result.message, result.message
+
+
+# --------------------------------------------------------------------------- #
+# Admission record (plan docs/history/plans/2026-11-06-dispatch-admission-
+# outstanding-manifest-recovery, Task 1): the claim-keyed JSON record beside
+# the execution claim in the PRIMARY checkout, the lib seeder importing the
+# consult's plan derivation, the atomic record writer, and the done-boundary
+# merge arm under the existing repo merge lock. Hermeticity: the shared
+# sweep_env fixture pins DONE_SWEEP_RUNTIME_HOME and DONE_SWEEP_USER_FACTS
+# into tmp_path; the locked-merge pins additionally run with the repo-local
+# done-lock script pinned via DONE_LOCK_SCRIPT (the script's only writes land
+# under the sweep_env-pinned MERGE_LOCK_ROOT inside tmp_path) and no ambient
+# MERGE_LOCK_DIR/MERGE_LOCK_TOKEN exports, so every refusal is forced through
+# controlled holder inputs rather than wall-clock aging; no pin touches the
+# real checkout.
+# --------------------------------------------------------------------------- #
+ADMISSION_FIXTURE_PLAN_REL = (
+    "docs/history/plans/2026-11-06-admission-merge-fixture.md"
+)
+ADMISSION_FIXTURE_SLUG = "admission-merge-fixture"
+
+
+def write_admission_fixture_plan(root: Path) -> Path:
+    """The covering-plan fixture: a `Files:` list with two owned script
+    paths plus a non-list section after it (the derivation stops there)."""
+    plan = root / ADMISSION_FIXTURE_PLAN_REL
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text(
+        "# Plan: admission merge fixture\n\n"
+        "## Task 1\n\n"
+        "Files:\n"
+        "- `scripts/owned_one.py`\n"
+        "- `scripts/owned_two.py`\n\n"
+        "Primary class anchors:\n"
+        "- `OwnedOne` the class anchor\n",
+        encoding="utf-8",
+    )
+    return plan
+
+
+def write_admission_claim(
+    root: Path, branch: str = "main", with_branch_line: bool = True
+) -> Path:
+    """The execution-claim fixture at the gateway's fixed relative path in
+    this checkout, mirroring scripts/execution_claim.sh's claim write shape
+    (frontmatter plus the `branch:` line this invocation holds)."""
+    claims = root / "docs" / "tmp" / "execution-claims"
+    claims.mkdir(parents=True, exist_ok=True)
+    claim = claims / f"{ADMISSION_FIXTURE_SLUG}.md"
+    lines = [
+        "session: sess-admission-fixture",
+        f"plan: {ADMISSION_FIXTURE_PLAN_REL}",
+        "created: 2026-11-06T10:00:00+0000",
+        "updated: 2026-11-06T10:00:00+0000",
+        "runtime_id: fixture",
+    ]
+    if with_branch_line:
+        lines.append(f"branch: {branch}")
+    claim.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return claim
+
+
+def seed_admission_record(
+    root: Path,
+    owned_paths=(),
+    owned_plan_paths=(),
+    owned_review_paths=(),
+) -> Path:
+    """Seed one admission record for the fixture slug through the lib's own
+    writer so merge pins exercise the real serialization shape."""
+    record = lib.admission_record_path(root, ADMISSION_FIXTURE_SLUG)
+    return lib.write_admission_record(
+        record,
+        list(owned_paths),
+        list(owned_plan_paths),
+        list(owned_review_paths),
+    )
+
+
+def read_admission_payload(root: Path) -> dict:
+    record = lib.admission_record_path(root, ADMISSION_FIXTURE_SLUG)
+    return json.loads(record.read_text(encoding="utf-8"))
+
+
+def admission_merge_lock_status(root: Path) -> str:
+    """done-lock.sh merge-status first line for the fixture repo (the same
+    hermetic pins the sweep_env fixture carries)."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS_DIR / "done-lock.sh"), "merge-status"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(root),
+        timeout=120,
+    )
+    lines = (proc.stdout or "").strip().splitlines()
+    return lines[0] if lines else ""
+
+
+def test_admission_seeder_delegates_to_consult_derivation(tmp_path, monkeypatch):
+    """[class: REPOSITORY_TEST] Seeder delegation: given a plan fixture with
+    `Files:` lists and one without, expects the lib seeder to return the list
+    `owned_paths_from_plan` yields for the first (imported, never copied),
+    and an empty seed for the second where that function raises its no-paths
+    tool error; plus the delegation seam: patching the imported symbol at the
+    seeder's binding site to return a sentinel list and observing the seeder
+    track the patch, so a copied implementation fails the pin."""
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    with_files = plans / "2026-11-06-seeder-with-files.md"
+    with_files.write_text(
+        "# Plan: seeder with files\n\n"
+        "Files:\n"
+        "- `scripts/owned_one.py`\n"
+        "- `scripts/owned_two.py`\n\n"
+        "Primary class anchors:\n"
+        "- `OwnedOne` the class anchor\n",
+        encoding="utf-8",
+    )
+    without_files = plans / "2026-11-06-seeder-without-files.md"
+    without_files.write_text(
+        "# Plan: seeder without files\n\n"
+        "## Task 1\n\n"
+        "- [ ] a task body with no Files: heading\n",
+        encoding="utf-8",
+    )
+
+    expected = dispatch_admission.owned_paths_from_plan(str(with_files))
+    assert expected == ["scripts/owned_one.py", "scripts/owned_two.py"]
+    assert lib.seed_admission_owned_paths(str(with_files)) == expected
+
+    # The no-paths tool error reads as an empty seed.
+    with pytest.raises(dispatch_admission.ToolError):
+        dispatch_admission.owned_paths_from_plan(str(without_files))
+    assert lib.seed_admission_owned_paths(str(without_files)) == []
+
+    # Delegation seam: the seeder tracks a patch of the imported symbol at
+    # its binding site (a copied Files: derivation never sees the patch).
+    monkeypatch.setattr(
+        lib, "owned_paths_from_plan", lambda path: ["sentinel-owned-path"]
+    )
+    assert lib.seed_admission_owned_paths(str(with_files)) == [
+        "sentinel-owned-path"
+    ]
+
+
+def test_admission_record_shape_round_trips_through_consult_reader(
+    tmp_path, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Record shape: the writer emits a JSON object
+    with exactly the three owned-list fields through atomic temp-plus-replace
+    (no temp residue, a re-write replaces the record fully, a failed replace
+    leaves the previous bytes and no residue), and the consult's existing
+    manifest reader reads a written record back to the same non-empty set."""
+    claims = tmp_path / "docs" / "tmp" / "execution-claims"
+    record = claims / "round-trip-fixture-admission.json"
+
+    written = lib.write_admission_record(
+        record, ["a.md"], ["p.md"], ["r.md"]
+    )
+    assert written == record
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    assert set(payload) == {
+        "owned_paths",
+        "owned_plan_paths",
+        "owned_review_paths",
+    }
+    assert payload == {
+        "owned_paths": ["a.md"],
+        "owned_plan_paths": ["p.md"],
+        "owned_review_paths": ["r.md"],
+    }
+    assert not list(claims.glob("*.tmp")), "no temp residue after the write"
+
+    # The consult's existing reader reads the written record back to the
+    # same non-empty set (the union of the three fields).
+    union = dispatch_admission.owned_paths_from_manifest(str(record))
+    assert union
+    assert sorted(set(union)) == ["a.md", "p.md", "r.md"]
+
+    # Atomic temp-plus-replace over an existing record: the new payload
+    # replaces the old bytes fully.
+    lib.write_admission_record(record, ["a2.md"], [], [])
+    payload2 = json.loads(record.read_text(encoding="utf-8"))
+    assert payload2["owned_paths"] == ["a2.md"]
+    assert payload2["owned_plan_paths"] == []
+
+    # A failed replace is atomic backwards: the previous record stands and
+    # no temp residue remains.
+    def refuse_replace(src, dst):
+        raise OSError("replace refused")
+
+    monkeypatch.setattr(os, "replace", refuse_replace)
+    with pytest.raises(OSError):
+        lib.write_admission_record(record, ["x.md"], [], [])
+    assert json.loads(record.read_text(encoding="utf-8"))["owned_paths"] == [
+        "a2.md"
+    ]
+    assert not list(claims.glob("*.tmp")), "no temp residue after the refusal"
+
+
+def test_write_manifest_boundary_merges_admission_record(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Monotone merge at a done boundary: given an
+    existing admission record and a ``write-manifest`` boundary over the
+    claimed plan slug, expects the record to become the per-field union of
+    what it held and the boundary's owned lists (never shrink), written into
+    the primary checkout's claims home."""
+    root = mktemp_repo("admission-merge")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="main")
+    seed_admission_record(
+        root,
+        owned_paths=["seed-a.md"],
+        owned_plan_paths=["docs/history/plans/2026-11-06-seed-plan.md"],
+        owned_review_paths=["seed-r.md"],
+    )
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(
+        [
+            "write-manifest",
+            "--owned-plan",
+            ADMISSION_FIXTURE_PLAN_REL,
+            "--owned-review",
+            "boundary-r.md",
+        ]
+    )
+
+    assert rc == 0
+    payload = read_admission_payload(root)
+    assert set(payload) == {
+        "owned_paths",
+        "owned_plan_paths",
+        "owned_review_paths",
+    }
+    assert set(payload["owned_paths"]) == {"seed-a.md"}
+    assert set(payload["owned_plan_paths"]) == {
+        "docs/history/plans/2026-11-06-seed-plan.md",
+        ADMISSION_FIXTURE_PLAN_REL,
+    }
+    assert set(payload["owned_review_paths"]) == {"seed-r.md", "boundary-r.md"}
+
+
+def test_admission_boundary_merge_never_creates_record(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Merge never creates: given a claimed plan
+    slug whose admission record does not exist, expects the boundary merge
+    arm to write nothing and to leave no record behind."""
+    root = mktemp_repo("admission-no-create")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="main")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    ctx = ctx_for(root)
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx, ["boundary-a.md"], [ADMISSION_FIXTURE_PLAN_REL], ["boundary-r.md"]
+    )
+
+    captured = capsys.readouterr()
+    assert not lib.admission_record_path(
+        root, ADMISSION_FIXTURE_SLUG
+    ).exists(), "the merge arm never creates a record"
+
+
+def test_admission_merge_claim_gone_writes_nothing(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Locked merge, claim-gone arm: given a done
+    boundary whose execution claim no longer exists under the primary
+    checkout's claims home, expects the merge arm to warn naming the slug
+    under the lock and to write nothing (the seeded record stays
+    unchanged)."""
+    root = mktemp_repo("admission-claim-gone")
+    write_admission_fixture_plan(root)
+    # No execution claim written: the claim-gone arm.
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    ctx = ctx_for(root)
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx, ["boundary-a.md"], [ADMISSION_FIXTURE_PLAN_REL], []
+    )
+
+    err = capsys.readouterr().err
+    assert ADMISSION_FIXTURE_SLUG in err
+    assert read_admission_payload(root)["owned_paths"] == ["seed-a.md"]
+    assert set(read_admission_payload(root)["owned_plan_paths"]) == set()
+
+
+def test_admission_merge_claim_without_branch_line_writes_nothing(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Locked merge, ownership re-check: given an
+    execution claim that records no ``branch:`` line, expects the merge arm
+    to warn naming the slug and to write nothing (ownership unverifiable is
+    never guessed)."""
+    root = mktemp_repo("admission-claim-nobranch")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, with_branch_line=False)
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    ctx = ctx_for(root)
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx, ["boundary-a.md"], [ADMISSION_FIXTURE_PLAN_REL], []
+    )
+
+    err = capsys.readouterr().err
+    assert ADMISSION_FIXTURE_SLUG in err
+    assert read_admission_payload(root)["owned_paths"] == ["seed-a.md"]
+
+
+def test_admission_merge_claim_foreign_branch_writes_nothing(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Locked merge, claim-foreign arm: given an
+    execution claim whose recorded ``branch:`` line names a branch other
+    than the boundary checkout's current branch, expects the merge arm to
+    warn naming the slug and to write nothing."""
+    root = mktemp_repo("admission-claim-foreign")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="some-other-branch")
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    ctx = ctx_for(root)
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx, ["boundary-a.md"], [ADMISSION_FIXTURE_PLAN_REL], []
+    )
+
+    err = capsys.readouterr().err
+    assert ADMISSION_FIXTURE_SLUG in err
+    assert read_admission_payload(root)["owned_paths"] == ["seed-a.md"]
+
+
+def test_admission_merge_verified_inherited_hold_is_reused(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Locked merge, verified inherited hold: given
+    a live merge-lock hold exported into the boundary's environment whose
+    meta record verifies against the exported token and holder identity, the
+    merge arm reuses the hold (no acquire, no release), merges the record,
+    and the hold still stands after the boundary."""
+    root = mktemp_repo("admission-hold")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="main")
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    ctx = ctx_for(root)
+    lock_dir, token = acquire_merge_lock_for_gate(
+        root, Path(os.environ["MERGE_LOCK_ROOT"])
+    )
+    monkeypatch.setenv("MERGE_LOCK_DIR", str(lock_dir))
+    monkeypatch.setenv("MERGE_LOCK_TOKEN", token)
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx,
+        ["boundary-a.md"],
+        [ADMISSION_FIXTURE_PLAN_REL],
+        ["boundary-r.md"],
+    )
+
+    err = capsys.readouterr().err
+    assert "does not verify" not in err
+    payload = read_admission_payload(root)
+    assert set(payload["owned_paths"]) == {"seed-a.md", "boundary-a.md"}
+    assert set(payload["owned_review_paths"]) == {"boundary-r.md"}
+    assert ": held" in admission_merge_lock_status(root), (
+        "a verified inherited hold is reused, never released by the merge arm"
+    )
+
+
+def test_admission_merge_unverifiable_inherited_hold_warns_and_recovers(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Locked merge, unverifiable inherited hold:
+    given an exported hold whose meta record names a dead holder (a
+    controlled holder input, never wall-clock aging), expects the merge arm
+    to warn naming the slug and to recover through its own try-once acquire
+    (the repo lock is free), so the record still merges and the boundary
+    succeeds."""
+    root = mktemp_repo("admission-unverified")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="main")
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    ctx = ctx_for(root)
+    fake_hold = tmp_path / "unverified-hold"
+    fake_hold.mkdir()
+    (fake_hold / "meta.env").write_text(
+        "lock_token=fixture-token\n"
+        "holder_pid=99999999\n"
+        "holder_identity=bogus\n"
+        f"repo_root={root}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MERGE_LOCK_DIR", str(fake_hold))
+    monkeypatch.setenv("MERGE_LOCK_TOKEN", "fixture-token")
+
+    lib.merge_admission_records_at_done_boundary(
+        ctx, ["boundary-a.md"], [ADMISSION_FIXTURE_PLAN_REL], []
+    )
+
+    err = capsys.readouterr().err
+    assert ADMISSION_FIXTURE_SLUG in err
+    assert "does not verify" in err
+    payload = read_admission_payload(root)
+    assert set(payload["owned_paths"]) == {"seed-a.md", "boundary-a.md"}
+
+
+def test_write_manifest_refused_merge_lock_warns_boundary_succeeds(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Warn-not-fail disposition: given a done
+    boundary whose merge-lock acquire is refused by a conflicting holder (a
+    live hold the fixture acquired; no ambient exports), expects the
+    boundary to still succeed (rc 0 with the manifest written), the refusal
+    warned on stderr naming the slug, and the seeded record left
+    unchanged."""
+    root = mktemp_repo("admission-refused")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="main")
+    seed_admission_record(root, owned_paths=["seed-a.md"])
+    make_marker(root, time.time(), os.getpid())
+    conflicting_dir, _conflicting_token = acquire_merge_lock_for_gate(
+        root, Path(os.environ["MERGE_LOCK_ROOT"])
+    )
+    assert conflicting_dir
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", ADMISSION_FIXTURE_PLAN_REL]
+    )
+
+    assert rc == 0, "the boundary still succeeds"
+    done_session = root / "docs" / "tmp" / "done-session"
+    assert list(done_session.glob("run-manifest-*.json")), (
+        "the boundary's own manifest is written"
+    )
+    err = capsys.readouterr().err
+    assert ADMISSION_FIXTURE_SLUG in err
+    assert read_admission_payload(root)["owned_paths"] == ["seed-a.md"]
+
+
+def test_write_manifest_merges_into_primary_record_from_linked_worktree(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Primary resolution: given a done boundary
+    run from a linked worktree, expects the merge arm to resolve the record
+    under the PRIMARY checkout's execution-claims directory (the gateway's
+    fixed relative path) through the primary-checkout resolution and the
+    artifact-slug derivation the gateway uses, updating the primary
+    checkout's record and writing nothing under the worktree."""
+    root = mktemp_repo("admission-primary")
+    write_admission_fixture_plan(root)
+    write_admission_claim(root, branch="admission-side")
+    seed_admission_record(
+        root,
+        owned_paths=["seed-a.md"],
+        owned_plan_paths=["docs/history/plans/2026-11-06-seed-plan.md"],
+        owned_review_paths=["seed-r.md"],
+    )
+    linked = Path(tempfile.mkdtemp(prefix="admission-linked-")) / "wt"
+    git(root, "worktree", "add", str(linked), "-b", "admission-side")
+    (linked / ".ai-playbook").mkdir(parents=True, exist_ok=True)
+    shutil.copy(
+        root / ".ai-playbook" / "facts.md", linked / ".ai-playbook" / "facts.md"
+    )
+    make_marker(linked, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(linked))
+
+    rc = lib.main(
+        ["write-manifest", "--owned-plan", ADMISSION_FIXTURE_PLAN_REL]
+    )
+
+    assert rc == 0
+    payload = read_admission_payload(root)
+    assert set(payload["owned_plan_paths"]) == {
+        "docs/history/plans/2026-11-06-seed-plan.md",
+        ADMISSION_FIXTURE_PLAN_REL,
+    }
+    assert set(payload["owned_paths"]) == {"seed-a.md"}
+    assert set(payload["owned_review_paths"]) == {"seed-r.md"}
+    assert not (
+        linked
+        / "docs"
+        / "tmp"
+        / "execution-claims"
+        / f"{ADMISSION_FIXTURE_SLUG}-admission.json"
+    ).exists(), "nothing is written under the worktree"
+# Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 2:
+# lib-level witnesses for the post-landing archive-ceremony report arm. The
+# wrapper suite pins the bash wiring end to end; these tests pin the entry
+# point contract itself: classification ownership (boundary, derivation
+# blocker, arm failure), the pinned hybrid context, the warning-only line
+# shapes, and the gate re-run scoping. No acceptance logic is exercised here
+# beyond what the gate itself decides.
+# --------------------------------------------------------------------------- #
+def _arm_red_committed_archive_fixture(
+    tmp_path: Path, name: str, plan_name: str, run_id: str
+) -> tuple[Path, str, Path]:
+    """A fixture repo whose landing span carries one red committed archive
+    (box-complete, no accepting record) and a seeded owning run manifest
+    bound to the pre-archive boundary; returns (root, archive rel, manifest
+    path)."""
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    write_facts(root)
+    _seed_archive_boundary(root, run_id)
+    archive_rel = _committed_plan_archive(
+        root, plan_name, "# Plan\n\n- [x] done\n"
+    )
+    manifest_path = (
+        root / "docs" / "tmp" / "done-session" / f"run-manifest-{run_id}.json"
+    )
+    assert manifest_path.is_file()
+    return root, archive_rel, manifest_path
+
+
+def _arm_report(out: list[str], err: list[str]) -> tuple[list[str], list[str]]:
+    """Extract the arm's line classes the way the wrapper suite does."""
+    summary = [
+        line for line in out
+        if "archive-ceremony evaluation:" in line and "findings=" in line
+    ]
+    findings = [
+        line for line in out + err if "archive-ceremony finding:" in line
+    ]
+    posture = [
+        line for line in out + err
+        if "archive-ceremony" in line and "could-not-evaluate" in line
+    ]
+    return summary, findings, posture
+
+
+def test_archive_report_arm_reports_finding_for_red_committed_archive(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Gap closed at the lib level: a red committed
+    archive inside the owning manifest's span produces the always-present
+    summary line (findings=1, evaluated commit, evaluation time, resolved
+    reviews root) plus one finding line naming the archive, the failing
+    acceptance route, the reconstruction producer, and the evaluated commit
+    and evaluation time; nothing lands on the failure channel."""
+    root, archive_rel, _manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "arm-red-committed", "2026-11-07-arm-red.md", "arm-red-run"
+    )
+    head = git(root, "rev-parse", "HEAD").stdout.strip()
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(summary) == 1, out
+    assert "findings=1" in summary[0]
+    assert f"evaluated_commit={head}" in summary[0]
+    assert "evaluated_at=" in summary[0]
+    assert "reviews_root=" in summary[0]
+    assert len(findings) == 1, out
+    assert archive_rel in findings[0]
+    assert "has no exec-review record" in findings[0]
+    assert "scripts/produce_exec_review_record.py" in findings[0]
+    assert f"evaluated_commit={head}" in findings[0]
+    assert "evaluated_at=" in findings[0]
+    assert posture == [], out + err
+
+
+def test_archive_report_arm_owning_span_survives_newer_same_checkout_peer(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Same-checkout peer race (the plan's span
+    assumption): with the owning bound manifest passed AND a newer
+    same-checkout peer marker plus manifest start-anchored past the red
+    committed rider present in the running checkout's own session dir, the
+    arm still evaluates the owning manifest's span and reports the rider
+    finding; a derivation that re-read the session dir's newest marker
+    post-release would select the peer's span, hide the rider, and report
+    a pass-shaped findings=0 clean (the same-checkout twin of the wrapper
+    suite's foreign-manifest span witness, which a primary-checkout
+    planting cannot reach)."""
+    root, archive_rel, owning_manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "arm-peer-race", "2026-11-07-arm-peer-race.md", "arm-peer-race-run"
+    )
+    head = git(root, "rev-parse", "HEAD").stdout.strip()
+    owning_start = json.loads(
+        owning_manifest.read_text(encoding="utf-8")
+    )["start_commit"]
+    assert owning_start != head
+    peer_epoch = time.time() + 5
+    peer_marker = make_marker(root, peer_epoch, os.getpid())
+    _seed_run_manifest(
+        root, "arm-peer-race-peer", peer_marker.name, str(root), peer_epoch,
+        start_commit=head,
+    )
+
+    out, err = lib.archive_ceremony_post_landing_report(root, owning_manifest)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(summary) == 1, out
+    assert "findings=1" in summary[0]
+    assert f"evaluated_commit={head}" in summary[0]
+    assert len(findings) == 1, out
+    assert archive_rel in findings[0]
+    assert "has no exec-review record" in findings[0]
+    assert posture == [], out + err
+
+
+def test_archive_report_arm_clean_archive_reports_findings_zero(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] No false report: an archive whose execution
+    evidence satisfies the filename-series acceptance route reports the
+    findings=0 summary only, with no finding line and no could-not-evaluate
+    posture anywhere (the summary line is not a finding)."""
+    root, _archive_rel, _manifest = _arm_red_committed_archive_fixture(
+    tmp_path, "arm-clean", "2026-11-07-arm-clean.md", "arm-clean-run"
+    )
+    _write_exec_review_record(root, "2026-11-07-arm-clean.md")
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(summary) == 1, out
+    assert "findings=0" in summary[0]
+    assert findings == [], out + err
+    assert posture == [], out + err
+
+
+def test_archive_report_arm_could_not_evaluate_on_unresolvable_boundary(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Span-boundary classification: the finalize's
+    bound manifest carries an unresolvable start_commit and ORIG_HEAD is
+    absent, so the entry point classifies the distinct could-not-evaluate
+    posture on stdout (never a pass-shaped findings=0 line, never an
+    archive finding) without running the gate."""
+    root, archive_rel, manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "arm-boundary", "2026-11-07-arm-boundary.md", "arm-boundary-run"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["start_commit"] = "0" * 40
+    manifest.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    git_dir = git(root, "rev-parse", "--absolute-git-dir").stdout.strip()
+    Path(git_dir, "ORIG_HEAD").unlink(missing_ok=True)
+
+    out, err = lib.archive_ceremony_post_landing_report(root, manifest)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(posture) == 1, out + err
+    assert "span boundary does not resolve" in posture[0]
+    assert findings == [], out + err
+    assert summary == [], out
+    assert "findings=0" not in "\n".join(out + err)
+
+
+def test_archive_report_arm_could_not_evaluate_on_derivation_blocker(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Blocker-class posture: an unreadable
+    plan-deliverables file beside a red committed archive drives the gate's
+    derivation blocker, which the entry point classifies into the
+    could-not-evaluate posture carrying the blocker detail, never into the
+    archive-finding line and never naming the reconstruction producer."""
+    root, archive_rel, _manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "arm-blocker", "2026-11-07-arm-blocker.md", "arm-blocker-run"
+    )
+    deliverables = (
+        root / "docs" / "tmp" / "done-session" / "plan-deliverables.txt"
+    )
+    deliverables.write_text(
+        "docs/history/plans/2026-11-07-arm-blocker.md\n", encoding="utf-8"
+    )
+    deliverables.chmod(0o000)
+    try:
+        out, err = lib.archive_ceremony_post_landing_report(root, None)
+    finally:
+        deliverables.chmod(0o644)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(posture) == 1, out + err
+    assert "gate derivation blocked" in posture[0]
+    assert findings == [], out + err
+    assert summary == [], out
+    assert "findings=0" not in "\n".join(out + err)
+    assert "scripts/produce_exec_review_record.py" not in "\n".join(out + err)
+
+
+def test_archive_report_arm_failure_posture_on_unresolvable_facts(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Arm failure posture (facts resolution): a
+    repo without a resolvable facts block returns the could-not-evaluate
+    posture on the failure channel only (never a pass-shaped or bare-clean
+    stdout line)."""
+    root = make_repo(tmp_path, "arm-facts-missing", gitignore_docs=True)
+    assert not (root / ".ai-playbook" / "facts.md").exists()
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert out == [], out
+    assert len(err) == 1, err
+    assert "could-not-evaluate" in err[0]
+    assert "archive-ceremony" in err[0]
+    assert "arm failure" in err[0]
+
+
+def test_archive_report_arm_failure_posture_on_gate_exception(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Arm failure posture (gate exception): a
+    raising gate helper returns the could-not-evaluate posture on the
+    failure channel naming the exception, never a pass-shaped stdout line,
+    with the arm still answering (no exception escapes)."""
+    root, _archive_rel, _manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "arm-gate-boom", "2026-11-07-arm-boom.md", "arm-boom-run"
+    )
+
+    def boom(ctx):
+        raise RuntimeError("gate exploded")
+
+    monkeypatch.setattr(lib, "gate_archive_ceremony", boom)
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert out == [], out
+    assert len(err) == 1, err
+    assert "could-not-evaluate" in err[0]
+    assert "RuntimeError" in err[0]
+    assert "gate exploded" in err[0]
+
+
+def test_archive_report_arm_gate_rerun_only_when_archive_surfaces(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Gate re-run scoping: with no archive
+    surfaces changed in the span the gate does not re-run and the summary
+    reports findings=0; with a red archive in the span the gate re-runs
+    exactly once and the finding reports."""
+    root = make_repo(tmp_path, "arm-rerun-scope", gitignore_docs=True)
+    write_facts(root)
+    _seed_archive_boundary(root, "arm-rerun-run")
+    calls: list[int] = []
+    real_gate = lib.gate_archive_ceremony
+
+    def counting(ctx):
+        calls.append(1)
+        return real_gate(ctx)
+
+    monkeypatch.setattr(lib, "gate_archive_ceremony", counting)
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert err == [], err
+    assert calls == [], "the gate must not re-run without archive surfaces"
+    summary, findings, posture = _arm_report(out, err)
+    assert len(summary) == 1 and "findings=0" in summary[0]
+    assert findings == [] and posture == []
+
+    archive_rel = _committed_plan_archive(
+        root, "2026-11-07-arm-rerun.md", "# Plan\n\n- [x] done\n"
+    )
+
+    out2, err2 = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert err2 == [], err2
+    assert calls == [1], "the gate re-runs exactly once per archive-bearing span"
+    summary2, findings2, posture2 = _arm_report(out2, err2)
+    assert len(summary2) == 1 and "findings=1" in summary2[0]
+    assert len(findings2) == 1 and archive_rel in findings2[0]
+    assert posture2 == []
+
+
+def test_archive_report_arm_summary_names_facts_rooted_reviews_home(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Pinned context reporting: the summary line's
+    reviews_root carries the resolved primary reviews home verbatim (the
+    relative facts value joined at the primary checkout, trailing form
+    preserved), and the resolved corpus is what the evaluation reads."""
+    root = make_repo(tmp_path, "arm-reviews-root", gitignore_docs=True)
+    write_facts(root)
+    _seed_archive_boundary(root, "arm-reviews-root-run")
+
+    out, err = lib.archive_ceremony_post_landing_report(root, None)
+
+    assert err == [], err
+    summary, findings, posture = _arm_report(out, err)
+    assert len(summary) == 1, out
+    assert f"reviews_root={root}/.ai-playbook/reviews/" in summary[0]
+    assert findings == [] and posture == []
+
+
+def test_archive_report_cli_exit_zero_with_stdout_report(
+    tmp_path, sweep_env, monkeypatch, capsys
+):
+    """[class: REPOSITORY_TEST] CLI contract: the archive-ceremony-report
+    command answers exit 0 on every answered outcome, prints the report on
+    stdout, and emits no OUTCOME line (read-only report command, the
+    warning-only posture)."""
+    root = make_repo(tmp_path, "arm-cli", gitignore_docs=True)
+    write_facts(root)
+    _seed_archive_boundary(root, "arm-cli-run")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["archive-ceremony-report", "--manifest", ""])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "findings=0" in captured.out
+    assert "reviews_root=" in captured.out
+    assert "OUTCOME:" not in captured.out
+
+
+# --------------------------------------------------------------------------- #
+# Plan docs/history/plans/2026-11-07-archive-rider-sweep-ordering.md, Task 4:
+# range provenance on the archive-ceremony derivation rows and in the finding
+# message. The provenance tag is an internal derivation-row extension (no
+# acceptance route and no verdict reads it; the refusal classes and verdict
+# semantics are unchanged), and the finding message states the class
+# two-sided: the replayed incident shape (a this-run committed archive) names
+# this run's manifest span, and a prior-run archive (the stale-deliverables
+# twin shape with no binding record) names a prior run. Gate-level checks:
+# run_gate returns the message these assertions pin.
+# --------------------------------------------------------------------------- #
+def test_archive_ceremony_finding_names_this_run_span_provenance(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] This-run provenance class: the replayed
+    incident shape (a box-complete committed archive inside the owning run
+    manifest's span, no accepting record) tags its derivation row with the
+    this-run class and the finding message names it; the prior-run class is
+    absent from the message."""
+    root, archive_rel, _manifest = _arm_red_committed_archive_fixture(
+        tmp_path, "prov-this-run", "2026-11-07-prov-this-run.md",
+        "prov-this-run-run"
+    )
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[5] == lib.ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert archive_rel in result.message
+    assert "has no exec-review record" in result.message
+    assert (
+        f"range provenance: {lib.ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN}"
+        in result.message
+    ), result.message
+    assert (
+        f"range provenance: {lib.ARCHIVE_CEREMONY_PROVENANCE_PRIOR_RUN}"
+        not in result.message
+    ), result.message
+
+
+def test_archive_ceremony_finding_names_prior_run_provenance_on_stale_twin(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Prior-run provenance class: the prior-run
+    fixture is a red variant of the stale-deliverables twin (the twin shape
+    with no binding record). The plan is archived by a commit BEFORE the
+    active run manifest's start_commit and an empty session commit follows,
+    so the committed-rename window covers nothing and only the
+    stale-deliverables shape derives the archive twin; the twin already
+    exists at the span base (a prior run landed it). The box-complete twin
+    carries no exec-review record and no bound receipt, so the route finding
+    surfaces on the twin naming the prior-run class the assertion pins; the
+    this-run class is absent from the message."""
+    root = make_repo(
+        tmp_path, "prov-prior-run-stale-twin", gitignore_docs=True
+    )
+    write_facts(root)
+    plan_name = "2026-11-07-prov-prior-run.md"
+    stale_rel = f"docs/history/plans/{plan_name}"
+    twin_rel = _committed_plan_archive(
+        root, plan_name, "# Plan: prior run\n\n- [x] done\n"
+    )
+    # One later commit, then the run manifest seeded at it: the archive
+    # rename sits outside the committed-rename window (start..HEAD covers
+    # nothing on the plans pathspec), so only the stale-deliverables shape
+    # can derive the archive, and the twin exists at the span base.
+    assert git(
+        root, "commit", "--allow-empty", "-m", "session work", "-q"
+    ).returncode == 0
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(
+        root, "prov-prior-run", marker.name, str(root), now,
+        start_commit=git(root, "rev-parse", "HEAD").stdout.strip(),
+    )
+    assert not (root / stale_rel).exists()
+    write_deliverables(root, [stale_rel])
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == twin_rel)
+    assert row[5] == lib.ARCHIVE_CEREMONY_PROVENANCE_PRIOR_RUN
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert twin_rel in result.message
+    assert "has no exec-review record" in result.message
+    assert (
+        f"range provenance: {lib.ARCHIVE_CEREMONY_PROVENANCE_PRIOR_RUN}"
+        in result.message
+    ), result.message
+    assert (
+        f"range provenance: {lib.ARCHIVE_CEREMONY_PROVENANCE_THIS_RUN}"
+        not in result.message
+    ), result.message

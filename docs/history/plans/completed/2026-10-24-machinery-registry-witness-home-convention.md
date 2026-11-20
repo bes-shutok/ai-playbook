@@ -185,3 +185,10 @@ Files:
 - [x] Inventory arm: run `scripts/machinery_inventory.py --check` on the merged base before repairs, record its failure list as the pre-existing baseline in the task log, and disposition every non-ref failure as pre-existing and untouched; verify none of the baseline failures postdates this plan's change set. [class: REPOSITORY_TEST]
 - [x] Run the Validation Commands ref-field census, Cluster census, note-probe census, and inventory check; expect 0 dangling refs (or parks per the safety witness), 0 dangling Cluster pointers in the touched rows, note-probe output recorded, and no inventory failure postdating the change set. [class: REPOSITORY_TEST]
 - [x] Commit: `fix: re-point dangling witness references to durable homes` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-19-machinery-registry-witness-ref-rot.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+
+- `docs/history/backlog/completed/2026-10-09-dangling-cluster-pointer-staging-series-gate-slug.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

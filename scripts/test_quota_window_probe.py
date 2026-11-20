@@ -2938,5 +2938,164 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertFalse(weekend["peak"])
         self.assertEqual(weekend["verdict"], "fire")
 
+
+class ClaudeUsageFileProbeTests(unittest.TestCase):
+    """The claude runtime reads one get_usage JSON file (path flag or env var)."""
+
+    NOW = 1_800_000_000.0
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        env = mock.patch.dict(os.environ, {}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_USAGE_JSON", None)
+
+    @staticmethod
+    def _iso(epoch):
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _window(self, label, percent, reset_epoch):
+        return {"label": label, "percentUsed": percent, "resetsAt": self._iso(reset_epoch)}
+
+    def _write(self, payload, age_seconds=0, name="usage.json", raw=None):
+        path = self.dir / name
+        path.write_text(raw if raw is not None else json.dumps(payload), encoding="utf-8")
+        mtime = self.NOW - age_seconds
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def _ok(self, windows):
+        return {"plan": {"status": "ok", "windows": windows}, "context": {"x": 1}}
+
+    def _assert_unknown(self, report):
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(report["limits"], [])
+        self.assertIsNone(report["binding"])
+
+    def test_future_dated_file_is_unknown(self):
+        reset = int(self.NOW) + 3600
+        path = self._write(self._ok([self._window("5-hour limit", 95, reset)]),
+                           age_seconds=-4000)
+        self._assert_unknown(probe.run_probe("claude", usage_file=str(path), now=self.NOW))
+
+    def test_duplicate_weekly_windows_keep_the_fullest_in_either_order(self):
+        reset = int(self.NOW) + 3600
+        week = int(self.NOW) + 86400
+        five = self._window("5-hour limit", 10, reset)
+        low, high = (self._window("Weekly · all models", 20, week),
+                     self._window("Weekly · Opus", 70, week))
+        for windows in ([five, low, high], [five, high, low]):
+            path = self._write(self._ok(windows))
+            report = probe.run_probe("claude", usage_file=str(path), now=self.NOW)
+            weekly = [l for l in report["limits"] if l["kind"] == "secondary"]
+            self.assertEqual([l["used_percent"] for l in weekly], [70.0])
+
+    def test_fresh_ok_file_reports_primary_window(self):
+        reset = int(self.NOW) + 3600
+        path = self._write(self._ok([self._window("5-hour limit", 95, reset)]))
+        report = probe.run_probe("claude", usage_file=str(path), now=self.NOW)
+        self.assertEqual(report["runtime"], "claude")
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["source"], "claude-code-get-usage")
+        primary = [l for l in report["limits"] if l["kind"] == "primary"]
+        self.assertEqual(len(primary), 1)
+        self.assertEqual(primary[0]["used_percent"], 95.0)
+        self.assertEqual(primary[0]["reset_at_epoch"], reset)
+        self.assertEqual(primary[0]["window_minutes"], 300)
+        self.assertEqual(report["observed_at_epoch"], self.NOW)
+
+    def test_channel_flag_env_and_neither(self):
+        reset = int(self.NOW) + 3600
+        path = self._write(self._ok([self._window("5-hour limit", 50, reset)]))
+        via_flag = probe.run_probe("claude", usage_file=str(path), now=self.NOW)
+        self.assertEqual(via_flag["status"], "ok")
+        os.environ["CLAUDE_USAGE_JSON"] = str(path)
+        via_env = probe.run_probe("claude", now=self.NOW)
+        self.assertEqual(via_env["status"], "ok")
+        os.environ.pop("CLAUDE_USAGE_JSON")
+        self._assert_unknown(probe.run_probe("claude", now=self.NOW))
+
+    def test_cli_flag_and_env_channels(self):
+        real_now = time.time()
+        path = self.dir / "cli.json"
+        path.write_text(json.dumps(self._ok(
+            [self._window("5-hour limit", 10, int(real_now) + 3600)])), encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            probe.main(["--runtime", "claude", "--usage-file", str(path)])
+        self.assertEqual(json.loads(out.getvalue())["status"], "ok")
+        os.environ["CLAUDE_USAGE_JSON"] = str(path)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            probe.main(["--runtime", "claude"])
+        self.assertEqual(json.loads(out.getvalue())["runtime"], "claude")
+        self.assertEqual(json.loads(out.getvalue())["status"], "ok")
+
+    def test_weekly_maps_to_report_only_secondary(self):
+        five = int(self.NOW) + 3600
+        week = int(self.NOW) + 86400
+        path = self._write(self._ok([
+            self._window("5-hour limit", 20, five),
+            self._window("Weekly · all models", 97, week),
+        ]))
+        report = probe.run_probe("claude", usage_file=str(path), now=self.NOW)
+        secondary = [l for l in report["limits"] if l["kind"] == "secondary"]
+        self.assertEqual(len(secondary), 1)
+        self.assertEqual(secondary[0]["reset_at_epoch"], week)
+        self.assertEqual(secondary[0]["window_minutes"], 10080)
+        self.assertEqual(report["binding"], "primary")
+        # When the weekly reset is the earliest one it binds, stays report-only,
+        # and never arms the guard flag.
+        early_week = int(self.NOW) + 1200
+        path = self._write(self._ok([
+            self._window("5-hour limit", 20, five),
+            self._window("Weekly · all models", 97, early_week),
+        ]), name="early.json")
+        report = probe.run_probe("claude", usage_file=str(path), now=self.NOW)
+        self.assertEqual(report["binding"], "secondary")
+        self.assertTrue(any("report-only" in r for r in report["reasons"]))
+        flag = self.dir / "flag"
+        self.assertFalse(probe.write_flag_if_paused(
+            flag, "claude", report["limits"], "pause"))
+        self.assertFalse(flag.exists())
+
+    def test_unusable_files_fail_open(self):
+        future = int(self.NOW) + 3600
+        past = int(self.NOW) - 60
+        cases = {
+            "missing": self.dir / "absent.json",
+            "malformed": self._write(None, raw="{not json", name="m.json"),
+            "expired": self._write(self._ok([self._window("5-hour limit", 99, past)]), name="e.json"),
+            "unavailable": self._write({"plan": {"status": "unavailable", "windows": [
+                self._window("5-hour limit", 99, future)]}}, name="u.json"),
+            "not_applicable": self._write({"plan": {"status": "not_applicable", "windows": [
+                self._window("5-hour limit", 99, future)]}}, name="n.json"),
+            "no_five_hour": self._write(self._ok([
+                self._window("Weekly · all models", 99, future)]), name="w.json"),
+        }
+        for name, path in cases.items():
+            with self.subTest(name):
+                self._assert_unknown(
+                    probe.run_probe("claude", usage_file=str(path), now=self.NOW))
+
+    def test_freshness_boundary_uses_mtime(self):
+        reset = int(self.NOW) + 3600
+        windows = self._ok([self._window("5-hour limit", 95, reset)])
+        fresh = self._write(windows, age_seconds=14 * 60, name="f.json")
+        report = probe.run_probe("claude", usage_file=str(fresh), now=self.NOW)
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["observed_at_epoch"], self.NOW - 14 * 60)
+        stale = self._write(windows, age_seconds=16 * 60, name="s.json")
+        self._assert_unknown(probe.run_probe("claude", usage_file=str(stale), now=self.NOW))
+
+    def test_detect_runtime_accepts_explicit_claude(self):
+        self.assertEqual(probe.detect_runtime("claude"), "claude")
+        self.assertIsNone(probe.detect_runtime("cursor"))
+
+
 if __name__ == "__main__":
     unittest.main()

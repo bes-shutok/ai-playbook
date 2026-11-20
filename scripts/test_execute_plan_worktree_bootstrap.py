@@ -305,8 +305,11 @@ def extract_closeout_migration_block(skill_text: str) -> str:
 
     First match, not a uniqueness assertion: the search runs over the
     worktree-first module only, and the Step 0.4 capture fence that also
-    contains both words stays in the retained spine
-    (``agents/skills/execute-plan/SKILL.md``), so the first match after the
+    contains both words stays outside this module (since the 2026-11-10
+    load-on-dispatch split, plan
+    docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4,
+    the retained spine is the SKILL.md router and the fence lives in
+    ``agents/skills/execute-plan/run-setup.md``), so the first match after the
     lead-in is the Transfer-out migration recipe.
     """
     search_at = skill_text.find(BOOTSTRAP_LEAD_IN)

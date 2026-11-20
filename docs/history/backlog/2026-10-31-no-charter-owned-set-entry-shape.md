@@ -1,4 +1,5 @@
 # no-charter owned-set entry shape refuses only at key level
+Cluster: docs/history/backlog/2026-10-31-no-charter-frozen-line-substring-binding.md; docs/history/backlog/2026-10-31-no-charter-start-commit-missing-reason.md
 
 Driving force: correctness (preservation on a corrupted manifest)
 

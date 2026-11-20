@@ -1,6 +1,8 @@
 # Plan: Runtime scripts home reconcile and retire
 
-Backlog origin: docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md
+Backlog origin: none
+
+Cluster: docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md (kept open by this plan's OPERATIONS_FOLLOW_UP disposition, quoted basis: "Keep the backlog origin open until that acceptance is met"; moved here from the Backlog origin line 2026-11-11 per the authoring-time rule in agents/skills/plans/SKILL.md, executing docs/history/plans/2026-11-08-coverage-gate-scope-row-and-pick-time-probe.md)
 Driving force: simplicity; secondary: code-quality
 Plan review record: the staging series .ai-playbook/reviews/2026-10-28-plan-review-runtime-scripts-home-reconcile-and-retire-r*.md
 Execution budget: 2.5h total, largest task 1.5h

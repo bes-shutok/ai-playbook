@@ -2,10 +2,13 @@
 
 - Cluster: dead-run-resume-claim-conversion
 - Cluster: docs/history/backlog/completed/2026-10-25-dead-run-conversion-zcode-runtime-gap.md (runtime reachability gap: session channel + status provider unconfigured; this row owns the refusal-path test coverage)
+- Cluster: docs/history/backlog/2026-11-19-codex-incomplete-run-owner-status-unavailable.md (same dead-run conversion surface; this row owns the missing Codex provider capability, this row the refusal-path test coverage)
 - Cluster: docs/history/backlog/2026-10-25-manifest-scan-cause-derivation-and-primary-symlink-coverage.md (manifest-scan cause derivation + primary-side symlink coverage)
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)
+
+- **Cluster:** docs/history/backlog/2026-11-19-codex-app-server-terminal-status-semantics.md (that row owns upstream terminal-status evidence; this row owns refusal-path test coverage)
 
 ## What is owed
 

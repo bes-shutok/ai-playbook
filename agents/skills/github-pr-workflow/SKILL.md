@@ -299,6 +299,8 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 ## PR Descriptions and Stats
 - Include five labeled sections in every PR description: What, Why, How, Testing, and Notes for reviewers. Write What, Why, and How in plain prose, not bullet lists; keep the one-line end-to-end flow in How (for example `trigger → fetch phone → format → send`). Use simple language and avoid jargon.
 - In Testing, state the verification actually run, or state that no verification was run. Keep additional verification details out unless asked. If any section cannot be completed honestly, say so in that section rather than omitting it.
+- Keep each verification claim head-bound: it names the head it applies to, or states only what was run in the form "last run on `<short sha>`", or is omitted.
+- After every push of a PR, refresh its description so claims match the new head before reporting the push done.
 - Only use bullet lists for enumerated specifics (files changed, config keys added, API endpoints). Do not use bullets for the main description.
 - For PR descriptions against a non-default base branch (for example stacked PRs), describe only the delta visible from that base; do not frame changes as restorations or mention work that exists only below the base branch.
 - When a user asks for PR stats, prefer concise branch-vs-base counts (for example commits plus doc/non-doc file counts) over full file-change or insertion/deletion totals unless the user explicitly asks for churn metrics.

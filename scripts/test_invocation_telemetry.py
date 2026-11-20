@@ -51,6 +51,16 @@ COSTS_NAME = "invocation-costs.jsonl"
 # Captured at base c2cfc02a9, before any telemetry integration: each probed
 # invocation's exact stdout, exact stderr, and exit code. The subprocess
 # integration tests assert these stay byte-identical with telemetry active.
+# Provenance: each pin's capture status is disclosed in the adjacent comment
+# at the literal (a pin with no adjacent comment still dates from this base).
+# The 2026-10-29 re-baseline (phase2-baseline-repair Task 1, landing
+# eb0b67845) re-captured at the current CLI: the PR_USAGE usage block
+# (argparse --verification-head), the VRS ERROR-literal set (each line now
+# names its provenance source), the VRS usage block (--scaffold and
+# --verification-head), and the closeout helper-closure module list (the
+# Closure re-baseline comment); every other pin in this section still dates
+# from its historical base, and pins elsewhere in the file carry their later
+# re-baselines in their own adjacent comments.
 # --------------------------------------------------------------------------- #
 
 PR_SUCCESS = {
@@ -665,7 +675,12 @@ def test_pins_suite_deployed_copy_outside_any_checkout_records_no_line(tmp_path)
 # d88657273 before the Task 3 integration; finalize stdout/stderr embed tmp
 # paths, run ids, and content digests, so the pinned literals are the
 # captured bytes with exactly those varying tokens masked by
-# normalize_done_output on both sides.
+# normalize_done_output on both sides. Provenance: re-captured pins in this
+# battery are disclosed inline at each literal (the finalization line after
+# landing 998d1dade, the scan tail after the missing-review-record-scan
+# re-baseline, the deferred-squash WARNING after 976aca51a, and the closure
+# module list re-baseline), so a provenance audit from this header plus the
+# inline comments alone reads original versus re-captured correctly.
 # --------------------------------------------------------------------------- #
 DONE_RUN_SCRIPT = SCRIPTS_DIR / "done_run.sh"
 DONE_LOCK_SCRIPT_FILE = SCRIPTS_DIR / "done-lock.sh"
@@ -676,10 +691,13 @@ DONE_LOCK_SCRIPT_FILE = SCRIPTS_DIR / "done-lock.sh"
 # (27433f204), whose own closure adds runtime_capabilities and
 # review_plan_identity, and review_record_selection hard-imports
 # code_delta_classifier; without them the Step 0 manifest writer refuses
-# instead of only the telemetry import failing.
+# instead of only the telemetry import failing. Later joins:
+# worktree_closeout_migrate.py at e9c920a9b (2026-11-07) and
+# dispatch_admission.py at 88da6ebf0 (2026-11-10).
 DONE_RUN_LIB_COPY_FILES = (
     "code_delta_classifier.py",
     "corrections_record.py",
+    "dispatch_admission.py",
     "done_sweep_gates_lib.py",
     "facts_paths.py",
     "plan_readiness.py",
@@ -729,10 +747,21 @@ _FINALIZE_LANDING_SUMMARY = (
 # missing-review-record scan summary now reports the resolved reviews
 # corpus root; the fixture's relative reviews_dir resolves from the
 # primary checkout (the fixture root itself), which normalize_done_output
-# already masks as <TMP>, so the pinned tail stays fixture-stable.
+# already masks as <TMP>, so the pinned tail stays fixture-stable. Later
+# re-capture: the archive-ceremony evaluation line and its
+# <UTC_TIMESTAMP> masking joined at landing 88da6ebf0 (2026-11-10).
 _FINALIZE_SCAN_TAIL = (
     "missing-review-record scan: 0 missing record(s)"
     " corpus_root=<TMP>/done-fixture-repo/.ai-playbook/reviews/\n"
+    "record-status: cited records are expected STAGED-terminal (decision-only pin, 2026-11-18; no post-landing transition exists or is enforced)\n"
+    "archive-ceremony evaluation: findings=0 evaluated_commit=<HEX>"
+    " evaluated_at=<UTC_TIMESTAMP>"
+    " reviews_root=<TMP>/done-fixture-repo/.ai-playbook/reviews/\n"
+)
+_FINALIZE_NO_MANIFEST_SCAN_TAIL = (
+    "missing-review-record scan: 0 missing record(s)"
+    " corpus_root=<TMP>/done-fixture-repo/.ai-playbook/reviews/\n"
+    "record-status: cited records are expected STAGED-terminal (decision-only pin, 2026-11-18; no post-landing transition exists or is enforced)\n"
 )
 _FINALIZE_FALLBACK_CREATE_STDERR = (
     "created: checkpoint-manifest run <RUN_ID> at"
@@ -778,7 +807,9 @@ PINNED_NO_MANIFEST_STDOUT = (
     "OUTCOME: pass\n"
     "done_run finalize: done lock status: free\n"
     + _FINALIZE_NO_LEDGER_SUMMARY
-    + _FINALIZE_SCAN_TAIL
+    + _FINALIZE_NO_MANIFEST_SCAN_TAIL
+    + "archive-ceremony evaluation: could-not-evaluate: span boundary does not resolve:"
+    " neither the owning run manifest start_commit nor ORIG_HEAD resolves, tried ORIG_HEAD\n"
 )
 PINNED_NO_MANIFEST_STDERR = ""
 
@@ -903,6 +934,11 @@ def normalize_done_output(text: str, base: Path) -> str:
         text = text.replace(variant, "<TMP>")
     text = re.sub(r"\b\d{8}T\d{6}Z-[0-9a-f]{6,64}\b", "<RUN_ID>", text)
     text = re.sub(r"\b[0-9a-f]{6,64}\b", "<HEX>", text)
+    text = re.sub(
+        r"\bevaluated_at=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\b",
+        "evaluated_at=<UTC_TIMESTAMP>",
+        text,
+    )
     text = re.sub(r"age [0-9]+s", "age <N>s", text)
     return text
 

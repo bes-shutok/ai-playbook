@@ -154,3 +154,8 @@ Files:
 - [x] Record in the fix-class origin why a sanctioned exit, false-positive removal, or simpler selection flow cannot safely resolve ambiguous or unauthorized targets. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run the complete Validation Commands block and require every command to exit 0. [class: REPOSITORY_TEST]
 - [x] Confirm changed paths are limited to Review Scope and that the two backlog rows describe non-overlapping scopes. [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-15-plan-prompts-prune-end-anchor-overreach.md`: covered by this plan (named by this plan's Backlog origin declaration); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

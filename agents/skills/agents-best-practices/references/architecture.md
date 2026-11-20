@@ -2,7 +2,7 @@
 
 ## Definition
 
-An agent harness is the provider-neutral runtime that lets a model act safely and repeatably. It is not the model and it is not only a prompt. It is the control plane that owns model calls, tool routing, permissions, memory, context compaction, approvals, tracing, and recovery.
+An agent harness is a provider-neutral runtime. It lets a model act safely and repeatably. It is not the model or just a prompt. It is the control plane that owns model calls, tool routing, permissions, memory, context compaction, approvals, tracing, and recovery.
 
 The model should propose. The harness should dispose.
 
@@ -296,7 +296,7 @@ Continuous cleanup is cheaper than waiting until drift becomes systemic.
 
 ## MVP harness default
 
-When building a new domain agent, start with an MVP harness rather than a full autonomy platform. The MVP should include one primary job-to-be-done, a minimal typed tool registry, approval-gated risky actions, explicit budgets, a deterministic context builder, planning mode, auto-compaction, tracing, and a small eval set. Add goal-like loops, more connectors, skills, or subagents only after the single-agent MVP has measured gaps.
+When building a new domain agent, start with an MVP harness. Do not start with a full autonomy platform. The MVP should have one primary job-to-be-done, a minimal typed tool registry, approval-gated risky actions, explicit budgets, a deterministic context builder, planning mode, auto-compaction, tracing, and a small eval set. Add goal-like loops, more connectors, skills, or subagents only after measurements show gaps in the single-agent MVP.
 
 The recommended MVP sequence is:
 

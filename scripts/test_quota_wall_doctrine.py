@@ -3,8 +3,10 @@
 
 Task 1 witnesses live here now: the two-class classification witnesses run
 through a test-local classifier whose rule literals are read from the
-doctrine block in agents/skills/execute-plan/SKILL.md (Sub-Agent Launch
-Rules) and the mirror sentences in agents/skills/maintenance/zcode.md (the
+doctrine block in agents/skills/execute-plan/launch-rules-and-gates.md
+(Sub-Agent Launch Rules; re-aimed 2026-11-10 by plan
+docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4
+after the load-on-dispatch split) and the mirror sentences in agents/skills/maintenance/zcode.md (the
 Dispatch discipline bullet), so the classification witnesses fail while the
 block is absent. The launch ledger line shape witnesses (Task 2) live here
 too: their test-local parser reads the Phase 3 tracking list's launch ledger
@@ -39,7 +41,20 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXEC_SKILL = REPO_ROOT / "agents" / "skills" / "execute-plan" / "SKILL.md"
-MAINT_SKILL = REPO_ROOT / "agents" / "skills" / "maintenance" / "zcode.md"
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the execute-plan skill split load-on-dispatch; the Sub-Agent Launch Rules doctrine block lives in launch-rules-and-gates.md and the Phase 3 tracking list in phase-3-review.md, so the readers name the owning module and the whole-text absence reads the router plus the module corpus.
+EXEC_LAUNCH_RULES = REPO_ROOT / "agents" / "skills" / "execute-plan" / "launch-rules-and-gates.md"
+EXEC_PHASE3 = REPO_ROOT / "agents" / "skills" / "execute-plan" / "phase-3-review.md"
+EXEC_CORPUS = (
+    EXEC_SKILL,
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "invocation-and-orchestration.md",
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "run-setup.md",
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "implementation-loop.md",
+    EXEC_PHASE3,
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "archive-and-cleanup.md",
+    EXEC_LAUNCH_RULES,
+    REPO_ROOT / "agents" / "skills" / "execute-plan" / "recovery-and-integration.md",
+)
+MAINT_SKILL = REPO_ROOT / "agents" / "skills" / "maintenance" / "zcode-dispatch-ladder.md"
 
 # The landed dispatch-failure contract (the doctrine never widens it).
 TYPED_LINE = "dispatch_failed: <ISO timestamp> <worker role> <reason code> pre-start"
@@ -78,7 +93,18 @@ TRANSIENT_ERROR = "momentary capacity throttling, retry shortly"
 
 
 def _exec_text() -> str:
-    return EXEC_SKILL.read_text(encoding="utf-8")
+    """The Sub-Agent Launch Rules module text (the doctrine block's home)."""
+    return EXEC_LAUNCH_RULES.read_text(encoding="utf-8")
+
+
+def _phase3_text() -> str:
+    """The Phase 3 module text (the tracking list's home)."""
+    return EXEC_PHASE3.read_text(encoding="utf-8")
+
+
+def _exec_corpus_text() -> str:
+    """The whole execute-plan skill text: the router plus every module."""
+    return "\n".join(path.read_text(encoding="utf-8") for path in EXEC_CORPUS)
 
 
 def _doctrine_block() -> str:
@@ -94,7 +120,7 @@ def _doctrine_block() -> str:
     if heading == -1 or marker == -1:
         pytest.fail(
             "doctrine block absent from the Sub-Agent Launch Rules in "
-            "agents/skills/execute-plan/SKILL.md"
+            "agents/skills/execute-plan/launch-rules-and-gates.md"
         )
     start = text.rfind("\n", 0, marker) + 1
     end = text.find("\n\n", start)
@@ -112,7 +138,7 @@ def _dispatch_bullet() -> str:
     if marker_at == -1:
         pytest.fail(
             "Dispatch discipline bullet absent from "
-            "agents/skills/maintenance/zcode.md"
+            "agents/skills/maintenance/zcode-dispatch-ladder.md"
         )
     start = marker_at + len("\n- ")
     end = text.find("\n- ", start)
@@ -364,18 +390,19 @@ def _dispatch_failed_entry() -> str:
     Its absence is the RED arm, mirroring _ledger_entry: the failure-receipt
     witnesses refuse to parse fixtures without the line contract's home.
     """
-    text = _exec_text()
+    text = _phase3_text()
     phase3 = text.find(PHASE3_HEADING)
     if phase3 == -1:
         pytest.fail(
-            "Phase 3 heading absent from agents/skills/execute-plan/SKILL.md"
+            "Phase 3 heading absent from "
+            "agents/skills/execute-plan/phase-3-review.md"
         )
     anchor = text.find(TRACKING_LIST_ANCHOR, phase3)
     head = text.find(DISPATCH_FAILED_ENTRY_HEAD, anchor) if anchor != -1 else -1
     if head == -1:
         pytest.fail(
             "dispatch_failed line contract absent from the Phase 3 tracking "
-            "list in agents/skills/execute-plan/SKILL.md"
+            "list in agents/skills/execute-plan/phase-3-review.md"
         )
     end = text.find("\n", head)
     return text[head:] if end == -1 else text[head:end]
@@ -494,18 +521,19 @@ def _ledger_entry() -> str:
     Its absence is the Task 2 RED arm: the ledger witnesses refuse to parse
     fixtures without the line contract's home.
     """
-    text = _exec_text()
+    text = _phase3_text()
     phase3 = text.find(PHASE3_HEADING)
     if phase3 == -1:
         pytest.fail(
-            "Phase 3 heading absent from agents/skills/execute-plan/SKILL.md"
+            "Phase 3 heading absent from "
+            "agents/skills/execute-plan/phase-3-review.md"
         )
     anchor = text.find(TRACKING_LIST_ANCHOR, phase3)
     head = text.find(LEDGER_ENTRY_HEAD, anchor) if anchor != -1 else -1
     if head == -1:
         pytest.fail(
             "launch ledger line contract absent from the Phase 3 tracking "
-            "list in agents/skills/execute-plan/SKILL.md"
+            "list in agents/skills/execute-plan/phase-3-review.md"
         )
     end = text.find("\n", head)
     return text[head:] if end == -1 else text[head:end]
@@ -575,7 +603,7 @@ def test_stale_wave_receipt_contrast_absent_from_operational_doctrine():
     surface absent from this lineage; neither the contrast phrase nor the
     surface name may return to the operational doctrine prose (the whole
     execution skill text is the doctrine's operational home)."""
-    text = _exec_text()
+    text = _exec_corpus_text()
     assert "wave_budget_receipts" not in text
     assert "per-round wave ordinal" not in text
 
@@ -810,7 +838,85 @@ def _committed_records() -> dict[str, str]:
 SANCTIONED_LANDING_SHAS = (
     "b00c0b7d4b2a56c2c57ba6ec7f19e6b76f295fb2",
     "843cc9709e12aa1255a24d483cd4a092e5d8dd26",
+    # 685c49d54 (stop-boundary-rederivation landing): rewrote D-18 (the
+    # directive-cap exit class and six-class reconcile); its constant
+    # join was missed at landing and repaired by the
+    # witness-preamble-committed-acceptance-residual session.
+    "685c49d5488477ccc41d8a78d18b8bf2515fbb06",
+    # f3b9023b8 (loop-continuity-exit-and-binding execution landing):
+    # added the Loop-scoped pin sentence to D-18 (loop-exit:queue-empty's
+    # authoritative reading through the recording session's switched-lane
+    # reach); its constant join landed as this run's recorded
+    # post-landing rider (the run manifest's closeout disposition,
+    # precedent 35dbeea14).
+    "f3b9023b86aaefb7bb35f734e6d5ac994a7f11ff",
 )
+
+
+# The preamble-rewriting sanctioned landings (the
+# witness-preamble-committed-acceptance-residual entry): commits that
+# legitimately rewrote the directives file's preamble because a
+# sanctioned landing edited it. Seed is the one witnessed historical
+# preamble rewrite (cb6adcb6f, the 2026-10-18 workflow-records pass that
+# set the preamble's current committed bytes). A future preamble-
+# rewriting sanctioned landing extends this constant by one entry and
+# the suite stays green; an unsanctioned committed preamble rewrite
+# goes red naming the preamble.
+SANCTIONED_PREAMBLE_LANDING_SHAS = (
+    "cb6adcb6f1967591e79c5e70c1055a1714a7a836",
+)
+
+
+def _preamble_of(text):
+    """The directives file's preamble: the bytes before the first record.
+
+    Fails named (like _directive_records) when the blob carries no record
+    heading, never a bare AttributeError on a heading-less historical blob.
+    """
+    match = RECORD_HEAD_RX.search(text)
+    if match is None:
+        pytest.fail("directives blob carries no D-records: no preamble to cut")
+    return text[: match.start()]
+
+
+def _preamble_anchor_revision(entries, sanctioned):
+    """Pure: resolve the preamble's anchor revision from the file history.
+
+    ``entries`` is the commit history oldest -> newest, each entry a
+    ``(commit, preamble, parent_preamble)`` triple over the directives
+    file's blobs; ``sanctioned`` is the set of preamble-rewriting
+    sanctioned-landing commit ids. The anchor is the newest commit among
+    the preamble's introducing commit (the oldest entry) and the
+    sanctioned landings whose committed blob changed the preamble.
+    Returns None when the history is empty.
+    """
+    anchor = None
+    for commit, preamble, parent_preamble in entries:
+        if anchor is None:
+            anchor = commit
+        if commit in sanctioned and preamble != parent_preamble:
+            anchor = commit
+    return anchor
+
+
+def _preamble_class_finding(tree_preamble, baseline_preamble, anchor_preamble):
+    """Pure: the committed-class acceptance decision for the preamble.
+
+    Returns None when the tree state passes (equal to the baseline
+    revision, or equal to the preamble's anchor revision), otherwise the
+    red line naming the preamble. Unlike the record twin, no None guards:
+    both call sites pass real strings (a resolved-None anchor_preamble is
+    never equal to a str tree state, so acceptance falls back to
+    baseline-only).
+    """
+    if tree_preamble == baseline_preamble:
+        return None
+    if tree_preamble == anchor_preamble:
+        return None
+    return (
+        "the directives preamble drifted from both the baseline and its "
+        "preamble anchor (the newest sanctioned revision)"
+    )
 
 
 def _record_anchor_revision(record_id, entries, sanctioned):
@@ -904,6 +1010,108 @@ def _record_entries():
     return entries
 
 
+def _preamble_entries():
+    """The directives file's commit history oldest -> newest, each entry a
+    ``(commit, preamble, parent_preamble)`` triple over HEAD's ancestry."""
+    commits = _git_line(
+        ["rev-list", "--reverse", "HEAD", "--", DIRECTIVES_HEAD_PATH]
+    ).split()
+    entries = []
+    for commit in commits:
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "cat-file", "-e",
+             f"{commit}:{DIRECTIVES_HEAD_PATH}"],
+            capture_output=True,
+        ).returncode != 0:
+            continue
+        blob = _git_bytes(["show", f"{commit}:{DIRECTIVES_HEAD_PATH}"]).decode(
+            "utf-8"
+        )
+        preamble = _preamble_of(blob)
+        parents = _git_line(["rev-list", "--parents", "-n", "1", commit]).split()[
+            1:
+        ]
+        parent_preamble = (
+            _preamble_of(
+                _git_bytes(
+                    ["show", f"{parents[0]}:{DIRECTIVES_HEAD_PATH}"]
+                ).decode("utf-8")
+            )
+            if parents
+            and subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "cat-file", "-e",
+                 f"{parents[0]}:{DIRECTIVES_HEAD_PATH}"],
+                capture_output=True,
+            ).returncode == 0
+            else None
+        )
+        entries.append((commit, preamble, parent_preamble))
+    return entries
+
+
+def _record_rewrites_without_constant_join(entries, sanctioned):
+    """Pure: the completeness arm over the directives file's history.
+
+    ``entries`` is the commit history oldest -> newest, each entry a
+    ``(commit, records, parent_records)`` triple; ``sanctioned`` is the
+    set of SANCTIONED_LANDING_SHAS members. Every commit whose committed
+    blob changed a present record's section bytes must be either that
+    record's introducing commit (the oldest entry carrying the record)
+    or a sanctioned landing listed in the constant - otherwise a
+    sanctioned landing rewrote a record but missed the constant join,
+    which is a named, permanent red instead of a time-boxed one the
+    baseline arm absorbs (lesson 473's witnessed miss class). First-
+    parent history only (the repo lands linearly); a committed record
+    DELETION is not attributed here - the sibling working-tree deletion
+    arm in the witness test names that class. Returns the finding
+    lines, empty when the history is complete.
+    """
+    introducing: dict[str, str] = {}
+    findings: list[str] = []
+    for commit, records, parent_records in entries:
+        for record_id in records:
+            introducing.setdefault(record_id, commit)
+        for record_id, section in records.items():
+            if (
+                section != parent_records.get(record_id)
+                and commit != introducing.get(record_id)
+                and commit not in sanctioned
+            ):
+                findings.append(
+                    f"record {record_id} rewritten in {commit} without a "
+                    "constant join: extend SANCTIONED_LANDING_SHAS or revert"
+                )
+    return findings
+
+
+def _preamble_rewrites_without_constant_join(entries, sanctioned):
+    """Pure: the preamble twin of the completeness arm.
+
+    ``entries`` is the commit history oldest -> newest, each entry a
+    ``(commit, preamble, parent_preamble)`` triple; ``sanctioned`` is the
+    set of SANCTIONED_PREAMBLE_LANDING_SHAS members. Every commit whose
+    committed blob changed the preamble must be either the preamble's
+    introducing commit (the oldest entry) or a sanctioned preamble
+    landing listed in the constant. First-parent history only (the repo
+    lands linearly). Returns the finding lines, empty when the history
+    is complete.
+    """
+    intro = entries[0][0] if entries else None
+    findings: list[str] = []
+    for commit, preamble, parent_preamble in entries:
+        if (
+            preamble != parent_preamble
+            and commit != intro
+            and commit not in sanctioned
+        ):
+            findings.append(
+                f"the directives preamble rewritten in {commit} without a "
+                "constant join: extend SANCTIONED_PREAMBLE_LANDING_SHAS or "
+                "revert"
+            )
+    return findings
+
+
 def _anchor_sections(anchors):
     """Map record id -> its anchor revision's section bytes."""
     sections: dict[str, str] = {}
@@ -932,9 +1140,13 @@ def test_witness_every_record_is_textually_unchanged_against_baseline_or_anchor(
     inherited standard, and any uncommitted drift from both revisions
     keeps today's red-with-id behavior. A working-tree deletion of a
     committed record is a named red too, never a bare KeyError. The
-    preamble carries the unchanged two-revision acceptance: it must equal
-    the baseline preamble, or the newest committed (HEAD) preamble when a
-    sanctioned commit edited the preamble.
+    preamble carries the same record-anchor model: it must equal the
+    baseline preamble, or the preamble anchor (the newest sanctioned
+    revision, resolved from the introducing commit and the
+    preamble-rewriting sanctioned landings in
+    SANCTIONED_PREAMBLE_LANDING_SHAS), so an unsanctioned committed
+    preamble rewrite goes red naming the preamble instead of silently
+    becoming the permanent standard.
     """
     tree_text = DIRECTIVES_FILE.read_text(encoding="utf-8")
     head_text = _baseline_directives_text()
@@ -965,16 +1177,104 @@ def test_witness_every_record_is_textually_unchanged_against_baseline_or_anchor(
             record_id,
         )
         assert finding is None, finding
-    tree_preamble = tree_text[: RECORD_HEAD_RX.search(tree_text).start()]
-    head_preamble = head_text[: RECORD_HEAD_RX.search(head_text).start()]
-    if tree_preamble != head_preamble:
-        committed_preamble = _committed_text()[
-            : RECORD_HEAD_RX.search(_committed_text()).start()
-        ]
-        assert tree_preamble == committed_preamble, (
-            "working-tree preamble drifted from both the baseline and the "
-            "committed (HEAD) preamble"
+    tree_preamble = _preamble_of(tree_text)
+    head_preamble = _preamble_of(head_text)
+    preamble_anchor = _preamble_anchor_revision(
+        _preamble_entries(), set(SANCTIONED_PREAMBLE_LANDING_SHAS)
+    )
+    anchor_preamble = (
+        _preamble_of(
+            _git_bytes(
+                ["show", f"{preamble_anchor}:{DIRECTIVES_HEAD_PATH}"]
+            ).decode("utf-8")
         )
+        if preamble_anchor is not None
+        else None
+    )
+    finding = _preamble_class_finding(
+        tree_preamble, head_preamble, anchor_preamble
+    )
+    assert finding is None, finding
+
+
+def test_witness_every_committed_rewrite_is_a_constant_join():
+    """Completeness arm over the real directives file history.
+
+    Walks the directives file's commit history (the ``_record_entries``
+    shape) and asserts every committed rewrite of a record or the
+    preamble is either that surface's introducing commit or a landing
+    listed in SANCTIONED_LANDING_SHAS / SANCTIONED_PREAMBLE_LANDING_SHAS
+    - so a future sanctioned landing that rewrites a record but misses
+    the constant join is a named, permanent red instead of a time-boxed
+    one the baseline arm absorbs (lesson 473: the witnessed D-18 miss
+    went green again after the next unrelated edit to the directives
+    file).
+    """
+    sanctioned = set(SANCTIONED_LANDING_SHAS)
+    findings = _record_rewrites_without_constant_join(
+        _record_entries(), sanctioned
+    )
+    assert not findings, "\n".join(findings)
+    preamble_findings = _preamble_rewrites_without_constant_join(
+        _preamble_entries(), set(SANCTIONED_PREAMBLE_LANDING_SHAS)
+    )
+    assert not preamble_findings, "\n".join(preamble_findings)
+
+
+def test_completeness_arm_partition_in_fixtures():
+    """Direct partition coverage of both completeness helpers: a rewrite
+    at the introducing commit is never a finding; a sanctioned landing in
+    the constant passes; the same rewrite missing from the constant is
+    a finding naming the surface."""
+    entries = [
+        ("intro", {"D-1": "v1"}, {}),
+        ("noop", {"D-1": "v1"}, {"D-1": "v1"}),
+        ("joined", {"D-1": "v2"}, {"D-1": "v1"}),
+    ]
+    assert (
+        _record_rewrites_without_constant_join(entries, {"joined"}) == []
+    )
+    findings = _record_rewrites_without_constant_join(entries, set())
+    assert findings == [
+        "record D-1 rewritten in joined without a constant join: extend "
+        "SANCTIONED_LANDING_SHAS or revert",
+    ]
+    # A rewrite at the record's introducing commit is never a finding.
+    assert (
+        _record_rewrites_without_constant_join(
+            [("intro", {"D-1": "v1"}, {})], set()
+        )
+        == []
+    )
+    unjoined_entries = [
+        ("intro", {"D-1": "v1"}, {}),
+        ("noop", {"D-1": "v1"}, {"D-1": "v1"}),
+        ("unjoined", {"D-1": "v3"}, {"D-1": "v1"}),
+    ]
+    assert _record_rewrites_without_constant_join(
+        unjoined_entries, set()
+    ) == [
+        "record D-1 rewritten in unjoined without a constant join: extend "
+        "SANCTIONED_LANDING_SHAS or revert",
+    ]
+    preamble_entries = [
+        ("intro", "p1", None),
+        ("noop", "p1", "p1"),
+        ("joined", "p2", "p1"),
+    ]
+    assert (
+        _preamble_rewrites_without_constant_join(
+            preamble_entries, {"joined"}
+        )
+        == []
+    )
+    preamble_findings = _preamble_rewrites_without_constant_join(
+        preamble_entries, set()
+    )
+    assert preamble_findings == [
+        "the directives preamble rewritten in joined without a constant "
+        "join: extend SANCTIONED_PREAMBLE_LANDING_SHAS or revert"
+    ]
 
 
 def test_record_anchor_revision_takes_the_newest_sanctioned_landing():
@@ -1136,4 +1436,130 @@ def test_witness_committed_rewrite_of_a_sanctioned_record_is_rejected_in_fixture
             tree_records["D-2"], introducing_records["D-2"], introducing_records["D-2"], "D-2"
         )
         is None
+    )
+
+    # Completeness-arm fixture pins: with the constant joined, the arm
+    # fires only on the unsanctioned rewrite (the class the fixture
+    # exists to reject); without the join, the sanctioned rewrite
+    # resolves as a completeness finding naming the landing too.
+    joined_findings = _record_rewrites_without_constant_join(
+        entries, sanctioned
+    )
+    assert joined_findings == [
+        f"record D-1 rewritten in {newest} without a constant join: extend "
+        "SANCTIONED_LANDING_SHAS or revert"
+    ]
+    unjoined = _record_rewrites_without_constant_join(entries, set())
+    assert any(
+        finding.startswith(
+            f"record D-1 rewritten in {sanctioned_landing} without a "
+            "constant join"
+        )
+        for finding in unjoined
+    )
+
+
+def _preamble_fixture_entries(repo, file_name):
+    """Fixture twin of _preamble_entries: history oldest -> newest over the
+    fixture repo's directives file, entries ``(commit, preamble,
+    parent_preamble)``."""
+    commits = _fixture_git(
+        repo, "rev-list", "--reverse", "HEAD", "--", file_name
+    ).split()
+    entries = []
+    for commit in commits:
+        blob = _fixture_git(repo, "show", f"{commit}:{file_name}")
+        preamble = _preamble_of(blob)
+        parents = _fixture_git(
+            repo, "rev-list", "--parents", "-n", "1", commit
+        ).split()[1:]
+        parent_preamble = (
+            _preamble_of(_fixture_git(repo, "show", f"{parents[0]}:{file_name}"))
+            if parents
+            else None
+        )
+        entries.append((commit, preamble, parent_preamble))
+    return entries
+
+
+def test_witness_committed_preamble_rewrite_is_rejected_in_fixture(tmp_path):
+    """Durable fixture: the preamble carries the record-anchor model too.
+
+    A temp-repo directives file gains its preamble and one record (the
+    introducing commit), the preamble is sanctionedly rewritten (the
+    test-local sanctioned set records the landing), and a second
+    unsanctioned committed preamble rewrite lands. The pure helpers must
+    resolve the preamble anchor to the sanctioned commit, pass the
+    sanctioned state, and reject the unsanctioned state naming the
+    preamble (RED-before/GREEN-after for the committed rewrite class).
+    """
+    preamble_v1 = "directive home preamble\n\n"
+    record = (
+        "## D-1: first record\n\n- status: active\n- directive: keep one\n"
+    )
+    file = tmp_path / "operator-directives.md"
+    file.write_text(preamble_v1 + record, encoding="utf-8")
+    _fixture_git(tmp_path, "init", "-q")
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "introduce records")
+    introducing = _fixture_git(tmp_path, "rev-parse", "HEAD")
+
+    # Sanctioned preamble rewrite: a sanctioned landing edited the preamble.
+    preamble_sanctioned = "directive home preamble, revised\n\n"
+    file.write_text(preamble_sanctioned + record, encoding="utf-8")
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "sanctioned preamble rewrite")
+    sanctioned_landing = _fixture_git(tmp_path, "rev-parse", "HEAD")
+    sanctioned = {sanctioned_landing}
+
+    # Unsanctioned committed preamble rewrite: silently become the standard.
+    preamble_unsanctioned = "silently replaced preamble\n\n"
+    file.write_text(preamble_unsanctioned + record, encoding="utf-8")
+    _fixture_git(tmp_path, "add", "-A")
+    _fixture_git(tmp_path, "commit", "-q", "-m", "unsanctioned preamble rewrite")
+    newest = _fixture_git(tmp_path, "rev-parse", "HEAD")
+
+    entries = _preamble_fixture_entries(tmp_path, file.name)
+    assert _preamble_anchor_revision(entries, sanctioned) == sanctioned_landing
+    assert sanctioned_landing != newest
+
+    introducing_preamble = _preamble_of(
+        _fixture_git(tmp_path, "show", f"{introducing}:{file.name}")
+    )
+    anchor_preamble = _preamble_of(
+        _fixture_git(tmp_path, "show", f"{sanctioned_landing}:{file.name}")
+    )
+
+    # The sanctioned state passes.
+    assert (
+        _preamble_class_finding(
+            anchor_preamble, introducing_preamble, anchor_preamble
+        )
+        is None
+    )
+    # The unsanctioned committed rewrite is rejected naming the preamble.
+    finding = _preamble_class_finding(
+        preamble_unsanctioned, introducing_preamble, anchor_preamble
+    )
+    assert finding is not None
+    assert "preamble" in finding
+
+    # Completeness-arm fixture pins: with the constant joined, the arm
+    # fires only on the unsanctioned preamble rewrite; without the
+    # join, the sanctioned rewrite resolves as a completeness finding
+    # naming the preamble and the landing too.
+    joined_findings = _preamble_rewrites_without_constant_join(
+        entries, sanctioned
+    )
+    assert joined_findings == [
+        f"the directives preamble rewritten in {newest} without a constant "
+        "join: extend SANCTIONED_PREAMBLE_LANDING_SHAS or revert"
+    ]
+    unjoined = _preamble_rewrites_without_constant_join(entries, set())
+    assert any(
+        finding.startswith(
+            f"the directives preamble rewritten in {sanctioned_landing} "
+            "without a constant join"
+        )
+        for finding in unjoined
     )

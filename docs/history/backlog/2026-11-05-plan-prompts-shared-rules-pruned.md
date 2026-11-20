@@ -1,6 +1,6 @@
 # Backlog: pruning the first prompt entry removed the shared rolling-log contract
 
-Status: covered-pending-execution (docs/history/plans/2026-11-06-plan-prompts-shared-rules-pruned.md)
+Status: covered (docs/history/plans/completed/2026-11-06-plan-prompts-shared-rules-pruned.md; execution landed 2026-11-08)
 Workflow: backlog
 Priority: high
 Class: fence-class
@@ -12,7 +12,7 @@ Skill/step: `agents/skills/investigate/SKILL.md` Stage 4; `agents/skills/plans/S
 Severity and source: High, current HEAD no longer contains the `Write boundary rule`, `Freeze rule`, or shared prune rules, while these consumers still refer to those labels; history shows the first entry prune removed the rules block with it
 Capture hygiene: `bash scripts/scan-public-hygiene.sh --files docs/history/backlog/2026-11-05-done-finalized-manifest-shadow.md docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md` passed; `bash scripts/check-no-em-dash.sh file docs/history/backlog/2026-11-05-done-finalized-manifest-shadow.md docs/history/backlog/2026-11-05-plan-prompts-shared-rules-pruned.md` passed
 Cluster: docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-skill-text-polish.md (same PLAN-PROMPTS contract surface; that row owns a narrower freeze-rule placement citation residual, this row owns loss of the shared rules block)
-Cluster: docs/history/backlog/2026-11-07-operative-files-exceed-read-tool-single-read-cap.md (same dispatch-and-corpus legibility family; that row owns the operative files' read-budget ceiling); docs/history/backlog/2026-11-07-standing-mandate-payloads-bake-skill-owned-duties.md (same family; that row owns ask payloads baking duties the templates already own)
+Cluster: docs/history/backlog/2026-11-07-operative-files-exceed-read-tool-single-read-cap.md (same dispatch-and-corpus legibility family; that row owns the operative files' read-budget ceiling)
 Dedup probe: surveyed 343 open top-level backlog rows and searched both rolling logs plus prompt-log history for missing shared rules, prune ranges, and write-boundary loss. Completed plans `docs/history/plans/completed/2026-10-13-prompt-log-origin-and-prune-boundaries.md` and `docs/history/plans/completed/2026-10-20-plan-prompts-prune-range-content-inventory.md` own correct prune semantics and range inventory, but not the current deletion of the standing rules block. `docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-skill-text-polish.md` covers a narrower existing freeze-rule placement citation residual; `docs/history/backlog/2026-11-03-plan-prompts-wrong-location-disposition-marker.md` owns one rejected-alternative marker violation. Neither covers the rules block being pruned with the first entry.
 
 ## Problem

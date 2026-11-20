@@ -18,7 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STACK_SKILL = (ROOT / "agents/skills/execute-plan-stack/SKILL.md").read_text(encoding="utf-8")
 RUNTIME_CONTRACT = (ROOT / "agents/skills/execute-plan/runtime-contract.md").read_text(encoding="utf-8")
-EXECUTE_PLAN_SKILL = (ROOT / "agents/skills/execute-plan/SKILL.md").read_text(encoding="utf-8")
+# Re-aimed 2026-11-10 (plan docs/history/plans/2026-11-07-operative-file-read-budget-gate.md Task 4): the Stack-task entry point section moved byte-verbatim to implementation-loop.md.
+EXECUTE_PLAN_SKILL = (ROOT / "agents/skills/execute-plan/implementation-loop.md").read_text(encoding="utf-8")
 WORKTREE_FIRST = (ROOT / "agents/skills/execute-plan/worktree-first.md").read_text(encoding="utf-8")
 
 

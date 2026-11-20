@@ -123,7 +123,7 @@ State-shape precondition: the reconciler reads the run's
 initialize `generation` to a positive integer when the run's state file is
 created, and advance it by one on every later parent-owned state rewrite
 (the reconciled projection itself advances it by one per the atomic
-replacement above); `run_session_id` carries the claim-holding session id.
+replacement above); `run_session_id` is the run's immutable origin identity, retained across an authorized owner conversion; the claim's `session` field carries the current owner through the claim gateway.
 A record written without them refuses `state-shape-unusable` before any
 read of the task's handoff state.
 
@@ -138,9 +138,73 @@ this transition reconciles only
 accepted `done-pending` handoffs and never touches a task that has not reached
 `done-pending`.
 
+
+**Scope-drift recovery (receipt-backed requeue):**
+
+A `task-scope-changed` refusal during Done-pending reconciliation has one post-acceptance remedy: before another task launch, the parent may invoke `python3 scripts/reconcile_execute_plan_handoff.py recover-scope-drift --state <runtime_state.json> --plan <plan-path> --task <N> --session <claim-holding-session>`. This scope-drift recovery is limited to an accepted `done-pending` task whose reviewed scope changed and whose accepted effects are absent or neutral. It is not a relaunch: the ordinary loop reselects the unchecked pending task at Step 1.1 and dispatches a new worker only after recovery succeeds. A refusal parks the run for operator disposition; never edit runtime state by hand or relaunch the accepted worker. On success, rerun ordinary preflight and the done commit gate before continuing.
+
+The scope-drift recovery receipt binds the run and plan identity, task identity, expected generation, prior launched scope digest, reviewed current scope digest, original terminal-receipt digest, effect verdicts, ready review evidence, and checkbox projection. The atomic write requeues that task as `pending`, records the receipt in `scope_recovery`, updates its scope digest, and preserves all unrelated records, the run plan digest, and the original terminal receipt. A subsequent accepted completion replaces `terminal_receipt`; `scope_recovery` retains the prior receipt digest as its evidence anchor, while the accepted completion's evidence remains in the plan's review-staging series. Done-pending reporting is keyed to `status == done-pending`, not receipt-field presence.
+
+For scope-drift recovery, the parent records `effect_baseline` before dispatch beside `task_scope_digest` by invoking `python3 scripts/reconcile_execute_plan_handoff.py capture-effect-evidence --repo-root <repo-root> <Files-path>...`; at acceptance it invokes the same command for changed paths and records post-only `effect_evidence` in the terminal receipt. The parent records no baseline half at acceptance. The command anchors traversal at a held repository-root directory descriptor, walks components relative to held descriptors without following symlinks, opens final files nonblocking, verifies regular-file status before reading, and emits no partial map on refusal. It hashes raw bytes and returns lowercase `absent` only for a genuinely missing non-symlink path. A symlink, directory, unreadable file, or non-regular target refuses before producer state writes. Derive task scope with the helper's `task_scope_digest` function; do not reimplement that derivation ad hoc. The operation refuses `effect-evidence-unavailable` when post evidence is absent and `effect-baseline-unrecorded` for pre-amendment launches or missing changed-path baseline cells. Both require operator disposition by fresh capture or manual reconciliation.
+
+The scope-drift recovery admission order is pinned once here: verify canonical plan identity and claim; bind current plan and ready review; require `done-pending`; require recorded launch scope and a changed scope; require an incomplete checklist projection; require `effect_evidence`; require matching `effect_baseline`; validate all path keys and containment; capture current bytes through the same safe descriptor-relative resolver; classify every path; then re-read all receipt inputs and probes immediately before replacement. Thus the early refusals are `launch-scope-unrecorded`, `scope-unchanged`, `projection-complete`, `effect-evidence-unavailable`, `effect-baseline-unrecorded`, and `effect-path-escapes-root`, followed by `effect-present` or `effect-evolved`; unreadable probe paths are tool errors. Every refusal preserves runtime-state bytes.
+
+The final compare groups each scope-drift recovery receipt field with its refusal class: `run_session_id`, `plan_slug`, `plan_path`, `plan_digest` → `scope-recovery-identity-drift`; `task_id`, `plan_task` → `scope-recovery-task-identity-drift`; `expected_generation` → `scope-recovery-stale-generation`; `prior_task_scope_digest` → `scope-recovery-launch-scope-changed`; `task_scope_digest` → `scope-recovery-task-scope-changed`; `worker_receipt_digest` → `scope-recovery-worker-receipt-changed`; `effect_verdicts` → `scope-recovery-effect-evidence-changed`; `review` → `scope-recovery-review-evidence-drift`; `checkbox_projection` → `scope-recovery-projection-changed`. Success is `scope-drift-recovered`; every refusal leaves runtime-state bytes unchanged.
+
+## Pre-acceptance recovery after plan-byte drift
+
+The done-pending arm above cannot absorb an interrupted task with no terminal
+receipt: it requires evidence of an accepted worker. If a task is still
+`pending` and has no `terminal_receipt`, compare the plan with the saved
+`runtime_state.plan_digest`. A different full-plan digest alone is not drift:
+reconstruct the expected bytes from the launch source plus checkbox projections
+for tasks whose runtime records have an accepted terminal receipt and
+`checkbox: true`. If current bytes equal that projection, continue without
+restoration. Otherwise recover only from the exact plan path at the run
+manifest's recorded `run_base` or `session_start_commit`, the primary
+checkout's same relative plan path, or a snapshot path explicitly recorded in
+this run's manifest. Do not search arbitrary refs, branches, or snapshots.
+Accept a source only when its full-byte SHA-256 equals the saved launch digest.
+
+Before any plan, task-path, or runtime-state write, re-observe the original
+worker through the native session interface. Unknown liveness stops with
+`original-worker-liveness-unknown`, leaving plan bytes, task-path files, task
+records, and runtime state unchanged and launching no duplicate worker. Do not
+restore the plan while liveness is unknown. Re-observe termination again
+immediately before every plan write and recovery dispatch.
+
+Before any write, use the reconciliation helper to derive each recorded task
+section from the selected source and require its digest to equal that task's
+`task_scope_digest`; also verify the current scopes of accepted completed tasks
+against those same digests. Missing source, any digest mismatch, or an
+unverifiable accepted projection stops with `plan-source-missing`,
+`plan-source-digest-mismatch`, or `plan-task-scope-mismatch`, leaving the plan,
+task record, and runtime evidence unchanged. Before each plan write, refresh the plan skill-gate marker and verify the
+source and recorded task-scope digests; restore the verified launch bytes
+exactly, then check the full digest and every recorded task-scope digest again.
+Append the repo-relative plan path to `{tmp_dir}/done-session/plan-deliverables.txt`
+after every successful plan mutation. Replay only the verified accepted
+checkbox projections, using postlaunch preserve-task mode before each write,
+and verify the resulting bytes equal the reconstructed expected projection.
+This digest-verified restore is the sole exception to the plans skill's
+postlaunch `--preserve-tasks` write rule; its marker, pre-write checks, and
+post-write digest checks remain required.
+
+Before recovery dispatch, require the fresh termination observation above.
+When termination is verified, do not fabricate
+a terminal receipt or relaunch that worker. Launch a distinct recovery worker
+to inspect and validate the existing diff against the restored task section,
+run the task's validation, and return fresh evidence under
+`task-<N>-recovery.log.md`; the parent accepts its result through the ordinary
+worker checks and records only that new worker's terminal receipt. The
+recovery worker cannot widen task paths or alter `runtime_state.json`.
+
+
 ## Run-level ownership and repository placement
 
 Every execution-claim `take`, `claim`, and `refresh` passes `--runtime` with the invoking runtime's canonical ID from `projects/.ai-playbook/execute-plan-runtime-inventory.toml` (for example, `codex` or `zcode`); absent or invalid IDs use `unknown` (never infer). The claim persists `runtime_id`, and refresh preserves it; unknown and legacy claims remain shared.
+
+Resume selection binds to the requested plan's own execution identity: start from the plan's exact repository-relative path and saved execution manifest, cross-checked against the plan's execution claim and registered placement, before any saved-manifest refresh or worktree provisioning. An authoring claim, even a same-session one for another item, never selects an execution checkout; missing or conflicting identity evidence preserves the existing work and reports the conflicting plan, owner, or placement, never supplied by an unrelated authoring claim, branch-name resemblance, or newest timestamp.
 
 Dead-run conversion contract (recovery routing lives in the sole recovery
 procedure, agents/skills/maintenance/template-execution.md): the Phase 0
@@ -183,9 +247,9 @@ substitutes for them.
 
 ## Stack-task entry point
 
-The explicit `--stack-task <plan-path> --task <N>` mode first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task's Inclusion Hard Gate. A caller with an existing stack run passes its registered worktree, exact task branch, and run context under the worktrees resolution, or its recorded primary placement (the primary checkout, company task branch, and no-worktree `run_worktree` form) under the primary resolution; accept the recorded primary placement beside the registered worktree form without resetting to base or creating a conflicting claim, so the entry's "ordinary Phase 0 placement" language and the adoption arm cover both resolutions. The stack orchestrator must first record a `stack_branch_transition:` row, refresh the claim's `branch`, update the manifest identity's `run_branch`, and pass the continuity probe against that exact branch. When that transition receipt is present and the claim and manifest agree, the stack-task adoption arm accepts the intentional branch change; it does not apply the ordinary resume refusal for a stale prior branch. A missing receipt or disagreement remains a hard stop. The mode runs exactly one selected task through its implement worker, required intermediate review, task-specific and scope-intersecting plan validation, repository-standard suite, and parent-owned light boundary. The worker records validation evidence before commit; the parent binds it to the resulting commit SHA and branch head in the post-boundary return. The boundary requires both sets to pass, with complete command identities, working directories, exit statuses, and fresh output identities. This explicit one-boundary mode then exits, overriding whole-plan continuous-execution and terminal-response gates; it does not enter Phase 2, Phase 3, archive, or closeout and performs no PR operation.
+The explicit `--stack-task <plan-path> --task <N>` mode first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task's Inclusion Hard Gate. A caller with an existing stack run passes its registered worktree, exact task branch, and run context under the worktrees resolution, or its recorded primary placement (the primary checkout, company task branch, and no-worktree `run_worktree` form) under the primary resolution; accept the recorded primary placement beside the registered worktree form without resetting to base or creating a conflicting claim, so the entry's "ordinary Phase 0 placement" language and the adoption arm cover both resolutions. The stack orchestrator must first record a `stack_branch_transition:` row, refresh the claim's `branch`, update the manifest identity's `run_branch`, and pass the continuity probe against that exact branch. When that transition receipt is present and the claim and manifest agree, the stack-task adoption arm accepts the intentional branch change; it does not apply the ordinary resume refusal for a stale prior branch. A missing receipt or disagreement remains a hard stop. The mode runs exactly one selected task through its implement worker, required intermediate review, task-specific and scope-intersecting plan validation, and parent-owned light boundary, applying the target's suite policy (`test_suite_policy`) instead of a universal complete-suite requirement and deferring any whole-repository suite to the policy's final boundary; a plan command invoking the whole test inventory is a conflict surfaced to the operator before the command runs at this boundary. The suite policy is resolved once at Phase 0 per the Suite policy resolution paragraph of `agents/skills/execute-plan/SKILL.md` (accepted values `full-before-final` and `focused-never-full`); this contract names that home by reference and does not restate the resolution semantics. The run's final stack-task boundary, the one whose selected task is the stack plan's last task (no unchecked later task at invocation time), carries the policy's final-boundary obligation under `full-before-final`: the complete repository-standard suite once, recorded like the Phase 2 run, before the stack claim is released; no intermediate boundary runs it. A suite policy that is unresolvable at the boundary blocks claim release, the gap surfaced to the operator. The worker records validation evidence before commit; the parent binds it to the resulting commit SHA and branch head in the post-boundary return. The boundary requires its policy-qualified validation set to pass, with complete command identities, working directories, exit statuses, and fresh output identities. This explicit one-boundary mode then exits, overriding whole-plan continuous-execution and terminal-response gates; it does not enter Phase 2, Phase 3, archive, or closeout and performs no PR operation.
 
-The ordinary full-plan lifecycle remains unchanged except that Phase 2 runs the plan validation commands and the complete repository-standard suite after all tasks pass and before Phase 3. Resolve the suite from authoritative repository test guidance and inventory. Incomplete guidance or inventory, unavailable commands, or any failure leaves the applicable boundary incomplete; after repair, rerun the complete standard set, and in stack-task mode rerun task-specific validation too.
+The ordinary full-plan lifecycle remains unchanged except that Phase 2 runs the plan validation commands plus the project-wide final validation the resolved suite policy requires, after all tasks pass and before Phase 3; the resolution home and its unresolvable treatment are the Suite policy resolution paragraph of `agents/skills/execute-plan/SKILL.md`, and an unresolvable policy leaves Phase 2 incomplete with the gap surfaced to the operator. Unavailable commands, or any failure of the validation the resolved policy requires, leaves the applicable boundary incomplete; after repair, rerun that boundary's policy-qualified validation.
 
 ## Plans-authoring watchers
 

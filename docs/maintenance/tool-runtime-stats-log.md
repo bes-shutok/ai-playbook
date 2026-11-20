@@ -85,3 +85,13 @@ Lower bound over the scheduler state file's last-20 `children[]` retention windo
 - Recorded landed outcomes: author 6, exec 3; `execute` 0. Other outcomes: progress 1, deferred 4, pending 2, stood-down 1, failed 1, in-progress 1.
 - Failure/park proxy: one failed child and four deferred children in the retained entries; standing `turn_error` is the prior interrupted-manifest witness refusal, `pending_dispatch` and `pending_rearm` are null, and `alert` is null. The state file keeps no per-turn error ledger, so retained outcomes are a proxy rather than a period total.
 - Queue depth at report time: ready prompt-log entries 89 (13 PLAN-PROMPTS, 76 EXEC-PROMPTS); plan-uncovered open backlog items 349; open top-level plans 7 (live counts, no retention bound).
+
+
+## Run 20261119T112309 (rider 2026-11-19)
+
+Digest: report docs/tmp/tool-runtime-stats/tool-runtime-stats-20261119T112309.md; store-resolved session telemetry; headline per-day row Agent 2026-10-12: 140 calls, mean 556.698s, total 77937.661s.
+Filing: 324 qualifying rows; one batched origin filed docs/history/backlog/2026-11-19-tool-runtime-agent-worker-cost-cluster.md (Agent worker dispatch class, 39 rows, dominant); residual classes (Bash test-suite rows, TaskOutput waits) named as data in the item, no per-row items.
+Throughput:
+- children[] counts by kind and evidenced outcome over the retention window (last 20 entries, lower bound): execute 14 (pending 5, failed 9 by ledger-canonical missed/cancelled merges), audit 3 (pending 1 idle-dispatched this turn, succeeded 2 by prior evidence), author 3 (succeeded 2 by certification-oracle evidence, pending 1); counts read at report time after the 2026-11-19 ledger outcome merge.
+- error/park proxy: children[] failed entries in the window: 9 (clocked-order missed/cancelled merges); standing turn_error: queued-execution-starved (the aging-bound record, this turn's); parked records: none (pending_dispatch and pending_rearm null at report time). This proxy counts retention-window failures and parks, not a direct manual-intervention measure (the state file keeps no per-turn error ledger).
+- queue depth at report time: ready prompt-log entries 53 (both logs, unfrozen, plan-absent), plan-uncovered open backlog items 434, open top-level plans 32.

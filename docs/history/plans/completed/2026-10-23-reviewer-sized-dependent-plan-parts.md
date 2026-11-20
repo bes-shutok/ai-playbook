@@ -88,3 +88,8 @@ Files:
 - [x] Each requested part has distinct behavior, acceptance criteria, and file ownership and stays within its recorded size limit; separate plans use the existing execution dependency [class: IMPLEMENTATION_REQUIRED]
 - [x] Tasks editing the same production or test file remain in one plan; no repository-wide size threshold, automatic split, ledger, or review lifecycle is added [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `docs: offer dependent plan parts for review boundaries` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-22-reviewer-sized-dependent-plan-parts.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

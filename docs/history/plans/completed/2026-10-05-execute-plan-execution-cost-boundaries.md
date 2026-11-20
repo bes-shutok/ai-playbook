@@ -164,3 +164,9 @@ Evidence:
 - [x] Re-derive the insertion anchor from live bytes before editing and verify Steps 1.4 and 1.5 stay byte-identical outside the new subsection, and re-derive the agent-logs.md table span including Task 1's fast-path note paragraph so the second-landed row cannot collide with it [class: IMPLEMENTATION_REQUIRED]
 - [x] Run → expect GREEN: all four greps flip to positive hits; the shared-skill contract suites still pass; the em-dash added-lines scan and the public hygiene scan exit 0 over the changed set [class: REPOSITORY_TEST]
 - [x] Commit: `feat: execute-plan early design review after the mechanism-defining task` [class: IMPLEMENTATION_REQUIRED]
+
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-10-05-done-commit-batching.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.
+- `docs/history/backlog/completed/2026-10-05-execution-design-review-early-lens.md`: covered by this plan (Status witness of this plan); the completed-corpus sweep (docs/history/plans/2026-11-08-backlog-completed-dir-regrowth.md, Task 2, 2026-11-09) folded the row here and deleted the row file.

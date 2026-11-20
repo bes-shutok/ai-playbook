@@ -76,6 +76,7 @@ operator's explicit authorization.
 | `CHECK_NO_EM_DASH_SCRIPT` | Repo-relative em-dash checker path, resolved against the primary checkout; `release-authoring.sh` uses it for the draft scan and the whole-file `CHANGELOG.md` scan. A missing checker aborts as an environment failure, never as a policy hit | `scripts/check-no-em-dash.sh` |
 | `PUBLIC_HYGIENE_PATTERNS_FILE` | Deny-pattern override handed to the privacy gate; when set, the effective value is printed to the run output and carried into the summary | unset (scanner default) |
 | `RELEASE_LOCK_MAX_WAIT` | Seconds the short agent wait may poll for the done lock | `60` |
+| `RELEASE_PUBLISH_SCOPE_CHECKER` | Repo-relative publish-scope checker path, resolved against the primary checkout; `release-rewrite.sh` pipes the publish delta's file list through it before the backup ref is created. Warning-only: findings surface as a stderr `PUBLISH SCOPE` banner and never abort; a missing checker prints one skip line, a failing checker one warning line | `scripts/release_publish_scope_check.sh` |
 
 ## CHANGELOG authoring rules
 
@@ -160,7 +161,10 @@ lock export lines plus a final `groups-file <path>` data line on stdout. The one
 as shell. The rewrite script re-asserts the lock and the branch, creates the backup ref,
 rewrites in the ad-hoc worktree, runs the privacy gate over the published result (every
 blob and message of the rewritten tip tree plus the groups file), moves `main` with a
-compare-and-swap, and prints the persisted push script path on stdout.
+compare-and-swap, and prints the persisted push script path on stdout. Before the backup
+ref is created the rewrite also runs the warning-only publish-scope check; its stderr
+`PUBLISH SCOPE` banner (when the delta carries tracked-ignored or charter-empty paths)
+is among the output kept for the final summary.
 
 ```bash
 unset DONE_LOCK_DIR DONE_LOCK_TOKEN RELEASE_GROUPS_FILE PUSH_SCRIPT
@@ -291,10 +295,15 @@ if [ "$lock_rc" -ne 0 ]; then
   echo "release: lock release failed; run '$LOCK_SCRIPT' status and report the holder state (status free means the hold is already gone)" >&2
 fi
 "$LOCK_SCRIPT" status
-# Report-only: sibling branches sharing pre-release-only history. Publishing any
-# of them would send commits this run's privacy gate never scanned.
+# Report-only: sibling branches sharing pre-release-only history; publishing
+# any sends commits the privacy gate never scanned.
 while read -r ref sha; do
-  if ! git merge-base --is-ancestor "$(git merge-base "$sha" "$BACKUP_REF")" "refs/remotes/$REMOTE/main"; then
+  base="$(git merge-base "$sha" "$BACKUP_REF")"
+  if [ -z "$base" ]; then
+    echo "unrelated history this release did not scan: $ref"
+    continue
+  fi
+  if ! git merge-base --is-ancestor "$base" "refs/remotes/$REMOTE/main"; then
     echo "sibling branch pointing into the rewritten range (or forked from it): $ref"
   fi
 done < <(git for-each-ref --format='%(refname) %(objectname)' refs/heads/)

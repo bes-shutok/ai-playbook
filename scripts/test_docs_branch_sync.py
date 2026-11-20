@@ -1585,5 +1585,99 @@ class DocsBranchSyncTests(unittest.TestCase):
         )
 
 
+    def test_local_nested_root_copy_is_never_published_or_restored(self) -> None:
+        self.repo.local_file(".ai-playbook/reviews/keep.md", b"ordinary\n")
+        self.repo.local_file(".ai-playbook/reviews/reviews/nested.md", b"doubled\n")
+        self.repo.local_file("docs/reviews/reviews/fixed-nested.md", b"doubled-fixed\n")
+        self.repo.local_file("docs/reviews/keep-fixed.md", b"ordinary-fixed\n")
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        paths = self.repo.docs_paths()
+        self.assertIn(".ai-playbook/reviews/keep.md", paths)
+        self.assertIn("docs/reviews/keep-fixed.md", paths)
+        self.assertNotIn(".ai-playbook/reviews/reviews/nested.md", paths)
+        self.assertNotIn("docs/reviews/reviews/fixed-nested.md", paths)
+        # The sync never deletes a local file: the local nested copy stays
+        # until the one-time post-landing sweep; it is just never published.
+        self.assertTrue((self.repo.root / ".ai-playbook" / "reviews" / "reviews" / "nested.md").exists())
+
+    def test_branch_nested_root_copy_paths_are_pruned_reported_and_never_restored(self) -> None:
+        self.repo.seed_docs([
+            (".ai-playbook/reviews/reviews/twin.md", b"twin\n", NOW, None),
+            (".ai-playbook/reviews/reviews/deep/twin2.md", b"twin2\n", NOW, None),
+        ])
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        self.assertIn("docs-branch: pruned .ai-playbook/reviews/reviews/twin.md", result.stdout)
+        self.assertIn("docs-branch: pruned .ai-playbook/reviews/reviews/deep/twin2.md", result.stdout)
+        self.assertEqual(
+            [path for path in self.repo.docs_paths() if path.startswith(".ai-playbook/reviews/reviews/")],
+            [],
+        )
+        self.assertFalse((self.repo.root / ".ai-playbook" / "reviews" / "reviews").exists())
+        self.assertNotIn("docs-branch: restored .ai-playbook/reviews/reviews/twin.md", result.stdout)
+
+    def test_nested_root_copy_of_a_nested_copy_is_covered_by_the_same_rule(self) -> None:
+        self.repo.local_file(".ai-playbook/reviews/reviews/reviews/doubly.md", b"doubly\n")
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        self.assertNotIn(".ai-playbook/reviews/reviews/reviews/doubly.md", self.repo.docs_paths())
+
+    def test_differently_named_subdirectory_archives_normally(self) -> None:
+        self.repo.local_file(".ai-playbook/reviews/quarantined-peer-2026-11-04/f.md", b"kept\n")
+        self.repo.local_file(".ai-playbook/metrics/metrics-history/x.jsonl", b"kept\n")
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        paths = self.repo.docs_paths()
+        self.assertIn(".ai-playbook/reviews/quarantined-peer-2026-11-04/f.md", paths)
+        self.assertIn(".ai-playbook/metrics/metrics-history/x.jsonl", paths)
+
+    def test_nested_root_copy_rule_holds_for_all_four_archive_roots(self) -> None:
+        namespace = load_runner_namespace()
+        root_for = namespace["root_for"]
+        roots = [
+            namespace["ArchiveRoot"]("reviews", "docs/reviews", self.repo.root / "docs" / "reviews"),
+            namespace["ArchiveRoot"]("reviews", ".ai-playbook/reviews", self.repo.root / ".ai-playbook" / "reviews"),
+            namespace["ArchiveRoot"]("metrics", ".ai-playbook/metrics", self.repo.root / ".ai-playbook" / "metrics"),
+            namespace["ArchiveRoot"]("review-certs", ".ai-playbook/review-certs", self.repo.root / ".ai-playbook" / "review-certs"),
+        ]
+        for root in roots:
+            prefix = root.relative
+            with self.subTest(root=prefix):
+                self.assertIsNone(root_for(f"{prefix}/{root.role}/nested.md", roots))
+                self.assertIsNotNone(root_for(f"{prefix}/ordinary.md", roots))
+                self.assertIsNotNone(root_for(f"{prefix}/{root.role}-sibling/nested.md", roots))
+        self.repo.local_file(".ai-playbook/metrics/metrics/doubled.jsonl", b"doubled\n")
+        self.repo.local_file(".ai-playbook/review-certs/review-certs/doubled.md", b"doubled\n")
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        paths = self.repo.docs_paths()
+        self.assertNotIn(".ai-playbook/metrics/metrics/doubled.jsonl", paths)
+        self.assertNotIn(".ai-playbook/review-certs/review-certs/doubled.md", paths)
+
+    def test_escaping_symlink_inside_nested_root_copy_does_not_refuse_the_sync(self) -> None:
+        nested = self.repo.root / ".ai-playbook" / "reviews" / "reviews"
+        nested.mkdir(parents=True)
+        try:
+            os.symlink("../../../outside-target", nested / "escape-link")
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+        result = self.repo.run()
+
+        self.assert_ok(result)
+        self.assertNotIn(".ai-playbook/reviews/reviews/escape-link", self.repo.docs_paths())
+
+
 if __name__ == "__main__":
     unittest.main()
