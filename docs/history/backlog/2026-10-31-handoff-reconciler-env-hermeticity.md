@@ -1,0 +1,3 @@
+# Backlog: Pin git env overrides reachable from handoff-reconciler tests and code
+
+Driving force: simplification. `scripts/test_reconcile_execute_plan_handoff.py::subprocess_env` pins only `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`; `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` stay inherited, and in-process reconcile tests run the reconciler's internal `git worktree list` under fully ambient `os.environ`. A shell carrying `GIT_DIR` produces loud spurious claim-resolution failures. Concern: env-var inputs reachable from the code under test have no named pinning mechanism. Found by the Task 1 intermediate review (testing lens, 2026-10-31, plan execute-plan-plan-digest-handoff-drift).

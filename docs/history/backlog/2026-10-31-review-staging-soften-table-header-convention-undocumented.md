@@ -1,10 +1,11 @@
 # Backlog: Review-staging soften-watchlist parser counts a conventional header row as data
 
 - **Filed:** 2026-10-31, learn Step 1.8 (interactive authoring session)
-- **Status:** open
+- **Status:** covered-pending-execution (docs/history/plans/2026-11-07-review-staging-soften-table-header-convention-undocumented.md)
 - **Workflow:** backlog
 - **Priority:** low (one failed hard-gate iteration per incident; the error names counts but not the convention)
 - **Origin class:** self-serving
+- **Quarantine:** 2026-11-04
 - **Class:** fix-class
 - **Driving force:** efficiency
 - **Skill/step:** `~/.ai-playbook/scripts/validate_review_staging.py` `validate_soften_watchlist_agreement` (the soften-watchlist source-of-truth plan's Task 4 arm) and the review-staging skill's soften-watchlist record shape docs

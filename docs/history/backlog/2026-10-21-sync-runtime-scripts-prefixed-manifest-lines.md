@@ -8,6 +8,9 @@ Quarantine: 2026-10-27
 - **Class:** fix-class
 - **Driving force:** code-quality (off-plan finding from the Task 1 intermediate review of docs/history/plans/2026-10-18-review-runtime-sibling-module-deployment.md)
 - **Cluster:** docs/history/backlog/2026-10-21-runtime-deployer-test-pin-gaps.md; docs/history/backlog/2026-10-21-runtime-verifier-design-simplification.md; docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md (shared runtime deployment scripts and verifier); docs/history/backlog/2026-10-18-runtime-scripts-home-residue.md (shared deployed-home maintenance surface)
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-deployer-test-pin-gaps.md
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-design-simplification.md
+- **Cluster:** docs/history/backlog/2026-10-21-runtime-verifier-naming-and-remedy-gaps.md
 
 ## Problem
 

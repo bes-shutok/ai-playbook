@@ -125,6 +125,179 @@ class OutcomeArgumentParser(argparse.ArgumentParser):
         sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
         raise SystemExit(3)
 
+
+# ---------------------------------------------------------------------------
+# The clear-record grammar home (producer code-family record arm plan,
+# Task 3): the minimal validating record shape (the `### Panel` /
+# `### Counts` / `### Triage outcomes` sub-sections under
+# `## Review Statistics` and their parity fields) is documented by one
+# complete worked example pair, rendered by `_grammar_home_example_pair()`
+# from this module's own fixture builders (`_current_clear_markdown` /
+# `_current_clear_payload`), so the home cannot drift from the grammar the
+# validator accepts: the example's `## Review Statistics` block is the
+# builders' bytes verbatim, and the standing grammar-home selftest cell
+# re-validates the whole pair through `validate_staging_file` on every
+# `--selftest` run. `_main` mounts the rendered pair on the parser epilog,
+# so `--help` prints it as usage text, and the three record-grammar
+# diagnostics (`missing ### Panel under Review Statistics`, `missing
+# ### Counts or Agents launched row`, `missing ### Triage outcomes or
+# Pending triage placeholder`) cite it by the repo-relative path in
+# GRAMMAR_HOME_CITATION below: only the Panel ERROR carries the hard-mode
+# skill-pointer parenthetical and joins the citation beside it, while the
+# two or-gated WARN lines carry no pointer, so the citation is their sole
+# appended text.
+#
+# The example carries the current-dated contract shape: the composer dates
+# the pair today (UTC), so every active date fence is on and the example
+# always shows the full post-fence obligations, annotated per fence:
+#   - on or after EXTENDED_SIDECAR_MIN_DATE (2026-09-09): the Metadata
+#     carries the four freshness lines (`Review mode`, `Changed-risk
+#     signals`, `Prior findings supplied as filter`, `Last fix commit`),
+#     and the sidecar carries the four extended fields (`review_mode`,
+#     `risk_signals`, `prior_findings_filter`, `last_fix_commit`) plus
+#     `verdict`;
+#   - on or after COVERAGE_SIDECAR_MIN_DATE (2026-09-16): the sidecar
+#     carries the `coverage` object and the Markdown the `- Coverage:`
+#     twin line;
+#   - on or after RECORD_KIND_SIDECAR_MIN_DATE (2026-09-20): the sidecar
+#     declares `record_kind: canonical` and the Metadata carries the
+#     `Record kind:` twin line;
+#   - on or after SOFTEN_WATCHLIST_PARITY_MIN_DATE (2026-10-03): the
+#     sidecar carries `soften_watchlist`;
+#   - on or after USAGE_MINT_PAIR_MIN_DATE (2026-10-06): the Metadata
+#     carries the mint pair (`review-run-id`, `review-started-at-ms`), so
+#     the post-fence self-heal chain state has its run binding;
+#   - on or after SELF_HEAL_STATE_MIN_DATE (2026-10-09): the sidecar
+#     carries `extensions.convergence.self_heal_attempt`.
+# ---------------------------------------------------------------------------
+GRAMMAR_HOME_CITATION = (
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)"
+)
+
+
+def _grammar_home_example_pair() -> tuple[str, str]:
+    """Render the grammar-home example pair (record Markdown, sidecar JSON).
+
+    Built from the fixture builders' rendering: the `## Review Statistics`
+    block and the `## Findings` / verdict tail are `_current_clear_markdown`'s
+    bytes verbatim (the standing selftest cell pins this), and only the
+    Metadata block is upgraded from the builder's pre-fence minimal shape to
+    the current-dated contract annotated beside ``GRAMMAR_HOME_CITATION``.
+    The sidecar composes ``_current_clear_payload`` with the post-fence
+    fields the date fences demand. Date fences move only forward, so a
+    future fence's obligations surface here the day it lands: the standing
+    selftest cell validates this exact pair through ``validate_staging_file``
+    and fails loudly instead of letting the home rot silently.
+    """
+    import datetime
+
+    date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    # Stable example literals (never derived at runtime): the digest is the
+    # SHA-256 of b"example reviewed bytes", the mint pair is a plausible
+    # review_usage_capture.py mint output.
+    digest = "04d5b358cb422860ed25ce45627e811a60a850b3940224400dc7691600f6d34c"
+    run_id = "0123456789abcdef0123456789abcdef"
+    started_at_ms = "1730000000000"
+    record_md = (
+        "# Branch Review: clear-record grammar example\n"
+        "## Metadata\n"
+        "- Type: plan-review\n"
+        # RECORD_KIND_SIDECAR_MIN_DATE twin of the sidecar's record_kind.
+        "- Record kind: canonical\n"
+        f"- Date: {date}\n"
+        "- URL or Artifact: docs/history/plans/example.md\n"
+        "- Round: r1\n"
+        # EXTENDED_SIDECAR_MIN_DATE freshness lines (all four required).
+        "- Review mode: fresh-adversarial\n"
+        "- Changed-risk signals: none\n"
+        "- Prior findings supplied as filter: no\n"
+        "- Last fix commit: none\n"
+        "- Panel mode: full\n"
+        f"- Source digest: {digest}"
+        " (sha256 of docs/history/plans/example.md)\n"
+        # USAGE_MINT_PAIR_MIN_DATE mint pair (review_usage_capture.py mint).
+        f"- review-run-id: {run_id}\n"
+        f"- review-started-at-ms: {started_at_ms}\n"
+        "- Findings: 0\n"
+        "- Staged findings: 0\n"
+        # COVERAGE_SIDECAR_MIN_DATE twin of the sidecar's coverage outcome.
+        "- Coverage: clean\n"
+        "- Status: STAGED\n"
+    )
+    # The builders' bytes verbatim from here through the verdict tail.
+    record_md += "## Review Statistics" + _current_clear_markdown(
+        "clear-record grammar example"
+    ).split("## Review Statistics", 1)[1]
+    material_lens_set = sorted(
+        {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    )
+    payload = _current_clear_payload()
+    payload.update(
+        {
+            "schema_version": 1,
+            "review_type": "plan-review",
+            "date": date,
+            "artifact_slug": "clear-record-example",
+            "round": "r1",
+            "source_kind": "plan",
+            "source_digest": digest,
+            # EXTENDED_SIDECAR_MIN_DATE extended fields plus verdict.
+            "verdict": "no",
+            "review_mode": "fresh-adversarial",
+            "risk_signals": [],
+            "prior_findings_filter": False,
+            "last_fix_commit": None,
+            # RECORD_KIND_SIDECAR_MIN_DATE.
+            "record_kind": "canonical",
+            # SOFTEN_WATCHLIST_PARITY_MIN_DATE.
+            "soften_watchlist": [],
+            "triage_outcomes": [],
+            "deduplication_groups": [],
+            "discarded": [],
+            "severity_calibration": [],
+            # COVERAGE_SIDECAR_MIN_DATE (clean over the full five-worker
+            # lens set).
+            "coverage": {
+                "outcome": "clean",
+                "material_lens_set": material_lens_set,
+                "completed": material_lens_set,
+                "missing": [],
+            },
+            # SELF_HEAL_STATE_MIN_DATE chain state (round 1 mints unused,
+            # bound to the record's own review-run-id).
+            "extensions": {
+                "convergence": {
+                    "self_heal_attempt": {"status": "unused", "run_id": run_id},
+                },
+            },
+        }
+    )
+    return record_md, json.dumps(payload)
+
+
+def _grammar_home_epilog() -> str:
+    """The parser epilog: the fence annotations plus the rendered example
+    pair, so `--help` carries the grammar home as usage text."""
+    record_md, sidecar_json = _grammar_home_example_pair()
+    return (
+        "Clear-record grammar example (the minimal validating record pair;\n"
+        "the ## Review Statistics block is this module's fixture-builder\n"
+        "bytes; the Metadata lines annotated in the module beside\n"
+        "GRAMMAR_HOME_CITATION carry the current-dated contract shape: the\n"
+        "EXTENDED_SIDECAR_MIN_DATE / COVERAGE_SIDECAR_MIN_DATE /\n"
+        "RECORD_KIND_SIDECAR_MIN_DATE / SOFTEN_WATCHLIST_PARITY_MIN_DATE /\n"
+        "USAGE_MINT_PAIR_MIN_DATE / SELF_HEAL_STATE_MIN_DATE obligations the\n"
+        "record's current date arms):\n"
+        "\n"
+        "<record path: <YYYY-MM-DD>-branch-review-<artifact-slug>-r1.md>\n"
+        + record_md
+        + "\n<sidecar path: the record path with .stats.json suffix>\n"
+        + sidecar_json
+        + "\n"
+    )
+
+
 STAGING_NAME_RE = re.compile(
     r"^(?:\d{4}-\d{2}-\d{2}-)?"
     r"(?:"
@@ -1913,6 +2086,12 @@ def _calendar_valid_record_date(value: object) -> bool:
     return True
 
 
+# Public surface over the private date validator: the chain-grammar seam
+# below (and its external consumers, e.g. the staging-record producer)
+# read this name; the private stays the validator's internal caller form.
+calendar_valid_record_date = _calendar_valid_record_date
+
+
 def _freshness_fence(
     staging_name: str | None, sidecar_date: object
 ) -> dict[str, str | None]:
@@ -2202,6 +2381,135 @@ def _usage_mint_fence(
     return _date_fence(staging_name, sidecar_date, USAGE_MINT_PAIR_MIN_DATE)
 
 
+# ---------------------------------------------------------------------------
+# Public self-heal chain-grammar derivation seam (producer-side home).
+#
+# Intentional twin duty: the enforcement carry-forward derivation inside
+# ``_validate_self_heal_record`` below (the block computing prior_valid /
+# prior_post_fence) re-derives the same prior-evidence predicate for
+# gate-bearing paths. The two derivations are deliberate twins, not one
+# shared helper (gate-bearing paths stay enforcement-owned), so a grammar
+# change must land in both together; the parity witness in
+# scripts/test_step31_record_validation_gate.py
+# (SeamDerivationCanaryTest.test_parity_witness_seam_and_enforcement_twins_agree)
+# holds them in agreement on the documented prior-evidence corpus. The
+# functions were promoted verbatim from the staging-record producer's
+# chain block (producer-code-family-record-arm plan, Task 1).
+# ---------------------------------------------------------------------------
+
+# The round-tail regex the seam's walk needs (promoted verbatim from the
+# producer's ``_ROUND_TAIL_RE``).
+_ROUND_TAIL_RE = re.compile(r"-r([1-9][0-9]*)\.md\Z")
+
+
+class AmbiguousChainPredecessor(ValueError):
+    """Two dated records resolve to the same chain stem and prior round.
+    Raised by ``self_heal_chain_state`` before anything is written;
+    external producers map exactly this class (via ``str(exc)``) to their
+    own modeled refusal, carrying this message text verbatim."""
+
+
+def well_formed_self_heal_state(state: object) -> bool:
+    """The state grammar of the shared self-heal gate (status enum, exact
+    key set, 32-hex run id, consumed bindings)."""
+    if not isinstance(state, dict):
+        return False
+    status = state.get("status")
+    run_id = state.get("run_id")
+    if status not in ("unused", "consumed", "unknown"):
+        return False
+    if not isinstance(run_id, str) or not USAGE_MINT_RUN_ID_RE.fullmatch(run_id):
+        return False
+    allowed = {"status", "run_id"}
+    if status == "consumed":
+        allowed |= {"round", "source_digest"}
+        if not re.fullmatch(r"r([1-9][0-9]*)", str(state.get("round", ""))):
+            return False
+        if not re.fullmatch(r"[0-9a-f]{64}", str(state.get("source_digest", ""))):
+            return False
+    return set(state) == allowed
+
+
+def valid_prior_chain_state(prior_path: Path) -> dict | None:
+    """The prior round's chain state when it is a valid post-fence
+    canonical record; ``None`` for every other prior evidence shape."""
+    prior_sidecar = stats_sidecar_path(prior_path)
+    if not prior_path.is_file() or not prior_sidecar.is_file():
+        return None
+    try:
+        prior_md = prior_path.read_text(encoding="utf-8")
+        prior_payload = json.loads(prior_sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(prior_payload, dict):
+        return None
+    if prior_payload.get("record_kind") != "canonical":
+        return None
+    fence = _date_fence(
+        prior_path.name, prior_payload.get("date"), SELF_HEAL_STATE_MIN_DATE
+    )
+    if fence["name_class"] != "post-fence" or fence["sidecar_class"] != "post-fence":
+        return None
+    if not calendar_valid_record_date(fence["name_date"]) or not (
+        calendar_valid_record_date(prior_payload.get("date"))
+    ):
+        return None
+    digest = prior_payload.get("source_digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    extensions = prior_payload.get("extensions")
+    convergence = extensions.get("convergence") if isinstance(extensions, dict) else None
+    state = convergence.get("self_heal_attempt") if isinstance(convergence, dict) else None
+    if not well_formed_self_heal_state(state):
+        return None
+    prior_result = ValidationResult(prior_path)
+    validate_usage_mint_gate(
+        prior_path.name, prior_md, prior_result, sidecar_payload=prior_payload
+    )
+    if prior_result.errors:
+        return None
+    return state
+
+
+def self_heal_chain_state(record_path: Path, run_id: str) -> dict:
+    """The self-heal member for the record under construction: round 1 (or
+    unnumbered) starts unused bound to the record's own run id; a higher
+    round carries a valid prior round's state verbatim and reports unknown
+    bound to its own run id when no valid prior evidence exists. The
+    prior lookup keys on the round chain stem across every dated record in
+    the output directory (the shared gate's predecessor-index shape); an
+    ambiguous prior (two dated records for the same chain round) raises
+    ``AmbiguousChainPredecessor`` before anything is written."""
+    match = _ROUND_TAIL_RE.search(record_path.name)
+    number = int(match.group(1)) if match else 1
+    if number == 1:
+        return {"status": "unused", "run_id": run_id}
+    stem = re.sub(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-", "", record_path.name)
+    chain_stem = re.sub(r"-r[1-9][0-9]*\.md\Z", "", stem)
+    name_re = re.compile(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}-(.+?)(?:-r([1-9][0-9]*))?\.md\Z"
+    )
+    candidates = []
+    if record_path.parent.is_dir():
+        for candidate in record_path.parent.iterdir():
+            name_match = name_re.fullmatch(candidate.name)
+            if name_match and name_match.group(1) == chain_stem and (
+                int(name_match.group(2) or 1) == number - 1
+            ):
+                candidates.append(candidate)
+    if len(candidates) > 1:
+        raise AmbiguousChainPredecessor(
+            f"ambiguous prior-round records for chain {chain_stem!r} "
+            f"round r{number - 1}: {sorted(c.name for c in candidates)}; "
+            "the shared self-heal gate refuses an ambiguous predecessor, "
+            "disambiguate the directory first"
+        )
+    state = valid_prior_chain_state(candidates[0]) if candidates else None
+    if state is not None:
+        return dict(state)
+    return {"status": "unknown", "run_id": run_id}
+
+
 def validate_self_heal_attempt_state(
     staging_path: Path,
     content: str,
@@ -2227,6 +2535,7 @@ def validate_self_heal_attempt_state(
         )
         if record_result is not result:
             result.errors.extend(record_result.errors)
+            result.warnings.extend(record_result.warnings)
 
 
 def _validate_self_heal_record(
@@ -2327,6 +2636,11 @@ def _validate_self_heal_record(
         result.add_error("self-heal state has ambiguous predecessor records for the prior round")
         return
     prior_path = prior_candidates[0] if prior_candidates else staging_path.with_name(f"{chain_stem}-r{prior_number}.md")
+    # Intentional twin: the public seam ``valid_prior_chain_state`` (see
+    # the seam block above) derives the same prior-evidence predicate for
+    # producers; this gate-bearing block stays enforcement-owned, and the
+    # two derivations must change together (parity witness:
+    # SeamDerivationCanaryTest in scripts/test_step31_record_validation_gate.py).
     prior_sidecar = stats_sidecar_path(prior_path)
     prior_state = None
     prior_valid = False
@@ -2369,9 +2683,18 @@ def _validate_self_heal_record(
     if not prior_valid or not prior_post_fence:
         if status != "unknown" or run_id != current_review_id:
             result.add_error("missing, malformed, or legacy prior round requires unknown state bound to this review-run-id")
+        if prior_number > 1:
+            result.add_warning(
+                "skipped self-heal chain validation for earlier rounds "
+                f"r1 through r{prior_number - 1}: prior round r{prior_number} "
+                "is missing, malformed, or legacy"
+            )
         return
     if prior_state["run_id"] != run_id:
-        result.add_error("run_id cannot change after r1 in the same artifact chain")
+        result.add_error(
+            "run_id cannot change after r1 in the same artifact chain; "
+            "r1's run_id must carry forward unchanged in later rounds"
+        )
         return
     if prior_state["status"] in {"consumed", "unknown"}:
         if state != prior_state:
@@ -2965,7 +3288,10 @@ def validate_discarded_findings(content: str, result: ValidationResult) -> None:
             continue
         _agent, _sev, _pattern, _theme, reason, notes = cells[:6]
         if reason not in VALID_DISCARD_REASONS:
-            result.add_warning(f"unknown discard reason code: {reason}")
+            accepted = ", ".join(sorted(VALID_DISCARD_REASONS))
+            result.add_warning(
+                f"unknown discard reason code: {reason}; accepted codes: {accepted}"
+            )
         if reason == "wrong-owner" and not re.search(r"lead:\s*\w+", notes, re.IGNORECASE):
             result.add_error(
                 "wrong-owner discard row missing Notes lead: <agent-id>"
@@ -3354,16 +3680,87 @@ def _scaffold_envelope() -> dict:
     }
 
 
+PLANS_DIR_DEFAULT = "docs/history/plans"
+PLANS_COMPLETED_DIR_DEFAULT = "docs/history/plans/completed"
+
+
+def _coverage_plans_layout(anchor: Path) -> tuple[Path, Path]:
+    """The facts-resolved plans layout under ``anchor`` (the repository
+    root): the ``plans_dir`` and ``plans_completed_dir`` facts keys read
+    through the existing ``facts_paths`` import (raw values anchored at the
+    repository root, not the process cwd), each falling back to its
+    conventional default under the anchor when the facts file or the key is
+    absent."""
+    plans_raw = completed_raw = None
+    if facts_paths is not None:
+        plans_raw = facts_paths.resolve_toml_key_raw(anchor, "plans_dir")
+        completed_raw = facts_paths.resolve_toml_key_raw(
+            anchor, "plans_completed_dir"
+        )
+    plans_dir = (
+        anchor / Path(plans_raw).expanduser()
+        if plans_raw
+        else anchor / PLANS_DIR_DEFAULT
+    )
+    completed_dir = (
+        anchor / Path(completed_raw).expanduser()
+        if completed_raw
+        else anchor / PLANS_COMPLETED_DIR_DEFAULT
+    )
+    return plans_dir.resolve(), completed_dir.resolve()
+
+
+def _coverage_archive_twin(value: str) -> Path | None:
+    """Archive-twin resolution (archive-aware source resolution plan, Task
+    1): for a relative recorded path whose parent resolves to the
+    facts-resolved plans layout, the completed twin (``plans_completed_dir``
+    plus the basename), derived unconditionally with no existence probe
+    (the consumers' first-existing candidate semantics gate the outcome).
+    An absolute path, a path outside the plans layout (a backlog row, a
+    source file, a document), and a value whose normalized form or whose
+    twin escapes the repository root derive no twin. The anchor is the
+    enclosing git repository root, falling back to the process cwd outside
+    any repository (the embedded battery's chdir fixtures)."""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return None
+    try:
+        cwd = Path.cwd()
+        anchor = repository_root(cwd) or cwd.resolve()
+        recorded = (anchor / candidate).resolve()
+        recorded.relative_to(anchor)
+        plans_dir, completed_dir = _coverage_plans_layout(anchor)
+        if recorded.parent != plans_dir:
+            return None
+        twin = (completed_dir / recorded.name).resolve()
+        twin.relative_to(anchor)
+    except (OSError, ValueError):
+        # A pathological recorded value (an embedded NUL, an unresolvable
+        # path) derives no twin and leaves today's named error vocabulary
+        # intact; the helper only ever adds resolution, never a new exit
+        # shape.
+        return None
+    return twin
+
+
 def _coverage_link_paths(value) -> list[Path]:
     """Resolve a coverage link value (artifact or sidecar path string)
-    against the process cwd and, when relative, also as recorded. Returns
-    the candidate paths for existence checks."""
+    against the process cwd and, when relative, also as recorded, then the
+    completed archive twin for an in-scope plans-layout path (appended
+    last, unconditionally; see ``_coverage_archive_twin``). Returns the
+    candidate paths for existence checks; consumers resolve the first
+    existing candidate, so the twin enters only when no earlier candidate
+    exists."""
     if not isinstance(value, str) or not value.strip():
         return []
     candidate = Path(value)
     if candidate.is_absolute():
         return [candidate]
-    return [candidate, Path.cwd() / candidate]
+    paths = [candidate, Path.cwd() / candidate]
+    twin = _coverage_archive_twin(value)
+    if twin is not None:
+        paths.append(twin)
+    return paths
 
 
 def _coverage_artifact_exists(value) -> bool:
@@ -3383,15 +3780,19 @@ def _coverage_sidecar_parses(value) -> bool:
 
 def _coverage_linked_round(value) -> dict | None:
     """Load the linked original sidecar payload for a replacement or
-    inherited entry (first existing candidate that parses to a dict)."""
+    inherited entry: the first existing candidate decides (a dict parse is
+    returned, any other parse result is ``None``), so a present primary
+    precludes twin substitution and the archive twin enters only when no
+    earlier candidate exists (the archive-aware source resolution plan's
+    priced first-existing stop; output-identical over the pre-twin
+    candidate list, whose second candidate is the cwd duplicate)."""
     for candidate in _coverage_link_paths(value):
         if candidate.is_file():
             try:
                 parsed = json.loads(candidate.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 return None
-            if isinstance(parsed, dict):
-                return parsed
+            return parsed if isinstance(parsed, dict) else None
     return None
 
 
@@ -5299,6 +5700,29 @@ def validate_version1_payload(
             )
 
 
+def _warn_skipped_sidecar_diagnostics(
+    result: ValidationResult, reason: str
+) -> None:
+    """Report which sidecar-dependent checks cannot run without its payload."""
+    for diagnostic in (
+        "version-1 sidecar schema validation",
+        "record-kind enum validation",
+        "cap-closure contract validation",
+        "corrections extension validation",
+        "last-fix commit agreement",
+        "current sidecar field and finding validation",
+        "finding conservation",
+        "counts parity",
+        "coverage Markdown agreement",
+        "soften-watchlist agreement",
+        "discarded-row ownership validation",
+        "sidecar-surface witness-ledger shape validation",
+    ):
+        result.add_warning(
+            f"skipped {diagnostic}: {reason} prevents evaluation"
+        )
+
+
 def _validate_stats_sidecar_gates(
     staging_path: Path,
     content: str,
@@ -5343,10 +5767,14 @@ def _validate_stats_sidecar_gates(
             f"missing required stats sidecar: "
             f"{stats_sidecar_path(staging_path).name}"
         )
+        _warn_skipped_sidecar_diagnostics(result, "the stats sidecar is missing")
         return None, None
     if sidecar_read.error is not None:
         result.add_error(
             f"invalid stats sidecar JSON: {sidecar_read.error}"
+        )
+        _warn_skipped_sidecar_diagnostics(
+            result, "the stats sidecar JSON is malformed"
         )
         return None, None
     payload = sidecar_read.payload
@@ -6669,7 +7097,15 @@ def validate_staging_file(
             result.add_error(f"missing {heading}")
 
     if "### Panel" not in content:
-        result.add_error("missing ### Panel under Review Statistics")
+        # The citation joins beside the hard-mode skill-pointer parenthetical
+        # (grammar home, producer code-family record arm plan, Task 3): the
+        # SKILL_CLAUSE_POINTERS table and its exact-suffix mapping pin stay
+        # unchanged because the marker "missing ### Panel" still matches the
+        # message head. This and the two or-gated warnings below are the
+        # three record-grammar diagnostics; the warnings stay warnings.
+        result.add_error(
+            "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION
+        )
 
     # Legacy anti-Solo check. Current five-worker panels validate from sidecars.
     if "### Panel" in content and detect_solo_collapse(path, content):
@@ -6681,10 +7117,15 @@ def validate_staging_file(
         )
 
     if "### Counts" not in content and "Agents launched" not in content:
-        result.add_warning("missing ### Counts or Agents launched row")
+        result.add_warning(
+            "missing ### Counts or Agents launched row" + GRAMMAR_HOME_CITATION
+        )
 
     if "### Triage outcomes" not in content and "Pending triage" not in content:
-        result.add_warning("missing ### Triage outcomes or Pending triage placeholder")
+        result.add_warning(
+            "missing ### Triage outcomes or Pending triage placeholder"
+            + GRAMMAR_HOME_CITATION
+        )
 
     medium_plus = extract_medium_plus_count(content)
     staged_count = extract_staged_count(content)
@@ -6716,7 +7157,10 @@ def validate_staging_file(
         if qualified and qualified.group(1) != plan_identity_token(expected_plan_identity):
             result.add_error("review filename plan-identity token does not match --source-plan path")
         if declared_identity is not None and not qualified:
-            result.add_error("sidecar plan_identity requires an identity-qualified review filename")
+            result.add_error(
+                "sidecar plan_identity requires an identity-qualified review filename; "
+                "required form: -p<8 lowercase hex>-r<N>.md"
+            )
         if qualified and actual_identity is None:
             result.add_error("identity-qualified review filename requires a plan identity")
     sidecar_date = None
@@ -6914,6 +7358,11 @@ def _current_clear_payload() -> dict:
 
 
 def _current_clear_markdown(title: str = "current") -> str:
+    # Fixture-side pointer (grammar home, producer code-family record arm
+    # plan, Task 3): this builder's rendering is the source of the
+    # clear-record grammar home housed in the usage-text region
+    # (`_grammar_home_example_pair`, cited by GRAMMAR_HOME_CITATION); edit
+    # this builder's record grammar only together with that home.
     import textwrap
 
     return textwrap.dedent(
@@ -7056,6 +7505,13 @@ def _current_findings_markdown(findings: list[dict], *, title: str = "conservati
     shared ``_current_finding_block`` builder (Severity, Blocking, Pattern when
     declared, and Triage bullets). The Markdown mirrors the sidecar so the
     conservation cross-check can reconcile the two.
+
+    Fixture-side pointer (grammar home, producer code-family record arm
+    plan, Task 3): the findings-bearing half of the clear-record grammar is
+    this builder's rendering; the housed grammar home in the usage-text
+    region (``_grammar_home_example_pair``, cited by GRAMMAR_HOME_CITATION)
+    is built from ``_current_clear_markdown``, whose ``## Review Statistics``
+    block this builder shares byte-for-byte.
     """
     by_severity: dict[str, list[dict]] = {sev: [] for sev in SEVERITY_ORDER}
     for finding in findings:
@@ -14982,6 +15438,536 @@ def _selftest_coverage_contract(root: Path, check) -> None:
     )
 
 
+def _selftest_coverage_archive_twin(root: Path, check) -> None:
+    """Family: archive-twin resolution for coverage links (archive-aware
+    source resolution plan, Task 1). RED-first: the coverage-twin pins fail
+    until ``_coverage_archive_twin`` exists and ``_coverage_link_paths``
+    appends the completed twin as its trailing candidate; the
+    unparseable-twin-sidecar pin, the linked-round first-existing stop pin,
+    and the plans-layout-scoping pins hold GREEN before and after
+    (byte-stable refusal regression guards). The family runs under the
+    battery's chdir fixture pattern (save, chdir into a subdirectory of the
+    battery root, restore in finally); the fixture subdirectory is no git
+    repository, so the helper's repository anchor falls back to the process
+    cwd and every probe stays inside the battery root, and the placeholder
+    basenames never collide with the live tree."""
+    import os
+
+    base = _version1_payload()
+    fixture_root = root / "archive-twin"
+    plans_dir = fixture_root / "docs" / "history" / "plans"
+    completed_dir = plans_dir / "completed"
+    backlog_dir = fixture_root / "docs" / "history" / "backlog"
+    backlog_completed_dir = backlog_dir / "completed"
+    completed_dir.mkdir(parents=True, exist_ok=True)
+    backlog_completed_dir.mkdir(parents=True, exist_ok=True)
+    placeholder_stem = "2026-09-16-plan-review-vrs-archive-twin-placeholder"
+
+    def local_attempt_coverage(artifact: str, sidecar: str) -> dict:
+        return {
+            "outcome": "clean",
+            "material_lens_set": ["testing"],
+            "completed": ["testing"],
+            "missing": [],
+            "attempts": [
+                {
+                    "attempt_id": "twin1",
+                    "started_at": "2026-09-16T10:00:00Z",
+                    "deadline": "2026-09-16T10:15:00Z",
+                    "outcome": "complete",
+                    "attempt_number": 1,
+                    "contributed_coverage": True,
+                    "execution_mode": "local",
+                    "lenses": ["testing"],
+                    "prompt_scope": "testing lens only, narrowed evidence",
+                    "artifact": artifact,
+                    "sidecar": sidecar,
+                }
+            ],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 15,
+                "per_worker_max": 2,
+            },
+        }
+
+    def contract_errors(artifact: str, sidecar: str) -> list[str]:
+        res = ValidationResult(Path("x"))
+        validate_coverage_contract(
+            _coverage_fixture_payload(
+                base, local_attempt_coverage(artifact, sidecar)
+            ),
+            res,
+            coverage_exempt=False,
+        )
+        return res.errors
+
+    # ---- Twin-only pair: the artifact and sidecar exist only under the
+    # completed directory; the record keeps citing the pre-archive path.
+    twin_only_name = f"{placeholder_stem}-twin-only-r1.md"
+    twin_only_doc = _write_staging(
+        completed_dir,
+        twin_only_name,
+        _version1_markdown(),
+        _coverage_fixture_payload(base, None, date="2026-09-16"),
+    )
+    twin_only_artifact = f"docs/history/plans/{twin_only_name}"
+    twin_only_sidecar = twin_only_artifact[:-3] + ".stats.json"
+    # ---- Primary-present pair: the primary sidecar parses to a dict with
+    # a marker, and a distinguishable twin sidecar sits under completed.
+    primary_name = f"{placeholder_stem}-primary-r1.md"
+    _write_staging(
+        plans_dir, primary_name, _version1_markdown(), {"marker": "primary"}
+    )
+    _write_staging(
+        completed_dir, primary_name, _version1_markdown(), {"marker": "twin"}
+    )
+    primary_artifact = f"docs/history/plans/{primary_name}"
+    primary_sidecar = primary_artifact[:-3] + ".stats.json"
+    # ---- Non-dict primary: the primary sidecar parses to a list while the
+    # twin sidecar parses to a dict (the Terms-priced linked-round stop).
+    nondict_name = f"{placeholder_stem}-nondict-r1.md"
+    _write_staging(plans_dir, nondict_name, _version1_markdown(), "[]")
+    _write_staging(
+        completed_dir, nondict_name, _version1_markdown(), {"marker": "twin"}
+    )
+    nondict_sidecar = f"docs/history/plans/{nondict_name}"[:-3] + ".stats.json"
+    # ---- Unparseable twin sidecar: the artifact exists only at the twin
+    # and the twin sidecar is not JSON.
+    broken_name = f"{placeholder_stem}-broken-sidecar-r1.md"
+    _write_staging(
+        completed_dir, broken_name, _version1_markdown(), "{not json"
+    )
+    broken_artifact = f"docs/history/plans/{broken_name}"
+    broken_sidecar = broken_artifact[:-3] + ".stats.json"
+    # ---- Out-of-layout row: a backlog-shaped recorded path whose
+    # parent-sibling ``completed/`` directory exists and holds the file.
+    backlog_name = f"{placeholder_stem}-backlog-row.md"
+    _write_staging(backlog_completed_dir, backlog_name, "# landed row\n")
+    backlog_artifact = f"docs/history/backlog/{backlog_name}"
+    # ---- Escape values: ``..``-bearing recorded values whose normalized
+    # form leaves the fixture anchor (the confinement arm).
+    escape_values = [
+        f"../docs/history/plans/{twin_only_name}",
+        f"docs/history/plans/../../../../{twin_only_name}",
+    ]
+
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(fixture_root)
+        expected_twin = twin_only_doc.resolve()
+        paths = _coverage_link_paths(twin_only_artifact)
+        check(
+            "coverage archive twin: an in-scope relative recorded path "
+            "appends the completed twin as the trailing candidate",
+            len(paths) == 3 and paths[-1].resolve() == expected_twin,
+        )
+        normalized_paths = _coverage_link_paths(
+            f"docs/history/plans/completed/../{twin_only_name}"
+        )
+        check(
+            "coverage archive twin: a ..-bearing value that normalizes "
+            "inside the plans layout derives the same trailing twin",
+            len(normalized_paths) == 3
+            and normalized_paths[-1].resolve() == expected_twin,
+        )
+        check(
+            "coverage archive twin: a twin-only artifact/sidecar pair passes "
+            "the artifact-exists and sidecar-parses checks",
+            _coverage_artifact_exists(twin_only_artifact)
+            and _coverage_sidecar_parses(twin_only_sidecar),
+        )
+        check(
+            "coverage archive twin: a local-mode attempt citing the "
+            "pre-archive pair validates through the completed twin",
+            contract_errors(twin_only_artifact, twin_only_sidecar) == [],
+        )
+        check(
+            "coverage archive twin: a twin-only linked sidecar loads through "
+            "the linked-round consumer",
+            _coverage_linked_round(twin_only_sidecar) is not None,
+        )
+
+        # ---- Outcome equivalence (GREEN before and after): an existing
+        # primary resolves first across the consumers; the twin never
+        # substitutes for a present primary.
+        linked_primary = _coverage_linked_round(primary_sidecar)
+        check(
+            "coverage archive twin: a present primary sidecar resolves "
+            "first in the linked-round consumer (the twin never substitutes)",
+            isinstance(linked_primary, dict)
+            and linked_primary.get("marker") == "primary",
+        )
+        check(
+            "coverage archive twin: a present primary pair keeps the "
+            "artifact-exists and sidecar-parses verdicts",
+            _coverage_artifact_exists(primary_artifact)
+            and _coverage_sidecar_parses(primary_sidecar),
+        )
+        check(
+            "coverage archive twin: a present-but-non-dict primary sidecar "
+            "keeps today's verdict (first-existing stop; no twin "
+            "substitution)",
+            _coverage_linked_round(nondict_sidecar) is None
+            and not _coverage_sidecar_parses(nondict_sidecar),
+        )
+
+        # ---- Unparseable twin sidecar (GREEN before and after): the
+        # existing sidecar vocabulary fires, no twin acceptance.
+        broken_errors = contract_errors(broken_artifact, broken_sidecar)
+        check(
+            "coverage archive twin: an unparseable twin sidecar keeps "
+            "today's local-mode attempt error",
+            not _coverage_sidecar_parses(broken_sidecar)
+            and _coverage_linked_round(broken_sidecar) is None
+            and any("local-mode attempt" in e for e in broken_errors)
+            and all(
+                e.startswith("coverage local-mode attempt")
+                for e in broken_errors
+            ),
+        )
+
+        # ---- Plans-layout scoping (GREEN before and after): absolute
+        # paths, out-of-layout rows, and escaping values derive no twin.
+        absolute_paths = _coverage_link_paths(str(plans_dir / twin_only_name))
+        check(
+            "coverage archive twin: an absolute recorded path derives no "
+            "twin candidate",
+            len(absolute_paths) == 1,
+        )
+        backlog_paths = _coverage_link_paths(backlog_artifact)
+        check(
+            "coverage archive twin: a backlog-row recorded path outside the "
+            "plans layout derives no twin candidate (inert even though the "
+            "sibling completed directory holds the file)",
+            len(backlog_paths) == 2
+            and not _coverage_artifact_exists(backlog_artifact),
+        )
+        check(
+            "coverage archive twin: a ..-bearing value that escapes the "
+            "repository anchor derives no twin candidate",
+            all(
+                len(_coverage_link_paths(value)) == 2
+                for value in escape_values
+            ),
+        )
+        # A pathological recorded value (an embedded NUL, valid sidecar
+        # JSON) derives no twin and keeps today's named error vocabulary:
+        # the helper must not introduce a new exit shape (uncaught
+        # ValueError/OSError out of the coverage contract).
+        nul_paths = _coverage_link_paths(f"docs/history/plans/{twin_only_name}\x00")
+        check(
+            "coverage archive twin: a recorded value with an embedded NUL "
+            "derives no twin candidate (no new exit shape)",
+            len(nul_paths) == 2,
+        )
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "coverage archive twin: the cwd is restored after the fixture",
+        os.getcwd() == prior_cwd,
+    )
+
+
+def _selftest_source_flag_archive_twin(root: Path, check) -> None:
+    """Family: the ``--source-plan`` not-found arm resolves the completed
+    archive twin (archive-aware source resolution plan, Task 2). RED-first:
+    the source-flag-twin, drift-mutant, and identity-stability pins fail
+    against the pre-change validator (a missing plans-layout operand
+    refuses as the ``source file not found`` tool error today); the
+    missing-twin, file-shaped-twin, and kind-gate pins hold GREEN before
+    and after (byte-stable refusal regression guards). The chdir fixture
+    pattern (save, chdir into a subdirectory of the battery root, restore
+    in finally) keeps every probe inside the battery root with placeholder
+    basenames that never collide with the live tree. The identity-stability
+    pin builds a hermetic throwaway ``ScratchRepo`` git repository in its
+    own temporary directory so ``repository_root`` resolves and the three
+    identity comparisons actually fire (the ``normalize_plan_path`` derivation, the filename
+    identity-token comparison, and the ``extensions.plan_identity``
+    comparison). Semantic decision (the plan's Terms pricing): identity
+    derivation stays bound to the pre-archive operand path rather than
+    introducing an identity-equivalence comparison, because deriving
+    identity from the original path keeps the record-side contract
+    untouched and an equivalence comparison would widen every identity
+    check to justify one call site."""
+    import os
+
+    fixture_root = root / "source-flag-twin"
+    plans_dir = fixture_root / "docs" / "history" / "plans"
+    completed_dir = plans_dir / "completed"
+    completed_dir.mkdir(parents=True, exist_ok=True)
+    stem = "2026-09-22-plan-review-vrs-source-twin-placeholder"
+
+    def fresh_bytes(tag: str) -> bytes:
+        return f"# source-flag twin plan ({tag}): reviewed bytes\n".encode(
+            "utf-8"
+        )
+
+    def twin_operand(tag: str, plan_bytes: bytes) -> tuple[str, Path]:
+        """Park the plan bytes only at the completed archive twin and
+        return the (pre-archive operand, resolved twin path) pair."""
+        name = f"{stem}-{tag}.md"
+        twin = completed_dir / name
+        twin.write_bytes(plan_bytes)
+        return f"docs/history/plans/{name}", twin.resolve()
+
+    def record(
+        tag: str, plan_bytes: bytes, *, declared_kind: str = "plan"
+    ) -> Path:
+        """A post-window canonical record whose sidecar binds the given
+        plan bytes' digest and declares the given source kind."""
+        payload = _post_window_fixture_payload(declared_kind)
+        payload["source_kind"] = declared_kind
+        payload["source_digest"] = compute_source_digest(
+            declared_kind, plan_bytes
+        )
+        return _write_staging(
+            fixture_root,
+            f"{stem}-{tag}.md",
+            _post_window_fixture_markdown(declared_kind),
+            payload,
+        )
+
+    # ---- Twin-only fixtures (the primary plans-root path is absent).
+    fresh_plan = fresh_bytes("fresh")
+    fresh_operand, fresh_twin = twin_operand("fresh", fresh_plan)
+    # ---- Drift fixture: the record binds the reviewed bytes' digest, and
+    # the twin's bytes then drift (the mutated bytes live only at the twin).
+    drift_plan = fresh_bytes("drift")
+    drifted_plan = drift_plan.replace(b"reviewed", b"drifted")
+    assert drifted_plan != drift_plan
+    drift_operand, drift_twin = twin_operand("drift", drifted_plan)
+    doc_operand, _doc_twin = twin_operand("kinddoc", fresh_bytes("kinddoc"))
+    rfc_operand, _rfc_twin = twin_operand("kindrfc", fresh_bytes("kindrfc"))
+    # ---- Absent twin: nothing at the primary and nothing under the
+    # completed directory.
+    absent_operand = f"docs/history/plans/{stem}-absent.md"
+    # ---- Directory-shaped twin: the completed entry is a directory, not
+    # a regular file (the known limitation keeps today's refusal).
+    dirshape_operand = f"docs/history/plans/{stem}-dirshape.md"
+    (completed_dir / f"{stem}-dirshape.md").mkdir()
+
+    fresh_record = record("rec-fresh", fresh_plan)
+    drift_record = record("rec-drift", drift_plan)
+    absent_record = record("rec-absent", fresh_plan)
+    dirshape_record = record("rec-dirshape", fresh_plan)
+    doc_record = record(
+        "rec-kinddoc", fresh_bytes("kinddoc"), declared_kind="document"
+    )
+    rfc_record = record(
+        "rec-kindrfc", fresh_bytes("kindrfc"), declared_kind="rfc"
+    )
+
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(fixture_root)
+        # ---- Source-flag-twin pin (RED): the operand names a missing
+        # plans-layout path whose completed twin holds the reviewed bytes;
+        # the validation must read the twin's bytes into the stale-source
+        # gate and exit 0.
+        rc_fresh = main(
+            ["--hard", str(fresh_record), "--source-plan", fresh_operand]
+        )
+        check(
+            "source-flag archive twin: a missing plans-layout operand "
+            "resolves the completed twin and binds its bytes (exit 0)",
+            rc_fresh == 0,
+        )
+        # ---- Drift-mutant pin (RED): the twin's bytes hash differently
+        # from the sidecar's source_digest; the existing stale-source
+        # refusal fires with the hint naming the resolved twin path.
+        with _stderr_captured() as buf_drift:
+            rc_drift = main(
+                ["--hard", str(drift_record), "--source-plan", drift_operand]
+            )
+        drift_text = buf_drift.getvalue()
+        check(
+            "source-flag archive twin: drifted twin bytes die at the "
+            "stale-source gate naming the resolved twin path",
+            rc_drift == 1
+            and "stale" in drift_text
+            and "source_digest" in drift_text
+            and str(drift_twin) in drift_text,
+        )
+        # ---- Kind-gate guard (GREEN before and after): --source-doc and
+        # --source-rfc get no twin resolution; the missing operand keeps
+        # today's tool error text, not just the exit code.
+        with _stderr_captured() as buf_doc:
+            rc_doc = main(
+                ["--hard", str(doc_record), "--source-doc", doc_operand]
+            )
+        with _stderr_captured() as buf_rfc:
+            rc_rfc = main(
+                ["--hard", str(rfc_record), "--source-rfc", rfc_operand]
+            )
+        check(
+            "source-flag archive twin: --source-doc and --source-rfc "
+            "resolve no twin (the missing operand keeps the tool error "
+            "text and code)",
+            rc_doc == 3
+            and rc_rfc == 3
+            and "source file not found" in buf_doc.getvalue()
+            and "source file not found" in buf_rfc.getvalue(),
+        )
+        # ---- Missing-twin guard (GREEN before and after): no primary and
+        # no twin keeps today's refusal shape.
+        with _stderr_captured() as buf_absent:
+            rc_absent = main(
+                ["--hard", str(absent_record), "--source-plan", absent_operand]
+            )
+        check(
+            "source-flag archive twin: a missing twin keeps today's "
+            "source file not found tool error",
+            rc_absent == 3 and "source file not found" in buf_absent.getvalue(),
+        )
+        # ---- File-shaped-twin guard (GREEN before and after): a
+        # directory-shaped completed entry is not a twin candidate.
+        with _stderr_captured() as buf_dirshape:
+            rc_dirshape = main(
+                ["--hard", str(dirshape_record), "--source-plan",
+                 dirshape_operand]
+            )
+        check(
+            "source-flag archive twin: a directory-shaped completed entry "
+            "keeps today's source file not found tool error",
+            rc_dirshape == 3
+            and "source file not found" in buf_dirshape.getvalue(),
+        )
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "source-flag archive twin: the cwd is restored after the fixture",
+        os.getcwd() == prior_cwd,
+    )
+
+    # ---- Identity-stability pin (RED): the throwaway git repository
+    # below gives the plans-layout operand an existing parent directory
+    # inside a repository, which is what lets ``repository_root`` resolve
+    # and the three identity comparisons actually fire (the
+    # ``normalize_plan_path`` derivation, the filename identity-token
+    # comparison, and the ``extensions.plan_identity`` comparison) over a
+    # twin-resolved validation; a nonexistent operand parent would leave
+    # ``repository_root`` None and silently skip them all. Semantic
+    # decision (the plan's Terms pricing): identity derivation stays bound
+    # to the pre-archive operand path rather than introducing an
+    # identity-equivalence comparison; deriving identity from the original
+    # path keeps the record-side contract untouched, and an equivalence
+    # comparison would widen every identity check to justify one call site.
+    cr = _sibling("corrections_record")
+    cleanup = _GradingCleanup()
+    repo = cr.build_scratch_repo(cleanup, name="identity-twin-repo")
+    identity_rel = f"docs/history/plans/{stem}-identity.md"
+    identity_plan = fresh_bytes("identity")
+    identity_completed = repo.root / "docs" / "history" / "plans" / "completed"
+    identity_completed.mkdir(parents=True, exist_ok=True)
+    (identity_completed / f"{stem}-identity.md").write_bytes(identity_plan)
+    identity_token = plan_identity_token(identity_rel)
+    identity_payload = _post_window_fixture_payload("plan")
+    identity_payload["source_kind"] = "plan"
+    identity_payload["source_digest"] = compute_source_digest(
+        "plan", identity_plan
+    )
+    identity_payload["extensions"] = {"plan_identity": identity_rel}
+    identity_record = _write_staging(
+        repo.root,
+        f"{stem}-identity-p{identity_token}-r1.md",
+        _post_window_fixture_markdown("plan"),
+        identity_payload,
+    )
+    # The wrong-identity twin of the pin: the same twin-resolved
+    # validation with a declared identity naming the completed path must
+    # refuse naming the original operand, proving the identity comparisons
+    # bind the pre-archive path through the twin resolution (a derivation
+    # that switched to the twin path would accept this record instead).
+    wrong_payload = json.loads(json.dumps(identity_payload))
+    wrong_payload["extensions"] = {
+        "plan_identity": f"docs/history/plans/completed/{stem}-identity.md"
+    }
+    wrong_record = _write_staging(
+        repo.root,
+        f"{stem}-identity-wrong-p{identity_token}-r1.md",
+        _post_window_fixture_markdown("plan"),
+        wrong_payload,
+    )
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(repo.root)
+        rc_identity = main(
+            ["--hard", str(identity_record), "--source-plan", identity_rel]
+        )
+        check(
+            "source-flag archive twin: identity stays the pre-archive path "
+            "through the twin resolution (the identity-qualified record and "
+            "its sidecar validate exactly as they did pre-archive)",
+            rc_identity == 0,
+        )
+        with _stderr_captured() as buf_wrong:
+            rc_wrong = main(
+                ["--hard", str(wrong_record), "--source-plan", identity_rel]
+            )
+        wrong_text = buf_wrong.getvalue()
+        check(
+            "source-flag archive twin: a twin-resolved validation binds "
+            "identity to the original operand (a completed-path declared "
+            "identity refuses naming the pre-archive path)",
+            rc_wrong == 1 and f"--source-plan {identity_rel!r}" in wrong_text,
+        )
+        # ---- Dual-anchor gate pin (RED): from a subdirectory cwd the
+        # plain relative operand reads differently under the two anchors
+        # (the helper anchors at the git root, ``source_path`` at the
+        # process cwd, whose parent directory does not even exist here),
+        # so the twin must not arm. Pre-fix the twin armed on the git-root
+        # reading, ``repository_root`` on the nonexistent cwd-anchored
+        # parent came back None, all three identity comparisons were
+        # silently skipped, and this wrong-identity record passed.
+        sub_dir = repo.root / "sub"
+        sub_dir.mkdir(exist_ok=True)
+        try:
+            os.chdir(sub_dir)
+            with _stderr_captured() as buf_sub:
+                rc_sub = main(
+                    ["--hard", str(wrong_record), "--source-plan",
+                     identity_rel]
+                )
+            sub_text = buf_sub.getvalue()
+            check(
+                "source-flag archive twin: a divergent-anchor subdirectory "
+                "cwd arms no twin (the wrong-identity record keeps today's "
+                "source-not-found refusal)",
+                rc_sub == 3 and "source file not found" in sub_text,
+            )
+            # ---- Layout-landing complement (RED against the pass-1
+            # raw-operand arm, GREEN with the layout-parent gate): a
+            # subdirectory operand whose cwd reading lands in the plans
+            # layout still resolves the twin, and the wrong-identity
+            # record refuses naming the pre-archive path -- identity
+            # derivation stays live whenever the twin arms.
+            parent_operand = f"../{identity_rel}"
+            with _stderr_captured() as buf_wrong_sub:
+                rc_wrong_sub = main(
+                    ["--hard", str(wrong_record), "--source-plan",
+                     parent_operand]
+                )
+            wrong_sub_text = buf_wrong_sub.getvalue()
+            check(
+                "source-flag archive twin: an anchor-agreeing subdirectory "
+                "operand still resolves the twin and binds identity to the "
+                "pre-archive path (the wrong-identity record refuses "
+                "naming it)",
+                rc_wrong_sub == 1
+                and f"--source-plan {identity_rel!r}" in wrong_sub_text,
+            )
+        finally:
+            os.chdir(prior_cwd)
+    finally:
+        os.chdir(prior_cwd)
+    check(
+        "source-flag archive twin: the cwd is restored after the identity "
+        "fixture",
+        os.getcwd() == prior_cwd,
+    )
+    cleanup.run()
+
+
 def _selftest_coverage_readiness_gate(root: Path, check) -> None:
     """Family: the coverage gates end to end through
     ``validate_staging_file`` (review-runner bounded-timeout plan, Task 2):
@@ -19760,7 +20746,9 @@ def _selftest_preflight_inventory(root: Path, check) -> None:
             "current sidecar source_digest must be a lowercase 64-char hex "
             "SHA-256; got an invalid or placeholder digest",
             "missing ## Metadata",
-            "missing ### Panel under Review Statistics",
+            # The Panel refusal carries the grammar-home citation beside its
+            # pointer (unpointed() strips only the skill-pointer suffix).
+            "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION,
             "staging filename dated 2026-10-05 (on or after "
             "EXTENDED_SIDECAR_MIN_DATE 2026-09-09) is missing freshness "
             "Metadata line 'Changed-risk signals'",
@@ -20567,8 +21555,12 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         "hard malformed fixture reports the independent doc-level "
         "diagnostic first",
         emitted(err)[:1] == [
-            "missing ### Panel under Review Statistics "
-            "(review-staging SKILL.md, Output discipline)",
+            # The citation joins beside the skill-pointer parenthetical
+            # (grammar home, producer code-family record arm plan, Task 3);
+            # the pointer mapping pin above stays on the bare-message probe.
+            "missing ### Panel under Review Statistics"
+            + GRAMMAR_HOME_CITATION
+            + " (review-staging SKILL.md, Output discipline)",
         ],
     )
     check(
@@ -20597,7 +21589,162 @@ def _selftest_hard_mode_diagnostics(root: Path, check) -> None:
         rc == 1
         and json_payload.get("outcome") == "fail"
         and (json_payload.get("errors") or [""])[0]
-        == "missing ### Panel under Review Statistics",
+        == "missing ### Panel under Review Statistics" + GRAMMAR_HOME_CITATION,
+    )
+
+
+def _selftest_grammar_home(root: Path, check) -> None:
+    """Family: the clear-record grammar home (producer code-family record
+    arm plan, Task 3). The standing accepted-set witness for the home: the
+    housed usage-epilog example pair (``_grammar_home_example_pair``, cited
+    by ``GRAMMAR_HOME_CITATION``) passes ``validate_staging_file`` in hard
+    mode on every ``--selftest`` run, its ``## Review Statistics`` block
+    stays byte-pinned to ``_current_clear_markdown``'s rendering, and the
+    three record-grammar diagnostics carry the citation on the channels
+    that carried them before (ERROR for Panel, WARN for the other two)
+    with their or-gated disjunctions intact, and the ``--help`` surface
+    renders the example title beside the ``GRAMMAR_HOME_CITATION``
+    annotation (the epilog-mount pin: a dropped ``epilog=``/
+    ``formatter_class=`` fails this check while every validation gate
+    stays green)."""
+    call = _selftest_call
+
+    # 1. The housed example passes hard validation (the permanent
+    # accepted-set witness: a fence landing tomorrow fails this cell the
+    # day its obligation arms, so the home cannot rot silently).
+    record_md, sidecar_json = _grammar_home_example_pair()
+    record_date = record_md.split("- Date: ", 1)[1].split("\n", 1)[0]
+    housed = _write_staging(
+        root,
+        f"{record_date}-branch-review-clear-record-example-r1.md",
+        record_md,
+        sidecar_json,
+    )
+    housed_result = validate_staging_file(housed, hard=True)
+    check(
+        "grammar home: housed example passes validate_staging_file hard",
+        housed_result.ok and not housed_result.errors and not housed_result.warnings,
+    )
+    check(
+        "grammar home: housed example's Review Statistics block is "
+        "byte-pinned to the fixture builder",
+        record_md.split("## Review Statistics", 1)[1]
+        == _current_clear_markdown().split("## Review Statistics", 1)[1],
+    )
+    check(
+        "grammar home: citation names the validator file by repo-relative "
+        "path",
+        "scripts/validate_review_staging.py" in GRAMMAR_HOME_CITATION,
+    )
+    # 1b. The usage-text mount itself (Phase 3 r1 fix): --help renders the
+    # example title beside the GRAMMAR_HOME_CITATION annotation, so a
+    # dropped epilog= or formatter_class= loses the rendered example from
+    # the help surface even though every validation gate stays green.
+    rc, out, err = call(["--help"])
+    check(
+        "grammar home: --help surface renders the example title beside "
+        "the GRAMMAR_HOME_CITATION annotation",
+        rc == 0
+        and "# Branch Review: clear-record grammar example" in out
+        and "GRAMMAR_HOME_CITATION" in out,
+    )
+
+    # 2. Citation witness, the both-missing shape per site: the sub-section
+    # and its alternative absent, so all three diagnostics fire, each on
+    # the channel that carried the message before, each carrying the
+    # citation path. The undated filename keeps the date-gated freshness
+    # errors out of these arms (the telemetry-baseline trick).
+    witness_md = (
+        "# Branch Review: grammar witness\n"
+        "## Metadata\n"
+        "- Findings: 0\n"
+        "- Status: STAGED\n"
+        "## Review Statistics\n"
+        "## Findings\n"
+        "### Critical\n"
+        "None.\n"
+        "### High\n"
+        "None.\n"
+        "### Medium\n"
+        "None.\n"
+        "### Low\n"
+        "None.\n"
+        "## Verdict for this round (before fixes)\n"
+        "0 Medium+ findings; clear round\n"
+    )
+    witness = _write_staging(root, "plan-review-grammar-witness-r1.md", witness_md)
+    panel_line = (
+        "ERROR: missing ### Panel under Review Statistics"
+        + GRAMMAR_HOME_CITATION
+        + " (review-staging SKILL.md, Output discipline)"
+    )
+    counts_line = (
+        "WARN: missing ### Counts or Agents launched row" + GRAMMAR_HOME_CITATION
+    )
+    triage_line = (
+        "WARN: missing ### Triage outcomes or Pending triage placeholder"
+        + GRAMMAR_HOME_CITATION
+    )
+    rc, out, err = call(["--hard", str(witness)])
+    check(
+        "grammar home: Panel refusal stays an ERROR line carrying the "
+        "citation beside the skill pointer",
+        rc == 1 and panel_line in err.splitlines(),
+    )
+    rc, out, err = call([str(witness)])
+    check(
+        "grammar home: Counts refusal stays a WARN line carrying the "
+        "citation",
+        counts_line in err.splitlines(),
+    )
+    check(
+        "grammar home: Triage refusal stays a WARN line carrying the "
+        "citation",
+        triage_line in err.splitlines(),
+    )
+    rc, out, err = call(["--hard", str(witness)])
+    check(
+        "grammar home: the two refusals are never promoted to errors",
+        not any(
+            line.startswith("ERROR: missing ### Counts")
+            or line.startswith("ERROR: missing ### Triage")
+            for line in err.splitlines()
+        ),
+    )
+
+    # 3. Disjunction byte-intact witness: the alternative-present shapes
+    # emit no warning (the or-gates' accepted set is unchanged).
+    counts_alt = _write_staging(
+        root,
+        "plan-review-grammar-witness-counts-alt-r1.md",
+        witness_md.replace(
+            "## Review Statistics\n",
+            "## Review Statistics\n- Agents launched: 5\n",
+        ),
+    )
+    rc, out, err = call([str(counts_alt)])
+    check(
+        "grammar home: Agents launched alternative still satisfies the "
+        "Counts gate without a warning",
+        not any(
+            "missing ### Counts" in line for line in err.splitlines()
+        ),
+    )
+    triage_alt = _write_staging(
+        root,
+        "plan-review-grammar-witness-triage-alt-r1.md",
+        witness_md.replace(
+            "## Review Statistics\n",
+            "## Review Statistics\n- Pending triage: none\n",
+        ),
+    )
+    rc, out, err = call([str(triage_alt)])
+    check(
+        "grammar home: Pending triage alternative still satisfies the "
+        "Triage gate without a warning",
+        not any(
+            "missing ### Triage outcomes" in line for line in err.splitlines()
+        ),
     )
 
 
@@ -20657,6 +21804,11 @@ def _run_selftest_body() -> int:
                 _selftest_sidecar_read_consolidation,
             ),
             ("coverage_contract", _selftest_coverage_contract),
+            ("coverage_archive_twin", _selftest_coverage_archive_twin),
+            (
+                "source_flag_archive_twin",
+                _selftest_source_flag_archive_twin,
+            ),
             (
                 "coverage_readiness_gate",
                 _selftest_coverage_readiness_gate,
@@ -20706,6 +21858,10 @@ def _run_selftest_body() -> int:
             (
                 "hard_mode_diagnostics",
                 _selftest_hard_mode_diagnostics,
+            ),
+            (
+                "grammar_home",
+                _selftest_grammar_home,
             ),
         ):
             fn(root, check)
@@ -20974,7 +22130,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(argv: list[str] | None = None) -> int:
-    parser = OutcomeArgumentParser(description="Validate review staging markdown")
+    # The grammar home rides the usage text (producer code-family record arm
+    # plan, Task 3): RawDescriptionHelpFormatter renders the epilog's
+    # example pair verbatim on --help while leaving the usage line and the
+    # argument-help wrapping (and so every usage-error stderr byte) to the
+    # default HelpFormatter behavior.
+    parser = OutcomeArgumentParser(
+        description="Validate review staging markdown",
+        epilog=_grammar_home_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("path", nargs="?", help="Staging markdown file")
     parser.add_argument(
         "--hard",
@@ -21247,7 +22412,12 @@ def _main(argv: list[str] | None = None) -> int:
     # freshness check at all, r4 F4).
     if supplied:
         source_flag_name, dest, source_kind = supplied[0]
-        source_path = Path(getattr(args, dest)).expanduser().resolve()
+        # The raw operand string is kept beside the resolved path: the
+        # archive-twin resolution (archive-aware source resolution plan,
+        # Task 2) compares recorded values against the repository root,
+        # and only a repository-relative recorded value derives a twin.
+        source_operand = getattr(args, dest)
+        source_path = Path(source_operand).expanduser().resolve()
 
     if source_kind is not None:
         # Directory plans (plan-directory-shape plan, Task 1): the plan
@@ -21259,6 +22429,10 @@ def _main(argv: list[str] | None = None) -> int:
         # for directory operands (a named tool error), never a crash, and
         # a malformed directory refuses through the resolver's named arms.
         source_shape = None
+        # The archive-twin resolution (archive-aware source resolution
+        # plan, Task 2) stays inert unless the regular-file arm below
+        # resolves a completed twin for a missing plans-layout operand.
+        twin_source = None
         if source_kind == "plan" and source_path.is_dir():
             ps_module = _sibling_module("plan_shape")
             if ps_module is None:
@@ -21293,7 +22467,55 @@ def _main(argv: list[str] | None = None) -> int:
                     print("OUTCOME: %s" % OUTCOME_LABELS[3])
                 return 3
         if source_shape is None:
-            if not source_path.is_file():
+            # Archive-twin resolution (archive-aware source resolution
+            # plan, Task 2): kind-gated to plan and consulted only when
+            # the operand is missing, before today's not-found refusal.
+            # When the operand names a plans-layout path whose completed
+            # twin exists as a regular file, the twin supplies the digest
+            # bytes and the stale-source hint path below; identity
+            # derivation further down keeps the original pre-archive
+            # operand path (the record-side contract is untouched; the
+            # plan's Terms price identity derivation over an equivalence
+            # comparison). A missing twin, a directory-shaped twin, and a
+            # non-plan kind all keep today's refusal shapes unchanged.
+            #
+            # Dual-anchor gate (pass 2, review F1): the twin arms only
+            # when the operand as read through the process cwd
+            # (``source_path``, the identity source below) is a relative
+            # path landing exactly in the anchor-resolved plans layout,
+            # and the helper is then fed that same anchor-relative
+            # reading. Arming on the raw operand instead let the bytes
+            # source (git-root reading) diverge from the identity source
+            # (cwd reading): from a repository subdirectory a plain
+            # relative operand armed the twin while the cwd-anchored
+            # operand parent did not exist, ``repository_root`` came back
+            # None, all three identity comparisons were silently skipped,
+            # and a wrong-identity record was accepted. Absolute operands
+            # keep today's no-twin refusal.
+            if source_kind == "plan" and not source_path.is_file():
+                twin_anchor = Path(
+                    repository_root(Path.cwd()) or Path.cwd().resolve()
+                ).resolve()
+                if (
+                    not Path(source_operand).is_absolute()
+                    and source_path.parent
+                    == _coverage_plans_layout(twin_anchor)[0]
+                ):
+                    try:
+                        twin_value = source_path.relative_to(
+                            twin_anchor
+                        ).as_posix()
+                    except ValueError:
+                        twin_value = None
+                    if twin_value is not None:
+                        resolved_twin = _coverage_archive_twin(twin_value)
+                        if (
+                            resolved_twin is not None
+                            and resolved_twin.is_file()
+                        ):
+                            twin_source = resolved_twin
+            bytes_source = twin_source or source_path
+            if not bytes_source.is_file():
                 payload = {
                     "ok": False,
                     "errors": [f"source file not found: {source_path}"],
@@ -21306,7 +22528,7 @@ def _main(argv: list[str] | None = None) -> int:
                     print("OUTCOME: %s" % OUTCOME_LABELS[3])
                 return 3
             try:
-                source_bytes = source_path.read_bytes()
+                source_bytes = bytes_source.read_bytes()
             except OSError as exc:
                 payload = {
                     "ok": False,
@@ -21324,8 +22546,13 @@ def _main(argv: list[str] | None = None) -> int:
         expected_digest = compute_source_digest(source_kind, source_bytes)
         # Stash the path so the stale-digest error can name it (F7: an agent
         # that points the source flag at the wrong file gets an actionable hint
-        # instead of an opaque "artifact may have changed").
-        _SOURCE_PATH_FOR_ERROR = str(source_path)
+        # instead of an opaque "artifact may have changed"). With the twin
+        # resolution armed, the hint names the resolved twin path -- the
+        # bytes the digest was computed over -- while the identity stays
+        # derived from the original operand path below.
+        _SOURCE_PATH_FOR_ERROR = str(
+            bytes_source if twin_source is not None else source_path
+        )
         # The plan family's corrections context: the certified artifact's
         # repository is the git repository containing the plan file; a plan
         # outside any repository keeps the legacy exact-match disposition

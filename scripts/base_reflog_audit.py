@@ -72,7 +72,10 @@ import sys
 
 OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 
-LANDING_PHRASED = re.compile(r"^[A-Za-z0-9-]+: (land|archive) ")
+# "file" joins the authoring coverage per plan
+# docs/history/plans/2026-11-04-execution-lane-authored-plans-misread-as-landed.md
+# Task 2: a content-bearing `plans: file <slug>` landing audits clean.
+LANDING_PHRASED = re.compile(r"^[A-Za-z0-9-]+: (land|archive|file) ")
 
 
 class OutcomeArgumentParser(argparse.ArgumentParser):

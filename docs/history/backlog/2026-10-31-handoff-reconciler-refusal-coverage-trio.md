@@ -1,0 +1,3 @@
+# Backlog: Add regressions for three uncovered handoff reconciler refusal classes
+
+Driving force: code-quality. The plan's Done-when names regressions for each refusal class; three modeled classes lack coverage: plan-identity-mismatch (state plan_slug vs plan stem), artifact-slug-unusable (non-kebab plan filename), and the reachable review-evidence-drift drift outcome (same-digest review round landing between reads). Downstream guards bound the blast radius. Add three focused refusals or record the covered set in the test docstring. Found by plan-review r9 of execute-plan-plan-digest-handoff-drift (2026-10-31).

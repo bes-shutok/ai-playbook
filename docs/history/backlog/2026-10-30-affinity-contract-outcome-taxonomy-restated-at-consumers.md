@@ -9,6 +9,7 @@ Priority: low
 - **Driving force:** simplicity; secondary: token-usage
 
 Cluster: docs/history/backlog/2026-10-30-affinity-promotion-citations-living-paths.md (shared surface: agent-type affinity contract and its consumer records)
+- **Cluster:** docs/history/backlog/2026-10-30-affinity-promotion-citations-living-paths.md
 ## Observed versus expected
 
 Observed: the shared affinity contract's three-branch outcome taxonomy (mismatch hold, unrecognized-target-or-absent-identity hold, runtime-neutral) is re-enumerated at five consumer sites beyond its declared one home in projects/.ai-playbook/agent-runtime-layout.md: execute-plan Phase 0 entry and plans authoring entry (each stating it references the contract and never restates it, then enumerating the branches anyway), the D1 and D2 arms in agents/skills/maintenance/decisions.md, and D1's idle-defect parenthetical. Six statements across six locations means every future contract edit carries six sync obligations. The contract's Enforcement-mode bullet similarly restates the ledger guard id, registry admission id, and witness-origin narrative beyond a pointer.

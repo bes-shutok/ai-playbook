@@ -8,6 +8,7 @@
 - **Class:** fence-class (unwitnessed operative duty clauses lose their regression evidence silently)
 - **Driving force:** reliability
 - **Dedup probe:** searched open backlog filenames and bodies for pins witness, presence pin, placeholder-set pin, and mutation-verified; nearest item `docs/history/backlog/2026-10-29-payload-placeholder-set-pin-parity.md`, which owns placeholder-set pin parity and payload-directive placement across the three dispatch payload modules; this row owns duty-clause presence pins over the quota, scheduling, guards, and constant-restatement surfaces, a disjoint span set from that row's set-membership scope, so the two rows stay separate with no merge.
+- **Cluster:** docs/history/backlog/2026-10-29-payload-placeholder-set-pin-parity.md
 - **Capture hygiene:** scan-public-hygiene --files pass over this draft before landing (2026-10-29).
 - **Why not fixed now:** the Machinery admission protocol refuses a mid-lane blocking pin without a witnessed catch; warning-only presence pins are the admitted remedy and belong to a scheduled maintenance pass, not this address pass.
 

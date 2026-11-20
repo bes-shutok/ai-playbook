@@ -69,3 +69,19 @@ Lower bound over the scheduler state file's children[] retention window (the doc
 - Digest source: docs/tmp/tool-runtime-stats/tool-runtime-stats-20261027T130729.json (+ .md); review-metrics report: ~/.ai-playbook/review-telemetry/reports/review-metrics-20261027T1300.md (841 loop(s), legacy bucket 960, malformed-findings skips 27).
 - Tool ranking (total s/day): Agent 93218.5 (calls/day 162.6, error 10.6 percent, judgment required); TaskOutput 7781.7; Bash/other 2938.6; Bash/test_done_run_wrapper.py 1316.8 (judgment required); WebSearch 544.6. Error ranking (>=50 calls): CronCreate 14.0 percent, Agent 10.6 percent, Edit 7.2 percent, CronDelete 6.6 percent.
 - No-action verdict: no filing candidate cleared the threshold (total >= 300 s/day or mean >= 10 s at >= 50 calls/day) with a scriptable replacement: the top row is Agent at 93218.5 s/day over 31 active day(s), scriptable candidate: no (judgment required); every top-5 row is non-scriptable.
+
+## 2026-11-06 run 20261106T212251 (31 active day(s), host-wide; weekly rider)
+
+- Digest source: `docs/tmp/tool-runtime-stats/tool-runtime-stats-20261106T212251.json` (+ `.md`); no filing candidate cleared the threshold (total >= 300 s/day or mean >= 10 s at >= 50 calls/day).
+- Tool ranking: Agent 80,321.1 s/day (3,970 calls; 11.0 percent errors; judgment required); TaskOutput 9,033.7 s/day; Bash/other 3,261.5 s/day; all top-five candidates require judgment or are unattributed.
+- Error ranking (>=50 calls): CronCreate 13.3 percent, Agent 11.0 percent, Edit 8.1 percent, CronDelete 6.9 percent, TaskOutput 5.5 percent.
+- No-action verdict: no scriptable replacement candidate met the filing threshold.
+
+### Throughput
+
+Lower bound over the scheduler state file's last-20 `children[]` retention window:
+
+- By kind: author 10, exec 8, execute 1, untyped legacy 1.
+- Recorded landed outcomes: author 6, exec 3; `execute` 0. Other outcomes: progress 1, deferred 4, pending 2, stood-down 1, failed 1, in-progress 1.
+- Failure/park proxy: one failed child and four deferred children in the retained entries; standing `turn_error` is the prior interrupted-manifest witness refusal, `pending_dispatch` and `pending_rearm` are null, and `alert` is null. The state file keeps no per-turn error ledger, so retained outcomes are a proxy rather than a period total.
+- Queue depth at report time: ready prompt-log entries 89 (13 PLAN-PROMPTS, 76 EXEC-PROMPTS); plan-uncovered open backlog items 349; open top-level plans 7 (live counts, no retention bound).

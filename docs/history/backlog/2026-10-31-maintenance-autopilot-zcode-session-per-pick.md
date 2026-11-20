@@ -5,7 +5,7 @@ Filed: 2026-10-31
 Status: open
 Priority: high
 Required agent type: zcode
-Cluster: docs/history/backlog/2026-10-31-maintenance-autopilot-codex-same-session-compaction.md (same D-17 continuation surface; separate runtime-specific continuation mechanism)
+Cluster: docs/history/plans/completed/2026-11-02-maintenance-codex-continuation.md (same D-17 continuation surface; separate runtime-specific continuation mechanism)
 Cluster: docs/history/backlog/2026-10-31-maintenance-cycle-gate-scenario-test.md (same D-17 continuation surface; separate regression-test gap)
 
 - **Class:** fix-class

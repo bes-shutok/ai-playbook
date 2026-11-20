@@ -9076,3 +9076,32 @@ before the reconciliation was explained.
 **See also:** #559 (build a commit declaration from git status - the
 surface the operator reads), playbook project corpus #48 (a claim line in
 a frozen artifact is provenance, never cleanup debt).
+
+## 564. Amortize a Known-Large File Across a Worker's Turns
+
+**Rule:** in a long-running implement or review worker, read a known-large
+file once (or in spans) and batch the edits that depend on it into as few
+turns as possible; do not re-read the whole file every turn. A file re-read
+per turn costs its size times the turn count; when the file is orders of
+magnitude larger than any single edit, read only the span each edit needs.
+Check a file's size before the first whole-file read: a read-too-large
+refusal is the harness telling you the amortization math already failed.
+
+**Principle:** Family H (verify the real thing, not the abstraction: the
+real cost is the tokens actually paid per turn; a per-turn re-read habit
+multiplies a known-large file's size by the turn count while carrying
+identical context).
+
+**Shape trigger:** a worker whose task centers on one very large file
+(thousands of lines), or whose turns alternate read-whole-file then
+edit-one-spot.
+
+**Why:** witnessed 2026-11-05 (playbook repo, one test-adding subagent):
+about 2.7M tokens for a single-task worker, most of it cache-read replays
+of the same half-megabyte test file across turns, with model time taking
+91% of the wall clock and several minutes per single-edit turn; batching
+the edits per turn and reading spans would have cut both.
+
+**See also:** #254 (stop probe rounds after a clean verdict - the same
+economics in the review loop), #563 (name deliberately uncommitted state -
+the same run-report discipline family).

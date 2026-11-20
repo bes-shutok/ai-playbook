@@ -4,7 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
-- **Cluster:** docs/history/backlog/2026-10-30-docs-tmp-sweep-sync-precondition-catch-22.md; docs/history/backlog/2026-10-30-execute-plan-proof-family-retention-unbounded.md; docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md
+- **Cluster:** docs/history/backlog/2026-10-30-orphaned-done-run-manifest-pool.md; docs/history/plans/completed/2026-11-01-docs-tmp-retention-redesign.md (the two origin rows it covered are deleted by its disposition rider)
 Cluster: docs/history/backlog/EXEC-PROMPTS.md EXEC-PROMPTS-PRUNE receipt drain-veto-destination-resolution-arm
 - **Origin class:** follow-up witnessed by the landed drain (receipt in the EXEC log, commit e852f89f1); directories left unadjudicated by the first pass's scope discipline
 - **Class:** fix-class (a bounded operational drain applying the proven recipe of development_lessons.md #314; no machinery change)

@@ -23,6 +23,7 @@ The selftest (and the parallel selection-suite arms) assert set equality for the
 
 - A validator change to pattern owners or triage values fails `--selftest` (and the selection-suite vocabulary arm) naming the drifted segment, before any worker prompt can carry a stale value.
 - The pre-existing `softened-reaffirmed` discard-code drift (documented in the review-staging obligation-1 list, absent from `VALID_DISCARD_REASONS`, warned as an unknown code at validation time) is dispositioned: either the code joins the validator's set with its soften-watchlist meaning recorded, or the doc list drops it.
+- Second discard-code drift witness (2026-11-02, maintenance-self-heal-first-on-blocks authoring run): a plan-review delta-round worker discarded a below-threshold finding, and `VALID_DISCARD_REASONS` has no such code, so the record used `already-mitigated`, which misdescribes the disposition. Same disposition duty as `softened-reaffirmed`: the code joins the set with its meaning recorded, or the worker-side vocabulary drops it.
 
 ## Priority rationale
 

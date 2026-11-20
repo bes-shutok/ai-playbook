@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quota window probe pure core.
 
-Parses Z.ai/ZCode limit responses and Codex rollout rate-limit records into a
+Parses Z.ai/ZCode limit responses and Codex app-server account-rate responses into a
 uniform limit contract, selects the binding (earliest resetting) window,
 evaluates pause thresholds, and prices and fit-checks a proposed --fire-at
 instant (evaluate_fire_at, P6 origin 2). Pure stdlib, no network; Task 2 adds
@@ -16,9 +16,12 @@ import fcntl
 import json
 import math
 import os
+import selectors
 from datetime import datetime, timedelta, timezone
 import pathlib
+import shutil
 import sys
+import subprocess
 import time
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Sequence
 import urllib.error
@@ -31,6 +34,7 @@ _SCRIPTS_DIR = str(pathlib.Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 import harness_detection  # noqa: E402
+from quota_sources import RUNTIME_SOURCES  # noqa: E402
 
 # Z.ai limit entry type -> window kind. Kind calibration (do not skip
 # silently): cross-check each type's nextResetTime against the observed
@@ -128,6 +132,8 @@ def _validated_limit(kind: str, raw_percent: Any, raw_reset: Any, now: float,
       and an engaged clamp is observable via a ``reset_clamped`` marker
       (review r1 F2, r2 F7).
     """
+    if isinstance(raw_percent, bool):
+        return None
     try:
         used_percent = float(raw_percent)
         reset_at_epoch = int(raw_reset)
@@ -198,73 +204,172 @@ def parse_zcode_limits(payload: Mapping, now: Optional[float] = None) -> list[di
     return limits
 
 
-def _find_rate_limits(obj: Any) -> Optional[Mapping]:
+def _find_codex_rate_limits(payload: Any) -> Optional[Mapping]:
+    """Find the structured account/rateLimits/read result in an RPC payload."""
     def has_rate_limits(node: Any) -> bool:
-        return isinstance(node, Mapping) and isinstance(node.get("rate_limits"), Mapping)
+        return isinstance(node, Mapping) and (
+            isinstance(node.get("rateLimits"), Mapping)
+            or isinstance(node.get("rate_limits"), Mapping)
+        )
 
-    holder = _find_first(obj, has_rate_limits)
-    return holder["rate_limits"] if holder is not None else None
+    holder = _find_first(payload, has_rate_limits)
+    if holder is None:
+        return None
+    return holder.get("rateLimits", holder.get("rate_limits"))
 
 
-def parse_codex_rollout(lines: Iterable[str], now: Optional[float] = None) -> list[dict]:
-    """Parse rollout JSONL lines; the last record carrying rate_limits wins."""
+def _parse_epoch(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            numeric = float(value)
+        except (OverflowError, ValueError):
+            return None
+        if not math.isfinite(numeric):
+            return None
+        epoch = int(value)
+        return epoch // 1000 if epoch > 10**12 else epoch
+    if isinstance(value, str):
+        try:
+            normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+            parsed = datetime.fromisoformat(normalized)
+            # An offset-free timestamp has no portable epoch: timestamp() would
+            # interpret it in the host's local timezone and accept bad quota data.
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return None
+            return int(parsed.timestamp())
+        except (ValueError, OverflowError, OSError):
+            return None
+    return None
+
+
+def parse_codex_rate_limits(payload: Mapping, now: Optional[float] = None) -> list[dict]:
+    """Parse structured primary and secondary windows from the live response."""
     if now is None:
         now = time.time()
-    latest: Optional[Mapping] = None
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        found = _find_rate_limits(record)
-        if found is not None:
-            latest = found
+    latest = _find_codex_rate_limits(payload)
     if latest is None:
         return []
     limits = []
     for kind in ("primary", "secondary"):
-        # Same per-entry isolation and validation shape as the zcode path
-        # (review r2 F3 + r2 F5), shared via _validated_limit since r3 F4:
-        # a non-mapping window, a non-numeric value, a non-finite or
-        # out-of-range percent (JSON Infinity/NaN literals parse), an
-        # epoch datetime cannot represent, or an OSError-band epoch drops
-        # ONLY this window; resets_at is clamped to the same horizon.
         window = latest.get(kind)
-        if not isinstance(window, Mapping) or "resets_at" not in window:
+        if not isinstance(window, Mapping):
             continue
-        entry_limit = _validated_limit(
-            kind, window.get("used_percent"), window["resets_at"], now
-        )
-        if entry_limit is not None:
-            limits.append(entry_limit)
+        raw_percent = window.get("usedPercent", window.get("used_percent"))
+        reset = _parse_epoch(window.get("resetsAt", window.get("resets_at")))
+        if reset is None or raw_percent is None:
+            continue
+        entry_limit = _validated_limit(kind, raw_percent, reset, now)
+        if entry_limit is None:
+            continue
+        duration = window.get("windowDurationMins", window.get("window_duration_mins"))
+        if isinstance(duration, int) and not isinstance(duration, bool) and duration > 0:
+            entry_limit["window_minutes"] = duration
+        name = window.get("limitName", window.get("limit_name"))
+        if isinstance(name, str) and name:
+            entry_limit["window_name"] = name
+        limits.append(entry_limit)
     return limits
 
 
-def rollout_carries_rate_limits(lines: Iterable[str]) -> bool:
-    """True when any rollout line parses to a record carrying rate_limits.
+def _read_rpc_line(proc: subprocess.Popen, selector: selectors.BaseSelector,
+                   buffer: bytearray, deadline: float, max_bytes: int) -> bytes:
+    """Read one bounded newline-delimited server frame before the deadline."""
+    while True:
+        newline = buffer.find(b"\n")
+        if newline >= 0:
+            frame = bytes(buffer[:newline]).strip()
+            del buffer[:newline + 1]
+            return frame
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not selector.select(remaining):
+            raise TimeoutError("Codex app-server request timed out")
+        chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1))
+        if not chunk:
+            raise RuntimeError("Codex app-server closed stdout before replying")
+        buffer.extend(chunk)
+        if len(buffer) > max_bytes:
+            raise ValueError("Codex app-server response exceeded size limit")
 
-    Mirrors parse_codex_rollout's own scan (strip per line, skip blanks and
-    unparseable lines, json.loads per record); unlike the parser, which
-    lets the last record win, this predicate returns on the first record
-    carrying rate_limits, so probe_codex can distinguish a record whose
-    windows all dropped from a record-less rollout at fail-open time
-    without touching the parser's list[dict] return contract.
-    """
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+
+def _codex_app_server_request(timeout_seconds: float = 10.0,
+                              max_response_bytes: int = 1024 * 1024) -> Mapping:
+    """Ask the local authenticated Codex app-server over bounded stdio RPC."""
+    command = shutil.which("codex")
+    if not command:
+        raise FileNotFoundError("Codex CLI unavailable")
+    proc = subprocess.Popen(
+        [command, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, bufsize=0,
+    )
+    selector = None
+    try:
+        selector = selectors.DefaultSelector()
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + timeout_seconds
+        buffer = bytearray()
+        response_bytes = 0
+        assert proc.stdin is not None
+        init = {"id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "maintenance-quota-probe", "version": "1"},
+                           "capabilities": {}}}
+        proc.stdin.write((json.dumps(init) + "\n").encode())
+        proc.stdin.flush()
+        while True:
+            frame = _read_rpc_line(proc, selector, buffer, deadline, max_response_bytes)
+            response_bytes += len(frame) + 1
+            if response_bytes > max_response_bytes:
+                raise ValueError("Codex app-server response exceeded size limit")
+            message = json.loads(frame)
+            if not isinstance(message, Mapping):
+                raise ValueError("Codex app-server returned a malformed frame")
+            if "id" in message:
+                if message.get("id") != 1:
+                    raise ValueError("Codex app-server initialization response ID mismatch")
+                if "error" in message or not isinstance(message.get("result"), Mapping):
+                    raise RuntimeError("Codex app-server initialization failed")
+                break
+        proc.stdin.write((json.dumps({"method": "initialized", "params": {}}) + "\n").encode())
+        proc.stdin.write((json.dumps({"id": 2,
+                                      "method": "account/rateLimits/read", "params": {}}) + "\n").encode())
+        proc.stdin.flush()
+        while True:
+            frame = _read_rpc_line(proc, selector, buffer, deadline, max_response_bytes)
+            response_bytes += len(frame) + 1
+            if response_bytes > max_response_bytes:
+                raise ValueError("Codex app-server response exceeded size limit")
+            message = json.loads(frame)
+            if not isinstance(message, Mapping):
+                raise ValueError("Codex app-server returned a malformed frame")
+            if "id" in message:
+                if message.get("id") != 2:
+                    raise ValueError("Codex rate-limits response ID mismatch")
+                if "error" in message or not isinstance(message.get("result"), Mapping):
+                    raise RuntimeError("Codex rate-limits request failed")
+                return message["result"]
+    finally:
         try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if _find_rate_limits(record) is not None:
-            return True
-    return False
-
+            if selector is not None:
+                selector.close()
+        finally:
+            try:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            finally:
+                for stream in (proc.stdin, proc.stdout):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
 
 def select_binding(limits: Sequence[Mapping]) -> Optional[str]:
     """The binding window is the limit whose reset_at_epoch is earliest."""
@@ -341,7 +446,9 @@ def build_report(runtime: str, limits: Sequence[Mapping],
                  percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
                  now: Optional[float] = None,
                  protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
-                 plan_cost_percent: Optional[float] = None) -> dict:
+                 plan_cost_percent: Optional[float] = None,
+                 source: Optional[str] = None,
+                 observed_at_epoch: Optional[float] = None) -> dict:
     """Evaluate only live windows; an all-expired limit set fails open.
 
     A limit whose ``reset_at_epoch`` is at or before ``now`` describes a
@@ -356,10 +463,12 @@ def build_report(runtime: str, limits: Sequence[Mapping],
     if now is None:
         now = time.time()
     if not limits:
-        return _unknown_report(runtime, ["no limits supplied"])
+        return _unknown_report(runtime, ["no limits supplied"], source=source,
+                               observed_at_epoch=observed_at_epoch)
     live = [limit for limit in limits if limit["reset_at_epoch"] > now]
     if not live:
-        return _unknown_report(runtime, ["all quota windows already reset; data stale"])
+        return _unknown_report(runtime, ["all quota windows already reset; data stale"],
+                               source=source, observed_at_epoch=observed_at_epoch)
     binding = select_binding(live)
     decision, reasons = evaluate_pause(
         live, binding,
@@ -386,6 +495,10 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         "reasons": reasons,
         "status": "ok",
     }
+    if source is not None:
+        report["source"] = source
+    if observed_at_epoch is not None:
+        report["observed_at_epoch"] = observed_at_epoch
     # One binding lookup feeds both the wait-for-reset carry and the wave
     # sizing below (review r1 F10 hoist); fail loud on regression: a
     # wait-for-reset report must always carry wait_minutes, never silently
@@ -667,7 +780,6 @@ def evaluate_fire_at(fire_epoch: int, now: Optional[float] = None,
 # Live Z.ai monitor endpoint (extracted from the ZCode desktop app bundle, 2026-09-13); the legacy https://api.z.ai/api/quota/limit answers 404-NOT_FOUND inside HTTP 200, which read as a permanent status: unknown; do not revert.
 ZCODE_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
 DEFAULT_ZCODE_CONFIG = pathlib.Path("~/.zcode/cli/config.json").expanduser()
-DEFAULT_CODEX_SESSIONS = pathlib.Path("~/.codex/sessions").expanduser()
 
 Transport = Callable[[str, Mapping[str, str]], str]
 
@@ -745,93 +857,73 @@ def probe_zcode(config_path: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
                 protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
                 plan_cost_percent: Optional[float] = None) -> dict:
     """Fetch Z.ai limits via the transport; fail open on any failure."""
+    source = RUNTIME_SOURCES["zcode"]
     if transport is None:
         transport = urllib_transport
     api_key = load_api_key(config_path)
     if not api_key:
-        return _unknown_report("zcode", ["zcode config missing provider.zai.options.apiKey"])
+        return _unknown_report("zcode", ["zcode config missing provider.zai.options.apiKey"],
+                               source=source, observed_at_epoch=time.time())
     try:
         body = transport(url, {"Authorization": api_key})
+        observed_at = time.time()
+        effective_now = observed_at if now is None else now
         payload = json.loads(body)
-        limits = parse_zcode_limits(payload, now=now)
-    except Exception as exc:  # fail open: any transport/parse failure
-        return _unknown_report("zcode", ["zcode quota fetch failed: {}".format(exc)])
-    if not limits:
-        return _unknown_report("zcode", ["zcode quota response carried no usable limits"])
+        limits = parse_zcode_limits(payload, now=effective_now)
+    except Exception as exc:  # fail open without copying endpoint response or credentials
+        detail = "HTTP {}".format(exc.code) if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+        return _unknown_report("zcode", ["zcode quota fetch failed ({})".format(detail)],
+                               source=source, observed_at_epoch=time.time())
+    if not any(limit["kind"] == "primary" and limit["reset_at_epoch"] > effective_now
+               for limit in limits):
+        return _unknown_report("zcode", ["zcode quota response carried no usable primary window"],
+                               source=source, observed_at_epoch=observed_at)
     return build_report("zcode", limits,
                         minutes_threshold=minutes_threshold,
-                        percent_threshold=percent_threshold, now=now,
+                        percent_threshold=percent_threshold, now=effective_now,
                         protocol_minutes_threshold=protocol_minutes_threshold,
-                        plan_cost_percent=plan_cost_percent)
+                        plan_cost_percent=plan_cost_percent, source=source,
+                        observed_at_epoch=observed_at)
 
 
-def discover_codex_rollout(sessions_dir: os.PathLike | str) -> Optional[pathlib.Path]:
-    """Newest rollout-*.jsonl under the sessions tree, by name sort."""
-    root = pathlib.Path(sessions_dir)
-    if not root.is_dir():
-        return None
-    candidates = sorted(root.rglob("rollout-*.jsonl"))
-    return candidates[-1] if candidates else None
-
-
-def probe_codex(sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
-                now: Optional[float] = None,
+def probe_codex(now: Optional[float] = None,
                 minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
                 percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
                 protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
-                plan_cost_percent: Optional[float] = None) -> dict:
-    """Parse the newest Codex rollout tail; fail open on absence."""
-    rollout = discover_codex_rollout(sessions_dir)
-    if rollout is None:
-        return _unknown_report(
-            "codex", ["no rollout-*.jsonl found under sessions dir {}".format(sessions_dir)]
-        )
+                plan_cost_percent: Optional[float] = None,
+                transport: Optional[Callable[[], Mapping]] = None) -> dict:
+    """Read the current Codex account limits from its native app-server."""
+    source = RUNTIME_SOURCES["codex"]
     try:
-        text = rollout.read_text(encoding="utf-8")
-        # Parse stays inside the guard: a read or unexpected parse failure
-        # must fail open like every other transport/parse failure, never
-        # escape as a traceback (per-entry malformed windows now drop
-        # inside parse_codex_rollout itself, review r2 F3/F5).
-        limits = parse_codex_rollout(text.splitlines(), now=now)
-    except Exception as exc:  # fail open: any read/parse failure
-        return _unknown_report("codex", ["codex rollout parse failed: {}".format(exc)])
-    if not limits:
-        # Split fail-open reason (review r2 F5 follow-up): a rollout that
-        # carried a rate_limits record whose windows all dropped at
-        # per-entry validation is a different diagnostic shape from a
-        # rollout with no rate_limits record at all.
-        if rollout_carries_rate_limits(text.splitlines()):
-            return _unknown_report(
-                "codex", ["rollout rate_limits record carried no usable windows"]
-            )
-        return _unknown_report("codex", ["rollout carried no rate_limits record"])
-    return build_report("codex", limits,
-                        minutes_threshold=minutes_threshold,
-                        percent_threshold=percent_threshold, now=now,
-                        protocol_minutes_threshold=protocol_minutes_threshold,
-                        plan_cost_percent=plan_cost_percent)
+        payload = (transport or _codex_app_server_request)()
+        observed_at = time.time()
+        effective_now = observed_at if now is None else now
+        limits = parse_codex_rate_limits(payload, now=effective_now)
+    except Exception as exc:  # fail open without copying server text or credentials
+        return _unknown_report("codex", ["Codex account rate-limits request failed ({})".format(
+            type(exc).__name__)], source=source, observed_at_epoch=time.time())
+    if not any(limit["kind"] == "primary" and limit["reset_at_epoch"] > effective_now
+               for limit in limits):
+        return _unknown_report("codex", ["Codex account response carried no usable primary window"],
+                               source=source, observed_at_epoch=observed_at)
+    report = build_report("codex", limits,
+                          minutes_threshold=minutes_threshold,
+                          percent_threshold=percent_threshold, now=effective_now,
+                          protocol_minutes_threshold=protocol_minutes_threshold,
+                          plan_cost_percent=plan_cost_percent, source=source,
+                          observed_at_epoch=observed_at)
+    rate_limits = _find_codex_rate_limits(payload)
+    if (rate_limits is not None and "secondary" in rate_limits
+            and not any(limit["kind"] == "secondary" for limit in limits)):
+        report["reasons"].append("Codex secondary window omitted (missing or malformed fields)")
+    return report
 
-
-def detect_runtime(explicit: Optional[str] = None,
-                   zcode_config: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
-                   codex_sessions: os.PathLike | str = DEFAULT_CODEX_SESSIONS) -> Optional[str]:
-    """Explicit override wins; auto-detect answers only from a live signal.
-
-    The auto path consults the shared detection seam (harness_detection) at the
-    module-attribute boundary so validation can patch the seam. Host file
-    presence is deliberately NOT consulted: the old file-presence rules
-    auto-bound a foreign runtime's quota window (the mis-bind defect of
-    record). zcode_config and codex_sessions remain in the signature only for
-    caller compatibility; within this function they are unused (the explicit
-    probe paths take their config directly from main()). Deploy the shared
-    helper together with this script: a stale probe without harness_detection
-    fails at import.
-    """
-    if explicit in ("zcode", "codex"):
-        return explicit
+def detect_runtime(explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve an explicit supported runtime or an unambiguous live signal."""
+    if explicit is not None:
+        return explicit if explicit in ("zcode", "codex") else None
     harness, _method = harness_detection.detect_harness()
-    return harness
-
+    return harness if harness in ("zcode", "codex") else None
 
 def add_secondary_report_only_reason(report: dict) -> dict:
     """When the binding window is the secondary one, mark it report-only."""
@@ -965,8 +1057,10 @@ def write_flag_if_paused(flag_path: os.PathLike | str, runtime: str,
     return True
 
 
-def _unknown_report(runtime: str, reasons: list[str]) -> dict:
-    return {
+def _unknown_report(runtime: str, reasons: list[str],
+                    source: Optional[str] = None,
+                    observed_at_epoch: Optional[float] = None) -> dict:
+    report = {
         "runtime": runtime,
         "limits": [],
         "binding": None,
@@ -974,32 +1068,38 @@ def _unknown_report(runtime: str, reasons: list[str]) -> dict:
         "reasons": reasons,
         "status": "unknown",
     }
+    if source is not None:
+        report["source"] = source
+    if observed_at_epoch is not None:
+        report["observed_at_epoch"] = observed_at_epoch
+    return report
 
 
 def run_probe(runtime: str,
               config_path: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
-              sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
               url: str = ZCODE_QUOTA_URL,
               transport: Optional[Transport] = None,
               now: Optional[float] = None,
               minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
               percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
               protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
-              plan_cost_percent: Optional[float] = None) -> dict:
+              plan_cost_percent: Optional[float] = None,
+              codex_transport: Optional[Callable[[], Mapping]] = None) -> dict:
     if runtime == "zcode":
         report = probe_zcode(config_path=config_path, url=url, transport=transport, now=now,
                              minutes_threshold=minutes_threshold,
                              percent_threshold=percent_threshold,
                              protocol_minutes_threshold=protocol_minutes_threshold,
                              plan_cost_percent=plan_cost_percent)
-    else:
-        report = probe_codex(sessions_dir=sessions_dir, now=now,
-                             minutes_threshold=minutes_threshold,
+    elif runtime == "codex":
+        report = probe_codex(now=now, minutes_threshold=minutes_threshold,
                              percent_threshold=percent_threshold,
                              protocol_minutes_threshold=protocol_minutes_threshold,
-                             plan_cost_percent=plan_cost_percent)
+                             plan_cost_percent=plan_cost_percent,
+                             transport=codex_transport)
+    else:
+        report = _unknown_report(str(runtime or "none"), ["unsupported or unknown runtime"])
     return add_secondary_report_only_reason(report)
-
 
 def _fire_at_cli(parser: argparse.ArgumentParser, args: argparse.Namespace,
                  now: Optional[float] = None) -> int:
@@ -1052,17 +1152,14 @@ def _fire_at_cli(parser: argparse.ArgumentParser, args: argparse.Namespace,
         # The fit half needs live window data from the normal transports;
         # the pricing-only form (need_minutes absent) never invokes one.
         try:
-            runtime = detect_runtime(
-                args.runtime, zcode_config=args.config, codex_sessions=args.sessions_dir
-            )
+            runtime = detect_runtime(args.runtime)
         except Exception:
             runtime = None
         if runtime is None:
             limits = []
         else:
             report = run_probe(runtime, config_path=args.config,
-                               sessions_dir=args.sessions_dir, url=args.url,
-                               now=now)
+                               url=args.url, now=now)
             limits = report.get("limits") or []
     verdict = evaluate_fire_at(
         fire_epoch,
@@ -1107,14 +1204,13 @@ def main(argv: Optional[Sequence[str]] = None,
             )
         )
     )
-    parser.add_argument("--runtime", choices=("zcode", "codex"))
+    parser.add_argument("--runtime", help="canonical runtime identity (codex or zcode)")
     parser.add_argument("--minutes-before", type=int, default=DEFAULT_MINUTES_THRESHOLD)
     parser.add_argument("--max-percent", type=float, default=DEFAULT_PERCENT_THRESHOLD)
     parser.add_argument("--min-protocol-minutes", type=int, default=DEFAULT_PROTOCOL_MINUTES_THRESHOLD)
     parser.add_argument("--plan-cost", type=float, default=None)
     parser.add_argument("--write-flag")
     parser.add_argument("--config", default=str(DEFAULT_ZCODE_CONFIG))
-    parser.add_argument("--sessions-dir", default=str(DEFAULT_CODEX_SESSIONS))
     parser.add_argument("--url", default=ZCODE_QUOTA_URL)
     parser.add_argument("--plan")
     parser.add_argument("--fire-at")
@@ -1154,9 +1250,7 @@ def main(argv: Optional[Sequence[str]] = None,
     if args.plan_cost is not None and not (0 < args.plan_cost <= 100):
         parser.error("--plan-cost must be within (0, 100]")
     try:
-        runtime = detect_runtime(
-            args.runtime, zcode_config=args.config, codex_sessions=args.sessions_dir
-        )
+        runtime = detect_runtime(args.runtime)
     except Exception as exc:
         # Fail open: runtime detection itself must never escape as a traceback
         # (for example an embedded NUL byte in a --config path raises before
@@ -1164,9 +1258,9 @@ def main(argv: Optional[Sequence[str]] = None,
         report = _unknown_report("none", ["runtime detection failed: {}".format(exc)])
     else:
         if runtime is None:
-            report = _unknown_report("none", ["no agent runtime detected; pass --runtime explicitly"])
+            report = _unknown_report("none", ["runtime is unsupported, ambiguous, or not detected; pass --runtime explicitly"])
         else:
-            report = run_probe(runtime, config_path=args.config, sessions_dir=args.sessions_dir,
+            report = run_probe(runtime, config_path=args.config,
                                url=args.url, minutes_threshold=args.minutes_before,
                                percent_threshold=args.max_percent,
                                protocol_minutes_threshold=args.min_protocol_minutes,

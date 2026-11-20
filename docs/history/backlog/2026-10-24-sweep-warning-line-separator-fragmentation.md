@@ -10,6 +10,7 @@ Quarantine: 2026-10-27
 - **Driving force:** correctness
 - **Skill/step:** `scripts/done_sweep_gates_lib.py` (`_tracked_ignored_paths` splitlines + `_escape_control_chars`) and `scripts/land_squash.sh` probe tracked-ignored pass stdout (the r3 risk lens witnessed the same raw-separator rendering reach the probe's warning channel after the quotePath pin moved)
 - **Cluster:** docs/history/plans/2026-10-23-ignored-audit-home-tracked-index-fence.md (the tracked-sibling report arm this row bounds); sibling row 2026-10-24-probe-branch-only-ignore-rule-gap.md (the probe arm's rule-source limit)
+- **Cluster:** docs/history/backlog/2026-10-24-probe-branch-only-ignore-rule-gap.md
 
 ## Problem
 

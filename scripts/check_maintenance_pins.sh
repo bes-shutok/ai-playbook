@@ -18,7 +18,9 @@
 # witnessed-fail-arm family under the same per-section fixture seam), and the
 # warning-only placement-pins family over the placement doctrine spans in the four placement-decision owners,
 # and the warning-only prompt-log prune-range pin family over the landed prune-range, receipt-preservation,
-# write-boundary, and audit-separation clauses across the two rolling logs and the five operative procedures.
+# write-boundary, and audit-separation clauses across the two rolling logs and the five operative procedures,
+# and the post-fire verification arm pins over the warning-only survey arm, the outcome-note shape and
+# retention cap, the task-index fire-ledger read path, and the fire-path preservation clause.
 # Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 = all pins hold
 # (`OUTCOME: pass`) or every standing red is an unexpired recorded red named
 # in the run summary line, exit 1 = a failing pin (`OUTCOME: fail` after the PIN
@@ -966,7 +968,7 @@ expect_absent "superseded uncontained execution-child marker wording must be abs
 pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
 # scheduler ops lanes and durability plan Task 4 (2026-09-19): the recycling
 # update call is demoted to a verified-only optimization leg, so the old
-# 'ladder recycling needle' literal (the update-as-primary step 2 sentence)
+# 'ladder recycling needle' literal (the update-as-primary step 2 sentence); the operative row below was renamed and re-needled to the activated chain default by plan docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md Task 4
 # and the old 'hand-off proceed refusal bound' literal (the update-refusal
 # convergence sentence "converges to the fallback's fresh-id create within
 # the same dispatch attempt") both died with the recycling primary path.
@@ -974,7 +976,7 @@ pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct 
 # below carries the same semantics on the operative path (a create refusal
 # routes to the next mutating call, the lingered-record delete, instead of
 # stranding the dispatch). Both dead literals are frozen absent.
-pin "ladder operative delete-plus-create needle" grep -qF 'delete-plus-create is the operative path' "$Z"
+pin "ladder operative chain default needle" grep -qF 'the launchd clocked-order chain is the operative default child dispatch' "$Z"
 pin "recycling update is a verified-only optimization leg" grep -qF 'may replace the delete-plus-create above only when a live-verified parent-to-child flip is recorded' "$Z"
 pin "hand-off proceed refusal bound (operative path)" grep -qF 'deleting your own lingered completed spawner record first when the create is refused for the automation-born cap' "$Z"
 expect_absent "demoted update-as-primary recycling wording must be absent from zcode.md" 'update the recorded parent record into the child one-shot' "$Z"
@@ -1028,7 +1030,7 @@ pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the asse
 [ "$(grep -oF 'never curtails an advancing dispatch' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "advancing-dispatch scoping count" "PIN FAIL: advancing-dispatch scoping count" || fail=1; }
 [ "$(grep -oF 'The bound counts decided mutations, not primitive calls' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit clause count" "PIN FAIL: bound unit clause count" || fail=1; }
 # bound unit-clause parenthetical count (dfm loop-guard successor)
-[ "$(grep -oF "a parent re-arm's shape is per the recipe's operative shape (delete-plus-create today; the recycling leg only if a verified flip reopens it)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit-clause parenthetical count" "PIN FAIL: bound unit-clause parenthetical count" || fail=1; }
+[ "$(grep -oF "a parent re-arm's shape is per the recipe's activated shape (the launchd clocked-order chain for bound sessions; the delete-plus-create fallback behind its guard rule sets, the recycling leg only if a verified flip reopens it)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "bound unit-clause parenthetical count" "PIN FAIL: bound unit-clause parenthetical count" || fail=1; }
 [ "$(grep -oF 'any refusal after that single call takes the existing escalation paths' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "escalation-routing count" "PIN FAIL: escalation-routing count" || fail=1; }
 [ "$(grep -oF "must stop touching automation primitives immediately after it regardless of the call's outcome" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "stop-bound tail count" "PIN FAIL: stop-bound tail count" || fail=1; }
 [ "$(grep -oF "the loop's signature appeared (two listings, no mutating step between them)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "guard-signature restatement count" "PIN FAIL: guard-signature restatement count" || fail=1; }
@@ -1641,6 +1643,41 @@ done
 pin "execute-plan company placement arm's per-run task-branch choice clause" test "$(grep -oF 'gains the per-run operator choice beside that base-branch-only rule' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
 pin "execute-plan company task-branch arm's PR-pairing consequence clause" test "$(grep -oF 'names the PR pairing (the task branch as source, the confirmed base as target)' "$repo/agents/skills/execute-plan/worktree-first.md" | wc -l | tr -d ' ')" -eq 1
 
+# --- done-pending handoff reconciliation flow pins (plan
+# docs/history/plans/2026-10-29-execute-plan-plan-digest-handoff-drift.md, Task 2) ---
+# Section-scoped presence pins over the documented done-pending recovery arm.
+# The SKILL.md section sits in the Phase 1 loop between Step 1.2b and Step 1.3
+# (the region's end anchor); the runtime-contract section sits between its own
+# heading and the Run-level ownership section (its end anchor); the Step 1.2
+# region pin keys the pre-prompt task-scope digest record the flow binds
+# receipts to. Region scoping (the same awk region mechanism the P57 S9 stance
+# pins use) keeps a stray prose copy elsewhere in either file from satisfying
+# a flow pin, and the distinctness pins freeze the separation between the
+# done-pending reconciliation arm and the existing prelaunch remedies (the
+# reviewed task-scope change Active-plan referral and the Step 0.5
+# fresh-review path; the retired prelaunch recover-task-scope operation has
+# no documented home) inside the documented flow sections themselves.
+pin "done-pending reconciliation section anchored in execute-plan SKILL.md" grep -qF '### Done-pending handoff reconciliation (receipt-backed recovery arm)' "$E"
+pin "done-pending reconciliation section anchored in runtime-contract.md" grep -qF '## Done-pending handoff reconciliation' "$RC"
+pin "Step 1.2 pre-prompt task-scope digest record (region-scoped)" bash -c "awk '/^### Step 1.2: Launch implement sub-agent/{f=1; next} /^### Step 1.2b:/{f=0} f' \"$E\" | grep -qF 'before a new worker receives its prompt, the parent records that task'"
+pin "done-pending flow names the helper invocation (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'scripts/reconcile_execute_plan_handoff.py reconcile'"
+pin "done-pending flow names the per-task receipt field (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'tasks[task_id].handoff_reconciliation'"
+pin "done-pending flow names the per-task scope-digest field (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'tasks[task_id].task_scope_digest'"
+pin "done-pending flow names the same-replacement write (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'replacement for that task only: the receipt lands in'"
+pin "done-pending flow names other-task preservation (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'every other task record and terminal receipt is preserved verbatim by the same replacement'"
+pin "done-pending flow names the exact already-reconciled retry response (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'the exact retry response: the stored receipt equals the freshly derived receipt on every identity field'"
+pin "done-pending flow requires preflight and the done commit gate after either success (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'rerun ordinary preflight (Step 0.5) and run the existing done commit gate'"
+pin "done-pending flow names the legacy launch-scope refusal (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'launch-scope-unverified'"
+pin "done-pending flow keeps prelaunch scope/digest mismatches with their existing prelaunch remedies (region-scoped)" bash -c "awk '/^### Done-pending handoff reconciliation/{f=1; next} /^### Step 1.3/{f=0} f' \"$E\" | grep -qF 'a reviewed task-scope change routes through the Active-plan referral'"
+pin "runtime contract names the same-replacement write (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'A successful reconciliation is ONE atomic'"
+pin "runtime contract names the per-task receipt field (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'handoff_reconciliation'"
+pin "runtime contract names the per-task scope-digest field (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'task_scope_digest'"
+pin "runtime contract names other-task preservation (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'preserved verbatim by the same'"
+pin "runtime contract names the exact already-reconciled retry response (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'the unchanged generation, the stored receipt echoed,'"
+pin "runtime contract requires preflight and the done commit gate after either success (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'ordinary preflight and the existing done commit gate to pass before the run'"
+pin "runtime contract keeps prelaunch scope/digest mismatches with their existing prelaunch remedies (section-scoped)" bash -c "awk '/^## Done-pending handoff reconciliation/{f=1; next} /^## Run-level ownership and repository placement/{f=0} f' \"$RC\" | grep -qF 'route to their existing prelaunch remedies'"
+[ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
+
 # Removed 2026-10-14, arm remove-beside-provenance (mirror coherence): this
 # passing mirror cross-referenced the canonical resume-fit and resume-pricing
 # spans adjudicated away above (deliberately removed by the certified landing
@@ -2058,7 +2095,7 @@ check(n >= 5, f"pending_landing count {n} < 5 across the split corpus")
 # Revisions ledger entry, so they are pinned region-scoped to their owning
 # regions (Step 5, State file section, Step 3) rather than whole-file
 a = s.index("\n### Step 5: scheduling"); b = s.index("\n### Step 6: state update")
-check("pre-dispatch landing gate" in s[a:b], "Step 5 region missing: pre-dispatch landing gate")
+check("pre-dispatch admission consult" in s[a:b], "Step 5 region missing: pre-dispatch admission consult")
 a = s.index("Each non-turn write is a targeted field edit"); b = s.index("- The `children` array")
 check("re-evaluate their precondition" in s[a:b], "State file region missing: re-evaluate their precondition")
 a = s.index("\n### Step 3: decision"); b = s.index("\n### Step 4: quota leg")
@@ -2070,8 +2107,8 @@ for needle in ["temporary worktree", "git reset --merge"]:
 # heading that follows it in the operative file
 a = s.index("## Invariants"); b = s.index("## Integration Points")
 inv = s[a:b]
-for needle in ["post-review, pre-landed state", "zero outstanding unlanded runs",
-               "no surviving repo-matching"]:
+for needle in ["post-review, pre-landed state", "target-disjointness admission consult",
+               "treated as intersecting"]:
     check(needle in inv, "Invariants region missing: " + needle)
 # Step 1-region needles (the read-back and reconciliation bullets live only there)
 a = s.index("\n### Step 1: survey"); b = s.index("\n### Step 2: guards")
@@ -2093,7 +2130,7 @@ a = s.index("\n### Step 3: decision"); b = s.index("\n### Step 4: quota leg")
 st3 = s[a:b]
 for needle in ["landing-completion",
                "pending-landing (primary occupied by peer session)",
-               "pending-landing (outstanding unlanded run)",
+               "pending-landing (unlanded run)",
                "pending-landing-stuck", "pending-landing-stash-left",
                "re-runs the same gate set"]:
     check(needle in st3, "Step 3 region missing: " + needle)
@@ -3142,7 +3179,7 @@ check_origin_independent_eligibility() { # $1 = root carrying agents/skills/inve
   grep -qF 'Origin repository or organization does not restrict investigation' "$inv" || { recorded_red_check "investigate eligibility opener sentence missing from" "PIN FAIL: investigate eligibility opener sentence missing from $inv" || rc=1; }
   grep -qF "Skip an origin only when it is already represented by an existing entry's \`Origins:\` line in either rolling log" "$inv" || { recorded_red_check "investigate sanctioned skip-shape span missing from" "PIN FAIL: investigate sanctioned skip-shape span missing from $inv" || rc=1; }
   grep -qF 'origin repository and organization do not affect eligibility' "$inv" || { recorded_red_check "investigate eligibility-indifference sentence missing from" "PIN FAIL: investigate eligibility-indifference sentence missing from $inv" || rc=1; }
-  grep -qF 'origin repository and organization do not exclude the input item or a relevant sibling' "$inv" || { recorded_red_check "investigate non-exclusion sentence missing from" "PIN FAIL: investigate non-exclusion sentence missing from $inv" || rc=1; }
+  # the third placement-universality sentence (non-exclusion restatement) was removed 2026-11-01 by the light-boundary prose-economy plan; the eligibility-indifference pin above covers the shared rule
   grep -qF 'redact foreign identifiers and personal data' "$inv" || { recorded_red_check "investigate redaction duty sentence missing from" "PIN FAIL: investigate redaction duty sentence missing from $inv" || rc=1; }
   grep -qF 'keep foreign identifiers, personal data, and details outside this repository out of cluster annotations and emitted entries' "$inv" || { recorded_red_check "investigate emission-privacy duty sentence missing from" "PIN FAIL: investigate emission-privacy duty sentence missing from $inv" || rc=1; }
   grep -qF "Keep cluster annotations within this repository's safe, repo-relative vocabulary and omit foreign identifiers or personal data" "$inv" || { recorded_red_check "investigate Stage 0 redaction sentence missing from" "PIN FAIL: investigate Stage 0 redaction sentence missing from $inv" || rc=1; }
@@ -3323,7 +3360,10 @@ pin "Project-class guard paragraph marker" grep -qF 'Project-class guard.' "$S"
 # rollback supersession, the truncation no-re-poll span, the
 # dispatch-discipline exception enumeration, the two-mutating-calls
 # parenthetical, and the duties-core mirror), and arm 3 the launchd
-# default-in-waiting demotion paragraph. Every row is count-gated at exactly 1
+# default paragraph, activated 2026-11-03 by plan
+# docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md
+# Task 4 (the arm-3 rows below convert to absence rows and a retained
+# fallback re-pin under that plan). Every row is count-gated at exactly 1
 # whole-file per the plan's expect1 idiom, so a restatement anywhere fails as
 # a second home.
 pin "arm 1 ownership-allowlist rule-set heading" test "$(grep -oF 'Ownership allowlist (every automation delete on this ladder)' "$Z" | wc -l | tr -d ' ')" -eq 1
@@ -3343,9 +3383,24 @@ pin "arm 2 rollback supersession span" test "$(grep -oF 'the distinct-failure ro
 pin "arm 2 dispatch-discipline probe exception span" test "$(grep -oF 'and the post-delete probe listing), which precedes or intervenes' "$Z" | wc -l | tr -d ' ')" -eq 1
 pin "arm 2 two-mutating-calls probe span" test "$(grep -oF 'plus the mandated post-delete probe listing between them' "$Z" | wc -l | tr -d ' ')" -eq 1
 pin "arm 2 duties-core probe mirror span" test "$(grep -oF 'one read-only listing probe precedes the create' "$DC" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 demoted-fallback paragraph heading" test "$(grep -oF 'Demoted fallback (arm 3)' "$Z" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 retired default-dispatch span" test "$(grep -oF 'stops being the default child dispatch for sessions already bound to an armed record' "$Z" | wc -l | tr -d ' ')" -eq 1
-pin "arm 3 promotion-review activation span" test "$(grep -oF 'takes over as the operative default for bound sessions only when the promotion review' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "arm 3 demoted-fallback paragraph heading" test "$(grep -oF 'Demoted fallback (arm 3)' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "arm 3 retired default-dispatch span" test "$(grep -oF 'documented fallback firing only behind both guard rule sets' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "arm 3 promotion-review activation span" test "$(grep -oF 'takes over as the operative default for bound sessions only when the promotion review' "$Z" | wc -l | tr -d ' ')" -eq 0
+
+# --- dispatch-ladder-rearm-joint-hardening Task 4 pins (plan
+# docs/history/plans/2026-11-03-dispatch-ladder-rearm-joint-hardening.md,
+# Task 4) --- companion rows over the activated text and absence rows over
+# the six remaining removed spans of the validation block's negation greps
+# (the two converted arm-3 rows above cover the other two).
+pin "ladder re-arm chained default needle" grep -qF 'defaults to arming the chain through the launchd clocked-order chain at the next slot' "$DC"
+pin "ladder gap-row disposition needle" test "$(grep -oF 'clocked-order discharge-verification gap row' "$Z" | wc -l | tr -d ' ')" -eq 1
+pin "ladder verify-successor posture needle" grep -qF 'the verify-successor arm stays warning-only with zero recorded catches at review time' "$Z"
+pin "removed span: operative-path parenthetical" test "$(grep -oF 'delete-plus-create is the operative path; the recycling update call is demoted' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: cost-review sentence" test "$(grep -oF "The promotion review and the guard rules' cost review are separate decisions" "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: keeps-operative declaration" test "$(grep -oF 'keeps delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: step-2-operative declaration" test "$(grep -oF 'step 2 is delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: UNVERIFIED-operative declaration" test "$(grep -oF 'stays UNVERIFIED with delete-plus-create operative' "$Z" | wc -l | tr -d ' ')" -eq 0
+pin "removed span: only-operative-path declaration" test "$(grep -oF 'the only operative path' "$Z" | wc -l | tr -d ' ')" -eq 0
 
 # --- two-mode loop policy Task 3 pins (plan
 # docs/history/plans/completed/2026-10-06-two-mode-loop-policy.md, Task 3) ---
@@ -3422,6 +3477,14 @@ pin "mode-coupled effort pairing marker" grep -qF 'Mode-coupled effort pairing:'
 pin "ad-hoc child marker catalog entry in overlay" grep -qF 'Ad-hoc child (added 2026-10-06' "$Z"
 pin "ad-hoc child marker occupancy span in overlay" grep -qF "a prompt containing \`ad-hoc backlog lane\` plus the resolved repository root" "$Z"
 pin "staging digest field present" grep -qF 'Source digest' "$RS"
+pin "staging PR base identity Metadata format" grep -qF 'Reviewed PR base identity: local=<OID>, PR baseRefOid=<OID>' "$RS"
+pin "staging PR head identity Metadata format" grep -qF 'Reviewed PR head identity: local=<OID>, PR headRefOid=<OID>' "$RS"
+pin "staging moved-scope disposition Metadata format" grep -qF 'Moved-scope disposition: old base/head=' "$RS"
+pin "staging unresolved moved-scope disposition requires reason and full review" grep -qF 'Moved-scope disposition: unresolved; reason=' "$RS"
+pin "staging unresolved disposition covers unverifiable digest" grep -qF 'identity pair or the reviewed-scope digest cannot be resolved or verified' "$RS"
+pin "staging unresolved disposition names identity and digest failure" grep -qF 'unclassifiable identity-or-digest failure' "$RS"
+pin "staging unresolved identity cannot post prior record" grep -qF 'never permits posting the prior record as current' "$RS"
+pin "staging unresolved form overrides resolved recovery fields" grep -qF "exception to \`doing-code-review\`'s resolved-recovery OID-pair and \`full|verified-delta\` fields" "$RS"
 pin "doing-code-review ad-hoc integration span" grep -qF 'ad-hoc backlog arm' "$DCR"
 
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
@@ -3592,8 +3655,18 @@ for f in "$GPW" "$DCR" "$RR"; do
 done
 [ "$fail" -eq 1 ] && { emit_outcome fail; exit 1; }
 pin "remote-operation gate section anchored" grep -qF '## Project-scope and remote-operation gate' "$GPW"
-pin "doing-code-review gate pointer wired" grep -qF 'Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, and the operator alone handles remote operations.' "$DCR"
+pin "doing-code-review gate pointer wired" grep -qF 'scope gate: remote writes remain operator-only for personal and pet projects; explicit user direction to recover stale review context permits only read-only PR metadata queries and temporary-ref fetches.' "$DCR"
 pin "receiving-review gate pointer wired" grep -qF 'Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, leaving remote operations to the operator.' "$RR"
+
+# --- active-review PR scope binding pins (plan
+# docs/history/plans/2026-11-02-review-freshness-and-code-coverage-gaps.md, Task 1) ---
+# Guard the initial OID-pair binding and the per-post scope recheck in both
+# the shared PR procedure and its active-review consumer.
+pin "PR context resolves both OIDs" grep -qF 'baseRefOid,headRefOid' "$GPW"
+pin "shared PR scope capture and per-post recheck" grep -qF 'Immediately before every PR post, re-resolve both OIDs, recompute the digest' "$GPW"
+pin "active review binds PR scope before worker launch" grep -qF 'fetch current PR refs into temporary refs (no checkout change), re-resolve context, and recompute once before launching workers' "$DCR"
+pin "active review rechecks staged and Direct PR posts" grep -qF 'PR scope recheck against the captured baseline' "$DCR"
+pin "active review moved-scope recovery binds successor identity" grep -qF 'record `Moved-scope disposition:` in its Metadata with the old and new base/head OID pairs' "$DCR"
 
 # --- review-loop-round-budget pins (plan 2026-10-09-review-loop-round-budget, Task 1) ---
 # Count-gated pins for the plans-skill spans the same plan's Task 1 landed in
@@ -4093,6 +4166,49 @@ rm -rf "$CONSULT_SELFTEST_FIXTURE"
 # (12 sites shipped that way before this guard). The searched literal is
 # split across two strings so this guard line cannot match itself.
 [ "$(grep -c "^[^#].*#.*| route_""heredoc_stream" "$0" | tr -d ' ')" -eq 0 ] || { recorded_red_check "routed heredoc pipe dead-wired after a trailing comment" "PIN FAIL: routed heredoc pipe dead-wired after a trailing comment" || fail=1; }
+
+# --- post-fire verification arm pins (plan docs/history/plans/2026-11-05-automation-fire-time-failure-verification.md, Task 1) ---
+# The warning-only post-fire verification arm: the survey arm's spine and
+# admission fields, the outcome-note shape and retention cap in the
+# state-file module, the task-index fire-ledger read path in the runtime
+# overlay, the fire-path preservation clause in the scheduling module,
+# the read-side suppression clause beside the arm's memory correction
+# (survey-arms plus the state-file pointer), and the adapter/selftest
+# files with the adapter's unavailable-source signal. Machinery admission: incident
+# docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md;
+# expected catch frequency: every pins run over an edit to the arm's four
+# module surfaces; false-positive cost: one failing pin naming the dropped
+# clause; review due 2026-12-05; promotion requires a production true catch
+# and a pre-registered registry-removal row.
+pin "post-fire verification arm anchor in survey-arms" grep -qF 'Post-fire verification arm' "$SA"
+pin "post-fire arm warning-only spine in survey-arms" grep -qF 'never runs pre-fire, never retries a fire, and never gates, blocks, prevents, cancels, or reschedules a dispatch' "$SA"
+pin "post-fire arm admission review date in survey-arms" grep -qF '2026-12-05' "$SA"
+pin "post-fire arm incident row citation in survey-arms" grep -qF 'docs/history/backlog/2026-11-05-automation-fire-time-failure-verification.md' "$SA"
+pin "post-fire arm registry-removal promotion clause" grep -qF 'pre-registered registry-removal row' "$SA"
+pin "post-fire arm unknown-no-write clause in survey-arms" grep -qF 'report `unknown` and write nothing' "$SA"
+pin "post-fire arm mandate-match-unknown clause in survey-arms" grep -qF 'mandate_match=unknown' "$SA"
+pin "outcome-note field paragraph anchor in state-file" grep -qF '`one-shot-fire-outcome|` notes records' "$SF"
+pin "outcome-note grammar literal in state-file" grep -qF '"note": "one-shot-fire-outcome|automation_id=<id>|scheduled_at=<epoch ms>' "$SF"
+pin "outcome-note retention cap 30 clause in state-file" grep -qF 'newest 30 outcome notes' "$SF"
+pin "outcome-note correction statuses in state-file" grep -qF 'correction=<pending|done|ambiguous>' "$SF"
+pin "outcome-note no-type-field clause in state-file" grep -qF 'no `type` field is ever added' "$SF"
+pin "task-index fire ledger section anchor in zcode overlay" grep -qF '## Task-index fire ledger' "$Z"
+pin "task-index store fallback locator literal in zcode overlay" grep -qF '~/.zcode/v2/tasks-index.sqlite' "$Z"
+pin "task-index env resolver literal in zcode overlay" grep -qF 'ZCODE_DATA_BASE_DIR' "$Z"
+pin "task-index read-only clause in zcode overlay" grep -qF 'open it read-only (`mode=ro`), never write it' "$Z"
+pin "lifecycle-vs-session-outcome separation clause in zcode overlay" grep -qF 'never substitute for the session outcome' "$Z"
+pin "fire path carries no outcome inputs anchor in scheduling" grep -qF 'The fire path carries no outcome inputs' "$SC"
+pin "scheduling no pre-fire lookup clause" grep -qF 'never performs a pre-fire duplicate or outcome lookup, never retries a fire, and never gates, defers, or blocks a dispatch on a fire outcome' "$SC"
+pin "fire-outcome adapter script present" test -f "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter read-only URI literal" grep -qF 'mode=ro' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter retention cap constant" grep -qF 'RETENTION_CAP = 30' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter correction prefix literal" grep -qF 'CORRECTION_PREFIX = "fire-outcome-correction|"' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "adapter correction supersedes key literal" grep -qF 'supersedes=%s@%s' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "post-fire arm read-side suppression clause in survey-arms" grep -qF 'treats the correction as authoritative and suppresses the armed line' "$SA"
+pin "post-fire arm read-side suppression immutability clause in survey-arms" grep -qF 'the armed line itself stays immutable' "$SA"
+pin "outcome-note read-side suppression pointer in state-file" grep -qF 'authoritative over its armed line' "$SF"
+pin "adapter unavailable-source signal class" grep -qF 'class SourceUnavailable' "$repo/scripts/maintenance_fire_outcomes.py"
+pin "fire-outcome selftest present" test -f "$repo/scripts/test_maintenance_fire_outcomes.py"
 
 # --- prompt-log prune-range pins (plan docs/history/plans/2026-10-20-plan-prompts-prune-range-content-inventory.md, Task 2) ---
 # WARNING-ONLY pin family over the landed prune-range clauses: full-range

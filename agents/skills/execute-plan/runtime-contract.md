@@ -50,6 +50,94 @@ skill. A timeout does not prove worker termination. On relaunch, verify the
 branch tip and expected in-flight paths against the recorded pre-restart state.
 Append to existing logs; never overwrite a prior pass.
 
+## Done-pending handoff reconciliation
+
+When an accepted worker completion is recorded terminal (`status` `done-pending`
+in that task's `runtime_state.json` record) while reviewed plan corrections
+changed the plan digest or the task checkbox projection afterwards, no preflight
+tool reports that handoff as such: the parent reads the task's
+`runtime_state.json` record directly and observes the `done-pending` status
+beside a changed reviewed plan digest or checkbox projection, with the Step 0.5
+stale-digest readiness refusal the correlated signal that prompts that read.
+The parent then invokes the
+receipt-backed recovery operation once for that task:
+`python3 scripts/reconcile_execute_plan_handoff.py reconcile --state
+<runtime_state.json> --plan <plan-path> --task <N> --session <the claim-holding session id>`.
+Manual `runtime_state.json` edits stay prohibited, and a refusal is never
+worked around by hand or by relaunching the completed worker.
+
+The operation owns only receipt validation and one atomic per-task
+runtime-state transition. The parent remains the sole caller and keeps every
+other runtime-state update, worker launch, and commit. The producer side sits
+at acceptance time: when the parent accepts a worker completion, it records
+the terminal handoff itself in that task's `runtime_state.json` record,
+setting `status` `done-pending` and the accepted worker's terminal completion
+evidence as that task's `terminal_receipt` (the per-task accepted-worker
+terminal receipt, distinct from Phase 4's run-level landed-archive
+`terminal_receipt`). The reconciliation
+receipt binds run and plan identity, task identity, the expected manifest
+generation, the exact current plan digest, the launched task-scope digest, the
+accepted worker terminal receipt, the review evidence for the current bytes (a
+current-shape plan-review record whose sidecar binds `source_digest` to the
+current plan digest with verdict `yes`), and the observed task checkbox
+projection. The repository's active execution claim must name the invoking
+session; run identity, task identity, task-scope digest, and expected
+generation are re-derived immediately before the write, and any drift refuses
+with a named reason.
+
+A successful reconciliation is ONE atomic `runtime_state.json` replacement
+that stores, for that task only, `tasks[task_id].handoff_reconciliation` (the
+receipt), `tasks[task_id].task_scope_digest` (the launched task-scope digest:
+the sha256 of the complete task section with every `- [ ]` or `- [x]`
+checklist marker replaced by the literal `- [#]`, each marker's leading
+whitespace preserved, derived with the helper's `task_scope_digest`
+derivation),
+and the reconciled projection (`status` `complete`, `checkbox` per the
+reviewed checklist), advancing the manifest generation by one; every other
+task record and terminal receipt is preserved verbatim by the same
+replacement. A retry that finds the stored receipt equal to the freshly
+derived receipt on every identity field and the reconciled projection in place
+returns the exact `already-reconciled` success response (`status` `success`,
+the unchanged generation, the stored receipt echoed, `next_action` naming the
+preflight and commit-gate rerun) without another write or generation
+increment; any other difference refuses as a mismatch.
+
+Failure outcomes are fail closed. Stale review evidence (`plan-digest-stale`,
+`review-evidence-unusable`, `review-verdict-no`), changed task scope
+(`task-scope-changed`), checkbox changes not covered by the reviewed bytes
+(`projection-incomplete`), a legacy record without `task_scope_digest` and no
+launch-scope proof (`launch-scope-unverified`: the digest derives only from
+historical plan bytes whose digest equals the run's saved launch
+`plan_digest`), a missing or foreign execution claim, a
+missing terminal receipt, a task in any other state, and stale generation or
+identity drift all refuse with the state and terminal-receipt bytes unchanged.
+An interrupted write leaves either the previous state bytes or the complete
+new receipt and projection, never a partial record. The accepted terminal
+receipt survives every refusal; the remedy is the repair the named reason
+requires (a fresh ready review for the current bytes, or state recovery),
+followed by the same invocation retried.
+
+State-shape precondition: the reconciler reads the run's
+`runtime_state.json` and requires an integer `generation` plus a non-empty
+`run_session_id` on the record. The parent owns both fields from run start:
+initialize `generation` to a positive integer when the run's state file is
+created, and advance it by one on every later parent-owned state rewrite
+(the reconciled projection itself advances it by one per the atomic
+replacement above); `run_session_id` carries the claim-holding session id.
+A record written without them refuses `state-shape-unusable` before any
+read of the task's handoff state.
+
+Both a fresh `reconciled` result and an `already-reconciled` retry require
+ordinary preflight and the existing done commit gate to pass before the run
+advances to the next task; the recovery never substitutes for either gate.
+Scope or digest mismatches that surface before a task launch
+route to their existing prelaunch remedies (a reviewed task-scope change to the execute-plan
+skill's `Reviewed task-scope change` Active-plan referral procedure, a
+reviewed digest mismatch to the Step 0.5 readiness gate's fresh-review path);
+this transition reconciles only
+accepted `done-pending` handoffs and never touches a task that has not reached
+`done-pending`.
+
 ## Run-level ownership and repository placement
 
 Every execution-claim `take`, `claim`, and `refresh` passes `--runtime` with the invoking runtime's canonical ID from `projects/.ai-playbook/execute-plan-runtime-inventory.toml` (for example, `codex` or `zcode`); absent or invalid IDs use `unknown` (never infer). The claim persists `runtime_id`, and refresh preserves it; unknown and legacy claims remain shared.
@@ -95,7 +183,7 @@ substitutes for them.
 
 ## Stack-task entry point
 
-The explicit `--stack-task <plan-path> --task <N>` mode first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task's Inclusion Hard Gate. A caller with an existing stack run passes its registered worktree, exact task branch, and run context; adopt these without resetting to base or creating a conflicting claim. The stack orchestrator must first record a `stack_branch_transition:` row, refresh the claim's `branch`, update the manifest identity's `run_branch`, and pass the continuity probe against that exact branch. When that transition receipt is present and the claim and manifest agree, the stack-task adoption arm accepts the intentional branch change; it does not apply the ordinary resume refusal for a stale prior branch. A missing receipt or disagreement remains a hard stop. The mode runs exactly one selected task through its implement worker, required intermediate review, task-specific and scope-intersecting plan validation, repository-standard suite, and parent-owned light boundary. The worker records validation evidence before commit; the parent binds it to the resulting commit SHA and branch head in the post-boundary return. The boundary requires both sets to pass, with complete command identities, working directories, exit statuses, and fresh output identities. This explicit one-boundary mode then exits, overriding whole-plan continuous-execution and terminal-response gates; it does not enter Phase 2, Phase 3, archive, or closeout and performs no PR operation.
+The explicit `--stack-task <plan-path> --task <N>` mode first follows ordinary Phase 0 placement, manifest, and execution-claim setup and the selected task's Inclusion Hard Gate. A caller with an existing stack run passes its registered worktree, exact task branch, and run context under the worktrees resolution, or its recorded primary placement (the primary checkout, company task branch, and no-worktree `run_worktree` form) under the primary resolution; accept the recorded primary placement beside the registered worktree form without resetting to base or creating a conflicting claim, so the entry's "ordinary Phase 0 placement" language and the adoption arm cover both resolutions. The stack orchestrator must first record a `stack_branch_transition:` row, refresh the claim's `branch`, update the manifest identity's `run_branch`, and pass the continuity probe against that exact branch. When that transition receipt is present and the claim and manifest agree, the stack-task adoption arm accepts the intentional branch change; it does not apply the ordinary resume refusal for a stale prior branch. A missing receipt or disagreement remains a hard stop. The mode runs exactly one selected task through its implement worker, required intermediate review, task-specific and scope-intersecting plan validation, repository-standard suite, and parent-owned light boundary. The worker records validation evidence before commit; the parent binds it to the resulting commit SHA and branch head in the post-boundary return. The boundary requires both sets to pass, with complete command identities, working directories, exit statuses, and fresh output identities. This explicit one-boundary mode then exits, overriding whole-plan continuous-execution and terminal-response gates; it does not enter Phase 2, Phase 3, archive, or closeout and performs no PR operation.
 
 The ordinary full-plan lifecycle remains unchanged except that Phase 2 runs the plan validation commands and the complete repository-standard suite after all tasks pass and before Phase 3. Resolve the suite from authoritative repository test guidance and inventory. Incomplete guidance or inventory, unavailable commands, or any failure leaves the applicable boundary incomplete; after repair, rerun the complete standard set, and in stack-task mode rerun task-specific validation too.
 

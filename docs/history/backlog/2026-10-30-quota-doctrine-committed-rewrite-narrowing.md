@@ -1,12 +1,12 @@
 # Backlog: quota-wall byte-level witness accepts any committed record rewrite permanently
 
 - **Filed:** 2026-10-30 during the phase2-baseline-repair Phase 3 review-fix round (r1)
-- **Status:** covered (docs/history/plans/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md)
+- **Status:** done (record-class body covered and landed by docs/history/plans/completed/2026-11-01-quota-doctrine-committed-rewrite-narrowing.md; the preamble acceptance residual this row was re-scoped to at execution now lives in its own open row `2026-11-02-witness-preamble-committed-acceptance-residual.md`, because the origins-closure gate cannot pass an open origin - deviation recorded in the archived plan's Disposition section)
 - **Workflow:** backlog
 - **Priority:** normal
-- **Skill-step:** `scripts/test_quota_wall_doctrine.py` `test_witness_every_preexisting_record_is_textually_unchanged_against_baseline` (the directives-file byte-level witness, records D-1..D-12 in `docs/maintenance/operator-directives.md`)
+- **Skill-step:** `scripts/test_quota_wall_doctrine.py` `test_witness_every_record_is_textually_unchanged_against_baseline_or_anchor` (the directives-file byte-level witness, records D-1..D-17 at authoring time (the derived-from-headings universe) in `docs/maintenance/operator-directives.md`)
 - **Class:** fence-class
-- **Cluster:** docs/history/backlog/2026-10-30-inventory-count-reconciliation.md (concern 1 corrects this row's D-1..D-12 record-range mention to D-1..D-16; shared operator-directives witness surface)
+- **Cluster:** docs/history/backlog/2026-10-30-inventory-count-reconciliation.md (concern 1 corrected this row's D-1..D-12 record-range mention to the derived-from-headings universe, D-1..D-17 at authoring time; shared operator-directives witness surface)
 - **Origin class:** self-serving
 - **Driving force:** code-quality (primary), reliability (secondary: the pin exists so silent erosion of the operator directives is visible, and the committed class currently erodes invisibly)
 - **Severity:** low; a hypothetical future committed rewrite would silently become the permanent standard, with no red and no named id.
@@ -15,7 +15,7 @@
 
 ## Problem
 
-The witness holds every pre-existing directive record (D-1..D-12) byte-identically against the baseline revision, and when the working tree differs from that baseline it accepts the newest committed (HEAD) revision as the alternative (`test_quota_wall_doctrine.py`, the committed-revision acceptance arm; the same acceptance exists for the preamble). That arm means any committed rewrite of any pre-existing record passes the witness permanently: once the rewrite lands, HEAD becomes the standard the record is held to, and every later revision inherits it. Enforcement for the committed class thereby narrows to pre-commit discipline only (uncommitted drift still goes red with the id named); there is no post-hoc red for committed drift against the last sanctioned revision. Evidence: code-traced by the review round against the current acceptance structure; no actual committed rewrite has occurred yet, so the failure class is witnessed by inspection, not by a landed incident.
+The witness holds every pre-existing directive record (D-1..D-17 at authoring time, derived from the file's own headings) byte-identically against the baseline revision, and when the working tree differs from that baseline it accepts the newest committed (HEAD) revision as the alternative (`test_quota_wall_doctrine.py`, the committed-revision acceptance arm; the same acceptance exists for the preamble). That arm means any committed rewrite of any pre-existing record passes the witness permanently: once the rewrite lands, HEAD becomes the standard the record is held to, and every later revision inherits it. Enforcement for the committed class thereby narrows to pre-commit discipline only (uncommitted drift still goes red with the id named); there is no post-hoc red for committed drift against the last sanctioned revision. Evidence: code-traced by the review round against the current acceptance structure; no actual committed rewrite has occurred yet, so the failure class is witnessed by inspection, not by a landed incident.
 
 ## Direction
 

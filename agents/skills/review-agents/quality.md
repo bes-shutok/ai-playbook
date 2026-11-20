@@ -11,6 +11,14 @@ Review for bugs, correctness issues, and quality problems.
 5. Data integrity: validation, sanitization, consistent state management
 6. Type safety: incorrect casts, generic type erasure issues, unchecked conversions
 
+When a changed terminal outcome feeds multiple metrics, trace every emitted metric
+to its branch and cite branch evidence; metric definitions alone do not prove an
+omission. For malformed-message tags, trace the tag hook and parse-failure fallback;
+require a test assertion for the contract's `unknown` tag or mark coverage unknown.
+Compare identifiers emitted by separate paths only with evidence that they refer to
+the same record and time scope; otherwise mark the relationship unverified and
+withhold defect or deduplication claims.
+
 ## Data Type and API Assumptions
 
 1. Mutability: does code/plan assume mutable access to a frozen or immutable object?

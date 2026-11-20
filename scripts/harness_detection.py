@@ -14,7 +14,8 @@ Signal table (one row per supported harness; a new harness is a new row):
   the FIRST token's basename against the codex executable name, so a "codex"
   mention inside an argument of some other executable never matches.
 
-Detection precedence: environment first, then ancestry; documented and tested.
+Supported signals must agree. A ZCode environment signal combined with a
+Codex process ancestor is ambiguous and deliberately produces no runtime.
 """
 
 from __future__ import annotations
@@ -86,11 +87,16 @@ def detect_harness(
     if ancestry is None:
         ancestry = _default_ancestry
     zcode_keys = sorted(key for key in env if key.startswith("ZCODE_"))
+    codex_ancestor = any(
+        _first_token_basename(command) == "codex"
+        for command in list(ancestry())[:ANCESTRY_DEPTH_BOUND]
+    )
+    if zcode_keys and codex_ancestor:
+        return None, "conflict"
     if zcode_keys:
         return "zcode", "env"
-    for command in list(ancestry())[:ANCESTRY_DEPTH_BOUND]:
-        if _first_token_basename(command) == "codex":
-            return "codex", "ancestry"
+    if codex_ancestor:
+        return "codex", "ancestry"
     return None, "none"
 
 
@@ -100,6 +106,8 @@ def _evidence(method: str, env: Optional[Mapping] = None) -> str:
         return "matched ZCODE_* environment key(s): {}".format(", ".join(keys))
     if method == "ancestry":
         return "matched a codex executable basename within {} process ancestors".format(ANCESTRY_DEPTH_BOUND)
+    if method == "conflict":
+        return "conflicting ZCODE_* environment and Codex process ancestry signals"
     return "no supported live signal found in environment or process ancestry"
 
 

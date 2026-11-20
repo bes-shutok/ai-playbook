@@ -4,6 +4,7 @@
 - Status: open
 - Priority: normal
 - Age: new (2026-10-23)
+- **Cluster:** docs/history/backlog/2026-10-30-worktree-closeout-migration-test-env-hermeticity.md
 
 ## What is owed
 

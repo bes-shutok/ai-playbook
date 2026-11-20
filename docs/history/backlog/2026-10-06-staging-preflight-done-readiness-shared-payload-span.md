@@ -1,7 +1,7 @@
 # Backlog: the landed staging-preflight and done-readiness plans both prescribe replacing the same payload certification span; the second-executing plan hits a stale anchor
 
 - **Filed:** 2026-10-06 (authoring session's post-landing cross-plan check, witnessed while surveying for the next cycle)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-11-02-shared-seam-prescription-fence.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Cluster:** docs/history/plans/completed/2026-10-06-authoring-staging-preflight-gates.md (the retired staging-series-gate slug's covering plan; durable home), docs/history/plans/completed/2026-10-09-primary-class-anchors-grammar-drift.md (two surfaces certified against a shared span; the later consumer refuses on drift), docs/history/plans/completed/2026-10-08-done-closeout-ceremony-friction.md (shares the done_sweep_gates surface; named kept-open outside that row's demotion program)

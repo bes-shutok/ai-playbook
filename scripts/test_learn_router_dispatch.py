@@ -86,6 +86,7 @@ EXPECTED_MODULE_HEADINGS = {
     ],
     "step-completion.md": [
         "## Completion Checklist",
+        "### Capture-freshness re-probe mechanics",
     ],
 }
 

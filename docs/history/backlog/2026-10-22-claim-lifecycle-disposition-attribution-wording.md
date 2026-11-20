@@ -5,6 +5,8 @@
 - **Workflow:** backlog
 - **Priority:** low
 - **Driving force:** correctness (a durable witness record names the wrong deleting change; the witness-ref-rot class the repo tracks)
+- **Cluster:** docs/history/backlog/2026-10-22-claim-lifecycle-exec-residual-skill-text-polish.md
+- **Cluster:** docs/history/backlog/2026-10-22-reverse-squash-guard-backlog-root-resolution-narrowing.md
 
 `docs/history/plans/2026-10-22-authoring-claim-marker-and-closeout-lifecycle.md:74` and the matching sentences in `docs/history/backlog/completed/2026-10-19-authoring-claim-closeout-delete-duty.md` (Status and reopened-gap section) say the related-scope row was "deleted at implementation completion" by that plan's execution. Disk history: main's covered-row dedupe landing `ae1e53862` deleted the top-level row before the execution's commits; the execution deleted only the header-origin row. Reword the three sites to name `ae1e53862` for that row (the plan bytes are digest-bound to a clean review round, so fold this at the next sanctioned plan-byte change or as an additive correction commit naming both current paths).
 

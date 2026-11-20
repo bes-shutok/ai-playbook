@@ -485,6 +485,13 @@
           "evidence": "cc8d2e12f",
           "time_lost_minutes": null,
           "note": "stale-snapshot retry-and-refuse guard landed by the gate-liveness-ledger-stale-snapshot-clobber plan; delayed ledger writers no longer replace completed peer appends, second conflict exits 3 preserving latest bytes"
+        },
+        {
+          "kind": "override",
+          "date": "2026-11-04",
+          "evidence": "scripts/execution_claim.sh",
+          "time_lost_minutes": null,
+          "note": "user-directed-override:execution-claim-gateway; fresh-foreign refusal encountered in interactive execution; claim matched current run plan and branch; origin run setup turn complete; no peer execution on target; override followed per maintenance guards"
         }
       ]
     },

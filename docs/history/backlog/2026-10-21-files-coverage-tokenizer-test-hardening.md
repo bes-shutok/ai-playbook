@@ -5,6 +5,7 @@ Priority: low
 Class: fix-class (test pins plus one pre-existing failure triage; no production change)
 Origin class: review-residual (execute-plan Phase 3 r1 of plan docs/history/plans/2026-10-20-readiness-files-coverage-quote-prefix.md, findings T-2, T-3, T-4, CC-4)
 Driving force: reliability
+Cluster: docs/history/backlog/2026-10-30-plan-readiness-deleted-files-path-vocabulary.md (plan-readiness validator grammar family; fresh 2026-11-04 authoring witness in docs/history/backlog/2026-11-03-certification-gates-sequential-reporting-churn.md, covered by docs/history/plans/2026-11-03-certification-gates-full-violation-reporting.md)
 
 ## Skill and step
 

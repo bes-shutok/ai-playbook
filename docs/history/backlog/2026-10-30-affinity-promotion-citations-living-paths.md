@@ -9,6 +9,7 @@ Priority: medium
 - **Driving force:** correctness; secondary: simplicity
 
 Cluster: docs/history/backlog/2026-10-30-affinity-contract-outcome-taxonomy-restated-at-consumers.md (shared surface: agent-type affinity contract and its consumer records)
+- **Cluster:** docs/history/backlog/2026-10-30-affinity-contract-outcome-taxonomy-restated-at-consumers.md
 ## Observed versus expected
 
 Observed: three new permanent records cite the promotion catch's evidence as the covered row's living path `docs/history/backlog/2026-10-26-session-channel-zcode-runtime-derivation-empty.md` - the gate liveness ledger `agent-type-affinity-check` catch row's `evidence`, the machinery registry `protocol:agent-type-affinity-check` active note, and the shared contract's Enforcement-mode paragraph in `projects/.ai-playbook/agent-runtime-layout.md`. That origin's designed fate is deletion at its covering plan's completion pass and no durable twin exists yet, so the citations point at a path that will not exist; the repo citation rule requires the durable home, never the deleted living path. The registry row's re-point duty covers only its plan `witness.ref`, not these origin citations.

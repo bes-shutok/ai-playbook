@@ -12,7 +12,8 @@ Master creating effective, discoverable, well-structured agent skills that work 
 Create your first skill in under 5 minutes:
 
 ```bash
-# 1. Create skill directory (under skills_repo_path from user facts; typically agents/skills/)
+# 1. Create skill directory (shared catalog: under skills_repo_path from user facts; typically agents/skills/.
+#    A private project whose agent discovers project-local skills tracks them at .agents/skills/; see Wrong Location)
 mkdir -p agents/skills/my-skill
 
 # 2. Create SKILL.md with frontmatter
@@ -425,7 +426,31 @@ description: Generate technical documentation from code. Use when user mentions 
 
 - **Shared catalog:** `skills_repo_path` → `agents/skills/<name>/` (canonical source to edit first)
 - **Local mirrors:** sync to agent-specific install paths (Cursor, Claude Code, Codex, etc.) after editing the catalog
-- **Project-local skills:** only when your agent supports a project skill directory; document the convention in user or repo facts, not in generic skill bodies
+- **Project-local skills:** only when your agent supports a project skill directory; see "Tracked project-local skills in private projects" below for the verified tracked path, ignore narrowing, and migration. The facts-document rule covers agent- or environment-specific values (paths that differ per installation); the tracked project-local skill path itself is a cross-project convention and stays documented in this section
+
+#### Tracked project-local skills in private projects
+
+For a private project whose agent discovers project skills inside the repository, track skills at `.agents/skills/<name>/`. Codex desktop discovers project-local skills at this path (verified 2026-11-02 on a private project repository: skills tracked only at the shared-catalog-style path did not appear in the Codex skill listing; after the packages moved to `.agents/skills/`, they appeared; see `docs/history/plans/completed/2026-11-02-private-project-skills-codex-discovery.md`). This home is distinct from the shared `skills_repo_path` registry: the shared catalog is the canonical source that mirrors into agent install paths, while `.agents/skills/` in a private project is that project's own tracked skill home, discovered in place.
+
+**Ignore narrowing:** a project that ignores `.agents/` wholesale must narrow the rule, because the bare directory form cannot re-include children. Ignore the directory's contents, then re-include the skill subtree:
+
+```text
+.agents/*
+!.agents/skills/
+```
+
+Under these two lines, unrelated `.agents/` runtime state (caches, scratch files, tool state) stays ignored; only `.agents/skills/` becomes tracked.
+
+**Migration from the shared-catalog-style path:** when a package is already tracked at `agents/skills/<name>/`, create the destination directory first, then move the package, then apply the ignore narrowing, all in one change:
+
+```bash
+mkdir -p .agents/skills
+git mv agents/skills/<name> .agents/skills/<name>
+```
+
+`git mv` preserves history and leaves neither an untracked copy nor a double-tracked copy behind.
+
+**Supported-agent gate:** project-local paths apply only when your agent supports a project skill directory. Codex desktop is verified as of 2026-11-02; other agents may scan different project paths or none at all. Verify discovery in your own agent (for example, ask it to list its available skills) rather than assuming this path is universal.
 
 ### 5. Duplicate Content
 
@@ -777,6 +802,7 @@ Skill predictability vocabulary (vendored from [mattpocock/skills](https://githu
 | Task | Command or action |
 | --- | --- |
 | Create skill | `mkdir -p agents/skills/my-skill` (under `skills_repo_path`) |
+| Create project-local skill (private project) | `mkdir -p .agents/skills/my-skill`; see Wrong Location |
 | Test discovery | Ask "What skills are available?" |
 | Test triggering | Ask task matching description |
 | Check size | `wc -l agents/skills/my-skill/SKILL.md` |
@@ -787,7 +813,7 @@ Skill predictability vocabulary (vendored from [mattpocock/skills](https://githu
 
 1. **Description matters**: Include WHAT + WHEN with trigger keywords
 2. **Size matters**: Keep SKILL.md focused, use references for details
-3. **Location matters**: canonical home is `skills_repo_path` → `agents/skills/`; sync local mirrors after edits
+3. **Location matters**: canonical home is `skills_repo_path` → `agents/skills/`; sync local mirrors after edits; a private project whose agent discovers project-local skills tracks them at `.agents/skills/` (see Wrong Location)
 4. **Structure matters**: Follow progressive disclosure pattern
 5. **Testing matters**: Verify discovery, triggering, and execution
 

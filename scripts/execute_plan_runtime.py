@@ -57,13 +57,18 @@ def _evidence_limit_message(task_id: str, criteria: list[Any], dimension: str, b
     byte_counts = [len(item.encode("utf-8")) for item in criteria if isinstance(item, str)]
     total = sum(byte_counts)
     if dimension == "item bytes":
-        offender = next(
-            item for item in criteria
-            if isinstance(item, str) and len(item.encode("utf-8")) > capabilities.MAX_EVIDENCE_ITEM_BYTES
+        offenders = [
+            (len(item.encode("utf-8")), item)
+            for item in criteria
+            if isinstance(item, str)
+            and len(item.encode("utf-8")) > capabilities.MAX_EVIDENCE_ITEM_BYTES
+        ]
+        details = "; ".join(
+            f"{size} UTF-8 bytes, limit {capabilities.MAX_EVIDENCE_ITEM_BYTES}): {item}"
+            for size, item in offenders
         )
         return (
-            f"task '{task_id}': {bare_message} ({len(offender.encode('utf-8'))} UTF-8 bytes, "
-            f"limit {capabilities.MAX_EVIDENCE_ITEM_BYTES}): {offender}; split the criterion into "
+            f"task '{task_id}': {bare_message} (over-cap criteria: {details}; split the criteria into "
             f"independently verifiable criteria preserving complete acceptance coverage; {_EVIDENCE_PROOF_LINE}"
         )
     if dimension == "aggregate bytes":
@@ -92,7 +97,10 @@ def _named_evidence_limit_error(task_map: Mapping[str, Mapping[str, Any]], error
             if str(task_error) == message:
                 return ValueError(
                     _evidence_limit_message(
-                        str(task_id), criteria if isinstance(criteria, list) else [], dimension, message
+                        str(task_id),
+                        list(criteria) if isinstance(criteria, (list, tuple)) else [],
+                        dimension,
+                        message,
                     )
                 )
     return error

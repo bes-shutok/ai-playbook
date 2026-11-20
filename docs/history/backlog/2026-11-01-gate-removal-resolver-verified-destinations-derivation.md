@@ -1,0 +1,8 @@
+# closeout resolver maintains verified_destinations in lockstep with verified_rows
+Cluster: docs/history/backlog/2026-11-01-gate-removal-formal-residues.md; docs/history/backlog/2026-11-01-gate-removal-multi-record-gate-report-conjunction-test.md; docs/history/backlog/2026-11-01-gate-removal-note-newline-sanitization.md; docs/history/backlog/2026-11-01-gate-removal-record-index-bool-stamp-exclusion-untested.md (same-day review family)
+
+Driving force: code-quality
+
+`_resolve_closeout_reference_state` appends to `verified_rows` and `verified_destinations` in lockstep although `verified_destinations` is exactly `[row["destination"] for row in verified_rows]`. Two hand-maintained copies of one invariant can silently diverge under a future one-sided edit, with no test failing. Deriving one from the other (collect rows only; compute destinations after the loop, same reset semantics) removes the duplication with byte-identical observable fields.
+
+Related latent notes from the same Phase 3 r1 pass (2026-11-01): the `_append_manifest` stamp index is exact only while each call carries at most one branch record (holds for both live callers; a `branch: []` append would mis-stamp one past the last record, fail-closed direction) - pin the one-record caller contract with a comment or test; on a non-git target the merge lock is skipped, so concurrent migrates could mis-stamp and drop rows, but the attribution consumer skips non-git targets too, so no reachable consequence today - if that lock skip is ever widened, move the stamp under a file-level lock or refuse a manifest whose branch length disagrees with max(record_index)+1.

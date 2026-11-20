@@ -1,4 +1,5 @@
 # Backlog: cross-skill single-homing debt - the same contracts restated across skill files (40 findings)
+Cluster: docs/history/backlog/2026-11-01-skill-review-maintenance-stance-stale-cap-wording.md; docs/history/backlog/2026-11-01-skill-review-review-agents-portability-markers.md; docs/history/backlog/2026-11-01-skill-review-systematic-debugging-broken-references.md (same-day review family)
 
 - **Filed:** 2026-11-01, weekly skill-review lane run 1 (batched cluster origin over the 46-skill rotation batch)
 - **Status:** open

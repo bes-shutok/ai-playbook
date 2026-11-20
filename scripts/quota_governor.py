@@ -14,12 +14,15 @@ import argparse
 import errno
 import fcntl
 import json
+import math
 import os
 import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+from quota_sources import RUNTIME_SOURCES
 
 TIGHTENING_PERCENT = 60.0
 CONSTRAINED_PERCENT = 80.0
@@ -55,8 +58,69 @@ def _primary_limit(probe_report):
     return None
 
 
+def _finite_float(value):
+    """Convert supported numeric evidence without leaking overflow or NaN."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        converted = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return converted if math.isfinite(converted) else None
+
+
+def _timestamp_iso(value):
+    """Return an ISO timestamp only when a finite epoch is platform-safe."""
+    epoch = _finite_float(value)
+    if epoch is None:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch).astimezone().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def _probe_usable(probe_report):
     return isinstance(probe_report, dict) and probe_report.get("status") == "ok"
+
+
+def _expected_runtime(runtime=None):
+    """Resolve an explicit runtime, or the one unambiguous live runtime."""
+    if runtime is None:
+        import quota_window_probe
+        try:
+            runtime = quota_window_probe.detect_runtime()
+        except Exception:
+            runtime = None
+    return runtime if isinstance(runtime, str) and runtime in RUNTIME_SOURCES else None
+
+
+def _evidence_from_probe(probe_report, runtime):
+    """Return source-owned evidence fields, rejecting absent or mismatched identity."""
+    expected_source = RUNTIME_SOURCES.get(runtime)
+    if not isinstance(probe_report, dict) or expected_source is None:
+        return None
+    if probe_report.get("runtime") != runtime or probe_report.get("source") != expected_source:
+        return None
+    observed = probe_report.get("observed_at_epoch")
+    if _finite_float(observed) is None:
+        return None
+    limits = probe_report.get("limits")
+    windows = ([dict(limit) for limit in limits
+                if isinstance(limit, dict) and limit.get("kind") in ("primary", "secondary")]
+               if isinstance(limits, list) else [])
+    primary = next((window for window in windows if window.get("kind") == "primary"), None)
+    if primary is not None:
+        used_percent = _finite_float(primary.get("used_percent"))
+        if used_percent is None or not 0.0 <= used_percent <= 100.0:
+            return None
+    has_primary = any(w.get("kind") == "primary" for w in windows)
+    return {
+        "runtime": runtime,
+        "source": expected_source,
+        "observed_at_epoch": observed,
+        "windows": windows if probe_report.get("status") == "ok" and has_primary else [],
+    }
 
 
 def _mining_usable(mining):
@@ -79,9 +143,11 @@ def evaluate_pressure(probe_report, mining, now=None):
     mining_usable = _mining_usable(mining)
     probe_usable = _probe_usable(probe_report)
     primary = _primary_limit(probe_report) if probe_usable else None
-    used = primary.get("used_percent") if primary else None
-    if not isinstance(used, (int, float)) or not (0.0 <= float(used) <= 100.0):
-        used = None
+    used = None
+    if primary is not None:
+        used = _finite_float(primary.get("used_percent"))
+        if used is None or not 0.0 <= used <= 100.0:
+            return "unknown", ["primary used_percent is malformed"]
     reasons = []
 
     # Exhaustion arm (evidence-anchored; never a previous window's line).
@@ -129,7 +195,7 @@ def evaluate_pressure(probe_report, mining, now=None):
         return "unknown", ["probe report unusable and mining unusable"]
 
     if used is None:
-        reasons.append("no usable primary window reading; class from available evidence")
+        return "unknown", ["no usable primary window or qualifying ZCode event"]
     reasons.append("all classification arms below their thresholds")
     return "abundant", reasons
 
@@ -140,8 +206,10 @@ def policy_verdicts(pressure, now=None):
     if now is None:
         now = time.time()
     klass = pressure.get("class")
-    used = pressure.get("inputs", {}).get("primary_used_percent")
-    headroom = (100.0 - used) if isinstance(used, (int, float)) else None
+    inputs = pressure.get("inputs")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    used = _finite_float(inputs.get("primary_used_percent"))
+    headroom = (100.0 - used) if used is not None and 0.0 <= used <= 100.0 else None
 
     def allow(reason):
         return {"verdict": "allow", "reason": reason}
@@ -166,10 +234,7 @@ def policy_verdicts(pressure, now=None):
         return {"execution": defer("pressure constrained; execution deferred"),
                 "authoring": headroom_cell(CONSTRAINED_AUTHORING_FLOOR_PERCENT, "authoring")}
     if klass == "exhausted":
-        reset_iso = None
-        reset_epoch = pressure.get("reset_at_epoch")
-        if isinstance(reset_epoch, (int, float)):
-            reset_iso = datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
+        reset_iso = _timestamp_iso(pressure.get("reset_at_epoch"))
         reason = "pressure exhausted; window resets at {}".format(reset_iso or "unknown time")
         return {"execution": defer(reason), "authoring": defer(reason)}
     return {"execution": allow("pressure unknown; fail-open defaults"),
@@ -189,6 +254,10 @@ def new_state(now=None):
         "pressure": {
             "class": "unknown",
             "computed_at_epoch": now,
+            "runtime": None,
+            "source": None,
+            "observed_at_epoch": None,
+            "windows": [],
             "inputs": {
                 "primary_used_percent": None,
                 "primary_minutes_remaining": None,
@@ -286,16 +355,20 @@ def write_state(state_path, state):
 
 def _stale(state, now):
     updated = state.get("updated_at_epoch")
-    if not isinstance(updated, (int, float)):
+    if _timestamp_iso(updated) is None:
         return True
-    return now - updated > STATE_STALE_SECONDS
+    return now - float(updated) > STATE_STALE_SECONDS
 
 
-def consult(state_path, now=None):
+def consult(state_path, now=None, runtime=None, source=None):
     """Read-only consult; exit 0 on every non-usage-error path. The verdict
     is parsed from the returned report, never from an exit code."""
     if now is None:
         now = time.time()
+    runtime = _expected_runtime(runtime)
+    expected_source = RUNTIME_SOURCES.get(runtime)
+    if runtime is None or expected_source is None or (source is not None and source != expected_source):
+        return _unknown_report("active runtime is unknown or unsupported")
     path = os.path.expanduser(str(state_path))
     state = read_state(path)
     if state is None:
@@ -307,9 +380,32 @@ def consult(state_path, now=None):
     if _stale(state, now):
         return _unknown_report("state older than {} seconds".format(STATE_STALE_SECONDS))
     pressure = state.get("pressure") if isinstance(state.get("pressure"), dict) else {}
+    if pressure.get("runtime") != runtime or pressure.get("source") != expected_source:
+        return _unknown_report("cached quota evidence belongs to a different runtime or source")
+    for timestamp in (pressure.get("computed_at_epoch"), pressure.get("observed_at_epoch")):
+        if timestamp is not None and _timestamp_iso(timestamp) is None:
+            return _unknown_report("cached quota evidence has an invalid timestamp", runtime, expected_source)
+    inputs = pressure.get("inputs")
+    if inputs is not None and not isinstance(inputs, dict):
+        return _unknown_report("cached quota evidence has malformed numeric inputs", runtime, expected_source)
+    if runtime == "codex" and pressure.get("class", "unknown") != "unknown":
+        if not isinstance(inputs, dict) or inputs.get("primary_used_percent") is None:
+            return _unknown_report("cached Codex quota class lacks primary usage evidence",
+                                   runtime, expected_source)
+    if isinstance(inputs, dict) and inputs.get("primary_used_percent") is not None:
+        used = _finite_float(inputs.get("primary_used_percent"))
+        if used is None or not 0.0 <= used <= 100.0:
+            return _unknown_report("cached quota evidence has invalid primary usage", runtime, expected_source)
+    for reset_epoch in (pressure.get("reset_at_epoch"), state.get("reset_at_epoch")):
+        if reset_epoch is not None and _timestamp_iso(reset_epoch) is None:
+            return _unknown_report("cached quota evidence has invalid reset time", runtime, expected_source)
     report = {
         "class": pressure.get("class", "unknown"),
         "computed_at_epoch": pressure.get("computed_at_epoch"),
+        "runtime": pressure.get("runtime"),
+        "source": pressure.get("source"),
+        "observed_at_epoch": pressure.get("observed_at_epoch"),
+        "windows": pressure.get("windows", []),
         "dispatch": policy_verdicts(pressure, now),
         "reset_at_epoch": state.get("reset_at_epoch"),
         "reset_at_iso": state.get("reset_at_iso"),
@@ -320,10 +416,15 @@ def consult(state_path, now=None):
     return report
 
 
-def _unknown_report(reason):
+def _unknown_report(reason, runtime=None, source=None, observed_at_epoch=None):
     return {
         "class": "unknown",
         "reason": reason,
+        "runtime": runtime,
+        "source": source,
+        "observed_at_epoch": observed_at_epoch,
+        "windows": [],
+        "computed_at_epoch": None,
         "dispatch": policy_verdicts({"class": "unknown"}),
         "reset_at_epoch": None,
         "reset_at_iso": None,
@@ -363,7 +464,7 @@ def _mine_merge(log_dir, now):
 
 
 def refresh(state_path, log_dir=None, updated_by=None, now=None,
-            probe_report=None):
+            probe_report=None, runtime=None):
     """Probe, mine, evaluate, write the shared state, print the consult report.
     The probe transport and the log mining run outside the lock; only the
     read-merge-stage-replace window holds it."""
@@ -372,13 +473,18 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
     import quota_window_probe
     import quota_pressure_stats
     unusable = None
-    runtime = None
+    requested_runtime = runtime
+    if runtime is not None:
+        runtime = _expected_runtime(runtime)
+        if runtime is None:
+            return _unknown_report("explicit runtime is unknown or unsupported")
     if probe_report is None:
-        try:
-            runtime = quota_window_probe.detect_runtime()
-        except Exception as exc:  # transport/detection failures fail open
-            runtime = None
-            unusable = "runtime detection failed: {}".format(exc)
+        if runtime is None:
+            try:
+                runtime = _expected_runtime()
+            except Exception as exc:  # transport/detection failures fail open
+                runtime = None
+                unusable = "runtime detection failed: {}".format(type(exc).__name__)
         if runtime not in ("codex", "zcode"):
             unusable = unusable or "runtime detection degraded ({}); refresh unknown".format(runtime)
             probe_report = None
@@ -389,7 +495,28 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
                 probe_report = None
                 unusable = "probe transport failed: {}".format(exc)
     elif isinstance(probe_report, dict):
-        runtime = probe_report.get("runtime")
+        if runtime is None:
+            try:
+                runtime = _expected_runtime()
+            except Exception as exc:  # detection failures fail open
+                runtime = None
+                unusable = "runtime detection failed: {}".format(type(exc).__name__)
+        if runtime not in ("codex", "zcode"):
+            probe_report = None
+            unusable = unusable or "runtime detection degraded ({}); refresh unknown".format(runtime)
+        elif probe_report.get("runtime") != runtime:
+            probe_report = None
+            source = "explicit runtime" if requested_runtime is not None else "detected runtime"
+            unusable = "probe runtime did not match the {}".format(source)
+    else:
+        runtime = _expected_runtime(runtime)
+
+    evidence = _evidence_from_probe(probe_report, runtime)
+    if evidence is None:
+        unusable = unusable or "probe evidence has no verified runtime/source/observation"
+        klass_probe = None
+    else:
+        klass_probe = probe_report if evidence["windows"] else None
     log_dir = os.path.expanduser(log_dir or DEFAULT_LOG_DIR)
     if runtime == "zcode":
         mining = _mine_merge(log_dir, now)
@@ -400,9 +527,9 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
             "exhaustion_ts_list": [],
             "days": {},
         }
-    klass, reasons = evaluate_pressure(probe_report, mining, now)
+    klass, reasons = evaluate_pressure(klass_probe, mining, now)
 
-    primary = _primary_limit(probe_report) if _probe_usable(probe_report) else None
+    primary = _primary_limit(klass_probe) if _probe_usable(klass_probe) else None
     used = primary.get("used_percent") if primary else None
     minutes = primary.get("minutes_remaining") if primary else None
     reset_epoch = primary.get("reset_at_epoch") if primary else None
@@ -421,12 +548,20 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
         if isinstance(s, dict) and isinstance(s.get("exhaustion_event_count"), int))
 
     # Read-merge-stage-replace under the lock.
+    local_observed = evidence.get("observed_at_epoch") if evidence else None
+    stored_newer = False
     with governor_lock(state_path) as acquired:
         if acquired:
             state = read_state(state_path)
             if state is None or not isinstance(state, dict) or "version" not in state:
                 state = new_state(now)
-            if isinstance(state.get("version"), int) and state["version"] > STATE_VERSION:
+            stored_pressure = state.get("pressure") if isinstance(state.get("pressure"), dict) else {}
+            raw_stored_observed = stored_pressure.get("observed_at_epoch")
+            stored_observed = (float(raw_stored_observed)
+                               if _timestamp_iso(raw_stored_observed) is not None else None)
+            if stored_observed is not None and (local_observed is None or stored_observed > local_observed):
+                stored_newer = True
+            elif isinstance(state.get("version"), int) and state["version"] > STATE_VERSION:
                 stored_newer = True
             else:
                 stored_newer = False
@@ -451,6 +586,10 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
                     "pressure": {
                         "class": klass,
                         "computed_at_epoch": now,
+                        "runtime": evidence.get("runtime") if evidence else runtime,
+                        "source": evidence.get("source") if evidence else RUNTIME_SOURCES.get(runtime),
+                        "observed_at_epoch": evidence.get("observed_at_epoch") if evidence else None,
+                        "windows": evidence.get("windows", []) if evidence else [],
                         "reasons": reasons,
                         "inputs": {
                             "primary_used_percent": used,
@@ -470,18 +609,39 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
         else:
             wrote = False  # lock timeout: skip the write without blocking
 
-    if not acquired or not stored_newer:
-        # The shared cache may already contain a result produced from another
-        # runtime's evidence, including after this refresh releases the lock.
-        # Return this refresh's local evaluation instead of an unlocked read.
+    if not acquired or stored_newer:
+        # A timed-out or older refresh may return only a newer matching cache.
+        cached = consult(state_path, now, runtime=runtime,
+                         source=RUNTIME_SOURCES.get(runtime)) if runtime else None
+        cached_observed = cached.get("observed_at_epoch") if isinstance(cached, dict) else None
+        if (cached and cached.get("status") == "ok"
+                and isinstance(cached_observed, (int, float))
+                and local_observed is not None and cached_observed > local_observed):
+            report = cached
+            report["refresh_wrote_state"] = False
+        else:
+            report = _unknown_report(
+                "refresh lock unavailable or newer state belongs to another source",
+                runtime=runtime, source=RUNTIME_SOURCES.get(runtime),
+                observed_at_epoch=local_observed)
+            report["refresh_wrote_state"] = False
+    elif not stored_newer:
         pressure = {
             "class": klass,
             "inputs": {"primary_used_percent": used},
             "reset_at_epoch": reset_epoch,
+            "runtime": evidence.get("runtime") if evidence else runtime,
+            "source": evidence.get("source") if evidence else RUNTIME_SOURCES.get(runtime),
+            "observed_at_epoch": local_observed,
+            "windows": evidence.get("windows", []) if evidence else [],
         }
         report = {
             "class": klass,
             "computed_at_epoch": now,
+            "runtime": pressure["runtime"],
+            "source": pressure["source"],
+            "observed_at_epoch": pressure["observed_at_epoch"],
+            "windows": pressure["windows"],
             "dispatch": policy_verdicts(pressure, now),
             "reset_at_epoch": reset_epoch,
             "reset_at_iso": (datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
@@ -494,7 +654,8 @@ def refresh(state_path, log_dir=None, updated_by=None, now=None,
     else:
         # Preserve the fail-closed refusal report when a newer schema prevents
         # this refresh from writing state.
-        report = consult(state_path, now)
+        report = consult(state_path, now, runtime=runtime,
+                         source=RUNTIME_SOURCES.get(runtime))
         report["refresh_wrote_state"] = False
     if klass == "unknown" and unusable:
         report["reason"] = unusable
@@ -519,12 +680,15 @@ def main(argv=None):
     parser.add_argument("--state-path", default=DEFAULT_STATE_PATH)
     parser.add_argument("--log-dir", default=DEFAULT_LOG_DIR)
     parser.add_argument("--updated-by", default=None)
+    parser.add_argument("--runtime", default=None,
+                        help="canonical active runtime identity (codex or zcode)")
     args = parser.parse_args(argv)
     state_path = os.path.expanduser(args.state_path)
     if args.refresh:
-        report = refresh(state_path, log_dir=args.log_dir, updated_by=args.updated_by)
+        report = refresh(state_path, log_dir=args.log_dir, updated_by=args.updated_by,
+                         runtime=args.runtime)
     else:
-        report = consult(state_path)
+        report = consult(state_path, runtime=args.runtime)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

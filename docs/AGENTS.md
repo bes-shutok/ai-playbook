@@ -67,6 +67,7 @@ At task start: read only the facts keys or sections needed from **`user_facts_pa
 
 - **Git push:** never push without explicit user instruction; never force-push without approval.
 - **Slack outbound:** draft-only. Never send, post, schedule, edit, delete, or react in Slack, even when a request's phrasing could imply it. Create drafts only. Change this hard rule only if the user explicitly asks to do so; a request to "answer," "reply," or "write" means create a draft, not send it.
+- **Slack source access:** Always use Slack MCP for Slack searches, reads, and message evidence when it is available; do not ask the user to sign in to Slack in a browser first.
 - **Execute-plan:** per-task `done` commits authorized for that run only; push still requires explicit instruction. See `execute-plan` skill.
 - **Co-authored-by:** never add `Co-authored-by:` / `Co-Authored-By:` trailers; no `git commit --trailer` attribution. Disable Cursor Agent Attribution.
 - **Formatting-only commits:** before commit, inspect full per-file diff; `git diff -w` is insufficient. See `agent_workflow_guidelines.md` #6.
@@ -114,7 +115,7 @@ Verify `git check-ignore` before staging. Never `git stash clear` when docs-bran
 | `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging, #12 prefer imports over FQNs, #14 selected Failsafe after install, #15 optional empty JSON columns, #16 no nested Awaitility await inside `untilAsserted`, #17 retarget migration-resource tests when DDL moves across versions, #21 PostgreSQL data-modifying CTE statement snapshot, #22 capacity IT discriminating witnesses, #25 fail-closed Tomcat Micrometer gauges need usable values, #26 bind standard temporal config types directly) |
 | `kotlin_guidelines.md` | Kotlin-specific (e.g. #16 `CancellationException`, #22 prefer imports → jvm #12) |
 | `java_guidelines.md` | Java-specific (e.g. #15 prefer imports → jvm #12, #26 bound scarce-resource concurrency with semaphores for virtual-thread tasks) |
-| `python_guidelines.md` | Python-specific |
+| `python_guidelines.md` | Python-specific (including numeric target-representation checks in #41) |
 
 **Agent workflow lessons:** do not restate §1–§49 here; consult the matching section when the trigger matches (false-positive review, scope discipline, merge verification, telemetry, GitOps, PR template, plain language, facts vs skills §50, etc.).
 

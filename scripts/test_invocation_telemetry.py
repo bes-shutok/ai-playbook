@@ -97,17 +97,54 @@ VRS_SUCCESS = {
     "stdout": "OUTCOME: pass\n",
     "stderr": "",
 }
-# The refusal probe's stderr: one deterministic eight-line block for an
+# The refusal probe's stderr: one deterministic twenty-line block for an
 # undated invalid staging record (an undated filename keeps the date-gated
 # freshness errors out of the baseline, so the block is content-only).
+# Re-baselined 2026-11-04 (producer code-family record arm plan, Task 3):
+# the three record-grammar diagnostics gained the grammar-home citation
+# (GRAMMAR_HOME_CITATION in scripts/validate_review_staging.py) beside the
+# Panel line's existing skill-pointer parenthetical; every other line and
+# the line count were unchanged then. Task 2 of the certification-gates
+# reporting plan added one warning for each sidecar-dependent diagnostic
+# skipped when the stats sidecar is missing.
 VRS_REFUSAL_LINES = [
-    "WARN: missing ### Counts or Agents launched row",
-    "WARN: missing ### Triage outcomes or Pending triage placeholder",
+    "WARN: missing ### Counts or Agents launched row"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)",
+    "WARN: missing ### Triage outcomes or Pending triage placeholder"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)",
+    "WARN: skipped version-1 sidecar schema validation: the stats sidecar"
+    " is missing prevents evaluation",
+    "WARN: skipped record-kind enum validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped cap-closure contract validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped corrections extension validation: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped last-fix commit agreement: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped current sidecar field and finding validation: the stats"
+    " sidecar is missing prevents evaluation",
+    "WARN: skipped finding conservation: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped counts parity: the stats sidecar is missing prevents"
+    " evaluation",
+    "WARN: skipped coverage Markdown agreement: the stats sidecar is"
+    " missing prevents evaluation",
+    "WARN: skipped soften-watchlist agreement: the stats sidecar is missing"
+    " prevents evaluation",
+    "WARN: skipped discarded-row ownership validation: the stats sidecar"
+    " is missing prevents evaluation",
+    "WARN: skipped sidecar-surface witness-ledger shape validation: the"
+    " stats sidecar is missing prevents evaluation",
     # Each ERROR line now names its provenance source (the review-staging
     # SKILL.md rule it enforces); re-baselined to the current CLI.
     "ERROR: missing ## Metadata (review-staging SKILL.md)",
     "ERROR: missing ## Review Statistics (review-staging SKILL.md)",
     "ERROR: missing ### Panel under Review Statistics"
+    " (clear-record grammar example: scripts/validate_review_staging.py"
+    " --help usage epilog)"
     " (review-staging SKILL.md, Output discipline)",
     "ERROR: clear round still requires ## Review Statistics"
     " (review-staging SKILL.md)",
@@ -652,12 +689,15 @@ DONE_RUN_LIB_COPY_FILES = (
     "review_staging_calibration.py",
     "runtime_capabilities.py",
     "validate_review_staging.py",
+    "worktree_closeout_migrate.py",
 )
 LANDING_COSTS_NAME = "landing-costs.jsonl"
 
 # Pinned pre-integration contract literals for the probed closeout arms,
-# captured at base d88657273 (before the Task 3 integration) with
-# normalize_done_output applied. The release ceremony's stdout prologue, the
+# originally captured at base d88657273 (before the Task 3 integration) with
+# normalize_done_output applied; the finalization-line pins were re-captured
+# after landing 998d1dade, which added that emitted line. The release
+# ceremony's stdout prologue, the
 # landing-summary variants, and the checkpoint create-then-refresh fallback
 # stderr line are shared; each arm's literal is the captured composition.
 _FINALIZE_RELEASE_STDOUT = (
@@ -666,6 +706,7 @@ _FINALIZE_RELEASE_STDOUT = (
     "removed: checkpoint-manifest run <RUN_ID>"
     " (<TMP>/done-fixture-repo/docs/tmp/done-session/"
     "run-checkpoint-<RUN_ID>.json)\n"
+    "done_run finalize: finalization: run_id=<RUN_ID> marking=applied\n"
     "done-lock: removed released lock at <TMP>/locks/done/<HEX>\n"
     "done-lock: released lock for <TMP>/done-fixture-repo\n"
     "OUTCOME: pass\n"
@@ -727,6 +768,7 @@ PINNED_LANDING_STDERR = (
 PINNED_NO_MANIFEST_STDOUT = (
     "done_run finalize: no run manifest from setup; nothing to finalize or"
     " checkpoint; the release still runs\n"
+    "done_run finalize: finalization: run_id=none marking=not-bound\n"
     "done_run finalize: releasing the done lock via the from-holder arm (the"
     " hold's own acquire-time records gate it)\n"
     "done-lock: lock already released (<TMP>/locks/done/<HEX>)\n"
@@ -792,7 +834,7 @@ DONE_RUNNER_SCRUB_VARS = (
     "CHECK_PLAN_ORIGINS_CLOSED_SCRIPT",
     "DONE_RUN_TRACE_FILE", "DONE_RUN_LINTER",
     "DONE_RUN_ID", "DONE_RUN_MANIFEST", "DONE_RUN_MARKER",
-    "PYTHONPATH",
+    "PYTHONPATH", "BASH_ENV",
 )
 
 
@@ -828,6 +870,14 @@ def run_done_run(
         timeout=300,
         check=False,
     )
+
+
+def test_done_runner_env_scrubs_bash_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("BASH_ENV", str(tmp_path / "startup.sh"))
+
+    env = done_runner_env(tmp_path, tmp_path)
+
+    assert "BASH_ENV" not in env
 
 
 def eval_done_exports(output: str) -> dict:

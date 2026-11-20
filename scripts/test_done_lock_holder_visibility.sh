@@ -311,4 +311,28 @@ grep -qF "$METALESS_DIR" "${TMP}/unreadable.err" || fail "unreadable-record line
 
 rm -rf "$METALESS_DIR"
 
-echo "selftest OK: acquire-wait holder visibility (merge, done, uncontended, vanished retry, holder-removal retry, unreadable)"
+# ---- 7) acquisition echo characterization: successful direct acquire ----
+# The plan (2026-11-03-done-run-setup-stdout-export-emission-split, Task 2)
+# pins the already-compliant shape so it cannot regress: a successful direct
+# acquire's stdout is assignment lines only (every line `export `-prefixed,
+# the whole stdout evals without error); the blocked wait-acquire legs pin
+# empty stdout with holder diagnostics on stderr (sections 1, 2, and 6), and
+# the blocked direct acquire's stdout emptiness stays a production-review
+# property, not a suite pin.
+CHAR_ACQUIRE_RC=0
+DONE_LOCK_DIR= DONE_LOCK_TOKEN= DONE_LOCK_HOLDER_PID= \
+  run_done acquire --label char-eval-safe \
+  >"${TMP}/char.out" 2>"${TMP}/char.err" || CHAR_ACQUIRE_RC=$?
+[[ "$CHAR_ACQUIRE_RC" -eq 0 ]] || fail "characterization direct acquire rc=${CHAR_ACQUIRE_RC}, want 0"
+[[ "$(tail -n1 "${TMP}/char.err")" == "OUTCOME: pass" ]] \
+  || fail "characterization direct acquire stderr does not end with OUTCOME: pass"
+CHAR_NONEXPORT="$(grep -cv '^export ' "${TMP}/char.out" || true)"
+[[ "$CHAR_NONEXPORT" -eq 0 ]] \
+  || fail "successful acquire stdout carries ${CHAR_NONEXPORT} non-export line(s); acquisition stdout must stay assignment lines only"
+eval "$(cat "${TMP}/char.out")" \
+  || fail "whole-stdout eval of a successful acquire failed; acquisition stdout must stay eval-safe"
+[[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] \
+  || fail "whole-stdout eval did not set the lock exports"
+run_done release-repo >/dev/null 2>&1 || fail "characterization direct acquire release failed"
+
+echo "selftest OK: acquire-wait holder visibility (merge, done, uncontended, vanished retry, holder-removal retry, unreadable, eval-safe acquisition echo)"

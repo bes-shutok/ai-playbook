@@ -8,6 +8,7 @@
 - **Class:** fix
 - **Driving force:** consistency
 - **Skill/step:** docs/history/plans/2026-10-15-post-implementation-review-invariant-coverage.md Task 4
+- **Cluster:** docs/history/backlog/2026-10-07-witnessed-fail-arm-enumeration-stale.md
 - **Review date:** 2026-11-15
 
 Cluster: docs/history/backlog/2026-10-15-codex-stale-worktree-pins-landing-recovery.md (backlog-wide survey: maintenance pins baseline and expected-literal alignment)

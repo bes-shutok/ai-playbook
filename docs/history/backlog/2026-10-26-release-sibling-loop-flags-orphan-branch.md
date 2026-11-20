@@ -2,7 +2,8 @@
 
 - **Filed:** 2026-10-26, learn Step 1.8 over the 2026-10-26 release run (Step 3 report)
 - **Status:** open
-Quarantine: 2026-10-27
+Quarantine: 2026-10-27 (self-serving origin; skip disposition re-affirmed 2026-11-01: no entry emission, quarantine stands)
+Second witness: 2026-11-01 (release of 656 commits): the same fatal re-printed for `refs/heads/docs` in the Step 3 sibling loop (merge-base rc 1 re-derived against the release backup ref); a same-day duplicate row was folded into this one per the dedupe rule.
 - **Workflow:** backlog
 - **Priority:** low
 - **Origin class:** self-serving

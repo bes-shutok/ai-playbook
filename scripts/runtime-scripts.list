@@ -131,3 +131,9 @@ skill_text_budget.py
 reconcile_post_landing.py
 quota_governor.py
 quota_pressure_stats.py
+#
+# Import-closure member joined by the 2026-11-02-review-freshness-and-code-coverage-gaps
+# plan's runtime registration gap closure (the deployed quota pair quota_governor.py
+# and quota_window_probe.py both plain-import this sibling, so the closure criterion
+# admits it beside them):
+quota_sources.py

@@ -7,3 +7,4 @@ Suggested remedy: a planned-deletion marker or disposition token in the plans te
 Scope: scripts/plan_readiness.py existence/coverage checks and the plans template Files grammar; no runtime behavior change beyond the validator.
 
 Cluster: plan-readiness validator grammar family.
+Cluster: docs/history/backlog/2026-11-06-plan-readiness-earlier-created-path-reference.md

@@ -11,6 +11,9 @@ Cluster: docs/history/backlog/2026-10-08-bootstrap-interview-descriptions-stale.
 Cluster: docs/history/backlog/2026-10-08-checkout-flow-class-language-lingers.md
 Cluster: docs/history/backlog/2026-10-08-maintenance-guard-reads-priority-profile-only.md
 Witness: docs/history/reviews/2026-10-08-pet-company-project-profile-code-review-r1.md (finding N6, non-blocking)
+- **Cluster:** docs/history/backlog/2026-10-08-bootstrap-interview-descriptions-stale.md
+- **Cluster:** docs/history/backlog/2026-10-08-checkout-flow-class-language-lingers.md
+- **Cluster:** docs/history/backlog/2026-10-08-maintenance-guard-reads-priority-profile-only.md
 
 ## Finding
 

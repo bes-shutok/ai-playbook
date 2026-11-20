@@ -4,6 +4,7 @@
 - **Cluster:** docs/history/plans/completed/2026-10-21-dead-run-resume-claim-conversion.md (same gateway: execution_claim.sh arms; the origin row landed covered and was deleted at landing per the plan's disposition)
 - **Status:** open
 - **Priority:** Low
+- **Cluster:** docs/history/backlog/2026-10-27-hyphen-bounded-slug-non-match-unpinned.md
 
 ## Main idea
 

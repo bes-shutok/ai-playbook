@@ -13,6 +13,7 @@ Origin: code review r1 address round (investigate-origin-independent-eligibility
 Source reference: docs/history/reviews/2026-10-07-investigate-origin-independent-eligibility-code-review-r1.md, F4 (correctness-completeness; contract-docs echo); capture hygiene: scan-public-hygiene --files pass (recorded below)
 Cluster: docs/history/backlog/2026-10-15-post-impl-pins-baseline-adjective.md; docs/history/backlog/2026-10-15-codex-stale-worktree-pins-landing-recovery.md (backlog-wide survey: maintenance pins baseline and expected-literal alignment)
 Cluster: docs/history/plans/completed/2026-10-26-maintenance-pin-current-main-baseline-red.md (same suite and pin-baseline family; this row covers inventory drift)
+- **Cluster:** docs/history/backlog/2026-10-15-post-impl-pins-baseline-adjective.md
 
 ## Problem
 

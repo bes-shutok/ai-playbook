@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Mapping
+from typing import Mapping, Optional
 import unittest
 import urllib.request
 import warnings
@@ -49,7 +49,6 @@ def _scrubbed_harness_env(extra: dict = None):
 ROOT = Path(__file__).resolve().parents[1]
 QUOTA_DIR = ROOT / "scripts/testdata/quota"
 ZCODE_FIXTURE = QUOTA_DIR / "zcode_limit_response.json"
-CODEX_FIXTURE = QUOTA_DIR / "codex_rollout.jsonl"
 
 # --- Task 1 (P6 origins 1-2): --fire-at fixtures. 2026-09-23 is a
 # Wednesday; every fixture instant is stated in the default peak zone
@@ -70,6 +69,155 @@ FIRE_WINDOW_END_EPOCH = int(datetime(2026, 9, 23, 18, 0, tzinfo=TZ8).timestamp()
 # (reset_at_epoch > now) and unclamped (within the 40-day horizon of now)
 # regardless of when the suite runs.
 FIRE_NOW_EPOCH = FIRE_OFFPEAK_EPOCH - 3600
+
+
+def _native_codex_result(now: Optional[float] = None, primary: Optional[dict] = None,
+                         secondary: Optional[dict] = None) -> dict:
+    now = time.time() if now is None else now
+    primary = primary or {
+        "usedPercent": 42.0, "windowDurationMins": 300,
+        "resetsAt": int(now) + 3600, "limitName": "primary",
+    }
+    secondary = secondary or {
+        "usedPercent": 18.0, "windowDurationMins": 10080,
+        "resetsAt": int(now) + 7 * 86400, "limitName": "secondary",
+    }
+    windows = {}
+    if primary is not None:
+        windows["primary"] = primary
+    if secondary is not None:
+        windows["secondary"] = secondary
+    return {"rateLimits": windows}
+
+
+def _fake_codex_environment(root: Path, result: Optional[dict] = None,
+                            mode: str = "normal") -> tuple[dict, Path, Path, str]:
+    """Build isolated HOME/PATH and a fake Codex app-server executable.
+
+    The fake records requests and responds over the actual JSON-RPC stdio
+    channel. A sitecustomize guard detects attempted credential-canary reads
+    in both the CLI process and the fake app-server process.
+    """
+    home = root / "home"
+    codex_home = home / ".codex"
+    codex_home.mkdir(parents=True)
+    credential = codex_home / "auth.json"
+    secret = "test-only-codex-credential-canary"
+    credential.write_text(json.dumps({"access_token": secret}), encoding="utf-8")
+    fake_bin = root / "fake-bin"
+    fake_bin.mkdir()
+    executable = fake_bin / "codex"
+    audit = root / "fake-app-server.json"
+    read_attempt = root / "credential-read-attempted"
+    fake_program = """import json, os, pathlib, sys, time
+events = []
+def record():
+    pathlib.Path(os.environ['FAKE_CODEX_AUDIT']).write_text(json.dumps({
+        'argv': sys.argv, 'home': os.environ.get('HOME'), 'events': events,
+        'pid': os.getpid(),
+    }), encoding='utf-8')
+mode = os.environ.get('FAKE_CODEX_MODE', 'normal')
+for raw in sys.stdin:
+    request = json.loads(raw)
+    events.append(request)
+    record()
+    method = request.get('method')
+    if method == 'initialize':
+        if mode == 'timeout':
+            time.sleep(30)
+        response_id = 99 if mode == 'bad-init-id' else request['id']
+        print(json.dumps({'id': response_id, 'result': {}}), flush=True)
+    elif method == 'account/rateLimits/read':
+        if mode == 'oversize':
+            sys.stdout.write('x' * (1024 * 1024 + 1))
+            sys.stdout.flush()
+            time.sleep(30)
+        elif mode == 'malformed':
+            print('not-json', flush=True)
+        elif mode == 'bad-quota-id':
+            print(json.dumps({'id': 99, 'result': {}}), flush=True)
+        elif mode == 'quota-error':
+            print(json.dumps({'id': request['id'],
+                              'error': {'code': -1, 'message': 'failed'}}), flush=True)
+        elif mode == 'auth-error':
+            print(json.dumps({'id': request['id'],
+                              'error': {'code': -32001, 'message': 'unauthorized'}}), flush=True)
+        else:
+            payload = json.loads(os.environ['FAKE_CODEX_RESULT'])
+            print(json.dumps({'id': request['id'],
+                              'result': payload}), flush=True)
+record()
+"""
+    executable.write_text("#!{}\n".format(sys.executable) + fake_program, encoding="utf-8")
+    executable.chmod(0o755)
+    guard = root / "python-guard"
+    guard.mkdir()
+    sitecustomize = """import builtins, io, os
+canary = os.path.realpath(os.environ.get('CODEX_AUTH_CANARY', ''))
+marker = os.environ.get('CODEX_READ_MARKER')
+_open, _io_open, _os_open = builtins.open, io.open, os.open
+def _check(path):
+    try:
+        candidate = os.path.realpath(os.fspath(path))
+    except (TypeError, ValueError):
+        return
+    if canary and candidate == canary:
+        fd = _os_open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.write(fd, b'credential read attempted')
+        os.close(fd)
+        raise PermissionError('credential canary access denied')
+def _builtins_open(path, *args, **kwargs):
+    _check(path)
+    return _open(path, *args, **kwargs)
+def _io_open_guard(path, *args, **kwargs):
+    _check(path)
+    return _io_open(path, *args, **kwargs)
+def _os_open_guard(path, *args, **kwargs):
+    _check(path)
+    return _os_open(path, *args, **kwargs)
+builtins.open, io.open, os.open = _builtins_open, _io_open_guard, _os_open_guard
+"""
+    (guard / "sitecustomize.py").write_text(sitecustomize, encoding="utf-8")
+    env = {
+        "PATH": str(fake_bin), "HOME": str(home), "CODEX_HOME": str(codex_home),
+        "PYTHONPATH": str(guard), "FAKE_CODEX_AUDIT": str(audit),
+        "CODEX_AUTH_CANARY": str(credential), "CODEX_READ_MARKER": str(read_attempt),
+        "FAKE_CODEX_RESULT": json.dumps(result or _native_codex_result()),
+        "FAKE_CODEX_MODE": mode,
+    }
+    return env, audit, read_attempt, secret
+
+
+@contextlib.contextmanager
+def _forbid_credential_reads(credential: Path):
+    """Fail in-process tests on any credential-path open attempt."""
+    target = os.path.realpath(credential)
+    builtins_open, io_open, os_open = open, io.open, os.open
+
+    def check(path) -> None:
+        try:
+            candidate = os.path.realpath(os.fspath(path))
+        except (TypeError, ValueError):
+            return
+        if candidate == target:
+            raise AssertionError("quota probe attempted to read Codex credentials")
+
+    def guard_builtins(path, *args, **kwargs):
+        check(path)
+        return builtins_open(path, *args, **kwargs)
+
+    def guard_io(path, *args, **kwargs):
+        check(path)
+        return io_open(path, *args, **kwargs)
+
+    def guard_os(path, *args, **kwargs):
+        check(path)
+        return os_open(path, *args, **kwargs)
+
+    with mock.patch("builtins.open", guard_builtins), \
+         mock.patch("io.open", guard_io), \
+         mock.patch("os.open", guard_os):
+        yield
 
 # Review r4 F1: flag-content assertions parse through the REAL hook core,
 # not a reimplementation of its contract.
@@ -109,28 +257,53 @@ class QuotaWindowProbeTest(unittest.TestCase):
             1789577400,
         )
 
-    def test_parse_codex_rollout_windows(self) -> None:
-        lines = CODEX_FIXTURE.read_text(encoding="utf-8").splitlines()
-        now = 1789182137 - 40 * 60
-        limits = probe.parse_codex_rollout(lines, now=now)
+    def test_parse_codex_native_account_rate_limits(self) -> None:
+        now = 1_789_182_137 - 40 * 60
+        payload = _native_codex_result(
+            now=now,
+            primary={"usedPercent": 4.0, "windowDurationMins": 300,
+                     "resetsAt": 1_789_182_137, "limitName": "primary"},
+            secondary={"usedPercent": 96.0, "windowDurationMins": 10080,
+                       "resetsAt": 1_789_577_839, "limitName": "secondary"},
+        )
+        limits = probe.parse_codex_rate_limits({"jsonrpc": "2.0", "id": 2,
+                                                "result": payload}, now=now)
         self.assertEqual(len(limits), 2)
-        primary = limits[0]
-        self.assertEqual(primary["kind"], "primary")
-        self.assertEqual(primary["used_percent"], 4.0)
-        self.assertEqual(primary["reset_at_epoch"], 1789182137)
         self.assertEqual(
-            int(datetime.fromisoformat(primary["reset_at_iso"]).timestamp()),
-            1789182137,
+            [(item["kind"], item["used_percent"], item["window_minutes"],
+              item["reset_at_epoch"]) for item in limits],
+            [("primary", 4.0, 300, 1_789_182_137),
+             ("secondary", 96.0, 10080, 1_789_577_839)],
         )
-        self.assertEqual(primary["minutes_remaining"], 40)
-        secondary = limits[1]
-        self.assertEqual(secondary["kind"], "secondary")
-        self.assertEqual(secondary["used_percent"], 96.0)
-        self.assertEqual(secondary["reset_at_epoch"], 1789577839)
-        self.assertEqual(
-            int(datetime.fromisoformat(secondary["reset_at_iso"]).timestamp()),
-            1789577839,
+
+    def test_codex_naive_reset_timestamp_keeps_quota_unknown(self) -> None:
+        now = 1_789_182_137
+        naive_reset = datetime.fromtimestamp(
+            now + 3600, timezone.utc
+        ).replace(tzinfo=None).isoformat()
+        payload = _native_codex_result(
+            now=now,
+            primary={"usedPercent": 4.0, "windowDurationMins": 300,
+                     "resetsAt": naive_reset},
         )
+
+        report = probe.probe_codex(now=now, transport=lambda: payload)
+
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["limits"], [])
+        self.assertIn("no usable primary window", " ".join(report["reasons"]))
+
+        aware_reset = datetime.fromtimestamp(
+            now + 3600, timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        aware_limits = probe.parse_codex_rate_limits(
+            {"rateLimits": {"primary": {
+                "usedPercent": 4.0, "resetsAt": aware_reset,
+            }}},
+            now=now,
+        )
+        self.assertEqual(len(aware_limits), 1)
+        self.assertEqual(aware_limits[0]["reset_at_epoch"], now + 3600)
 
     def test_binding_earliest_reset(self) -> None:
         late_primary = probe.make_limit("primary", 10.0, 2000, now=1000)
@@ -432,14 +605,12 @@ class QuotaWindowProbeTest(unittest.TestCase):
                 calls[0]["url"], "https://api.z.ai/api/monitor/usage/quota/limit"
             )
             self.assertEqual(report["status"], "ok")
-            # Same recording transport through run_probe with no url=:
-            # pins run_probe's default-parameter wiring too (sessions_dir
-            # is unused on the zcode leg but passed for hermeticity).
+            # Same recording transport through run_probe with no url= pins
+            # the ZCode routing default without engaging Codex.
             run_transport, run_calls = self._fake_transport(payload)
             run_report = probe.run_probe(
                 "zcode",
                 config_path=config,
-                sessions_dir=tmpdir,
                 transport=run_transport,
                 now=1789146000 - 12 * 60,
             )
@@ -786,251 +957,493 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertEqual(report["pause_decision"], "continue")
         self.assertTrue(report["reasons"])
 
-    def test_codex_rollout_discovery_newest(self) -> None:
+    def test_zcode_primary_is_required_with_valid_primary_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            (sessions / "2026" / "09" / "10").mkdir(parents=True)
-            (sessions / "2026" / "09" / "11").mkdir(parents=True)
-            for name in (
-                "rollout-2026-09-10T10-00-00.jsonl",
-                "rollout-2026-09-11T09-00-00.jsonl",
-                "rollout-2026-09-11T18-30-00.jsonl",
-            ):
-                day = name.split("T")[0].removeprefix("rollout-").replace("-", "/")
-                (sessions.joinpath(day, name)).write_text(
-                    CODEX_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
-                )
-            found = probe.discover_codex_rollout(sessions)
-            self.assertIsNotNone(found)
-            self.assertEqual(found.name, "rollout-2026-09-11T18-30-00.jsonl")
-            report = probe.probe_codex(
-                sessions_dir=sessions, now=1789182137 - 40 * 60
+            root = Path(tmpdir)
+            config = self._write_config(root)
+            now = time.time()
+            secondary_only = {"data": {"limits": [{
+                "type": "TIME_LIMIT", "percentage": 10,
+                "nextResetTime": int((now + 7 * 86400) * 1000),
+            }]}}
+            expired_primary_live_secondary = {"data": {"limits": [
+                {
+                    "type": "TOKENS_LIMIT", "percentage": 10,
+                    "nextResetTime": int((now - 1) * 1000),
+                },
+                secondary_only["data"]["limits"][0],
+            ]}}
+            valid_primary = {"data": {"limits": [{
+                "type": "TOKENS_LIMIT", "percentage": 10,
+                "nextResetTime": int((now + 3600) * 1000),
+            }]}}
+            malformed_primary = {"data": {"limits": [
+                {
+                    "type": "TOKENS_LIMIT", "percentage": "invalid",
+                    "nextResetTime": int((now + 3600) * 1000),
+                },
+                secondary_only["data"]["limits"][0],
+            ]}}
+            boolean_primary = {"data": {"limits": [{
+                "type": "TOKENS_LIMIT", "percentage": True,
+                "nextResetTime": int((now + 3600) * 1000),
+            }]}}
+            missing_primary = probe.probe_zcode(
+                config_path=config,
+                transport=lambda *_: json.dumps(secondary_only), now=now,
             )
+            expired_primary = probe.probe_zcode(
+                config_path=config,
+                transport=lambda *_: json.dumps(expired_primary_live_secondary), now=now,
+            )
+            bad_primary = probe.probe_zcode(
+                config_path=config,
+                transport=lambda *_: json.dumps(malformed_primary), now=now,
+            )
+            boolean_percent = probe.probe_zcode(
+                config_path=config,
+                transport=lambda *_: json.dumps(boolean_primary), now=now,
+            )
+            with_primary = probe.probe_zcode(
+                config_path=config,
+                transport=lambda *_: json.dumps(valid_primary), now=now,
+            )
+        self.assertEqual(missing_primary["status"], "unknown")
+        self.assertEqual(missing_primary["limits"], [])
+        self.assertEqual(expired_primary["status"], "unknown")
+        self.assertEqual(expired_primary["limits"], [])
+        self.assertEqual(bad_primary["status"], "unknown")
+        self.assertEqual(bad_primary["limits"], [])
+        self.assertEqual(boolean_percent["status"], "unknown")
+        self.assertEqual(boolean_percent["limits"], [])
+        self.assertEqual(with_primary["status"], "ok")
+        self.assertEqual([limit["kind"] for limit in with_primary["limits"]], ["primary"])
+        self.assertEqual(with_primary["source"], "zcode-quota-endpoint")
+        self.assertIn("observed_at_epoch", with_primary)
+
+        response_time = now + 20
+        clock = mock.Mock(return_value=now)
+        expires_during_fetch = {"data": {"limits": [
+            {
+                "type": "TOKENS_LIMIT", "percentage": 10,
+                "nextResetTime": int((now + 10) * 1000),
+            },
+            secondary_only["data"]["limits"][0],
+        ]}}
+        with tempfile.TemporaryDirectory() as response_tmpdir:
+            response_config = self._write_config(Path(response_tmpdir))
+            with mock.patch.object(probe, "time", mock.Mock(time=clock)):
+                def slow_transport(*_args):
+                    clock.return_value = response_time
+                    return json.dumps(expires_during_fetch)
+
+                expired_before_response = probe.probe_zcode(
+                    config_path=response_config,
+                    transport=slow_transport,
+                )
+        self.assertEqual(expired_before_response["status"], "unknown")
+        self.assertEqual(expired_before_response["limits"], [])
+        self.assertEqual(expired_before_response["observed_at_epoch"], response_time)
+
+    def test_codex_probe_uses_fake_native_server_and_preserves_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            now = time.time()
+            native = _native_codex_result(now=now)
+            env, audit_path, read_attempt, secret = _fake_codex_environment(root, native)
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                report = probe.probe_codex(now=now)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["runtime"], "codex")
-        self.assertEqual(len(report["limits"]), 2)
-
-    def test_codex_missing_rollout_fail_open(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            sessions.mkdir()
-            report = probe.probe_codex(sessions_dir=sessions)
-        self.assertEqual(report["status"], "unknown")
-        self.assertEqual(report["pause_decision"], "continue")
-        self.assertTrue(report["reasons"])
-
-    def test_codex_recordless_rollout_keeps_old_reason(self) -> None:
-        # A rollout with no rate_limits record at all (an unrelated JSON
-        # line only) keeps the original record-less reason: there is no
-        # rate_limits record whose windows could have been dropped.
-        rollout = json.dumps({"type": "session_meta", "payload": {}}) + "\n"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            sessions.mkdir()
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                rollout, encoding="utf-8"
-            )
-            report = probe.probe_codex(sessions_dir=sessions)
-        self.assertEqual(report["runtime"], "codex")
-        self.assertEqual(report["status"], "unknown")
-        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(report["source"], "codex-app-server/account/rateLimits/read")
+        self.assertGreaterEqual(report["observed_at_epoch"], now)
         self.assertEqual(
-            report["reasons"], ["rollout carried no rate_limits record"]
+            [(item["kind"], item["window_minutes"]) for item in report["limits"]],
+            [("primary", 300), ("secondary", 10080)],
         )
+        self.assertEqual([event.get("method") for event in audit["events"]], [
+            "initialize", "initialized", "account/rateLimits/read",
+        ])
+        self.assertEqual([event.get("id") for event in audit["events"]], [1, None, 2])
+        self.assertTrue(all("jsonrpc" not in event for event in audit["events"]))
+        self.assertEqual(audit["argv"][1], "app-server")
+        self.assertEqual(audit["home"], env["HOME"])
+        self.assertEqual(Path(audit["argv"][0]).resolve(), (Path(env["PATH"]) / "codex").resolve())
+        self.assertNotIn(secret, json.dumps(audit["events"]))
+        self.assertFalse(read_attempt.exists())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(audit["pid"], 0)
 
-    def test_codex_all_windows_dropped_reason_distinct(self) -> None:
-        # A rollout whose only rate_limits record carries a single
-        # malformed window (non-numeric used_percent) and no valid sibling
-        # is an all-windows-dropped shape: its reason must be distinct
-        # from the record-less case.
-        rollout = json.dumps({
-            "rate_limits": {
-                "primary": {"used_percent": "high", "resets_at": 1789182137}
-            }
-        }) + "\n"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            sessions.mkdir()
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                rollout, encoding="utf-8"
-            )
-            report = probe.probe_codex(sessions_dir=sessions)
-        self.assertEqual(report["runtime"], "codex")
-        self.assertEqual(report["status"], "unknown")
-        self.assertEqual(report["pause_decision"], "continue")
-        self.assertEqual(
-            report["reasons"],
-            ["rollout rate_limits record carried no usable windows"],
-        )
-
-    def test_codex_garbage_line_with_dropped_windows_keeps_new_reason(self) -> None:
-        # Review r1 F1: pins the fail-open branch for a MIXED rollout (a
-        # non-JSON garbage line plus a rate_limits record whose only window
-        # is malformed). The predicate's blank/unparseable-line skip must
-        # keep the all-windows-dropped reason; if its try/except or
-        # skip logic regressed, the garbage line would raise outside
-        # probe_codex's guard or collapse to the record-less reason.
-        rollout = (
-            "not json at all\n"
-            + json.dumps({
-                "rate_limits": {
-                    "primary": {"used_percent": "high", "resets_at": 1789182137}
-                }
-            })
-            + "\n"
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            sessions.mkdir()
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                rollout, encoding="utf-8"
-            )
-            report = probe.probe_codex(sessions_dir=sessions)
-        self.assertEqual(report["runtime"], "codex")
-        self.assertEqual(report["status"], "unknown")
-        self.assertEqual(report["pause_decision"], "continue")
-        self.assertEqual(
-            report["reasons"],
-            ["rollout rate_limits record carried no usable windows"],
-        )
-
-    def test_codex_malformed_used_percent_fail_open(self) -> None:
-        # Review r2 F3/F5: a rollout whose rate_limits window carries a
-        # non-numeric (or absent, or non-finite) used_percent drops at
-        # per-entry parse level; probe_codex then fails open to an unknown
-        # report ("rollout rate_limits record carried no usable windows"),
-        # never a traceback.
-        resets = int(time.time()) + 3600
-        for used_percent in ('"high"', None, "Infinity"):
-            with self.subTest(used_percent=used_percent):
-                if used_percent == "Infinity":
-                    # Raw non-standard JSON literal: json.loads accepts it
-                    # and parses it to a non-finite float.
-                    rollout = (
-                        '{"rate_limits": {"primary": {"used_percent": Infinity, '
-                        '"resets_at": %d}}}\n' % resets
-                    )
-                else:
-                    window: dict = {"resets_at": resets}
-                    if used_percent is not None:
-                        window["used_percent"] = used_percent
-                    rollout = json.dumps({"rate_limits": {"primary": window}}) + "\n"
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    sessions = Path(tmpdir) / "sessions"
-                    sessions.mkdir()
-                    (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                        rollout, encoding="utf-8"
-                    )
-                    report = probe.probe_codex(sessions_dir=sessions)
-                self.assertEqual(report["runtime"], "codex")
+    def test_codex_primary_is_required_and_bad_secondary_is_diagnostic(self) -> None:
+        now = time.time()
+        good = _native_codex_result(now=now)
+        secondary_only = {"rateLimits": {"secondary": good["rateLimits"]["secondary"]}}
+        expired_primary_live_secondary = {"rateLimits": {
+            "primary": {
+                "usedPercent": 10, "windowDurationMins": 300,
+                "resetsAt": int(now) - 1,
+            },
+            "secondary": good["rateLimits"]["secondary"],
+        }}
+        invalid_primary = {"rateLimits": {
+            "primary": {"usedPercent": "bad", "windowDurationMins": 300,
+                        "resetsAt": int(now) + 3600},
+            "secondary": good["rateLimits"]["secondary"],
+        }}
+        malformed_secondary = {"rateLimits": {
+            "primary": good["rateLimits"]["primary"],
+            "secondary": {"usedPercent": "bad", "windowDurationMins": 10080,
+                          "resetsAt": int(now) + 7 * 86400},
+        }}
+        boolean_primary = {"rateLimits": {
+            "primary": {"usedPercent": True, "windowDurationMins": 300,
+                        "resetsAt": int(now) + 3600},
+        }}
+        for payload in (secondary_only, invalid_primary, boolean_primary,
+                        expired_primary_live_secondary):
+            with self.subTest(payload=payload):
+                report = probe.probe_codex(now=now, transport=lambda p=payload: p)
                 self.assertEqual(report["status"], "unknown")
-                self.assertEqual(report["pause_decision"], "continue")
-                self.assertEqual(
-                    report["reasons"],
-                    ["rollout rate_limits record carried no usable windows"],
-                )
-        # Per-entry, not whole-parse: a healthy sibling window survives a
-        # malformed primary and the report stays ok.
-        rollout = json.dumps({"rate_limits": {
-            "primary": {"used_percent": "high", "resets_at": resets},
-            "secondary": {"used_percent": 10.0, "resets_at": resets + 5 * 86400},
-        }}) + "\n"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            sessions.mkdir()
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                rollout, encoding="utf-8"
-            )
-            report = probe.probe_codex(sessions_dir=sessions)
+                self.assertEqual(report["limits"], [])
+        report = probe.probe_codex(now=now, transport=lambda: malformed_secondary)
         self.assertEqual(report["status"], "ok")
-        self.assertEqual(
-            [limit["kind"] for limit in report["limits"]], ["secondary"]
-        )
+        self.assertEqual([limit["kind"] for limit in report["limits"]], ["primary"])
+        self.assertTrue(any("secondary window omitted" in reason for reason in report["reasons"]))
 
-    def test_parse_codex_bad_entry_drops_alone_and_clamps(self) -> None:
-        # Review r2 F3 + F5: the codex path carries the same per-entry
-        # guard as the zcode path. A negative epoch drops only its own
-        # window while the sibling survives; an Infinity percent drops;
-        # a far-future resets_at is clamped to the 40-day horizon and
-        # marked observable.
-        now = 1789182137 - 40 * 60
-        good = {"used_percent": 10.0, "resets_at": now + 3600}
+        for duration in (True, 1.5):
+            with self.subTest(duration=duration):
+                malformed_duration = {"rateLimits": {
+                    "primary": {
+                        **good["rateLimits"]["primary"],
+                        "windowDurationMins": duration,
+                    },
+                }}
+                report = probe.probe_codex(
+                    now=now, transport=lambda p=malformed_duration: p,
+                )
+                self.assertEqual(report["status"], "ok")
+                self.assertEqual([limit["kind"] for limit in report["limits"]], ["primary"])
+                self.assertNotIn("window_minutes", report["limits"][0])
 
-        def rollout_lines(primary: dict) -> list[str]:
-            return [
-                json.dumps({"rate_limits": {"primary": primary, "secondary": good}})
-            ]
+        oversized_secondary = {"rateLimits": {
+            "primary": good["rateLimits"]["primary"],
+            "secondary": {"usedPercent": 40, "windowDurationMins": 10080,
+                          "resetsAt": 10**1000},
+        }}
+        report = probe.probe_codex(now=now, transport=lambda: oversized_secondary)
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual([limit["kind"] for limit in report["limits"]], ["primary"])
+        self.assertTrue(any("secondary window omitted" in reason for reason in report["reasons"]))
 
-        limits = probe.parse_codex_rollout(
-            rollout_lines({"used_percent": 50.0, "resets_at": -(10 ** 12)}), now=now
+        response_time = now + 20
+        clock = mock.Mock(return_value=now)
+        expires_during_fetch = {"rateLimits": {
+            "primary": {
+                "usedPercent": 10, "windowDurationMins": 300,
+                "resetsAt": int(now) + 10,
+            },
+            "secondary": good["rateLimits"]["secondary"],
+        }}
+        with mock.patch.object(probe, "time", mock.Mock(time=clock)):
+            def slow_transport():
+                clock.return_value = response_time
+                return expires_during_fetch
+
+            expired_before_response = probe.probe_codex(transport=slow_transport)
+        self.assertEqual(expired_before_response["status"], "unknown")
+        self.assertEqual(expired_before_response["limits"], [])
+        self.assertEqual(expired_before_response["observed_at_epoch"], response_time)
+
+    def test_codex_protocol_failures_return_unknown_and_clean_up(self) -> None:
+        for mode in ("bad-init-id", "bad-quota-id", "malformed", "quota-error", "auth-error"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                env, audit_path, read_attempt, secret = _fake_codex_environment(
+                    root, mode=mode
+                )
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                    report = probe.probe_codex()
+                audit = json.loads(audit_path.read_text(encoding="utf-8"))
+                self.assertEqual(report["status"], "unknown")
+                self.assertEqual(report["source"], "codex-app-server/account/rateLimits/read")
+                self.assertIn("observed_at_epoch", report)
+                self.assertNotIn(secret, json.dumps(report))
+                self.assertNotIn(secret, json.dumps(audit["events"]))
+                self.assertFalse(read_attempt.exists())
+                self.assertEqual(Path(audit["argv"][0]).resolve(), (Path(env["PATH"]) / "codex").resolve())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(audit["pid"], 0)
+
+    def test_codex_rpc_closes_parent_pipe_streams_on_success_and_failure(self) -> None:
+        for mode in ("normal", "quota-error"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                env, _audit_path, _read_attempt, _secret = _fake_codex_environment(
+                    root, mode=mode
+                )
+                children = []
+                real_popen = subprocess.Popen
+
+                def recording_popen(*args, **kwargs):
+                    child = real_popen(*args, **kwargs)
+                    children.append(child)
+                    return child
+
+                try:
+                    with mock.patch.dict(os.environ, env, clear=True), \
+                         mock.patch.object(
+                             probe.subprocess, "Popen", side_effect=recording_popen,
+                         ):
+                        if mode == "normal":
+                            probe._codex_app_server_request()
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                probe._codex_app_server_request()
+
+                    self.assertEqual(len(children), 1)
+                    self.assertTrue(children[0].stdin.closed)
+                    self.assertTrue(children[0].stdout.closed)
+                finally:
+                    for child in children:
+                        if child.poll() is None:
+                            child.kill()
+                            child.wait()
+
+    def test_source_failures_record_failure_observation_time(self) -> None:
+        request_started = 1_800_000_000.0
+        failure_observed = request_started + 17.0
+        clock = mock.Mock(return_value=request_started)
+
+        def codex_failure():
+            clock.return_value = failure_observed
+            raise OSError("source unavailable")
+
+        with mock.patch.object(probe, "time", mock.Mock(time=clock)):
+            codex_report = probe.probe_codex(transport=codex_failure)
+        self.assertEqual(codex_report["status"], "unknown")
+        self.assertEqual(codex_report["runtime"], "codex")
+        self.assertEqual(codex_report["source"], probe.RUNTIME_SOURCES["codex"])
+        self.assertEqual(codex_report["observed_at_epoch"], failure_observed)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "zcode-config.json"
+            config_path.write_text(
+                json.dumps({"provider": {"zai": {"options": {"apiKey": "test-key"}}}}),
+                encoding="utf-8",
+            )
+            clock.return_value = request_started
+
+            def zcode_failure(_url, _headers):
+                clock.return_value = failure_observed
+                raise OSError("source unavailable")
+
+            with mock.patch.object(probe, "time", mock.Mock(time=clock)):
+                zcode_report = probe.probe_zcode(
+                    config_path=config_path,
+                    transport=zcode_failure,
+                )
+        self.assertEqual(zcode_report["status"], "unknown")
+        self.assertEqual(zcode_report["runtime"], "zcode")
+        self.assertEqual(zcode_report["source"], probe.RUNTIME_SOURCES["zcode"])
+        self.assertEqual(zcode_report["observed_at_epoch"], failure_observed)
+
+    def test_codex_selector_setup_failure_reaps_fake_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env, _audit_path, _read_attempt, _secret = _fake_codex_environment(root)
+            children = []
+            real_popen = subprocess.Popen
+
+            class RegisterFailureSelector:
+                def register(self, *_args, **_kwargs):
+                    raise OSError("selector registration failed")
+
+                def close(self):
+                    pass
+
+            def recording_popen(*args, **kwargs):
+                child = real_popen(*args, **kwargs)
+                children.append(child)
+                return child
+
+            try:
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     mock.patch.object(probe.subprocess, "Popen", side_effect=recording_popen), \
+                     mock.patch.object(
+                         probe.selectors, "DefaultSelector",
+                         return_value=RegisterFailureSelector(),
+                     ), \
+                     _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                    report = probe.probe_codex()
+                self.assertEqual(report["status"], "unknown")
+                self.assertEqual(len(children), 1)
+                self.assertIsNotNone(children[0].poll())
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait()
+
+    def test_codex_selector_close_failure_reaps_fake_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env, _audit_path, _read_attempt, _secret = _fake_codex_environment(root)
+            children = []
+            real_popen = subprocess.Popen
+            real_selector_type = probe.selectors.DefaultSelector
+
+            class CloseFailureSelector:
+                def __init__(self):
+                    self.selector = real_selector_type()
+
+                def register(self, *args, **kwargs):
+                    return self.selector.register(*args, **kwargs)
+
+                def select(self, *args, **kwargs):
+                    return self.selector.select(*args, **kwargs)
+
+                def close(self):
+                    self.selector.close()
+                    raise OSError("selector close failed")
+
+            def recording_popen(*args, **kwargs):
+                child = real_popen(*args, **kwargs)
+                children.append(child)
+                return child
+
+            try:
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     mock.patch.object(probe.subprocess, "Popen", side_effect=recording_popen), \
+                     mock.patch.object(
+                         probe.selectors, "DefaultSelector", CloseFailureSelector,
+                     ), \
+                     _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                    report = probe.probe_codex()
+                self.assertEqual(report["status"], "unknown")
+                self.assertEqual(len(children), 1)
+                self.assertIsNotNone(children[0].poll())
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait()
+
+    def test_codex_timeout_and_oversize_kill_fake_child(self) -> None:
+        for mode in ("timeout", "oversize"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                env, audit_path, read_attempt, _secret = _fake_codex_environment(root, mode=mode)
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                    started = time.monotonic()
+                    report = probe.probe_codex(
+                        transport=lambda: probe._codex_app_server_request(timeout_seconds=2.0)
+                    )
+                    self.assertLess(time.monotonic() - started, 4.0)
+                audit = json.loads(audit_path.read_text(encoding="utf-8"))
+                self.assertEqual(report["status"], "unknown")
+                self.assertIn("observed_at_epoch", report)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(audit["pid"], 0)
+                self.assertFalse(read_attempt.exists())
+
+    def test_codex_missing_command_is_unknown_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env, audit_path, read_attempt, secret = _fake_codex_environment(root)
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(probe.shutil, "which", return_value=None), \
+                 _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                report = probe.probe_codex()
+        self.assertEqual(report["status"], "unknown")
+        self.assertIn("observed_at_epoch", report)
+        self.assertNotIn(secret, json.dumps(report))
+        self.assertFalse(audit_path.exists())
+        self.assertFalse(read_attempt.exists())
+
+    def test_run_probe_routes_supported_and_unknown_runtimes_explicitly(self) -> None:
+        now = time.time()
+        native = _native_codex_result(now=now)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env, audit_path, read_attempt, _secret = _fake_codex_environment(root, native)
+            env["ZCODE_APP_VERSION"] = "test-inherited-zcode-signal"
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                report = probe.run_probe("codex", now=now)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["runtime"], "codex")
+            self.assertEqual([event.get("method") for event in audit["events"]], [
+                "initialize", "initialized", "account/rateLimits/read",
+            ])
+            self.assertFalse(read_attempt.exists())
+        report = probe.run_probe(
+            "unsupported",
+            codex_transport=lambda: self.fail("unsupported runtime called Codex"),
+            transport=lambda *_: self.fail("unsupported runtime called ZCode"),
         )
-        self.assertEqual([limit["kind"] for limit in limits], ["secondary"])
-        limits = probe.parse_codex_rollout(
-            rollout_lines({"used_percent": float("inf"), "resets_at": now + 7200}),
-            now=now,
-        )
-        self.assertEqual([limit["kind"] for limit in limits], ["secondary"])
-        limits = probe.parse_codex_rollout(
-            rollout_lines({"used_percent": 95.0, "resets_at": now + 200 * 86400}),
-            now=now,
-        )
-        self.assertEqual([limit["kind"] for limit in limits], ["primary", "secondary"])
-        clamped_limit = limits[0]
-        self.assertEqual(
-            clamped_limit["reset_at_epoch"], now + probe.MAX_RESET_HORIZON_SECONDS
-        )
-        self.assertTrue(clamped_limit.get("reset_clamped"))
-        self.assertFalse(limits[1].get("reset_clamped"))
-        # Review r3 F2: an OSError-band epoch (platform localtime failure,
-        # roughly one magnitude beyond the ValueError year-range band)
-        # drops only its own window while the sibling survives.
-        limits = probe.parse_codex_rollout(
-            rollout_lines({"used_percent": 50.0, "resets_at": -(10 ** 17)}),
-            now=now,
-        )
-        self.assertEqual([limit["kind"] for limit in limits], ["secondary"])
-        # Review r3 F8: the codex non-mapping-window drop arm is pinned
-        # like the zcode garbage-entry case; a non-mapping primary window
-        # drops alone and the healthy secondary survives.
-        limits = probe.parse_codex_rollout(
-            rollout_lines("high"), now=now
-        )
-        self.assertEqual([limit["kind"] for limit in limits], ["secondary"])
+        self.assertEqual(report["status"], "unknown")
+
+    def test_cli_unsupported_runtime_does_not_start_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env, audit_path, read_attempt, secret = _fake_codex_environment(root)
+            result = self._run_cli("--runtime", "unsupported", env=env)
+        report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["status"], "unknown")
+        self.assertFalse(audit_path.exists())
+        self.assertFalse(read_attempt.exists())
+        self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_codex_cli_explicit_override_uses_fake_server_and_isolated_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            now = time.time()
+            primary = {"usedPercent": 95.0, "windowDurationMins": 300,
+                       "resetsAt": int(now) + 3600}
+            env, audit_path, read_attempt, secret = _fake_codex_environment(
+                root, _native_codex_result(now=now, primary=primary)
+            )
+            env["ZCODE_APP_VERSION"] = "test-inherited-zcode-signal"
+            flag = root / "budget-guard.flag"
+            result = self._run_cli("--runtime", "codex", "--write-flag", str(flag),
+                                   "--plan", "codex-native-test", env=env)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            flag_exists = flag.exists()
+            credential_read_attempted = read_attempt.exists()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["runtime"], "codex")
+        self.assertEqual(report["source"], "codex-app-server/account/rateLimits/read")
+        self.assertEqual(report["pause_decision"], "pause")
+        self.assertEqual(audit["home"], env["HOME"])
+        self.assertEqual(Path(audit["argv"][0]).resolve(), (Path(env["PATH"]) / "codex").resolve())
+        self.assertNotIn(secret, result.stdout + result.stderr + json.dumps(audit["events"]))
+        self.assertFalse(credential_read_attempted)
+        self.assertTrue(flag_exists)
 
     def test_runtime_explicit_override(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            zcode_config = self._write_config(tmp)
-            sessions = tmp / "sessions"
-            sessions.mkdir()
-            self.assertEqual(
-                probe.detect_runtime("codex", zcode_config=zcode_config, codex_sessions=sessions),
-                "codex",
-            )
-            self.assertEqual(
-                probe.detect_runtime("zcode", zcode_config=zcode_config, codex_sessions=sessions),
-                "zcode",
-            )
+        self.assertEqual(probe.detect_runtime("codex"), "codex")
+        self.assertEqual(probe.detect_runtime("zcode"), "zcode")
+        self.assertIsNone(probe.detect_runtime("unsupported"))
 
-    def test_runtime_autodetect_order(self) -> None:
-        # Live-signal auto-detect (file presence no longer consulted):
-        # documented precedence is environment first, then ancestry.
+    def test_runtime_autodetect_rejects_conflicting_live_signals(self) -> None:
         with _scrubbed_harness_env({"ZCODE_APP_VERSION": "3.12.3"}):
-            # Live env signal present: zcode wins even though the host also
-            # has a codex ancestry.
             with mock.patch.object(
                 harness_detection, "_default_ancestry",
                 lambda: ["zsh", "codex exec plan X", "launchd"],
             ):
-                self.assertEqual(probe.detect_runtime(), "zcode")
+                self.assertIsNone(probe.detect_runtime())
         with _scrubbed_harness_env():
-            # Only codex present, via the ancestry chain.
             with mock.patch.object(
                 harness_detection, "_default_ancestry",
                 lambda: ["zsh", "codex exec plan X", "launchd"],
             ):
                 self.assertEqual(probe.detect_runtime(), "codex")
-            # Neither live signal present.
             self.assertIsNone(probe.detect_runtime())
 
     def test_autodetect_uses_live_env_signal(self) -> None:
@@ -1334,87 +1747,34 @@ class QuotaWindowProbeTest(unittest.TestCase):
 
     # --- CLI-level wiring: main() exit codes and --write-flag ---
 
-    def _run_cli(self, *extra: str) -> subprocess.CompletedProcess:
+    def _run_cli(self, *extra: str, env: Optional[dict] = None) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(ROOT / "scripts/quota_window_probe.py"), *extra],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
 
-    def test_cli_continue_exits_one_without_flag(self) -> None:
+    def test_codex_cli_source_failure_exits_one_without_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            sessions = tmp / "sessions"
-            sessions.mkdir()
-            flag = tmp / "budget-guard.flag"
-            result = self._run_cli(
-                "--runtime", "codex",
-                "--config", str(tmp / "missing-config.json"),
-                "--sessions-dir", str(sessions),
-                "--write-flag", str(flag),
+            root = Path(tmpdir)
+            env, audit_path, read_attempt, secret = _fake_codex_environment(
+                root, mode="quota-error"
             )
-            self.assertEqual(result.returncode, 1, result.stderr)
-            report = json.loads(result.stdout)
-            self.assertEqual(report["pause_decision"], "continue")
-            self.assertEqual(report["status"], "unknown")
-            self.assertFalse(flag.exists())
-
-    def test_cli_pause_exits_zero_and_writes_flag(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            sessions = tmp / "sessions" / "2026" / "09" / "12"
-            sessions.mkdir(parents=True)
-            resets = int(time.time()) + 3600
-            # Usage gate first: 50 percent used with the reset an hour out
-            # is a continue (exit 1) and arms no flag.
-            rollout = (
-                '{"rate_limits": {"primary": {"used_percent": 50, "resets_at": %d}, '
-                '"secondary": {"used_percent": 10, "resets_at": %d}}}\n'
-                % (resets, resets + 5 * 86400)
-            )
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                rollout, encoding="utf-8"
-            )
-            flag = tmp / "budget-guard.flag"
-            result = self._run_cli(
-                "--runtime", "codex",
-                "--config", str(tmp / "missing-config.json"),
-                "--sessions-dir", str(sessions.parent),
-                "--write-flag", str(flag),
-                "--plan", "my-plan",
-            )
-            self.assertEqual(result.returncode, 1, result.stderr)
-            report = json.loads(result.stdout)
-            self.assertEqual(report["pause_decision"], "continue")
-            self.assertFalse(flag.exists())
-            # The pause drill: 95 percent used (no minutes override, so the
-            # decision is quota-driven) exercises exit 0, pause, and an
-            # armed flag.
-            hot_rollout = (
-                '{"rate_limits": {"primary": {"used_percent": 95, "resets_at": %d}, '
-                '"secondary": {"used_percent": 10, "resets_at": %d}}}\n'
-                % (resets, resets + 5 * 86400)
-            )
-            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
-                hot_rollout, encoding="utf-8"
-            )
-            result = self._run_cli(
-                "--runtime", "codex",
-                "--config", str(tmp / "missing-config.json"),
-                "--sessions-dir", str(sessions.parent),
-                "--write-flag", str(flag),
-                "--plan", "my-plan",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            report = json.loads(result.stdout)
-            self.assertEqual(report["pause_decision"], "pause")
-            self.assertEqual(report["binding"], "primary")
-            self.assertTrue(flag.exists())
-            content = flag.read_text(encoding="utf-8")
-            self.assertIn("runtime=codex", content)
-            self.assertIn("plan=my-plan", content)
+            flag = root / "budget-guard.flag"
+            result = self._run_cli("--runtime", "codex", "--write-flag", str(flag), env=env)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertIn("source", report)
+        self.assertIn("observed_at_epoch", report)
+        self.assertNotIn(secret, result.stdout + result.stderr + json.dumps(audit["events"]))
+        self.assertFalse(read_attempt.exists())
+        self.assertFalse(flag.exists())
 
     def test_wait_for_reset_exits_1_and_arms_no_flag(self) -> None:
         # A wait-for-reset report exits 1 (0 stays pause-only) and never
@@ -1455,7 +1815,7 @@ class QuotaWindowProbeTest(unittest.TestCase):
     def test_cli_zcode_default_url_reaches_transport(self) -> None:
         # Review r3 F5: main()'s argparse --url default is the production
         # entry surface (the plan's gate command passes no --url); all
-        # earlier CLI tests drove the codex rollout path, so a legacy
+        # the Codex CLI tests use a fake app-server, so a legacy
         # literal rebound into add_argument("--url", default=...) shipped
         # green while re-creating the silent never-pause failure. In-process
         # wiring pin: main() with an explicit zcode runtime must hand the
@@ -1753,42 +2113,30 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertEqual(report["status"], "unknown")
         self.assertEqual(
             report["reasons"],
-            ["no agent runtime detected; pass --runtime explicitly"],
+            ["runtime is unsupported, ambiguous, or not detected; pass --runtime explicitly"],
         )
 
-    def test_codex_rollout_margin_threading_reaches_build_report(self) -> None:
-        # The codex path threads protocol_minutes_threshold and
-        # plan_cost_percent into build_report; dropping either kwarg in the
-        # codex call must fail this pin. Usage gate first: the 10-percent
-        # scenario now continues; at 95 percent the 30-minute margin over a
-        # 25-minute remainder converts the would-be pause to wait-for-reset
-        # and the threading pin survives.
+    def test_codex_native_margin_threading_reaches_build_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            sessions = Path(tmpdir) / "sessions"
-            (sessions / "2026/09/18").mkdir(parents=True)
+            root = Path(tmpdir)
             now = time.time()
-            # A whole-second base plus one minute of headroom past the
-            # 25-minute scenario keeps the floor-divided minutes_remaining
-            # at exactly 25 (the plan's margin-over-remainder fixture).
             reset_epoch = int(now) + 26 * 60
-            rollout = sessions / "2026/09/18" / "rollout-test.jsonl"
-            record = {"rate_limits": {"primary": {"used_percent": 10.0,
-                                                  "resets_at": reset_epoch}}}
-            rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
-            report = probe.probe_codex(sessions_dir=sessions, now=now,
-                                       protocol_minutes_threshold=30,
-                                       plan_cost_percent=40.0)
-            self.assertEqual(report["status"], "ok")
-            self.assertEqual(report["pause_decision"], "continue")
-            record = {"rate_limits": {"primary": {"used_percent": 95.0,
-                                                  "resets_at": reset_epoch}}}
-            rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
-            report = probe.probe_codex(sessions_dir=sessions, now=now,
-                                       protocol_minutes_threshold=30,
-                                       plan_cost_percent=40.0)
-            self.assertEqual(report["status"], "ok")
-            self.assertEqual(report["pause_decision"], "wait-for-reset")
-            self.assertEqual(report["wait_minutes"], 27)
+            primary = {"usedPercent": 10.0, "windowDurationMins": 300,
+                       "resetsAt": reset_epoch}
+            env, audit_path, read_attempt, _secret = _fake_codex_environment(
+                root, _native_codex_result(now=now, primary=primary)
+            )
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 _forbid_credential_reads(Path(env["CODEX_AUTH_CANARY"])):
+                report = probe.probe_codex(now=now, protocol_minutes_threshold=30,
+                                           plan_cost_percent=40.0)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual([event.get("method") for event in audit["events"]], [
+            "initialize", "initialized", "account/rateLimits/read",
+        ])
+        self.assertFalse(read_attempt.exists())
 
     def test_cli_ninety_eight_percent_pause_drill_ac2_witness(self) -> None:
         # The origin-2 AC2 fixture drill: the pause fires at very high

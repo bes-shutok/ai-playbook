@@ -150,18 +150,28 @@ class PlanReadinessFenceBalanceTest(unittest.TestCase):
         opener_line = plan_text.split("\n").index("```bash") + 1
         plan = self._write_fixture(plan_text)
         rc, out, err = self._run_main([str(plan)])
-        self.assertNotEqual(rc, 0, (out, err))
+        self.assertEqual(rc, 1, (out, err))
         self.assertIn("unclosed fence", err)
         self.assertIn(f"line {opener_line}", err)
+        self.assertIn("skipped probes:", err)
+        self.assertIn("decision-points trailer", err)
+        self.assertIn("Review Scope", err)
+        self.assertIn("plan ownership", err)
+        self.assertIn("scope classification", err)
+        self.assertIn("anchors block", err)
+        self.assertIn("extraction-rule executability", err)
+        self.assertNotIn("missing decision-points trailer", err)
         # Pre-round entry: same structural failure through the pre-round
         # channel, before any probe evaluates the stripped text.
         rc, out, err = self._run_main(["--pre-round", str(plan)])
-        self.assertNotEqual(rc, 0, (out, err))
+        self.assertEqual(rc, 1, (out, err))
         self.assertIn(
             f"readiness PRE-ROUND FAILED: unclosed fence opener at line "
             f"{opener_line}",
             err,
         )
+        self.assertIn("skipped probes:", err)
+        self.assertNotIn("missing decision-points trailer", err)
 
     def test_balanced_fences_still_pass(self):
         plan = self._write_fixture(BALANCED_PLAN)
@@ -1904,9 +1914,7 @@ class CanonicalStatsSkipWaiverTest(unittest.TestCase):
 
 
 class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
-    """The shared gate's FIRST error keeps its routed reason when several
-    routed diagnostics coexist (review-staging hard-validator fail-fast
-    iteration plan, Task 2).
+    """The shared gate keeps every routed reason when diagnostics coexist.
 
     The hard-mode validation result carries multiple independently
     evaluable defects across distinct reason families (source_kind,
@@ -1970,7 +1978,7 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
         )
         return result
 
-    def test_first_error_reason_is_stable_under_coexistence(self):
+    def test_every_error_reason_is_stable_under_coexistence(self):
         result = self._gate_result()
         errors = result.errors
         # Several routed diagnostics coexist across at least three distinct
@@ -1985,11 +1993,12 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
         self.assertTrue(
             any("finding conservation" in error for error in errors), errors
         )
-        # The established first error is the source_kind mismatch, and the
-        # readiness router maps exactly that error into its family.
-        first = errors[0]
+        # The source_kind mismatch retains its established family mapping.
+        source_kind_error = next(
+            error for error in errors if "source_kind mismatch" in error
+        )
         self.assertEqual(
-            first,
+            source_kind_error,
             "source_kind mismatch: validator got 'plan' but sidecar "
             "declares 'code'",
         )
@@ -1997,30 +2006,95 @@ class FirstErrorRoutingCoexistenceTest(unittest.TestCase):
             "sidecar source_kind is 'code', expected 'plan' (round r1)"
         )
         self.assertEqual(
-            plan_readiness._first_gate_error_reason(first, self.payload, 1),
+            plan_readiness._first_gate_error_reason(
+                source_kind_error, self.payload, 1
+            ),
             expected_reason,
         )
-        # End-to-end: evaluate_readiness returns exactly the errors[0]
-        # family, unchanged by the coexisting digest/schema/conservation
-        # diagnostics.
+        # End-to-end: every validator diagnostic routes through the existing
+        # family classifier and remains in the readiness reason.
         ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
         self.assertFalse(ok)
-        self.assertEqual(reason, expected_reason)
-        # The picked reason names no later error's family or text.
-        self.assertNotIn("stale", expected_reason)
-        self.assertNotIn("finding conservation", expected_reason)
-        self.assertNotIn("invalid reachability", expected_reason)
-        # Discriminator: a later error routes to a DIFFERENT family, so the
-        # first-error pick is load-bearing, not family-convergent.
-        digest_reason = plan_readiness._first_gate_error_reason(
-            next(
-                error for error in errors if "source_digest is stale" in error
-            ),
-            self.payload,
-            1,
+        self.assertIsNotNone(reason)
+        routed = [
+            plan_readiness._first_gate_error_reason(error, self.payload, 1)
+            for error in errors
+        ]
+        for expected in routed:
+            self.assertIn(expected, reason)
+        self.assertIn(expected_reason, reason)
+        self.assertIn("sidecar source_digest is stale", reason)
+        self.assertIn("malformed stats sidecar (schema validation failed)", reason)
+
+
+class ReadinessViolationAggregationTest(unittest.TestCase):
+    """Independent plan probes are all reported in one gate pass."""
+
+    PLAN = (
+        "# P\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: pending unresolved choice.\n\n"
+        "## Tasks\n\n"
+        "### Task 1: Implement the missing module\n\n"
+        "Files:\n- `scripts/missing.py`\n\n"
+        "- [ ] Implement the module.\n\n"
+        "## Review Scope\n\n"
+        "**Documentation:**\n- scripts/missing.py\n"
+    )
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="readiness-aggregation-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
         )
-        self.assertIn("sidecar source_digest is stale", digest_reason)
-        self.assertNotEqual(digest_reason, expected_reason)
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        self.plan, _ = plan_readiness._write_clean_state(
+            self.plans,
+            self.reviews,
+            plan_text=self.PLAN,
+            date=_GATED_SIDECAR_DATE,
+            slug="multiple-probes",
+        )
+
+    def _assert_all_probe_failures(self, text):
+        for evidence in (
+            "unresolved decision-points trailer",
+            "Review Scope lists scripts/missing.py",
+            "Files: path scripts/missing.py",
+            "carries no [class: ...] classification tag",
+        ):
+            self.assertIn(evidence, text)
+
+    def test_evaluate_readiness_reports_each_independent_probe(self):
+        ok, reason = evaluate_readiness(self.plan, self.plans, self.reviews)
+        self.assertFalse(ok)
+        self.assertIsNotNone(reason)
+        self._assert_all_probe_failures(reason)
+
+    def test_pre_round_reports_each_probe_once_and_returns_one_failure(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = plan_readiness.run_pre_round(self.plan, self.plans)
+        self.assertEqual(rc, 1, err.getvalue())
+        report = err.getvalue()
+        self._assert_all_probe_failures(report)
+        self.assertEqual(report.count("readiness PRE-ROUND FAILED:"), 1)
+
+    def test_cli_reports_each_probe_and_keeps_failure_outcome_tail(self):
+        rc, out, err = PlanReadinessFenceBalanceTest._run_main(
+            self, [str(self.plan)]
+        )
+        self.assertEqual(rc, 1, (out, err))
+        self._assert_all_probe_failures(err)
+        self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
 
 
 class _SidecarRepairFixture:
@@ -2829,12 +2903,20 @@ class RegeneratedSidecarIntegrationTest(
             r3, hard=True, expected_digest=self.digest, source_kind="plan"
         )
         self.assertFalse(result.ok, result.errors)
+        run_id_error = next(
+            error
+            for error in result.errors
+            if "run_id cannot change after r1" in error
+        )
         self.assertTrue(
-            any(
-                "run_id cannot change after r1" in error
-                for error in result.errors
+            run_id_error.startswith(
+                "run_id cannot change after r1 in the same artifact chain"
             ),
-            result.errors,
+            run_id_error,
+        )
+        self.assertTrue(
+            "r1's run_id must carry forward unchanged in later rounds" in run_id_error,
+            run_id_error,
         )
 
         # Bounded retry: r3's own marker-bearing sidecar permits the
@@ -4315,7 +4397,10 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self._write_round(
             fx,
             _graded_payload(cr.sha256_hex(_GRADED_D1))
-            | {"extensions": {"corrections": [row]}},
+            | {
+                "extensions": {"corrections": [row]},
+                "verdict": "no",
+            },
             _graded_markdown(),
         )
         rc, out, err = self._run_gate(fx)
@@ -4323,6 +4408,11 @@ class PlanReadinessGradedTest(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("OUTCOME: indeterminate"), out)
         self.assertIn(cr.MARKER_PREFIX, err)
         self.assertIn("no resolvable entry", err)
+        self.assertEqual(
+            err.count(cr.MARKER_PREFIX), 1,
+            "indeterminate reason must remain exclusive",
+        )
+        self.assertNotIn("verdict field reports 'no'", err)
 
     def test_marker_check_outranks_the_substring_branches(self):
         # Routing home: the corrections marker check is the FIRST test in
@@ -5323,6 +5413,33 @@ class ReadinessSingleFileUnchangedTest(unittest.TestCase):
         self.assertIn(
             "evidence criterion exceeds UTF-8 item byte limit", proc.stderr
         )
+        over_cap = []
+        for _title, body in plan_readiness._plan_task_sections(
+            fixture_plan.read_text(encoding="utf-8")
+        ):
+            criteria, _actions = runtime_capabilities.derive_plan_checklist_actions(body)
+            over_cap.extend(
+                (len(criterion.encode("utf-8")), criterion)
+                for criterion in criteria
+                if len(criterion.encode("utf-8"))
+                > runtime_capabilities.MAX_EVIDENCE_ITEM_BYTES
+            )
+        self.assertEqual([size for size, _criterion in over_cap], [538, 981])
+        evidence_line = next(
+            line
+            for line in proc.stderr.splitlines()
+            if "evidence criterion exceeds UTF-8 item byte limit" in line
+        )
+        self.assertRegex(
+            evidence_line,
+            r"task 'task-[^']+': evidence criterion exceeds UTF-8 item byte limit "
+            r"\(over-cap criteria: ",
+        )
+        for size, criterion in over_cap:
+            self.assertIn(
+                f"{size} UTF-8 bytes, limit 512): {criterion}",
+                evidence_line,
+            )
         self.assertEqual(proc.stdout, "OUTCOME: fail\n")
 
     def test_file_operand_digest_matches_raw_bytes(self):
@@ -5811,6 +5928,23 @@ class ExtractionRuleParityTest(unittest.TestCase):
         expected = _named_evidence_label([criterion])
         self.assertIsNotNone(reason, "certification must fail on the item-bytes ground")
         self.assertIn(expected, reason)
+
+    def test_evidence_item_tuple_diagnostic_names_every_over_cap_criterion(self):
+        criteria = ("x" * 600, "y" * 601)
+        reason = plan_readiness.extraction_rule_executability_problem(
+            derived_task_map={
+                "task-1": {
+                    "task_body": "",
+                    "checklist_actions": [],
+                    "required_criteria": criteria,
+                }
+            }
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertIn("over-cap criteria:", reason)
+        self.assertIn("600 UTF-8 bytes, limit 512): " + criteria[0], reason)
+        self.assertIn("601 UTF-8 bytes, limit 512): " + criteria[1], reason)
 
     def test_evidence_aggregate_bytes_parity(self):
         criteria = [f"c{index}-" + "y" * 500 for index in range(9)]
@@ -6445,6 +6579,309 @@ class CertificationSealStagingCliTest(unittest.TestCase):
         self.assertIn("OUTCOME: fail", out)
         self.assertIn(cr.MARKER_PREFIX, err)
         self.assertIn("no first-parent ancestor", err)
+
+
+def _ownership_plan(tasks_body: str) -> str:
+    """Minimal single-file plan text whose task sections are tasks_body."""
+    return f"# P\n\n## Tasks\n\n{tasks_body}\n"
+
+
+class PlanOwnershipEarlierCreatorTest(unittest.TestCase):
+    """Files-existence check (clause (c) of plan_ownership_problem): an
+    unannotated Files listing of an absent path passes when its creation
+    record sits at an earlier or the same task section, ordered by heading
+    ordinal when every section carries one; a strictly-later owner and the
+    three ownership protections keep their refusals."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="ownership-earlier-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def test_earlier_creator_exempts_later_unannotated_listing(self):
+        plan = _ownership_plan(
+            "### Task 1: Create the report\n\n"
+            "Files:\n"
+            "- `src/report.md` *(new)*\n\n"
+            "- [ ] Write the report. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Unrelated\n\n"
+            "Files:\n"
+            "- `src/other.md` *(new)*\n\n"
+            "- [ ] Write other. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 3: Extend the report\n\n"
+            "Files:\n"
+            "- `src/report.md`\n\n"
+            "- [ ] Extend it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/report.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(plan, self.root))
+
+    def test_same_section_owner_exempts_unannotated_relisting(self):
+        plan = _ownership_plan(
+            "### Task 1: Create and relist\n\n"
+            "Files:\n"
+            "- `src/same.md` *(new)*\n"
+            "- `src/same.md`\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/same.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(plan, self.root))
+
+    def test_directory_form_orders_by_heading_ordinal(self):
+        import plan_shape
+
+        tasks: dict[str, str] = {}
+        for ordinal in range(1, 11):
+            if ordinal == 2:
+                files = "Files:\n- `src/dir_created.md` *(new)*\n\n"
+            elif ordinal == 10:
+                files = "Files:\n- `src/dir_created.md`\n\n"
+            else:
+                files = ""
+            tasks[f"task-{ordinal}.md"] = (
+                f"### Task {ordinal}: step {ordinal}\n\n"
+                f"{files}"
+                f"- [ ] Do step {ordinal}. [class: IMPLEMENTATION_REQUIRED]\n"
+            )
+        plans_dir = self.root / "plans"
+        plans_dir.mkdir()
+        plan_dir = _directory_plan_fixture(
+            plans_dir,
+            slug="2026-11-06-ordinal-order",
+            charter_text="# Plan: ordinal order\n\n## Tasks\n",
+            task_texts=tasks,
+        )
+        text = plan_shape.resolve_plan_operand(plan_dir).charter_plus_tasks_text()
+        # Precondition: unpadded filename assembly places Task 10 ahead of
+        # Task 2, so document position alone would invert the exemption.
+        self.assertLess(
+            text.index("### Task 10:"), text.index("### Task 2:")
+        )
+        self.assertFalse((self.root / "src/dir_created.md").exists())
+        self.assertIsNone(plan_readiness.plan_ownership_problem(text, self.root))
+
+    def test_strictly_later_owner_keeps_refusal_byte_identical(self):
+        plan = _ownership_plan(
+            "### Task 1: Edit before creation\n\n"
+            "Files:\n"
+            "- `src/later_owned.md`\n\n"
+            "- [ ] Edit the file. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create the file\n\n"
+            "Files:\n"
+            "- `src/later_owned.md` *(new)*\n\n"
+            "- [ ] Write the file. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertEqual(
+            plan_readiness.plan_ownership_problem(plan, self.root),
+            f"Files: path src/later_owned.md in Task 1 does not exist under "
+            f"{self.root} and carries no *(new)* annotation",
+        )
+
+    def test_absent_path_without_creation_record_still_refuses(self):
+        plan = _ownership_plan(
+            "### Task 1: Touch the ghost\n\n"
+            "Files:\n"
+            "- `src/ghost.md`\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("does not exist under", reason)
+        self.assertIn("carries no *(new)* annotation", reason)
+        self.assertIn("src/ghost.md", reason)
+
+    def test_two_creating_tasks_still_refuse(self):
+        plan = _ownership_plan(
+            "### Task 1: Create\n\n"
+            "Files:\n"
+            "- `src/dup.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create again\n\n"
+            "Files:\n"
+            "- `src/dup.md` *(new)*\n\n"
+            "- [ ] Write it again. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("duplicate creating task for src/dup.md", reason)
+
+    def test_consumer_before_owner_still_refuses(self):
+        plan = _ownership_plan(
+            "### Task 1: Consume\n\n"
+            "- [ ] Import `src/later_new.md` and call it. "
+            "[class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create\n\n"
+            "Files:\n"
+            "- `src/later_new.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("consumer-before-owner", reason)
+        self.assertIn("src/later_new.md", reason)
+
+
+class PlanFilesDeletionMarkerTest(unittest.TestCase):
+    """Planned-deletion marker (``*(deleted)*``) in the Files grammar:
+    ``_plan_files_items`` records the marker kind per annotation by its
+    leading keyword, and the Files-existence check (clause (c) of
+    plan_ownership_problem) exempts deleted-marked paths whether the
+    path exists under the repo root or not. The marker is never a
+    creation record (duplicate-creator and consumer-before-owner never
+    read it), imposes no ordering constraint against creation records
+    (delete-before-create passes by design), and an unrecognized
+    annotation stays unannotated."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="ownership-deleted-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def _existing_witness(self, rel: str) -> None:
+        path = self.root / rel
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# witness\n", encoding="utf-8")
+
+    def test_deletion_marker_recorded_token_still_collected(self):
+        items = plan_readiness._plan_files_items(
+            "Files:\n- `src/gone.md` *(deleted)*\n"
+        )
+        self.assertEqual(items, [("src/gone.md", False, True)])
+        self.assertEqual(
+            plan_readiness._review_scope_task_files(
+                "### Task 1: Delete\n\n"
+                "Files:\n"
+                "- `src/gone.md` *(deleted)*\n"
+            ),
+            ["src/gone.md"],
+        )
+
+    def test_marker_kind_follows_leading_keyword(self):
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/a.md` *(deleted; see Task 2)*\n"
+            ),
+            [("src/a.md", False, True)],
+        )
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/b.md` *(new; also-deleted)*\n"
+            ),
+            [("src/b.md", True, False)],
+        )
+        self.assertEqual(
+            plan_readiness._plan_files_items(
+                "Files:\n- `src/c.md` *(new)* *(deleted)*\n"
+            ),
+            [("src/c.md", True, True)],
+        )
+
+    def test_unrecognized_annotation_stays_unannotated(self):
+        items = plan_readiness._plan_files_items(
+            "Files:\n- `src/d.md` *(removed)*\n"
+        )
+        self.assertEqual([token for token, *_ in items], ["src/d.md"])
+        self.assertTrue(
+            all(not flag for _token, *flags in items for flag in flags)
+        )
+        plan = _ownership_plan(
+            "### Task 1: Touch the mystery\n\n"
+            "Files:\n"
+            "- `src/mystery.md` *(removed)*\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/mystery.md").exists())
+        reason = plan_readiness.plan_ownership_problem(plan, self.root)
+        self.assertIsNotNone(reason)
+        self.assertIn("does not exist under", reason)
+        self.assertIn("carries no *(new)* annotation", reason)
+        self.assertIn("src/mystery.md", reason)
+
+    def test_deleted_path_exemption_absent_and_existing(self):
+        absent_plan = _ownership_plan(
+            "### Task 1: Delete the report\n\n"
+            "Files:\n"
+            "- `src/deleted_absent.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/deleted_absent.md").exists())
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(absent_plan, self.root)
+        )
+        self._existing_witness("src/deleted_exists.md")
+        existing_plan = _ownership_plan(
+            "### Task 1: Delete the module\n\n"
+            "Files:\n"
+            "- `src/deleted_exists.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(existing_plan, self.root)
+        )
+
+    def test_delete_before_create_passes_by_design(self):
+        plan = _ownership_plan(
+            "### Task 1: Delete ahead of creation\n\n"
+            "Files:\n"
+            "- `src/order_free.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Create the file\n\n"
+            "Files:\n"
+            "- `src/order_free.md` *(new)*\n\n"
+            "- [ ] Write it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertFalse((self.root / "src/order_free.md").exists())
+        # The accepted narrowing, pinned deliberately: the planned-deletion
+        # marker imposes no ordering constraint against creation records,
+        # so a delete-listing ahead of the creating task refuses nothing.
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_double_deleted_marker_is_not_a_creation_record(self):
+        self._existing_witness("src/twice_deleted.md")
+        plan = _ownership_plan(
+            "### Task 1: Delete it\n\n"
+            "Files:\n"
+            "- `src/twice_deleted.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Delete it again\n\n"
+            "Files:\n"
+            "- `src/twice_deleted.md` *(deleted)*\n\n"
+            "- [ ] Delete it again. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_deleted_beside_unannotated_existing_listing_no_refusal(self):
+        self._existing_witness("src/mixed_listed.md")
+        plan = _ownership_plan(
+            "### Task 1: Delete it\n\n"
+            "Files:\n"
+            "- `src/mixed_listed.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Touch it too\n\n"
+            "Files:\n"
+            "- `src/mixed_listed.md`\n\n"
+            "- [ ] Edit it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
+
+    def test_consumer_half_marker_claims_no_creation(self):
+        self._existing_witness("src/consumed.md")
+        plan = _ownership_plan(
+            "### Task 1: Consume\n\n"
+            "- [ ] Import `src/consumed.md` and call it. "
+            "[class: IMPLEMENTATION_REQUIRED]\n\n"
+            "### Task 2: Delete it later\n\n"
+            "Files:\n"
+            "- `src/consumed.md` *(deleted)*\n\n"
+            "- [ ] Delete it. [class: IMPLEMENTATION_REQUIRED]\n"
+        )
+        self.assertIsNone(
+            plan_readiness.plan_ownership_problem(plan, self.root)
+        )
 
 
 if __name__ == "__main__":

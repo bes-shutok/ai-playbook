@@ -1,4 +1,5 @@
 # Backlog: review-agents quality catalog carries MyBatis sections without the portability marker
+Cluster: docs/history/backlog/2026-11-01-skill-review-cross-skill-repetition-debt.md; docs/history/backlog/2026-11-01-skill-review-maintenance-stance-stale-cap-wording.md; docs/history/backlog/2026-11-01-skill-review-systematic-debugging-broken-references.md (same-day review family)
 
 - **Filed:** 2026-11-01, weekly skill-review lane run 1 (batch unit: agents/skills/review-agents/)
 - **Status:** open

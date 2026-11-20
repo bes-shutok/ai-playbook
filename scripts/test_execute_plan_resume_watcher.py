@@ -32,6 +32,7 @@ sys.path.insert(0, str(HOOK_DIR))
 import budget_guard_core  # noqa: E402
 import execute_plan_resume_watcher as watcher  # noqa: E402
 import execute_plan_runtime as runtime  # noqa: E402
+import reconcile_execute_plan_handoff as reconciliation  # noqa: E402
 import plan_shape  # noqa: E402
 import quota_window_probe as probe  # noqa: E402
 
@@ -2335,6 +2336,163 @@ class ClockedOrderSuccessorVerificationTest(unittest.TestCase):
         emitted = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(emitted["status"], "success", emitted)
         self.assertEqual([item["order_id"] for item in emitted["flagged"]], ["co-cli-real"], emitted)
+
+
+class HandoffRunFixture:
+    """Minimal execute-plan run in its own scratch git repo: one task at
+    done-pending, the staged review pair, the execution claim, and the
+    runtime state, all bound to the current plan bytes (the minimal disk
+    evidence the receipt-backed reconciliation helper reads)."""
+
+    PLAN_TEXT = (
+        "# Plan: handoff fence fixture\n\n"
+        "## Terms\n\n"
+        "- Fixture term: the fence proof plan.\n\n"
+        "## Tasks\n\n"
+        "### Task 1: Fence fixture task\n\n"
+        "Files:\n- scripts/fence_fixture.py\n\n"
+        "- [x] The fence fixture clause.\n"
+    )
+    PLAN_REL = "docs/history/plans/2026-10-01-handoff-fence-fixture.md"
+    STATE_REL = "docs/tmp/execute-plan/2026-10-01-handoff-fence-fixture/runtime_state.json"
+    SESSION = "fence-fixture-session"
+
+    def __init__(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()
+        self._git("init", "-q")
+        self._git("config", "user.email", "fixture@example.invalid")
+        self._git("config", "user.name", "Fixture")
+        self._git("commit", "--allow-empty", "-q", "-m", "init")
+        self.plan_path = self.root / self.PLAN_REL
+        self.plan_path.parent.mkdir(parents=True)
+        self.plan_path.write_text(self.PLAN_TEXT, encoding="utf-8")
+        self.state_path = self.root / self.STATE_REL
+        self.state_path.parent.mkdir(parents=True)
+        digest = hashlib.sha256(self.plan_path.read_bytes()).hexdigest()
+        self._write_review(digest)
+        claim = self.root / "docs" / "tmp" / "execution-claims" / "handoff-fence-fixture.md"
+        claim.parent.mkdir(parents=True)
+        claim.write_text(
+            f"session: {self.SESSION}\nplan: {self.PLAN_REL}\ncreated: fixture\nupdated: fixture\n",
+            encoding="utf-8",
+        )
+        state = {
+            "plan_slug": "2026-10-01-handoff-fence-fixture",
+            "plan_digest": digest,
+            "generation": 3,
+            "run_session_id": "fence-fixture-run",
+            "workflow_state": "running",
+            "tasks": {
+                "1": {
+                    "status": "done-pending",
+                    "checkbox": False,
+                    "terminal_receipt": {"status": "success", "evidence": ["scripts/fence_fixture.py"]},
+                }
+            },
+        }
+        self.state_path.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    def _git(self, *args: str) -> None:
+        subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True, timeout=60)
+
+    def _write_review(self, digest: str) -> None:
+        base = "2026-10-01-plan-review-handoff-fence-fixture"
+        record = self.root / ".ai-playbook" / "reviews" / f"{base}-r1.md"
+        record.parent.mkdir(parents=True)
+        record.write_text("# Plan Review: fence fixture\n\nVerdict: ready=yes.\n", encoding="utf-8")
+        sidecar = {
+            "schema_version": 1,
+            "review_type": "Plan Review",
+            "date": "2026-10-01",
+            "artifact_slug": "handoff-fence-fixture",
+            "round": "r1",
+            "source_kind": "plan",
+            "source_digest": digest,
+            "verdict": "yes",
+            "extensions": {"plan_identity": self.PLAN_REL},
+        }
+        record.with_suffix(".stats.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+
+    def reconcile(self) -> tuple[dict, str]:
+        reconciler = reconciliation.HandoffReconciler(
+            state_path=self.state_path,
+            plan_path=self.plan_path,
+            task_number=1,
+            session=self.SESSION,
+            repo_root=self.root,
+        )
+        return reconciler.reconcile()
+
+    def cleanup(self) -> None:
+        self._tmp.cleanup()
+
+
+class ReconciliationWatcherFenceTest(unittest.TestCase):
+    """The receipt-backed done-pending handoff recovery leaves the
+    plans-authoring watcher state byte-identical and its identity and digest
+    fences fully enforcing: the recovery neither writes the watcher state
+    nor weakens the fences that gate its fire decisions."""
+
+    def setUp(self) -> None:
+        self.clock = FakeClock(7_400_000.0)
+        self.authoring = PlansAuthoringFixture(self.clock)
+        self.addCleanup(self.authoring.cleanup)
+        self.automation_calls: list[dict] = []
+        self.chain = [
+            watcher.AutomationScheduler(self.automation_result),
+            watcher.ReportOnlyScheduler(),
+        ]
+
+    def automation_result(self, request: dict) -> dict:
+        self.automation_calls.append(request)
+        return {"scheduled": True, "id": f"auto-{len(self.automation_calls)}"}
+
+    def boundary(self, report: dict) -> dict:
+        return watcher.record_budget_boundary(
+            self.authoring.adapter(),
+            self.chain,
+            probe_report=report,
+            plan_slug="fixture-authoring",
+            plan_path=str(self.authoring.plan_path),
+            plan_digest=self.authoring.plan_digest(),
+            repo_root=str(self.authoring.root),
+            clock=self.clock,
+        )
+
+    def test_reconciliation_leaves_watcher_identity_and_digest_fences_intact(self) -> None:
+        self.boundary(known_continue_report(7_400_000_090))
+        receipt = self.authoring.peek_state()["resume_watcher"]
+        watcher_state_before = self.authoring.state_path.read_bytes()
+        run = HandoffRunFixture()
+        self.addCleanup(run.cleanup)
+        # The recovery runs to completion against its own runtime state.
+        result, outcome = run.reconcile()
+        self.assertEqual(outcome, "pass", result)
+        self.assertEqual(result["reason_code"], "reconciled", result)
+        # The watcher state file is byte-identical: the recovery neither
+        # wrote nor re-keyed the armed watcher.
+        self.assertEqual(self.authoring.state_path.read_bytes(), watcher_state_before)
+        # The digest fence still refuses plan bytes changed after scheduling.
+        self.authoring.plan_path.write_text(
+            "# authoring fixture plan\n\n- [x] mutated body\n", encoding="utf-8"
+        )
+        decision = watcher.evaluate_fire(self.authoring.adapter(), receipt)
+        self.assertEqual(decision["decision"], "refuse")
+        self.assertIn("plan-digest", decision["mismatches"])
+        # The plan-path identity fence still refuses a moved canonical path.
+        self.authoring.plan_path.write_text(self.authoring.PLAN_TEXT, encoding="utf-8")
+        moved = dict(receipt)
+        moved["plan_path"] = str(self.authoring.root / "docs" / "history" / "plans" / "elsewhere.md")
+        decision = watcher.evaluate_fire(self.authoring.adapter(), moved)
+        self.assertEqual(decision["decision"], "refuse")
+        self.assertIn("plan-path", decision["mismatches"])
+        # The repository-root identity fence still refuses a foreign root.
+        rooted = dict(receipt)
+        rooted["repo_root"] = str(self.authoring.root / "elsewhere")
+        decision = watcher.evaluate_fire(self.authoring.adapter(), rooted)
+        self.assertEqual(decision["decision"], "refuse")
+        self.assertIn("repository-root", decision["mismatches"])
 
 
 if __name__ == "__main__":
